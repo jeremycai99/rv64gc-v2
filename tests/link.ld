@@ -1,0 +1,12 @@
+OUTPUT_ARCH("riscv")
+ENTRY(_start)
+
+SECTIONS {
+    . = 0x80000000;
+    .text : { *(.text.init) *(.text) }
+    .data : { *(.data) }
+    .bss : { *(.bss) }
+
+    . = 0x80001000;
+    .tohost : { *(.tohost) }
+}
