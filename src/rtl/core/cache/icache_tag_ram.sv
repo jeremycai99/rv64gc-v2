@@ -1,10 +1,9 @@
 /* file: icache_tag_ram.sv
- * Description: Tag RAM for the 32 kB 4-way set-associative L1 I-cache.
- *              128 sets x 4 ways.  Each entry: valid (1 bit) + tag (51 bits).
- *              Synchronous write, synchronous read (1-cycle read latency).
- *              invalidate_all clears every valid bit in one cycle.
- * Version: 2.0
- */
+ Description: Tag RAM for 32 kB 4-way L1 I-cache (128 sets).
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module icache_tag_ram
     import rv64gc_pkg::*;
 (

@@ -1,13 +1,9 @@
 /* file: issue_queue.sv
- * Description: Parameterized issue queue with dual-select and speculative
- *              wakeup. 32 entries, 2 enqueue ports, 2 issue ports per cycle.
- *              Selection is oldest-ready based on ROB distance from head.
- *              Speculative wakeup from load AGU with cancel on cache miss.
- * Author: AI-generated for RV64GC v2
- * Date: Apr. 9, 2026
- * Version: 2.0
- */
-
+ Description: 32-entry issue queue with dual oldest-ready select.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module issue_queue
     import rv64gc_pkg::*;
     import uarch_pkg::*;

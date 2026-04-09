@@ -1,12 +1,9 @@
 /* file: rat.sv
- Description: Register Alias Table (RAT) mapping 32 architectural registers
-              to 256 physical registers. Supports 6-wide rename with
-              intra-group bypass and 4 checkpoint slots.
+ Description: Register alias table mapping arch to physical registers.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
 */
-
 module rat
     import rv64gc_pkg::*;
 (

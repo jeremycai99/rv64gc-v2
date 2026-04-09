@@ -1,12 +1,9 @@
 /* file: bru.sv
- * Description: Branch Resolution Unit. Evaluates branch conditions,
- *              computes branch/jump targets, detects mispredictions.
- *              Supports fused compare-and-branch uops where an SLT/SLTU
- *              comparison and BEQ/BNE against zero are performed in one cycle.
- *              Combinational: result available same cycle.
- * Version: 2.0
- */
-
+ Description: Branch resolution unit for conditional and indirect branches.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module bru
     import rv64gc_pkg::*;
     import uarch_pkg::*;

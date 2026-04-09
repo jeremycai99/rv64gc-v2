@@ -1,12 +1,9 @@
 /* file: lsu.sv
- Description: 2-load 1-store LSU top integrating load AGUs, store AGU,
-              store data path, load queue, store queue, committed store
-              buffer, and D-cache interface with store-to-load forwarding.
+ Description: Load-store unit with 2-load 1-store ports and forwarding.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
 */
-
 `ifndef LSU_SV
 `define LSU_SV
 

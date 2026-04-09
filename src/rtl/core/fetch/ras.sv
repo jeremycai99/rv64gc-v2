@@ -1,9 +1,9 @@
 /* file: ras.sv
- * Description: 24-entry circular Return Address Stack (RAS).
- *              Tracks call/return nesting for fast return prediction.
- *              Supports checkpoint restore for mispredict recovery.
- * Version: 2.0
- */
+ Description: Return address stack for call/return prediction.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module ras
     import rv64gc_pkg::*;
 (

@@ -1,10 +1,9 @@
 /* file: uarch_pkg.sv
- * Description: Microarchitectural types for the v2 OoO pipeline.
- *              Defines all struct and enum types used across the core.
- *              Imports rv64gc_pkg for sizing parameters.
- * Version: 2.0
- */
-
+ Description: Microarchitectural types: decoded_insn_t, iq_entry_t, etc.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef UARCH_PKG_SV
 `define UARCH_PKG_SV
 package uarch_pkg;

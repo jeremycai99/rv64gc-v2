@@ -1,12 +1,9 @@
 /* file: rob.sv
- * Description: Reorder Buffer. 192-entry circular buffer with 6-wide
- *              allocation (from rename) and 6-wide commit (in order).
- *              Stores narrow status info only (PC, exception, flags).
- *              Register mapping stored in rename_buffer at same index.
- *              Uses flat arrays for Verilator-friendly storage.
- * Version: 2.0
- */
-
+ Description: 192-entry circular reorder buffer with 6-wide alloc/commit.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module rob
     import rv64gc_pkg::*;
     import uarch_pkg::*;

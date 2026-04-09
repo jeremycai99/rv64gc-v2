@@ -1,11 +1,9 @@
 /* file: dcache_tag_ram.sv
- * Description: Tag RAM for the 64 kB 4-way set-associative L1 D-cache.
- *              256 sets x 4 ways.
- *              Each entry: valid (1 bit) + dirty (1 bit) + tag (L1D_TAG_BITS bits).
- *              Synchronous write, synchronous read (1-cycle read latency).
- *              invalidate_all clears every valid/dirty bit in one cycle.
- * Version: 2.0
- */
+ Description: Tag RAM for 64 kB 4-way L1 D-cache (256 sets).
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module dcache_tag_ram
     import rv64gc_pkg::*;
 (

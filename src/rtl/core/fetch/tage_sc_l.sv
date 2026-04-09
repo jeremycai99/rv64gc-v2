@@ -1,10 +1,9 @@
 /* file: tage_sc_l.sv
- * Description: TAGE-SC-L branch predictor combining Tagged Geometric-history
- *              (TAGE) base predictor, Statistical Corrector (SC), and Loop
- *              Predictor (L). Delivers +15.1% IPC vs LTAGE in gem5 sweeps.
- *              All prediction paths are combinational; updates are sequential.
- * Version: 2.0
- */
+ Description: TAGE-SC-L branch predictor with statistical corrector.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module tage_sc_l
     import rv64gc_pkg::*;
 (

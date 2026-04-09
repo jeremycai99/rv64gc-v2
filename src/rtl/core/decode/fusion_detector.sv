@@ -1,11 +1,9 @@
 /* file: fusion_detector.sv
- * Description: Macro-op fusion detector for the 6-wide decode stage.
- *              Checks each adjacent pair (i, i+1) for fusion eligibility,
- *              produces a fused uop for matching pairs, then compacts the
- *              output array to remove consumed slots.
- * Version: 2.0
- */
-
+ Description: Macro-op fusion detector for 6-wide decode stage.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef FUSION_DETECTOR_SV
 `define FUSION_DETECTOR_SV
 

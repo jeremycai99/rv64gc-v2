@@ -1,11 +1,9 @@
 /* file: fetch_unit.sv
- * Description: 6-wide fetch unit integrating I-cache, TAGE-SC-L branch predictor,
- *              BTB, and RAS. 2-stage internal pipeline (F1: PC gen / cache request /
- *              BPU lookup; F2: cache response / instruction extraction / RVC
- *              decompression / branch resolution). Delivers up to PIPE_WIDTH=6
- *              instructions per cycle to the decode stage.
- * Version: 2.0
- */
+ Description: Fetch unit with branch prediction and I-cache interface.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module fetch_unit
     import rv64gc_pkg::*;
     import isa_pkg::*;

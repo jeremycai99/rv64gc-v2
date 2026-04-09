@@ -1,12 +1,9 @@
 /* file: int_prf.sv
- * Description: 256x64 integer physical register file with 12 read ports and
- *              6 write ports.  Implemented as 6 copies of a 256x64 2-read-port
- *              array; all 6 write ports broadcast to every copy.
- *              Write-first bypass: same-cycle write data is forwarded
- *              combinationally; highest-indexed matching write port wins.
- *              Physical register p0 is hardwired to 64'h0.
- */
-
+ Description: 256x64 integer PRF with 12 read and 6 write ports.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef INT_PRF_SV
 `define INT_PRF_SV
 

@@ -1,13 +1,9 @@
 /* file: checkpoint.sv
- * Description: 4-slot checkpoint manager for branch mispredict recovery.
- *              Each slot stores a snapshot of the RAT, free list bitmap,
- *              and ROB tail pointer. Supports save, restore, per-slot
- *              release, and full flush.
- * Author: Jeremy Cai
- * Date: Apr. 09, 2026
- * Version: 2.0
- */
-
+ Description: Checkpoint manager for speculative rename recovery.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module checkpoint
     import rv64gc_pkg::*;
 (

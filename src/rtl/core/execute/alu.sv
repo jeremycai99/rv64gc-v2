@@ -1,13 +1,9 @@
 /* file: alu.sv
- * Description: 64-bit ALU for the v2 OoO core.  Purely combinational,
- *              1-cycle latency.  Supports all RV64I base ALU operations
- *              plus Zba (address generation), Zbb (bit manipulation),
- *              Zbs (single-bit), and Zicond (conditional) extensions.
- *              W-suffix variants operate on the lower 32 bits and
- *              sign-extend the result to 64 bits.
- * Version: 2.0
- */
-
+ Description: RV64GC ALU with Zba/Zbb/Zbs/Zicond extensions.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module alu
     import rv64gc_pkg::*;
     import uarch_pkg::*;

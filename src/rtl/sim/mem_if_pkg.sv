@@ -1,9 +1,9 @@
 /* file: mem_if_pkg.sv
- * Description: Memory interface package for simulation.  Defines types and
- *              constants used by sim_memory and the top-level testbench.
- * Version: 2.0
- */
-
+ Description: Memory interface package for simulation.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef MEM_IF_PKG_SV
 `define MEM_IF_PKG_SV
 package mem_if_pkg;

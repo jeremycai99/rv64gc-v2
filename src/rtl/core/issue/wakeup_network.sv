@@ -1,14 +1,9 @@
 /* file: wakeup_network.sv
- * Description: Purely combinational wakeup network. Checks whether a single
- *              issue-queue entry's source operands become ready via CDB
- *              broadcast or speculative load wakeup. Produces one-cycle
- *              wakeup pulses; no signal is asserted when the source was
- *              already marked ready (prevents double-wakeup).
- * Author: AI-generated for RV64GC v2
- * Date: Apr. 9, 2026
- * Version: 2.0
- */
-
+ Description: CDB-based wakeup network for issue queue entries.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module wakeup_network
     import rv64gc_pkg::*;
 (

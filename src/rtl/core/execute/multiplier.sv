@@ -1,15 +1,9 @@
 /* file: multiplier.sv
- * Description: 3-stage pipelined 64-bit integer multiplier. Supports MUL,
- *              MULH, MULHSU, MULHU and W variants (MULW). Uses behavioral
- *              multiply operator for synthesis tool inference (DSP slices).
- *              Pipeline: stage 1 = sign-extend operands & capture,
- *                        stage 2 = compute 128-bit product,
- *                        stage 3 = select result half + W-suffix handling.
- *              Fully pipelined: accepts one new operation per cycle.
- *              On flush, clears all pipeline valid bits.
- * Version: 2.0
- */
-
+ Description: Pipelined integer multiplier (RV64M MUL/MULH variants).
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module multiplier
     import rv64gc_pkg::*;
     import uarch_pkg::*;

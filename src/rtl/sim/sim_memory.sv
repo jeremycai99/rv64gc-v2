@@ -1,11 +1,9 @@
 /* file: sim_memory.sv
- * Description: Simulation-only memory model.  Loads hex files via $readmemh.
- *              Services cache-line-sized requests from the L2 cache with
- *              1-cycle latency for reads.  Monitors a configurable tohost
- *              address for test pass/fail signalling.
- * Version: 2.0
- */
-
+ Description: Simulation memory model with configurable latency.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module sim_memory
     import rv64gc_pkg::*;
 (

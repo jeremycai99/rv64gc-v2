@@ -1,17 +1,10 @@
-/* verilator lint_off MULTITOP */
 /* file: dcache.sv
- * Description: 64 kB, 4-way set-associative L1 D-Cache.
- *              256 sets, 64-byte cache lines, PLRU replacement.
- *              Two load ports and one store port (from CSB).
- *              16-entry MSHR for outstanding misses; misses to the same line
- *              are coalesced.  Dirty-line writeback before fill.
- *              Bank-conflict stall: if two load ports hit the same set this
- *              cycle, load port 1 is replayed next cycle (deq_valid held off).
- *
- *              Implementation note: single-bank 256-set design for initial
- *              bring-up.  Banking is a later incremental step.
- * Version: 2.0
- */
+ Description: 64 kB 4-way L1 D-Cache with 16-entry MSHR and PLRU.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
+/* verilator lint_off MULTITOP */
 module dcache
     import rv64gc_pkg::*;
     import uarch_pkg::*;

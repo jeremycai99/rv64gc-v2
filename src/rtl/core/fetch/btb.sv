@@ -1,9 +1,9 @@
 /* file: btb.sv
- * Description: 1024-entry, 4-way set-associative Branch Target Buffer (BTB).
- *              Provides combinational lookup by PC and registered update from
- *              commit/BRU resolution. Uses PLRU replacement on update miss.
- * Version: 2.0
- */
+ Description: 1024-entry 4-way BTB with PLRU replacement.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module btb
     import rv64gc_pkg::*;
 (

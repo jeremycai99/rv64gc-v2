@@ -1,13 +1,9 @@
 /* file: rv64gc_core_top.sv
- * Description: Structural top-level module for the RV64GC v2 out-of-order
- *              superscalar core.  Instantiates all pipeline stages and wires
- *              them together: fetch, decode, fusion detector, loop buffer,
- *              rename, dispatch queue, 5 issue queues (3 int + load + store),
- *              4 ALUs, BRU, multiplier, divider, LSU, D-cache, L2 cache,
- *              integer PRF, bypass networks, ROB, commit, and CSR file.
- * Version: 2.0
- */
-
+ Description: RV64GC v2 core top-level integration module.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module rv64gc_core_top
     import rv64gc_pkg::*;
     import isa_pkg::*;

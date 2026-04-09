@@ -1,10 +1,9 @@
 /* file: isa_pkg.sv
- * Description: RV64IMAFDC + Zba/Zbb/Zbs/Zicond instruction encoding constants.
- *              Defines all opcodes, funct3/funct7 fields, CSR addresses,
- *              exception codes, and interrupt codes for the RISC-V 64-bit ISA.
- * Version: 2.0
- */
-
+ Description: ISA-level constants, CSR addresses, and opcode definitions.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef ISA_PKG_SV
 `define ISA_PKG_SV
 package isa_pkg;

@@ -1,11 +1,9 @@
 /* file: icache.sv
- * Description: 32 kB, 4-way set-associative, 64-byte-line L1 Instruction Cache.
- *              1-cycle hit latency.  Miss handling via IDLE→WAIT_FILL FSM.
- *              PLRU replacement (3-bit binary tree per set).
- *              FENCE.I support via invalidate_all: clears all valid bits in
- *              a single cycle inside the tag RAM.
- * Version: 2.0
- */
+ Description: 32 kB 4-way L1 I-Cache with PLRU and FENCE.I support.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module icache
     import rv64gc_pkg::*;
 (

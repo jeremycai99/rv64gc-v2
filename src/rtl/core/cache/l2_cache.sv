@@ -1,13 +1,9 @@
 /* file: l2_cache.sv
- * Description: 2 MB, 8-way set-associative L2 Cache.
- *              4096 sets, 64-byte cache lines, PLRU replacement.
- *              32 MSHRs for outstanding misses to main memory.
- *              8-cycle hit latency (shift-register pipeline).
- *              Arbitrates between D-cache and I-cache fill requests
- *              (D-cache has priority).  Dirty-line writeback before fill.
- *              FENCE.I: flush all dirty lines to memory, then invalidate.
- * Version: 2.0
- */
+ Description: 2 MB 8-way L2 cache with 32 MSHRs and 8-cycle hit latency.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module l2_cache
     import rv64gc_pkg::*;
     import uarch_pkg::*;

@@ -1,9 +1,9 @@
 /* file: decode.sv
- * Description: 6-wide decode top-level. Instantiates PIPE_WIDTH decode slices,
- *              wires fetch outputs to each slice, and passes through branch
- *              prediction info. Mostly structural wiring.
- * Version: 2.0
- */
+ Description: Six-wide decode wrapper combining decode slices and fusion.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module decode
     import rv64gc_pkg::*;
     import isa_pkg::*;

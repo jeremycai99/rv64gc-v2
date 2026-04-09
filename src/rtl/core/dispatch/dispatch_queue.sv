@@ -1,11 +1,9 @@
 /* file: dispatch_queue.sv
- * Description: Dispatch queues for RV64GC v2 OoO core.
- *              Two 32-deep FIFOs: integer and memory.
- *              Accepts up to 6 renamed uops/cycle from rename,
- *              dispatches up to 6/cycle to issue queues.
- * Version: 2.0
- */
-
+ Description: Dispatch queue buffering renamed instructions for issue.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef DISPATCH_QUEUE_SV
 `define DISPATCH_QUEUE_SV
 

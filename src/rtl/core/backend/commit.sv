@@ -1,13 +1,9 @@
 /* file: commit.sv
- * Description: 6-wide in-order commit unit with checkpoint-based recovery.
- *              Examines up to 6 ROB head entries per cycle, retiring those
- *              that are ready in order. Generates flush on exception,
- *              mispredict, or privileged return. Serializes CSR, FENCE,
- *              MRET/SRET, ECALL, SFENCE.VMA, and WFI at slot 0 only.
- *              Uses 1-cycle checkpoint restore for partial flushes.
- * Version: 2.0
- */
-
+ Description: Six-wide in-order commit unit with checkpoint recovery.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module commit
     import rv64gc_pkg::*;
     import uarch_pkg::*;

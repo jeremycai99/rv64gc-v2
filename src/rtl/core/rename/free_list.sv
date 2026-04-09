@@ -1,12 +1,9 @@
 /* file: free_list.sv
- Description: Free list for physical register allocation using a 256-bit
-              bitmap. Supports up to 6 allocations and 6 releases per cycle
-              with 4 checkpoint slots for branch recovery.
+ Description: Physical register free list with 6-wide alloc/dealloc.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
 */
-
 module free_list
     import rv64gc_pkg::*;
 (

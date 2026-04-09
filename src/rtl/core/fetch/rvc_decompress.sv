@@ -1,9 +1,9 @@
 /* file: rvc_decompress.sv
- * Description: RV64C compressed instruction decompressor. Expands one 16-bit
- *              instruction into an equivalent 32-bit base instruction for the
- *              decode stage. Standard RISC-V C extension decoding.
- * Version: 2.0 (adapted from v1 for v2 pipeline)
- */
+ Description: RV64C compressed instruction decompressor.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module rvc_decompress
     import isa_pkg::*;
 (

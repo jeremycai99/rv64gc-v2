@@ -1,12 +1,9 @@
 /* file: load_queue.sv
- Description: 48-entry circular load queue with ordering violation detection.
-              Scans all executed loads when a store address arrives to detect
-              RAW ordering violations that require pipeline flush and replay.
+ Description: Load queue tracking in-flight loads for ordering.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
 */
-
 `ifndef LOAD_QUEUE_SV
 `define LOAD_QUEUE_SV
 

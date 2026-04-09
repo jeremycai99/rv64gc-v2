@@ -1,13 +1,9 @@
 /* file: divider.sv
- * Description: Iterative 64-bit integer divider. Radix-2 restoring division.
- *              Takes 64 cycles for 64-bit ops, 32 for W variants.
- *              Supports DIV, DIVU, REM, REMU and W variants.
- *              Handles division by zero and signed overflow per RISC-V spec.
- *              State machine: IDLE -> RUNNING (1 bit/cycle) -> DONE.
- *              On flush, returns immediately to IDLE.
- * Version: 2.0
- */
-
+ Description: Multi-cycle integer divider (RV64M DIV/REM).
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module divider
     import rv64gc_pkg::*;
     import uarch_pkg::*;

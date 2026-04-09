@@ -1,10 +1,9 @@
 /* file: bypass_network.sv
- * Description: Purely combinational 6-source bypass network for one operand.
- *              Checks ALU0-3, MUL, and Load0 bypass sources and forwards data
- *              when a tag match is found. Highest-index match wins (newest result).
- * Version: 2.0
- */
-
+ Description: Combinational 6-source bypass network for one operand.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef BYPASS_NETWORK_SV
 `define BYPASS_NETWORK_SV
 

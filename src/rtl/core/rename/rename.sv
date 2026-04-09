@@ -1,16 +1,9 @@
 /* file: rename.sv
- * Description: 6-wide rename unit with per-slot independent advance.
- *              v1 used group-hold (entire bundle stalls if any slot can't
- *              advance), wasting 57% of cycles.  v2 allows each slot to
- *              advance independently: slots that can rename are emitted,
- *              while slots that cannot are held for the next cycle.
- *              Includes move elimination (mv, li rd,0, xor rd,rd,rd).
- *              Instantiates RAT, free list, and checkpoint manager.
- * Author: Jeremy Cai
- * Date: Apr. 09, 2026
- * Version: 2.0
- */
-
+ Description: Six-wide register renaming with RAT and free list.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module rename
     import rv64gc_pkg::*;
     import uarch_pkg::*;

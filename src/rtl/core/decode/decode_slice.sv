@@ -1,10 +1,9 @@
 /* file: decode_slice.sv
- * Description: Single-instruction combinational decoder for RV64IMAFDC +
- *              Zba/Zbb/Zbs/Zicond. Takes a 32-bit instruction (already
- *              decompressed) and produces a decoded_insn_t.
- *              Instantiated PIPE_WIDTH times by decode.sv.
- * Version: 2.0
- */
+ Description: Single-slot RV64GC instruction decoder.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module decode_slice
     import rv64gc_pkg::*;
     import isa_pkg::*;

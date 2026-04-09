@@ -1,11 +1,9 @@
 /* file: rv64gc_pkg.sv
- * Description: Global design parameters for the RV64GC v2 out-of-order core.
- *              Defines all tunable sizes for pipeline, register files,
- *              issue queues, caches, branch prediction, and memory map.
- *              Values are derived from gem5 sweep data.
- * Version: 2.0
- */
-
+ Description: Top-level package with microarchitectural parameters.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef RV64GC_PKG_SV
 `define RV64GC_PKG_SV
 package rv64gc_pkg;

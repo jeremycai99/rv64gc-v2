@@ -1,12 +1,9 @@
 /* file: store_queue.sv
- Description: 48-entry circular store queue with split STA/STD fill,
-              store-to-load forwarding (full and partial), and committed
-              store drain to the committed store buffer.
+ Description: Store queue with store-to-load forwarding.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
 */
-
 `ifndef STORE_QUEUE_SV
 `define STORE_QUEUE_SV
 

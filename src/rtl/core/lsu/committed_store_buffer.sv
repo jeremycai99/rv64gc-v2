@@ -1,11 +1,9 @@
 /* file: committed_store_buffer.sv
- * Description: 24-entry circular FIFO between the store queue and D-cache.
- *              Committed stores enter from the SQ drain port and leave to the
- *              D-cache write port in strict program order.
- *              Provides store-to-load forwarding so loads can check the CSB
- *              before going to the cache.
- * Version: 2.0
- */
+ Description: Committed store buffer for ordered store retirement.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module committed_store_buffer
     import rv64gc_pkg::*;
     import uarch_pkg::*;

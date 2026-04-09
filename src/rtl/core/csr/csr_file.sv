@@ -1,16 +1,9 @@
 /* file: csr_file.sv
- * Description: RV64GC v2 privilege-aware CSR file.  Implements full M/S/U
- *              mode CSR state, trap handling, interrupt prioritisation,
- *              performance counters, and floating-point control registers.
- *              Adapted from v1 (RV64GC) with updated interface names and
- *              write_op (CSR RW/RS/RC) decoding from commit.
- *
- *              Reads are combinational with same-cycle write bypass.
- *              Writes, traps, and returns are sequentialised at commit.
- *
- * Version: 2.0
- */
-
+ Description: Privilege-aware CSR file with M/S/U mode, traps, and counters.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef CSR_FILE_SV
 `define CSR_FILE_SV
 

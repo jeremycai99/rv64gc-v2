@@ -1,11 +1,9 @@
 /* file: icache_data_ram.sv
- * Description: Data RAM for the 32 kB 4-way set-associative L1 I-cache.
- *              128 sets x 4 ways x 64 bytes = 32 KB total.
- *              Synchronous write, synchronous read (1-cycle read latency).
- *              Read way is registered alongside the address to match the
- *              tag-RAM read pipeline.
- * Version: 2.0
- */
+ Description: Data RAM for 32 kB 4-way L1 I-cache (128 sets).
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module icache_data_ram
     import rv64gc_pkg::*;
 (

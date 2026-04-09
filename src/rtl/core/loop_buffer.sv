@@ -1,21 +1,9 @@
 /* file: loop_buffer.sv
- * Description: 64-entry decoded-uop loop buffer.  Captures hot loop bodies
- *              from the decode stage and replays them to rename without
- *              re-fetching or re-decoding, enabling frontend clock-gating
- *              during tight loop execution.
- *
- * State machine:
- *   IDLE      – waiting for a backward taken branch to start capture.
- *   CAPTURING – recording decoded instructions into the ring buffer.
- *               Transitions to PLAYING when a second backward taken branch
- *               is seen (loop back-edge detected) and the captured body
- *               fits within LOOP_BUF_DEPTH.
- *   PLAYING   – feeding rename from the ring buffer; frontend may be
- *               clock-gated.  Exits to IDLE on invalidate.
- *
- * Version: 2.0
- */
-
+ Description: Loop stream detector and buffer for small hot loops.
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 `ifndef LOOP_BUFFER_SV
 `define LOOP_BUFFER_SV
 

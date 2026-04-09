@@ -1,10 +1,9 @@
 /* file: dcache_data_ram.sv
- * Description: Data RAM for the 64 kB 4-way set-associative L1 D-cache.
- *              256 sets x 4 ways x 64 bytes = 64 KB total.
- *              Synchronous write with byte-enable masking, synchronous read
- *              (1-cycle read latency).
- * Version: 2.0
- */
+ Description: Data RAM for 64 kB 4-way L1 D-cache (256 sets).
+ Author: Jeremy Cai
+ Date: Apr. 09, 2026
+ Version: 2.0
+*/
 module dcache_data_ram
     import rv64gc_pkg::*;
 (
