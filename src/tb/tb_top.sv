@@ -40,6 +40,10 @@ module tb_top
     // =========================================================================
     // Core instantiation
     // =========================================================================
+    // Core-level tohost detection (snoops CSB drain to D-cache)
+    logic        core_tohost_valid;
+    logic [63:0] core_tohost_data;
+
     rv64gc_core_top u_core (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -65,8 +69,16 @@ module tb_top
         .time_val        (cycle_count),
 
         // Tohost address from package
-        .tohost_addr     (TOHOST_ADDR)
+        .tohost_addr     (TOHOST_ADDR),
+
+        // Tohost detection
+        .tohost_wr_valid (core_tohost_valid),
+        .tohost_wr_data  (core_tohost_data)
     );
+
+    // Use core-level tohost detection (immediate, no cache writeback delay)
+    assign tohost_valid = core_tohost_valid;
+    assign tohost_value = core_tohost_data;
 
     // =========================================================================
     // Simulation memory instantiation

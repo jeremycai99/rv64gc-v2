@@ -29,7 +29,11 @@ module rv64gc_core_top
     input  logic [63:0] time_val,
 
     // Tohost address (for test pass/fail monitoring)
-    input  logic [63:0] tohost_addr
+    input  logic [63:0] tohost_addr,
+
+    // Tohost detection (snoops committed store buffer drain to D-cache)
+    output logic        tohost_wr_valid,
+    output logic [63:0] tohost_wr_data
 );
 
     // =========================================================================
@@ -1735,5 +1739,15 @@ module rv64gc_core_top
     // For simplicity, STA address completion is handled via the existing
     // LSU-to-CDB interface (lsu_sta_wb_valid goes through the ordering
     // violation path, not through CDB for register writeback).
+
+    // =========================================================================
+    // Tohost detection: snoop CSB drain to D-cache for tohost writes
+    // =========================================================================
+    // Compare only lower 32 bits: on RV64, LUI sign-extends bit 31,
+    // so software generates 0xFFFFFFFF_80001000 while TOHOST_ADDR is
+    // 0x00000000_80001000. Both refer to the same physical address.
+    assign tohost_wr_valid = dc_store_req_valid &&
+                             (dc_store_req_addr[31:3] == tohost_addr[31:3]);
+    assign tohost_wr_data  = dc_store_req_data;
 
 endmodule
