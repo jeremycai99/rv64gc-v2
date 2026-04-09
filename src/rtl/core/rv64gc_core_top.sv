@@ -61,6 +61,27 @@ module rv64gc_core_top
     logic [63:0]              cdb_csr_wdata    [0:CDB_WIDTH-1];
 
     // =========================================================================
+    // Registered CDB (1-cycle delayed) for wakeup / ROB writeback / preg_ready
+    // The combinational CDB drives bypass (same-cycle forwarding) + PRF writes.
+    // The registered CDB drives IQ wakeup, ROB writeback, and preg_ready_table
+    // to break the combinational loop:
+    //   IQ issue -> PRF read -> ALU -> CDB -> IQ wakeup -> IQ re-select
+    // =========================================================================
+    logic [CDB_WIDTH-1:0]     cdb_valid_r;
+    logic [PHYS_REG_BITS-1:0] cdb_tag_r  [0:CDB_WIDTH-1];
+    logic [63:0]              cdb_data_r [0:CDB_WIDTH-1];
+    logic [ROB_IDX_BITS-1:0]  cdb_rob_idx_r      [0:CDB_WIDTH-1];
+    logic [CDB_WIDTH-1:0]     cdb_has_exception_r;
+    logic [3:0]               cdb_exc_code_r     [0:CDB_WIDTH-1];
+    logic [CDB_WIDTH-1:0]     cdb_is_branch_r;
+    logic [CDB_WIDTH-1:0]     cdb_branch_taken_r;
+    logic [63:0]              cdb_branch_target_r [0:CDB_WIDTH-1];
+    logic [CDB_WIDTH-1:0]     cdb_branch_mispredict_r;
+    logic [CDB_WIDTH-1:0]     cdb_csr_we_r;
+    logic [11:0]              cdb_csr_addr_r     [0:CDB_WIDTH-1];
+    logic [63:0]              cdb_csr_wdata_r    [0:CDB_WIDTH-1];
+
+    // =========================================================================
     // Bypass sources (6 sources: ALU0, ALU1, ALU2, ALU3, MUL, Load0)
     // =========================================================================
     logic [5:0]               bypass_valid;
@@ -410,17 +431,17 @@ module rv64gc_core_top
         .alloc_is_sfence_vma    (rob_alloc_is_sfence_vma),
         .alloc_is_ecall         (rob_alloc_is_ecall),
         .alloc_is_wfi           (rob_alloc_is_wfi),
-        .wb_valid               (cdb_valid),
-        .wb_idx                 (cdb_rob_idx),
-        .wb_has_exception       (cdb_has_exception),
-        .wb_exc_code            (cdb_exc_code),
-        .wb_is_branch           (cdb_is_branch),
-        .wb_branch_taken        (cdb_branch_taken),
-        .wb_branch_target       (cdb_branch_target),
-        .wb_branch_mispredict   (cdb_branch_mispredict),
-        .wb_csr_we              (cdb_csr_we),
-        .wb_csr_addr            (cdb_csr_addr),
-        .wb_csr_wdata           (cdb_csr_wdata),
+        .wb_valid               (cdb_valid_r),
+        .wb_idx                 (cdb_rob_idx_r),
+        .wb_has_exception       (cdb_has_exception_r),
+        .wb_exc_code            (cdb_exc_code_r),
+        .wb_is_branch           (cdb_is_branch_r),
+        .wb_branch_taken        (cdb_branch_taken_r),
+        .wb_branch_target       (cdb_branch_target_r),
+        .wb_branch_mispredict   (cdb_branch_mispredict_r),
+        .wb_csr_we              (cdb_csr_we_r),
+        .wb_csr_addr            (cdb_csr_addr_r),
+        .wb_csr_wdata           (cdb_csr_wdata_r),
         .head_idx               (rob_head_idx),
         .head_valid             (rob_head_valid),
         .head_ready             (rob_head_ready),
@@ -645,8 +666,8 @@ module rv64gc_core_top
         .enq_valid       (iq0_enq_valid),
         .enq_data        (iq0_enq_data),
         .full            (iq0_full),
-        .cdb_valid       (cdb_valid),
-        .cdb_tag         (cdb_tag),
+        .cdb_valid       (cdb_valid_r),
+        .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
@@ -666,8 +687,8 @@ module rv64gc_core_top
         .enq_valid       (iq1_enq_valid),
         .enq_data        (iq1_enq_data),
         .full            (iq1_full),
-        .cdb_valid       (cdb_valid),
-        .cdb_tag         (cdb_tag),
+        .cdb_valid       (cdb_valid_r),
+        .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
@@ -687,8 +708,8 @@ module rv64gc_core_top
         .enq_valid       (iq2_enq_valid),
         .enq_data        (iq2_enq_data),
         .full            (iq2_full),
-        .cdb_valid       (cdb_valid),
-        .cdb_tag         (cdb_tag),
+        .cdb_valid       (cdb_valid_r),
+        .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
@@ -708,8 +729,8 @@ module rv64gc_core_top
         .enq_valid       (iq_load_enq_valid),
         .enq_data        (iq_load_enq_data),
         .full            (iq_load_full),
-        .cdb_valid       (cdb_valid),
-        .cdb_tag         (cdb_tag),
+        .cdb_valid       (cdb_valid_r),
+        .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
@@ -729,8 +750,8 @@ module rv64gc_core_top
         .enq_valid       (iq_store_enq_valid),
         .enq_data        (iq_store_enq_data),
         .full            (iq_store_full),
-        .cdb_valid       (cdb_valid),
-        .cdb_tag         (cdb_tag),
+        .cdb_valid       (cdb_valid_r),
+        .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
@@ -1137,6 +1158,48 @@ module rv64gc_core_top
     end
 
     // =========================================================================
+    // CDB Pipeline Register — break the combinational loop
+    //   IQ issue -> PRF read -> ALU -> CDB -> IQ wakeup -> IQ re-select
+    // Registered version feeds: IQ wakeup, ROB writeback, preg_ready_table.
+    // Combinational version feeds: bypass network, PRF writes.
+    // =========================================================================
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_out.valid) begin
+            cdb_valid_r            <= '0;
+            cdb_has_exception_r    <= '0;
+            cdb_is_branch_r        <= '0;
+            cdb_branch_taken_r     <= '0;
+            cdb_branch_mispredict_r <= '0;
+            cdb_csr_we_r           <= '0;
+            for (int i = 0; i < CDB_WIDTH; i++) begin
+                cdb_tag_r[i]            <= '0;
+                cdb_data_r[i]           <= '0;
+                cdb_rob_idx_r[i]        <= '0;
+                cdb_exc_code_r[i]       <= '0;
+                cdb_branch_target_r[i]  <= '0;
+                cdb_csr_addr_r[i]       <= '0;
+                cdb_csr_wdata_r[i]      <= '0;
+            end
+        end else begin
+            cdb_valid_r            <= cdb_valid;
+            cdb_has_exception_r    <= cdb_has_exception;
+            cdb_is_branch_r        <= cdb_is_branch;
+            cdb_branch_taken_r     <= cdb_branch_taken;
+            cdb_branch_mispredict_r <= cdb_branch_mispredict;
+            cdb_csr_we_r           <= cdb_csr_we;
+            for (int i = 0; i < CDB_WIDTH; i++) begin
+                cdb_tag_r[i]            <= cdb_tag[i];
+                cdb_data_r[i]           <= cdb_data[i];
+                cdb_rob_idx_r[i]        <= cdb_rob_idx[i];
+                cdb_exc_code_r[i]       <= cdb_exc_code[i];
+                cdb_branch_target_r[i]  <= cdb_branch_target[i];
+                cdb_csr_addr_r[i]       <= cdb_csr_addr[i];
+                cdb_csr_wdata_r[i]      <= cdb_csr_wdata[i];
+            end
+        end
+    end
+
+    // =========================================================================
     // PRF Write Port Assignment
     //   Write[0]: ALU0/BRU
     //   Write[1]: ALU1
@@ -1207,10 +1270,10 @@ module rv64gc_core_top
                     preg_ready_table[ren_insn[i].pdst] <= 1'b0;
                 end
             end
-            // Set on CDB writeback
+            // Set on CDB writeback (registered CDB to match wakeup timing)
             for (int i = 0; i < CDB_WIDTH; i++) begin
-                if (cdb_valid[i] && cdb_tag[i] != '0) begin
-                    preg_ready_table[cdb_tag[i]] <= 1'b1;
+                if (cdb_valid_r[i] && cdb_tag_r[i] != '0) begin
+                    preg_ready_table[cdb_tag_r[i]] <= 1'b1;
                 end
             end
             // p0 always ready

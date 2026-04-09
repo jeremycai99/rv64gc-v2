@@ -311,11 +311,17 @@ module rob
                 if (commit_count > 0)
                     head_r <= nh;
 
-                // Recompute count
-                if (flush_rob_tail >= nh)
-                    count_r <= flush_rob_tail - nh;
-                else
-                    count_r <= ROB_DEPTH_U8 - nh + flush_rob_tail;
+                // Recompute count — cap at pre-flush occupancy to avoid
+                // wrap-around error when head advances past restored tail
+                begin
+                    automatic logic [7:0] max_valid = count_r - {5'd0, commit_count};
+                    automatic logic [7:0] raw_count;
+                    if (flush_rob_tail >= nh)
+                        raw_count = flush_rob_tail - nh;
+                    else
+                        raw_count = ROB_DEPTH_U8 - nh + flush_rob_tail;
+                    count_r <= (raw_count <= max_valid) ? raw_count : 8'd0;
+                end
             end
 
             // Writebacks to surviving entries
