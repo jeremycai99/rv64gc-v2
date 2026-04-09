@@ -81,7 +81,8 @@ module store_queue
     // =========================================================================
     // Drain logic (combinational)
     // =========================================================================
-    assign drain_valid = queue[head_r].valid & queue[head_r].committed;
+    assign drain_valid = queue[head_r].valid & queue[head_r].committed
+                       & queue[head_r].addr_valid & queue[head_r].data_valid;
     assign drain_entry = queue[head_r];
 
     // =========================================================================

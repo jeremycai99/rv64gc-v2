@@ -22,7 +22,7 @@ module issue_queue
 
     // Wakeup via CDB broadcast
     input  logic [CDB_WIDTH-1:0]     cdb_valid,
-    input  logic [PHYS_REG_BITS-1:0] cdb_tag [CDB_WIDTH-1:0],
+    input  logic [PHYS_REG_BITS-1:0] cdb_tag [0:CDB_WIDTH-1],
 
     // Speculative wakeup (from load AGU -- may be cancelled on cache miss)
     input  logic                     spec_wk_valid,

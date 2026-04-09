@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     top->rst_n = 1;
 
     int  cycle      = 0;
-    int  max_cycles = 200;  // short VCD for debug
+    int  max_cycles = 500;  // extended for debug
     bool done       = false;
 
     while (!done && cycle < max_cycles && !Verilated::gotFinish()) {

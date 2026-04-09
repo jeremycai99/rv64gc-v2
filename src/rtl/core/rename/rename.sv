@@ -526,6 +526,10 @@ module rename
     end
 
     always_comb begin
+        // Running counters for LQ/SQ allocation among advancing slots
+        automatic int lq_cnt = 0;
+        automatic int sq_cnt = 0;
+
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             ren_insn[i] = '0;
         end
@@ -567,6 +571,23 @@ module rename
                     ren_insn[out_dest[i]].rs2_ready = 1'b1;
                 end
 
+                // Intra-batch dependency: if an earlier slot in this batch
+                // allocates a new physical register that matches our source,
+                // the source is NOT ready (the producer hasn't executed yet).
+                for (int j = 0; j < i; j++) begin
+                    if (slot_can_advance[j] && work_insn[j].rd_valid &&
+                        work_insn[j].rd_arch != 5'd0 && !is_zero_elim[j]) begin
+                        if (work_insn[i].rs1_valid && work_insn[i].rs1_arch != 5'd0 &&
+                            rat_rs1_phys[i] == rat_wr_phys[j]) begin
+                            ren_insn[out_dest[i]].rs1_ready = 1'b0;
+                        end
+                        if (work_insn[i].rs2_valid && work_insn[i].rs2_arch != 5'd0 &&
+                            rat_rs2_phys[i] == rat_wr_phys[j]) begin
+                            ren_insn[out_dest[i]].rs2_ready = 1'b0;
+                        end
+                    end
+                end
+
                 // Move-eliminated instructions are ready at rename
                 if (is_move_elim[i] || is_zero_elim[i]) begin
                     ren_insn[out_dest[i]].rs1_ready = 1'b1;
@@ -586,9 +607,21 @@ module rename
                     ren_insn[out_dest[i]].uses_checkpoint  = 1'b0;
                 end
 
-                // LQ/SQ indices
-                ren_insn[out_dest[i]].lq_idx = lq_alloc_idx[out_dest[i]];
-                ren_insn[out_dest[i]].sq_idx = sq_alloc_idx[out_dest[i]];
+                // LQ/SQ indices: use running counters, not output position,
+                // because alloc_idx arrays are indexed by store/load number
+                // within the batch, not by overall instruction position.
+                if (work_insn[i].is_load) begin
+                    ren_insn[out_dest[i]].lq_idx = lq_alloc_idx[lq_cnt];
+                    lq_cnt = lq_cnt + 1;
+                end else begin
+                    ren_insn[out_dest[i]].lq_idx = '0;
+                end
+                if (work_insn[i].is_store) begin
+                    ren_insn[out_dest[i]].sq_idx = sq_alloc_idx[sq_cnt];
+                    sq_cnt = sq_cnt + 1;
+                end else begin
+                    ren_insn[out_dest[i]].sq_idx = '0;
+                end
             end
         end
     end
