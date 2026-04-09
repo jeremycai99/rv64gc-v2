@@ -1270,10 +1270,13 @@ module rv64gc_core_top
                     preg_ready_table[ren_insn[i].pdst] <= 1'b0;
                 end
             end
-            // Set on CDB writeback (registered CDB to match wakeup timing)
+            // Set on CDB writeback — use COMBINATIONAL CDB so the table
+            // is current when rename reads it next cycle. This path
+            // (ready_table -> rename -> IQ) is one-way, not part of
+            // the IQ -> ALU -> CDB -> IQ wakeup loop.
             for (int i = 0; i < CDB_WIDTH; i++) begin
-                if (cdb_valid_r[i] && cdb_tag_r[i] != '0) begin
-                    preg_ready_table[cdb_tag_r[i]] <= 1'b1;
+                if (cdb_valid[i] && cdb_tag[i] != '0) begin
+                    preg_ready_table[cdb_tag[i]] <= 1'b1;
                 end
             end
             // p0 always ready
