@@ -1309,20 +1309,25 @@ module rv64gc_core_top
     //   [0]: ALU0/BRU  [1]: ALU1  [2]: ALU2/MUL  [3]: ALU3/DIV
     //   [4]: Load 0    [5]: Load 1
     // =========================================================================
-    assign bypass_valid = {cdb_valid[5], cdb_valid[4], cdb_valid[3],
-                           cdb_valid[2], cdb_valid[1], cdb_valid[0]};
-    assign bypass_tag[0] = cdb_tag[0];
-    assign bypass_tag[1] = cdb_tag[1];
-    assign bypass_tag[2] = cdb_tag[2];
-    assign bypass_tag[3] = cdb_tag[3];
-    assign bypass_tag[4] = cdb_tag[4];
-    assign bypass_tag[5] = cdb_tag[5];
-    assign bypass_data[0] = cdb_data[0];
-    assign bypass_data[1] = cdb_data[1];
-    assign bypass_data[2] = cdb_data[2];
-    assign bypass_data[3] = cdb_data[3];
-    assign bypass_data[4] = cdb_data[4];
-    assign bypass_data[5] = cdb_data[5];
+    // Use REGISTERED CDB for bypass to break the combinational loop:
+    //   CDB -> bypass -> ALU operand -> ALU result -> CDB
+    // With registered wakeup, consumers issue 1 cycle after the producer,
+    // so the PRF already has the data. Bypass from registered CDB provides
+    // the same data — redundant but harmless and loop-free.
+    assign bypass_valid = {cdb_valid_r[5], cdb_valid_r[4], cdb_valid_r[3],
+                           cdb_valid_r[2], cdb_valid_r[1], cdb_valid_r[0]};
+    assign bypass_tag[0] = cdb_tag_r[0];
+    assign bypass_tag[1] = cdb_tag_r[1];
+    assign bypass_tag[2] = cdb_tag_r[2];
+    assign bypass_tag[3] = cdb_tag_r[3];
+    assign bypass_tag[4] = cdb_tag_r[4];
+    assign bypass_tag[5] = cdb_tag_r[5];
+    assign bypass_data[0] = cdb_data_r[0];
+    assign bypass_data[1] = cdb_data_r[1];
+    assign bypass_data[2] = cdb_data_r[2];
+    assign bypass_data[3] = cdb_data_r[3];
+    assign bypass_data[4] = cdb_data_r[4];
+    assign bypass_data[5] = cdb_data_r[5];
 
     // =========================================================================
     // PRF Ready Table
