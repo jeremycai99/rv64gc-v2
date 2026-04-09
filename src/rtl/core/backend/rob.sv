@@ -320,7 +320,12 @@ module rob
                         raw_count = flush_rob_tail - nh;
                     else
                         raw_count = ROB_DEPTH_U8 - nh + flush_rob_tail;
-                    count_r <= (raw_count <= max_valid) ? raw_count : 8'd0;
+                    if (raw_count <= max_valid) begin
+                        count_r <= raw_count;
+                    end else begin
+                        count_r <= 8'd0;
+                        head_r  <= flush_rob_tail;  // head=tail when empty
+                    end
                 end
             end
 
