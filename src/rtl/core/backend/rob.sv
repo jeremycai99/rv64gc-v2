@@ -44,6 +44,10 @@ module rob
     input  logic [11:0]                       wb_csr_addr [0:CDB_WIDTH-1],
     input  logic [63:0]                       wb_csr_wdata [0:CDB_WIDTH-1],
 
+    // STA sideband writeback (marks store ROB entry as ready, no data)
+    input  logic                              sta_wb_valid,
+    input  logic [ROB_IDX_BITS-1:0]           sta_wb_rob_idx,
+
     // Commit: read head entries for commit unit
     output logic [ROB_IDX_BITS-1:0]           head_idx,
     output logic [PIPE_WIDTH-1:0]             head_valid,     // which of the 6 head entries are valid
@@ -345,6 +349,10 @@ module rob
                     csr_wdata_packed[wb_idx[i]*64 +: 64]    <= wb_csr_wdata[i];
                 end
             end
+
+            // STA sideband: mark store entry as ready
+            if (sta_wb_valid)
+                ready_r[sta_wb_rob_idx] <= 1'b1;
         end else begin
             // Normal operation
 
@@ -404,6 +412,10 @@ module rob
                     csr_wdata_packed[wb_idx[i]*64 +: 64]    <= wb_csr_wdata[i];
                 end
             end
+
+            // STA sideband: mark store entry as ready
+            if (sta_wb_valid)
+                ready_r[sta_wb_rob_idx] <= 1'b1;
 
             // Commit: advance head, clear valid and instruction-type flags
             begin

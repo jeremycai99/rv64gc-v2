@@ -49,6 +49,7 @@ module commit
     output logic [2:0]              commit_count,       // how many entries retired this cycle
     output commit_t                 commit_out [0:PIPE_WIDTH-1],  // per-entry commit info (for free list)
     output logic [2:0]              store_commit_count,  // how many stores committed (for SQ)
+    output logic [2:0]              load_commit_count,   // how many loads committed (for LQ)
 
     // Flush output (mispredict or exception)
     output flush_t                  flush_out,
@@ -123,6 +124,7 @@ module commit
     logic [2:0] misp_slot;
     logic       found_ret;      // MRET or SRET
     logic [2:0] store_cnt;
+    logic [2:0] load_cnt;
 
     // Per-slot eligibility
     logic [PIPE_WIDTH-1:0] slot_can_commit;
@@ -135,6 +137,7 @@ module commit
         misp_slot        = 3'd0;
         found_ret        = 1'b0;
         store_cnt        = 3'd0;
+        load_cnt         = 3'd0;
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             slot_can_commit[i] = 1'b0;
@@ -160,6 +163,7 @@ module commit
                 slot_can_commit[i] = 1'b1;
                 scan_count = scan_count + 3'd1;
                 if (head_is_store[i]) store_cnt = store_cnt + 3'd1;
+                if (head_is_load[i])  load_cnt = load_cnt  + 3'd1;
                 found_exception = 1'b1;
                 exc_slot = i[2:0];
             end
@@ -172,6 +176,7 @@ module commit
                 slot_can_commit[i] = 1'b1;
                 scan_count = scan_count + 3'd1;
                 if (head_is_store[i]) store_cnt = store_cnt + 3'd1;
+                if (head_is_load[i])  load_cnt = load_cnt  + 3'd1;
 
                 // Check for mispredict
                 if (head_branch_mispredict[i]) begin
@@ -244,6 +249,7 @@ module commit
     // =========================================================================
     assign commit_count      = scan_count;
     assign store_commit_count = store_cnt;
+    assign load_commit_count  = load_cnt;
     assign insn_retired_count = scan_count;
 
     // =========================================================================

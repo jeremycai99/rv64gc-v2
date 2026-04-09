@@ -20,7 +20,7 @@ module checkpoint
     input  logic [INT_PRF_DEPTH-1:0]   fl_bitmap_snapshot,
     input  logic [ROB_IDX_BITS-1:0]    rob_tail_snapshot,
 
-    // Restore: triggered on branch mispredict
+    // Restore: triggered on branch mispredict (frees all checkpoints)
     input  logic                       restore_valid,
     input  logic [CHECKPOINT_BITS-1:0] restore_id,
     output logic [PHYS_REG_BITS-1:0]   restored_rat [0:31],

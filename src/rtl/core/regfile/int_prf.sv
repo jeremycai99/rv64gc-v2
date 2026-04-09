@@ -80,21 +80,14 @@ module int_prf
     assign base_rdata[10] = regfile_copy5[raddr[10]];
     assign base_rdata[11] = regfile_copy5[raddr[11]];
 
-    // Write-first bypass + p0 zero rule
+    // Read with p0 zero rule (no write-first bypass; the bypass_network
+    // already handles same-cycle CDB forwarding, avoiding a combinational loop)
     always_comb begin
         for (int rp = 0; rp < 12; rp++) begin
             if (raddr[rp] == '0) begin
-                // p0 always reads zero
                 rdata[rp] = 64'h0;
             end else begin
-                // Start from stored value, then let higher-priority writes override
                 rdata[rp] = base_rdata[rp];
-                // Scan from wp=0 to wp=5; highest index wins (later overrides earlier)
-                for (int wp = 0; wp < 6; wp++) begin
-                    if (wen[wp] && (waddr[wp] == raddr[rp])) begin
-                        rdata[rp] = wdata[wp];
-                    end
-                end
             end
         end
     end

@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     top->rst_n = 1;
 
     int  cycle      = 0;
-    int  max_cycles = 500;  // short VCD for analysis
+    int  max_cycles = 50000;  // large limit
     bool done       = false;
 
     while (!done && cycle < max_cycles && !Verilated::gotFinish()) {

@@ -230,7 +230,7 @@ module rename
         .restored_rob_tail  (restored_rob_tail),
         .release_valid      (commit_release_cp),
         .release_id         (commit_cp_id),
-        .flush              (do_flush)
+        .flush              (do_flush || do_ckpt_restore)
     );
 
     // =========================================================================

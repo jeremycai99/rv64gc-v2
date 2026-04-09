@@ -265,6 +265,7 @@ module rv64gc_core_top
     logic [2:0]              commit_count;
     commit_t                 commit_out [0:PIPE_WIDTH-1];
     logic [2:0]              store_commit_count;
+    logic [2:0]              load_commit_count;
     logic [2:0]              insn_retired_count;
 
     // =========================================================================
@@ -442,6 +443,8 @@ module rv64gc_core_top
         .wb_csr_we              (cdb_csr_we_r),
         .wb_csr_addr            (cdb_csr_addr_r),
         .wb_csr_wdata           (cdb_csr_wdata_r),
+        .sta_wb_valid           (lsu_sta_wb_valid_r),
+        .sta_wb_rob_idx         (lsu_sta_wb_rob_idx_r),
         .head_idx               (rob_head_idx),
         .head_valid             (rob_head_valid),
         .head_ready             (rob_head_ready),
@@ -644,10 +647,23 @@ module rv64gc_core_top
                                 iq_ld_enq_cnt = iq_ld_enq_cnt + 3'd1;
                             end
                         end else begin
-                            if (iq_st_enq_cnt < 3'd2) begin
-                                iq_store_enq_data[iq_st_enq_cnt[0]] = dq_iq_entry[i];
-                                iq_store_enq_valid[iq_st_enq_cnt[0]] = 1'b1;
-                                iq_st_enq_cnt = iq_st_enq_cnt + 3'd1;
+                            // Split each store into STA + STD using both enqueue ports.
+                            // Only 1 store split per cycle (uses both ports).
+                            if (iq_st_enq_cnt == 3'd0) begin
+                                // Port 0: STA entry — needs rs1 (base addr), not rs2
+                                iq_store_enq_data[0]           = dq_iq_entry[i];
+                                iq_store_enq_data[0].fu_type   = FU_STA;
+                                iq_store_enq_data[0].rs2_ready = 1'b1;  // STA doesn't use rs2
+                                iq_store_enq_valid[0]          = 1'b1;
+
+                                // Port 1: STD entry — needs rs2 (store data), not rs1
+                                iq_store_enq_data[1]           = dq_iq_entry[i];
+                                iq_store_enq_data[1].fu_type   = FU_STD;
+                                iq_store_enq_data[1].rs1_ready = 1'b1;  // STD doesn't use rs1
+                                iq_store_enq_data[1].pdst      = '0;    // STD has no dest reg
+                                iq_store_enq_valid[1]          = 1'b1;
+
+                                iq_st_enq_cnt = iq_st_enq_cnt + 3'd2;  // consumed both ports
                             end
                         end
                     end
@@ -765,6 +781,44 @@ module rv64gc_core_top
     );
 
     // =========================================================================
+    // Store IQ issue → STA/STD routing
+    // Either issue port may produce STA or STD. Route by fu_type.
+    // =========================================================================
+    logic       routed_sta_valid;
+    iq_entry_t  routed_sta_data;
+    logic       routed_std_valid;
+    iq_entry_t  routed_std_data;
+
+    always_comb begin
+        routed_sta_valid = 1'b0;
+        routed_sta_data  = '0;
+        routed_std_valid = 1'b0;
+        routed_std_data  = '0;
+
+        // Check port 0
+        if (iq_store_issue_valid[0]) begin
+            if (iq_store_issue_data[0].fu_type == FU_STA) begin
+                routed_sta_valid = 1'b1;
+                routed_sta_data  = iq_store_issue_data[0];
+            end else begin
+                routed_std_valid = 1'b1;
+                routed_std_data  = iq_store_issue_data[0];
+            end
+        end
+
+        // Check port 1
+        if (iq_store_issue_valid[1]) begin
+            if (iq_store_issue_data[1].fu_type == FU_STA) begin
+                routed_sta_valid = 1'b1;
+                routed_sta_data  = iq_store_issue_data[1];
+            end else begin
+                routed_std_valid = 1'b1;
+                routed_std_data  = iq_store_issue_data[1];
+            end
+        end
+    end
+
+    // =========================================================================
     // 8. INTEGER PRF (12R6W)
     // =========================================================================
     logic [PHYS_REG_BITS-1:0] prf_raddr [0:11];
@@ -806,9 +860,9 @@ module rv64gc_core_top
     // Load IQ -> Load AGU rs1 x2
     assign prf_raddr[8]  = iq_load_issue_data[0].rs1_phys;
     assign prf_raddr[9]  = iq_load_issue_data[1].rs1_phys;
-    // Store IQ -> STA rs1 (port 0), STD rs2 (port 1)
-    assign prf_raddr[10] = iq_store_issue_data[0].rs1_phys;
-    assign prf_raddr[11] = iq_store_issue_data[1].rs2_phys;
+    // Store IQ -> STA rs1, STD rs2 (routed by fu_type)
+    assign prf_raddr[10] = routed_sta_data.rs1_phys;
+    assign prf_raddr[11] = routed_std_data.rs2_phys;
 
     // =========================================================================
     // 9. BYPASS NETWORK (12 instances, one per operand)
@@ -1200,6 +1254,24 @@ module rv64gc_core_top
     end
 
     // =========================================================================
+    // STA writeback register (1-cycle delay, matches CDB register stage)
+    // =========================================================================
+    logic                     lsu_sta_wb_valid_r;
+    logic [ROB_IDX_BITS-1:0]  lsu_sta_wb_rob_idx_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            lsu_sta_wb_valid_r   <= 1'b0;
+            lsu_sta_wb_rob_idx_r <= '0;
+        end else if (flush_out.valid) begin
+            lsu_sta_wb_valid_r   <= 1'b0;
+        end else begin
+            lsu_sta_wb_valid_r   <= lsu_sta_wb_valid;
+            lsu_sta_wb_rob_idx_r <= lsu_sta_wb_rob_idx;
+        end
+    end
+
+    // =========================================================================
     // PRF Write Port Assignment
     //   Write[0]: ALU0/BRU
     //   Write[1]: ALU1
@@ -1326,10 +1398,10 @@ module rv64gc_core_top
         // Issue inputs
         .load_issue_valid       (iq_load_issue_valid),
         .load_issue_data        (iq_load_issue_data),
-        .sta_issue_valid        (iq_store_issue_valid[0]),
-        .sta_issue_data         (iq_store_issue_data[0]),
-        .std_issue_valid        (iq_store_issue_valid[1]),
-        .std_issue_data         (iq_store_issue_data[1]),
+        .sta_issue_valid        (routed_sta_valid),
+        .sta_issue_data         (routed_sta_data),
+        .std_issue_valid        (routed_std_valid),
+        .std_issue_data         (routed_std_data),
         // PRF read data
         .load_rs1               ({bypassed_data[9], bypassed_data[8]}),
         .sta_rs1                (bypassed_data[10]),
@@ -1343,8 +1415,9 @@ module rv64gc_core_top
         .load_wb_exc_code       (lsu_load_wb_exc_code),
         .sta_wb_valid           (lsu_sta_wb_valid),
         .sta_wb_rob_idx         (lsu_sta_wb_rob_idx),
-        // Store commit
+        // Commit counts
         .store_commit_count     (store_commit_count),
+        .load_commit_count      (load_commit_count),
         // Speculative wakeup
         .spec_wakeup_valid      (lsu_spec_wakeup_valid),
         .spec_wakeup_tag        (lsu_spec_wakeup_tag),
@@ -1510,6 +1583,7 @@ module rv64gc_core_top
         .commit_count           (commit_count),
         .commit_out             (commit_out),
         .store_commit_count     (store_commit_count),
+        .load_commit_count      (load_commit_count),
         .flush_out              (flush_out),
         .csr_commit_valid       (csr_commit_valid),
         .csr_commit_addr        (csr_commit_addr),

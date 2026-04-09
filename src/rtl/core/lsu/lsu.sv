@@ -39,8 +39,9 @@ module lsu
     output logic sta_wb_valid,
     output logic [ROB_IDX_BITS-1:0] sta_wb_rob_idx,
 
-    // Store commit (from commit unit)
+    // Commit counts (from commit unit)
     input logic [2:0] store_commit_count,
+    input logic [2:0] load_commit_count,
 
     // Speculative wakeup (load issues -> wake dependents)
     output logic [1:0] spec_wakeup_valid,
@@ -360,7 +361,7 @@ module lsu
         .ordering_violation(ordering_violation),
         .violation_rob_idx (violation_rob_idx),
         // Commit
-        .commit_count      (store_commit_count),
+        .commit_count      (load_commit_count),
         // Flush
         .flush_valid       (flush_in.valid),
         .flush_full        (flush_in.full_flush)
