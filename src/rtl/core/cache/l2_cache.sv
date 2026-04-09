@@ -169,58 +169,12 @@ module l2_cache
     //   Bit [6]     : way 6 vs 7
     // Victim is the LRU leaf.
     // =========================================================================
-    function automatic logic [2:0] plru_get_victim(input logic [6:0] state);
-        logic top, mid_l, mid_r, bot;
-        logic [2:0] v;
-        top   = state[0];
-        if (!top) begin
-            mid_l = state[1];
-            if (!mid_l) begin
-                bot = state[3];
-                v = bot ? 3'd1 : 3'd0;
-            end else begin
-                bot = state[4];
-                v = bot ? 3'd3 : 3'd2;
-            end
-        end else begin
-            mid_r = state[2];
-            if (!mid_r) begin
-                bot = state[5];
-                v = bot ? 3'd5 : 3'd4;
-            end else begin
-                bot = state[6];
-                v = bot ? 3'd7 : 3'd6;
-            end
-        end
-        return v;
-    endfunction
+    // Inline PLRU victim: compute from state bits (binary tree traversal)
+    // plru_victim_from_state[i] computes victim from plru_state for a given set
+    // We compute it on demand using always_comb blocks below.
 
-    function automatic logic [6:0] plru_update(
-        input logic [6:0] state,
-        input logic [2:0] way
-    );
-        logic [6:0] ns;
-        ns = state;
-        // Update root: point away from used half
-        ns[0] = ~way[2];
-        // Update mid level
-        if (!way[2]) begin
-            ns[1] = ~way[1];
-            // Update leaf level for left half
-            if (!way[1])
-                ns[3] = ~way[0];
-            else
-                ns[4] = ~way[0];
-        end else begin
-            ns[2] = ~way[1];
-            // Update leaf level for right half
-            if (!way[1])
-                ns[5] = ~way[0];
-            else
-                ns[6] = ~way[0];
-        end
-        return ns;
-    endfunction
+    // Inline PLRU update: compute next state given current state and accessed way
+    // Computed inline at each usage site below.
 
     // =========================================================================
     // Combinational: address decode
@@ -249,7 +203,22 @@ module l2_cache
     // Combinational: PLRU victim for this set
     // =========================================================================
     always_comb begin
-        plru_victim = plru_get_victim(plru_state[lookup_set]);
+        // Inline plru_get_victim for lookup_set
+        begin
+            logic [6:0] _ps;
+            _ps = plru_state[lookup_set];
+            if (!_ps[0]) begin
+                if (!_ps[1])
+                    plru_victim = _ps[3] ? 3'd1 : 3'd0;
+                else
+                    plru_victim = _ps[4] ? 3'd3 : 3'd2;
+            end else begin
+                if (!_ps[2])
+                    plru_victim = _ps[5] ? 3'd5 : 3'd4;
+                else
+                    plru_victim = _ps[6] ? 3'd7 : 3'd6;
+            end
+        end
         victim_way  = plru_victim;
         need_evict  = valid_ram[lookup_set][victim_way] &&
                       dirty_ram[lookup_set][victim_way];
@@ -451,9 +420,21 @@ module l2_cache
                         data_ram[lookup_set][hit_way] <= arb_wdata;
                         dirty_ram[lookup_set][hit_way] <= 1'b1;
                     end
-                    // Update PLRU on every access
-                    plru_state[lookup_set] <=
-                        plru_update(plru_state[lookup_set], hit_way);
+                    // Update PLRU on every access (inline plru_update)
+                    begin
+                        automatic logic [6:0] _ns = plru_state[lookup_set];
+                        _ns[0] = ~hit_way[2];
+                        if (!hit_way[2]) begin
+                            _ns[1] = ~hit_way[1];
+                            if (!hit_way[1]) _ns[3] = ~hit_way[0];
+                            else             _ns[4] = ~hit_way[0];
+                        end else begin
+                            _ns[2] = ~hit_way[1];
+                            if (!hit_way[1]) _ns[5] = ~hit_way[0];
+                            else             _ns[6] = ~hit_way[0];
+                        end
+                        plru_state[lookup_set] <= _ns;
+                    end
                 end else begin
                     // ---- MISS ----
                     // Only allocate MSHR for fill requests (not writebacks)
@@ -468,8 +449,20 @@ module l2_cache
                                 tag_ram[lookup_set][victim_way]   <= lookup_tag;
                                 valid_ram[lookup_set][victim_way] <= 1'b1;
                                 dirty_ram[lookup_set][victim_way] <= 1'b1;
-                                plru_state[lookup_set] <=
-                                    plru_update(plru_state[lookup_set], victim_way);
+                                begin
+                                    automatic logic [6:0] _ns2 = plru_state[lookup_set];
+                                    _ns2[0] = ~victim_way[2];
+                                    if (!victim_way[2]) begin
+                                        _ns2[1] = ~victim_way[1];
+                                        if (!victim_way[1]) _ns2[3] = ~victim_way[0];
+                                        else                _ns2[4] = ~victim_way[0];
+                                    end else begin
+                                        _ns2[2] = ~victim_way[1];
+                                        if (!victim_way[1]) _ns2[5] = ~victim_way[0];
+                                        else                _ns2[6] = ~victim_way[0];
+                                    end
+                                    plru_state[lookup_set] <= _ns2;
+                                end
                             end
                             // If need_evict: writeback handling below via
                             // eviction path (simplified: skip for bringup,
@@ -504,11 +497,24 @@ module l2_cache
                     logic [L2_SET_BITS-1:0] fill_set;
                     logic [L2_TAG_BITS-1:0] fill_tag;
                     logic [2:0]             fill_victim;
-                    logic [6:0]             fill_plru_ns;
 
                     fill_set    = mshr[mshr_resp_idx].addr[INDEX_HI:INDEX_LO];
                     fill_tag    = mshr[mshr_resp_idx].addr[TAG_HI:TAG_LO];
-                    fill_victim = plru_get_victim(plru_state[fill_set]);
+                    // Inline plru_get_victim for fill_set
+                    begin
+                        automatic logic [6:0] _fps = plru_state[fill_set];
+                        if (!_fps[0]) begin
+                            if (!_fps[1])
+                                fill_victim = _fps[3] ? 3'd1 : 3'd0;
+                            else
+                                fill_victim = _fps[4] ? 3'd3 : 3'd2;
+                        end else begin
+                            if (!_fps[2])
+                                fill_victim = _fps[5] ? 3'd5 : 3'd4;
+                            else
+                                fill_victim = _fps[6] ? 3'd7 : 3'd6;
+                        end
+                    end
 
                     // Writeback dirty victim before installing fill data
                     // (simplified: queue writeback only if dirty — for
@@ -533,8 +539,21 @@ module l2_cache
                     valid_ram[fill_set][fill_victim] <= 1'b1;
                     dirty_ram[fill_set][fill_victim] <= 1'b0;
 
-                    fill_plru_ns = plru_update(plru_state[fill_set], fill_victim);
-                    plru_state[fill_set] <= fill_plru_ns;
+                    // Inline plru_update for fill_set
+                    begin
+                        automatic logic [6:0] _fns = plru_state[fill_set];
+                        _fns[0] = ~fill_victim[2];
+                        if (!fill_victim[2]) begin
+                            _fns[1] = ~fill_victim[1];
+                            if (!fill_victim[1]) _fns[3] = ~fill_victim[0];
+                            else                 _fns[4] = ~fill_victim[0];
+                        end else begin
+                            _fns[2] = ~fill_victim[1];
+                            if (!fill_victim[1]) _fns[5] = ~fill_victim[0];
+                            else                 _fns[6] = ~fill_victim[0];
+                        end
+                        plru_state[fill_set] <= _fns;
+                    end
 
                     // Deliver response through a single-cycle bypass
                     // (insert directly into the last pipe stage so it arrives

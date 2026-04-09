@@ -19,69 +19,30 @@ module fusion_detector
 );
 
     // =========================================================================
-    // Local helper functions / wires for instruction classification
+    // Per-slot classification wires (replaces classification functions)
     // =========================================================================
+    logic [PIPE_WIDTH-1:0] w_is_lui, w_is_auipc, w_is_addi, w_is_jalr;
+    logic [PIPE_WIDTH-1:0] w_is_load_insn, w_is_store_insn;
+    logic [PIPE_WIDTH-1:0] w_is_slt, w_is_sltu, w_is_slti, w_is_sltiu;
+    logic [PIPE_WIDTH-1:0] w_is_bne, w_is_beq;
 
-    // Check whether an instruction is LUI  (fu_type==FU_ALU, alu_op==ALU_LUI)
-    function automatic logic is_lui(input decoded_insn_t d);
-        return (d.fu_type == FU_ALU) && (d.alu_op == ALU_LUI);
-    endfunction
-
-    // Check whether an instruction is AUIPC (fu_type==FU_ALU, alu_op==ALU_PASS2,
-    // use_imm==1).  AUIPC is decoded as PC+imm via ALU_PASS2.
-    function automatic logic is_auipc(input decoded_insn_t d);
-        return (d.fu_type == FU_ALU) && (d.alu_op == ALU_PASS2) && d.use_imm;
-    endfunction
-
-    // ADDI: fu_type==FU_ALU, alu_op==ALU_ADD, use_imm==1
-    function automatic logic is_addi(input decoded_insn_t d);
-        return (d.fu_type == FU_ALU) && (d.alu_op == ALU_ADD) && d.use_imm;
-    endfunction
-
-    // JALR: fu_type==FU_BRU, br_op==BR_JALR
-    function automatic logic is_jalr(input decoded_insn_t d);
-        return (d.fu_type == FU_BRU) && (d.br_op == BR_JALR);
-    endfunction
-
-    // LOAD: is_load flag set
-    function automatic logic is_load_insn(input decoded_insn_t d);
-        return d.is_load;
-    endfunction
-
-    // STORE: is_store flag set (STA half carries the base address)
-    function automatic logic is_store_insn(input decoded_insn_t d);
-        return d.is_store;
-    endfunction
-
-    // SLT (register): FU_ALU, ALU_SLT, !use_imm
-    function automatic logic is_slt(input decoded_insn_t d);
-        return (d.fu_type == FU_ALU) && (d.alu_op == ALU_SLT) && !d.use_imm;
-    endfunction
-
-    // SLTU (register): FU_ALU, ALU_SLTU, !use_imm
-    function automatic logic is_sltu(input decoded_insn_t d);
-        return (d.fu_type == FU_ALU) && (d.alu_op == ALU_SLTU) && !d.use_imm;
-    endfunction
-
-    // SLTI (immediate): FU_ALU, ALU_SLT, use_imm
-    function automatic logic is_slti(input decoded_insn_t d);
-        return (d.fu_type == FU_ALU) && (d.alu_op == ALU_SLT) && d.use_imm;
-    endfunction
-
-    // SLTIU (immediate): FU_ALU, ALU_SLTU, use_imm
-    function automatic logic is_sltiu(input decoded_insn_t d);
-        return (d.fu_type == FU_ALU) && (d.alu_op == ALU_SLTU) && d.use_imm;
-    endfunction
-
-    // BNE: FU_BRU, BR_NE
-    function automatic logic is_bne(input decoded_insn_t d);
-        return (d.fu_type == FU_BRU) && (d.br_op == BR_NE);
-    endfunction
-
-    // BEQ: FU_BRU, BR_EQ
-    function automatic logic is_beq(input decoded_insn_t d);
-        return (d.fu_type == FU_BRU) && (d.br_op == BR_EQ);
-    endfunction
+    genvar gi;
+    generate
+        for (gi = 0; gi < PIPE_WIDTH; gi++) begin : gen_classify
+            assign w_is_lui[gi]        = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_LUI);
+            assign w_is_auipc[gi]      = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_PASS2) && dec_in[gi].use_imm;
+            assign w_is_addi[gi]       = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_ADD) && dec_in[gi].use_imm;
+            assign w_is_jalr[gi]       = (dec_in[gi].fu_type == FU_BRU) && (dec_in[gi].br_op == BR_JALR);
+            assign w_is_load_insn[gi]  = dec_in[gi].is_load;
+            assign w_is_store_insn[gi] = dec_in[gi].is_store;
+            assign w_is_slt[gi]        = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_SLT) && !dec_in[gi].use_imm;
+            assign w_is_sltu[gi]       = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_SLTU) && !dec_in[gi].use_imm;
+            assign w_is_slti[gi]       = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_SLT) && dec_in[gi].use_imm;
+            assign w_is_sltiu[gi]      = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_SLTU) && dec_in[gi].use_imm;
+            assign w_is_bne[gi]        = (dec_in[gi].fu_type == FU_BRU) && (dec_in[gi].br_op == BR_NE);
+            assign w_is_beq[gi]        = (dec_in[gi].fu_type == FU_BRU) && (dec_in[gi].br_op == BR_EQ);
+        end
+    endgenerate
 
     // =========================================================================
     // Pass 1: determine which adjacent pairs fuse
@@ -123,7 +84,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 1a: LUI rd + ADDI rd, rd, imm  => 32-bit imm load
             // ---------------------------------------------------------------
-            if (is_lui(dec_in[0]) && is_addi(dec_in[1]) &&
+            if (w_is_lui[0] && w_is_addi[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[0].rd_arch == dec_in[1].rd_arch)) begin
                 fusable[0]              = 1'b1;
@@ -136,7 +97,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 1b: AUIPC rd + JALR ra, rd, imm  => PC-relative call
             // ---------------------------------------------------------------
-            end else if (is_auipc(dec_in[0]) && is_jalr(dec_in[1]) &&
+            end else if (w_is_auipc[0] && w_is_jalr[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
                 fusable[0]              = 1'b1;
                 fused_uop[0]            = dec_in[0];
@@ -154,7 +115,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 1c: AUIPC rd + ADDI rd, rd, imm  => PC-relative address
             // ---------------------------------------------------------------
-            end else if (is_auipc(dec_in[0]) && is_addi(dec_in[1]) &&
+            end else if (w_is_auipc[0] && w_is_addi[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[0].rd_arch == dec_in[1].rd_arch)) begin
                 fusable[0]              = 1'b1;
@@ -167,7 +128,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 1d: AUIPC rd + LD rd, imm(rd)  => PC-relative load
             // ---------------------------------------------------------------
-            end else if (is_auipc(dec_in[0]) && is_load_insn(dec_in[1]) &&
+            end else if (w_is_auipc[0] && w_is_load_insn[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
                 fusable[0]              = 1'b1;
                 fused_uop[0]            = dec_in[1];
@@ -182,7 +143,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 1e: AUIPC rd + SD/SW/SH/SB rs, imm(rd) => PC-relative store
             // ---------------------------------------------------------------
-            end else if (is_auipc(dec_in[0]) && is_store_insn(dec_in[1]) &&
+            end else if (w_is_auipc[0] && w_is_store_insn[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
                 fusable[0]              = 1'b1;
                 fused_uop[0]            = dec_in[1];
@@ -197,7 +158,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 2a: SLT rd, rs1, rs2 + BNE rd, x0  => fused signed lt-branch
             // ---------------------------------------------------------------
-            end else if (is_slt(dec_in[0]) && is_bne(dec_in[1]) &&
+            end else if (w_is_slt[0] && w_is_bne[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[1].rs2_arch == 5'd0)) begin
                 fusable[0]              = 1'b1;
@@ -214,7 +175,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 2b: SLTU rd + BNE rd, x0  => unsigned lt-branch
             // ---------------------------------------------------------------
-            end else if (is_sltu(dec_in[0]) && is_bne(dec_in[1]) &&
+            end else if (w_is_sltu[0] && w_is_bne[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[1].rs2_arch == 5'd0)) begin
                 fusable[0]              = 1'b1;
@@ -231,7 +192,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 2c: SLT rd + BEQ rd, x0  => inverted signed lt-branch
             // ---------------------------------------------------------------
-            end else if (is_slt(dec_in[0]) && is_beq(dec_in[1]) &&
+            end else if (w_is_slt[0] && w_is_beq[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[1].rs2_arch == 5'd0)) begin
                 fusable[0]              = 1'b1;
@@ -248,7 +209,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 2d: SLTU rd + BEQ rd, x0  => inverted unsigned lt-branch
             // ---------------------------------------------------------------
-            end else if (is_sltu(dec_in[0]) && is_beq(dec_in[1]) &&
+            end else if (w_is_sltu[0] && w_is_beq[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[1].rs2_arch == 5'd0)) begin
                 fusable[0]              = 1'b1;
@@ -265,7 +226,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 2e: SLTI rd + BNE/BEQ rd, x0  => imm signed compare-branch
             // ---------------------------------------------------------------
-            end else if (is_slti(dec_in[0]) && is_bne(dec_in[1]) &&
+            end else if (w_is_slti[0] && w_is_bne[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[1].rs2_arch == 5'd0)) begin
                 fusable[0]              = 1'b1;
@@ -279,7 +240,7 @@ module fusion_detector
                 fused_uop[0].is_fused   = 1'b1;
                 fused_uop[0].fusion_type = 3'd4;  // SLTI+BNE
 
-            end else if (is_slti(dec_in[0]) && is_beq(dec_in[1]) &&
+            end else if (w_is_slti[0] && w_is_beq[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[1].rs2_arch == 5'd0)) begin
                 fusable[0]              = 1'b1;
@@ -296,7 +257,7 @@ module fusion_detector
             // ---------------------------------------------------------------
             // Tier 2f: SLTIU rd + BNE/BEQ rd, x0
             // ---------------------------------------------------------------
-            end else if (is_sltiu(dec_in[0]) && is_bne(dec_in[1]) &&
+            end else if (w_is_sltiu[0] && w_is_bne[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[1].rs2_arch == 5'd0)) begin
                 fusable[0]              = 1'b1;
@@ -310,7 +271,7 @@ module fusion_detector
                 fused_uop[0].is_fused   = 1'b1;
                 fused_uop[0].fusion_type = 3'd5;  // SLTIU+BNE
 
-            end else if (is_sltiu(dec_in[0]) && is_beq(dec_in[1]) &&
+            end else if (w_is_sltiu[0] && w_is_beq[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
                 (dec_in[1].rs2_arch == 5'd0)) begin
                 fusable[0]              = 1'b1;
@@ -337,7 +298,7 @@ module fusion_detector
             dec_in[1].valid && dec_in[2].valid && same_line[1] &&
             (dec_in[1].rd_arch != 5'd0)) begin
 
-            if (is_lui(dec_in[1]) && is_addi(dec_in[2]) &&
+            if (w_is_lui[1] && w_is_addi[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[1].rd_arch == dec_in[2].rd_arch)) begin
                 fusable[1]              = 1'b1;
@@ -347,7 +308,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[1]) && is_jalr(dec_in[2]) &&
+            end else if (w_is_auipc[1] && w_is_jalr[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
                 fusable[1]              = 1'b1;
                 fused_uop[1]            = dec_in[1];
@@ -362,7 +323,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[1]) && is_addi(dec_in[2]) &&
+            end else if (w_is_auipc[1] && w_is_addi[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[1].rd_arch == dec_in[2].rd_arch)) begin
                 fusable[1]              = 1'b1;
@@ -372,7 +333,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[1]) && is_load_insn(dec_in[2]) &&
+            end else if (w_is_auipc[1] && w_is_load_insn[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
                 fusable[1]              = 1'b1;
                 fused_uop[1]            = dec_in[2];
@@ -384,7 +345,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[1]) && is_store_insn(dec_in[2]) &&
+            end else if (w_is_auipc[1] && w_is_store_insn[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
                 fusable[1]              = 1'b1;
                 fused_uop[1]            = dec_in[2];
@@ -396,7 +357,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd0;
 
-            end else if (is_slt(dec_in[1]) && is_bne(dec_in[2]) &&
+            end else if (w_is_slt[1] && w_is_bne[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[2].rs2_arch == 5'd0)) begin
                 fusable[1]              = 1'b1;
@@ -410,7 +371,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd0;
 
-            end else if (is_sltu(dec_in[1]) && is_bne(dec_in[2]) &&
+            end else if (w_is_sltu[1] && w_is_bne[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[2].rs2_arch == 5'd0)) begin
                 fusable[1]              = 1'b1;
@@ -424,7 +385,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd1;
 
-            end else if (is_slt(dec_in[1]) && is_beq(dec_in[2]) &&
+            end else if (w_is_slt[1] && w_is_beq[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[2].rs2_arch == 5'd0)) begin
                 fusable[1]              = 1'b1;
@@ -438,7 +399,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd2;
 
-            end else if (is_sltu(dec_in[1]) && is_beq(dec_in[2]) &&
+            end else if (w_is_sltu[1] && w_is_beq[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[2].rs2_arch == 5'd0)) begin
                 fusable[1]              = 1'b1;
@@ -452,7 +413,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd3;
 
-            end else if (is_slti(dec_in[1]) && is_bne(dec_in[2]) &&
+            end else if (w_is_slti[1] && w_is_bne[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[2].rs2_arch == 5'd0)) begin
                 fusable[1]              = 1'b1;
@@ -466,7 +427,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd4;
 
-            end else if (is_slti(dec_in[1]) && is_beq(dec_in[2]) &&
+            end else if (w_is_slti[1] && w_is_beq[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[2].rs2_arch == 5'd0)) begin
                 fusable[1]              = 1'b1;
@@ -480,7 +441,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd4;
 
-            end else if (is_sltiu(dec_in[1]) && is_bne(dec_in[2]) &&
+            end else if (w_is_sltiu[1] && w_is_bne[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[2].rs2_arch == 5'd0)) begin
                 fusable[1]              = 1'b1;
@@ -494,7 +455,7 @@ module fusion_detector
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd5;
 
-            end else if (is_sltiu(dec_in[1]) && is_beq(dec_in[2]) &&
+            end else if (w_is_sltiu[1] && w_is_beq[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
                 (dec_in[2].rs2_arch == 5'd0)) begin
                 fusable[1]              = 1'b1;
@@ -521,7 +482,7 @@ module fusion_detector
             dec_in[2].valid && dec_in[3].valid && same_line[2] &&
             (dec_in[2].rd_arch != 5'd0)) begin
 
-            if (is_lui(dec_in[2]) && is_addi(dec_in[3]) &&
+            if (w_is_lui[2] && w_is_addi[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[2].rd_arch == dec_in[3].rd_arch)) begin
                 fusable[2]              = 1'b1;
@@ -531,7 +492,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[2]) && is_jalr(dec_in[3]) &&
+            end else if (w_is_auipc[2] && w_is_jalr[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
                 fusable[2]              = 1'b1;
                 fused_uop[2]            = dec_in[2];
@@ -546,7 +507,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[2]) && is_addi(dec_in[3]) &&
+            end else if (w_is_auipc[2] && w_is_addi[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[2].rd_arch == dec_in[3].rd_arch)) begin
                 fusable[2]              = 1'b1;
@@ -556,7 +517,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[2]) && is_load_insn(dec_in[3]) &&
+            end else if (w_is_auipc[2] && w_is_load_insn[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
                 fusable[2]              = 1'b1;
                 fused_uop[2]            = dec_in[3];
@@ -568,7 +529,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[2]) && is_store_insn(dec_in[3]) &&
+            end else if (w_is_auipc[2] && w_is_store_insn[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
                 fusable[2]              = 1'b1;
                 fused_uop[2]            = dec_in[3];
@@ -580,7 +541,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd0;
 
-            end else if (is_slt(dec_in[2]) && is_bne(dec_in[3]) &&
+            end else if (w_is_slt[2] && w_is_bne[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[3].rs2_arch == 5'd0)) begin
                 fusable[2]              = 1'b1;
@@ -594,7 +555,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd0;
 
-            end else if (is_sltu(dec_in[2]) && is_bne(dec_in[3]) &&
+            end else if (w_is_sltu[2] && w_is_bne[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[3].rs2_arch == 5'd0)) begin
                 fusable[2]              = 1'b1;
@@ -608,7 +569,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd1;
 
-            end else if (is_slt(dec_in[2]) && is_beq(dec_in[3]) &&
+            end else if (w_is_slt[2] && w_is_beq[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[3].rs2_arch == 5'd0)) begin
                 fusable[2]              = 1'b1;
@@ -622,7 +583,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd2;
 
-            end else if (is_sltu(dec_in[2]) && is_beq(dec_in[3]) &&
+            end else if (w_is_sltu[2] && w_is_beq[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[3].rs2_arch == 5'd0)) begin
                 fusable[2]              = 1'b1;
@@ -636,7 +597,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd3;
 
-            end else if (is_slti(dec_in[2]) && is_bne(dec_in[3]) &&
+            end else if (w_is_slti[2] && w_is_bne[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[3].rs2_arch == 5'd0)) begin
                 fusable[2]              = 1'b1;
@@ -650,7 +611,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd4;
 
-            end else if (is_slti(dec_in[2]) && is_beq(dec_in[3]) &&
+            end else if (w_is_slti[2] && w_is_beq[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[3].rs2_arch == 5'd0)) begin
                 fusable[2]              = 1'b1;
@@ -664,7 +625,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd4;
 
-            end else if (is_sltiu(dec_in[2]) && is_bne(dec_in[3]) &&
+            end else if (w_is_sltiu[2] && w_is_bne[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[3].rs2_arch == 5'd0)) begin
                 fusable[2]              = 1'b1;
@@ -678,7 +639,7 @@ module fusion_detector
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd5;
 
-            end else if (is_sltiu(dec_in[2]) && is_beq(dec_in[3]) &&
+            end else if (w_is_sltiu[2] && w_is_beq[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
                 (dec_in[3].rs2_arch == 5'd0)) begin
                 fusable[2]              = 1'b1;
@@ -705,7 +666,7 @@ module fusion_detector
             dec_in[3].valid && dec_in[4].valid && same_line[3] &&
             (dec_in[3].rd_arch != 5'd0)) begin
 
-            if (is_lui(dec_in[3]) && is_addi(dec_in[4]) &&
+            if (w_is_lui[3] && w_is_addi[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[3].rd_arch == dec_in[4].rd_arch)) begin
                 fusable[3]              = 1'b1;
@@ -715,7 +676,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[3]) && is_jalr(dec_in[4]) &&
+            end else if (w_is_auipc[3] && w_is_jalr[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch)) begin
                 fusable[3]              = 1'b1;
                 fused_uop[3]            = dec_in[3];
@@ -730,7 +691,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[3]) && is_addi(dec_in[4]) &&
+            end else if (w_is_auipc[3] && w_is_addi[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[3].rd_arch == dec_in[4].rd_arch)) begin
                 fusable[3]              = 1'b1;
@@ -740,7 +701,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[3]) && is_load_insn(dec_in[4]) &&
+            end else if (w_is_auipc[3] && w_is_load_insn[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch)) begin
                 fusable[3]              = 1'b1;
                 fused_uop[3]            = dec_in[4];
@@ -752,7 +713,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[3]) && is_store_insn(dec_in[4]) &&
+            end else if (w_is_auipc[3] && w_is_store_insn[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch)) begin
                 fusable[3]              = 1'b1;
                 fused_uop[3]            = dec_in[4];
@@ -764,7 +725,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd0;
 
-            end else if (is_slt(dec_in[3]) && is_bne(dec_in[4]) &&
+            end else if (w_is_slt[3] && w_is_bne[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[4].rs2_arch == 5'd0)) begin
                 fusable[3]              = 1'b1;
@@ -778,7 +739,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd0;
 
-            end else if (is_sltu(dec_in[3]) && is_bne(dec_in[4]) &&
+            end else if (w_is_sltu[3] && w_is_bne[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[4].rs2_arch == 5'd0)) begin
                 fusable[3]              = 1'b1;
@@ -792,7 +753,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd1;
 
-            end else if (is_slt(dec_in[3]) && is_beq(dec_in[4]) &&
+            end else if (w_is_slt[3] && w_is_beq[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[4].rs2_arch == 5'd0)) begin
                 fusable[3]              = 1'b1;
@@ -806,7 +767,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd2;
 
-            end else if (is_sltu(dec_in[3]) && is_beq(dec_in[4]) &&
+            end else if (w_is_sltu[3] && w_is_beq[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[4].rs2_arch == 5'd0)) begin
                 fusable[3]              = 1'b1;
@@ -820,7 +781,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd3;
 
-            end else if (is_slti(dec_in[3]) && is_bne(dec_in[4]) &&
+            end else if (w_is_slti[3] && w_is_bne[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[4].rs2_arch == 5'd0)) begin
                 fusable[3]              = 1'b1;
@@ -834,7 +795,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd4;
 
-            end else if (is_slti(dec_in[3]) && is_beq(dec_in[4]) &&
+            end else if (w_is_slti[3] && w_is_beq[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[4].rs2_arch == 5'd0)) begin
                 fusable[3]              = 1'b1;
@@ -848,7 +809,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd4;
 
-            end else if (is_sltiu(dec_in[3]) && is_bne(dec_in[4]) &&
+            end else if (w_is_sltiu[3] && w_is_bne[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[4].rs2_arch == 5'd0)) begin
                 fusable[3]              = 1'b1;
@@ -862,7 +823,7 @@ module fusion_detector
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd5;
 
-            end else if (is_sltiu(dec_in[3]) && is_beq(dec_in[4]) &&
+            end else if (w_is_sltiu[3] && w_is_beq[4] &&
                 (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
                 (dec_in[4].rs2_arch == 5'd0)) begin
                 fusable[3]              = 1'b1;
@@ -889,7 +850,7 @@ module fusion_detector
             dec_in[4].valid && dec_in[5].valid && same_line[4] &&
             (dec_in[4].rd_arch != 5'd0)) begin
 
-            if (is_lui(dec_in[4]) && is_addi(dec_in[5]) &&
+            if (w_is_lui[4] && w_is_addi[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[4].rd_arch == dec_in[5].rd_arch)) begin
                 fusable[4]              = 1'b1;
@@ -899,7 +860,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[4]) && is_jalr(dec_in[5]) &&
+            end else if (w_is_auipc[4] && w_is_jalr[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch)) begin
                 fusable[4]              = 1'b1;
                 fused_uop[4]            = dec_in[4];
@@ -914,7 +875,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[4]) && is_addi(dec_in[5]) &&
+            end else if (w_is_auipc[4] && w_is_addi[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[4].rd_arch == dec_in[5].rd_arch)) begin
                 fusable[4]              = 1'b1;
@@ -924,7 +885,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[4]) && is_load_insn(dec_in[5]) &&
+            end else if (w_is_auipc[4] && w_is_load_insn[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch)) begin
                 fusable[4]              = 1'b1;
                 fused_uop[4]            = dec_in[5];
@@ -936,7 +897,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd0;
 
-            end else if (is_auipc(dec_in[4]) && is_store_insn(dec_in[5]) &&
+            end else if (w_is_auipc[4] && w_is_store_insn[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch)) begin
                 fusable[4]              = 1'b1;
                 fused_uop[4]            = dec_in[5];
@@ -948,7 +909,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd0;
 
-            end else if (is_slt(dec_in[4]) && is_bne(dec_in[5]) &&
+            end else if (w_is_slt[4] && w_is_bne[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[5].rs2_arch == 5'd0)) begin
                 fusable[4]              = 1'b1;
@@ -962,7 +923,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd0;
 
-            end else if (is_sltu(dec_in[4]) && is_bne(dec_in[5]) &&
+            end else if (w_is_sltu[4] && w_is_bne[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[5].rs2_arch == 5'd0)) begin
                 fusable[4]              = 1'b1;
@@ -976,7 +937,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd1;
 
-            end else if (is_slt(dec_in[4]) && is_beq(dec_in[5]) &&
+            end else if (w_is_slt[4] && w_is_beq[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[5].rs2_arch == 5'd0)) begin
                 fusable[4]              = 1'b1;
@@ -990,7 +951,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd2;
 
-            end else if (is_sltu(dec_in[4]) && is_beq(dec_in[5]) &&
+            end else if (w_is_sltu[4] && w_is_beq[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[5].rs2_arch == 5'd0)) begin
                 fusable[4]              = 1'b1;
@@ -1004,7 +965,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd3;
 
-            end else if (is_slti(dec_in[4]) && is_bne(dec_in[5]) &&
+            end else if (w_is_slti[4] && w_is_bne[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[5].rs2_arch == 5'd0)) begin
                 fusable[4]              = 1'b1;
@@ -1018,7 +979,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd4;
 
-            end else if (is_slti(dec_in[4]) && is_beq(dec_in[5]) &&
+            end else if (w_is_slti[4] && w_is_beq[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[5].rs2_arch == 5'd0)) begin
                 fusable[4]              = 1'b1;
@@ -1032,7 +993,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd4;
 
-            end else if (is_sltiu(dec_in[4]) && is_bne(dec_in[5]) &&
+            end else if (w_is_sltiu[4] && w_is_bne[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[5].rs2_arch == 5'd0)) begin
                 fusable[4]              = 1'b1;
@@ -1046,7 +1007,7 @@ module fusion_detector
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd5;
 
-            end else if (is_sltiu(dec_in[4]) && is_beq(dec_in[5]) &&
+            end else if (w_is_sltiu[4] && w_is_beq[5] &&
                 (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
                 (dec_in[5].rs2_arch == 5'd0)) begin
                 fusable[4]              = 1'b1;
@@ -1097,17 +1058,7 @@ module fusion_detector
     //     fusable[k] covers pair (k, k+1), so input slot i is the FIRST of
     //     a fused pair when fusable[i] is set (for i in 0..4).
     //   - Otherwise: dec_in[i] as-is.
-    function automatic decoded_insn_t slot_output(
-        input int i,
-        input decoded_insn_t di [0:PIPE_WIDTH-1],
-        input decoded_insn_t fu  [0:4],
-        input logic [4:0]    fus
-    );
-        if ((i < 5) && fus[i])
-            return fu[i];
-        else
-            return di[i];
-    endfunction
+    // slot_output logic inlined in compaction block below
 
     // Compaction: shift valid (non-consumed) slots to fill the array.
     // We unroll this combinationally.  Output slots are filled sequentially.

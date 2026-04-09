@@ -524,46 +524,48 @@ module rv64gc_core_top
     logic [PHYS_REG_BITS-1:0] lsu_spec_cancel_tag [0:1];
 
     // =========================================================================
-    // Dispatch routing: convert renamed_insn_t to iq_entry_t and route
+    // Dispatch routing: precompute renamed_insn_t to iq_entry_t conversion
     // =========================================================================
-    function automatic iq_entry_t renamed_to_iq(input renamed_insn_t ri);
-        iq_entry_t e;
-        e.valid        = ri.base.valid;
-        e.rob_idx      = ri.rob_idx;
-        e.pdst         = ri.pdst;
-        e.rs1_phys     = ri.rs1_phys;
-        e.rs2_phys     = ri.rs2_phys;
-        e.rs1_ready    = ri.rs1_ready;
-        e.rs2_ready    = ri.rs2_ready;
-        e.imm          = ri.base.imm;
-        e.fu_type      = ri.base.fu_type;
-        e.alu_op       = ri.base.alu_op;
-        e.br_op        = ri.base.br_op;
-        e.mul_op       = ri.base.mul_op;
-        e.div_op       = ri.base.div_op;
-        e.mem_size     = ri.base.mem_size;
-        e.csr_op       = ri.base.csr_op;
-        e.csr_addr     = ri.base.csr_addr;
-        e.is_w_op      = ri.base.is_w_op;
-        e.is_unsigned  = ri.base.is_unsigned;
-        e.use_imm      = ri.base.use_imm;
-        e.pc           = ri.base.pc;
-        e.bp_taken     = ri.base.bp_taken;
-        e.bp_target    = ri.base.bp_target;
-        e.is_fused     = ri.base.is_fused;
-        e.fusion_type  = ri.base.fusion_type;
-        e.fused_imm    = ri.base.fused_imm;
-        e.is_amo       = ri.base.is_amo;
-        e.amo_op       = ri.base.amo_op;
-        e.amo_aq       = ri.base.amo_aq;
-        e.amo_rl       = ri.base.amo_rl;
-        e.is_rvc       = ri.base.is_rvc;
-        e.checkpoint_id   = ri.checkpoint_id;
-        e.uses_checkpoint = ri.uses_checkpoint;
-        e.sq_idx       = ri.sq_idx;
-        e.lq_idx       = ri.lq_idx;
-        return e;
-    endfunction
+    iq_entry_t dq_iq_entry [0:PIPE_WIDTH-1];
+
+    always_comb begin
+        for (int s = 0; s < PIPE_WIDTH; s++) begin
+            dq_iq_entry[s].valid        = dq_deq_data[s].base.valid;
+            dq_iq_entry[s].rob_idx      = dq_deq_data[s].rob_idx;
+            dq_iq_entry[s].pdst         = dq_deq_data[s].pdst;
+            dq_iq_entry[s].rs1_phys     = dq_deq_data[s].rs1_phys;
+            dq_iq_entry[s].rs2_phys     = dq_deq_data[s].rs2_phys;
+            dq_iq_entry[s].rs1_ready    = dq_deq_data[s].rs1_ready;
+            dq_iq_entry[s].rs2_ready    = dq_deq_data[s].rs2_ready;
+            dq_iq_entry[s].imm          = dq_deq_data[s].base.imm;
+            dq_iq_entry[s].fu_type      = dq_deq_data[s].base.fu_type;
+            dq_iq_entry[s].alu_op       = dq_deq_data[s].base.alu_op;
+            dq_iq_entry[s].br_op        = dq_deq_data[s].base.br_op;
+            dq_iq_entry[s].mul_op       = dq_deq_data[s].base.mul_op;
+            dq_iq_entry[s].div_op       = dq_deq_data[s].base.div_op;
+            dq_iq_entry[s].mem_size     = dq_deq_data[s].base.mem_size;
+            dq_iq_entry[s].csr_op       = dq_deq_data[s].base.csr_op;
+            dq_iq_entry[s].csr_addr     = dq_deq_data[s].base.csr_addr;
+            dq_iq_entry[s].is_w_op      = dq_deq_data[s].base.is_w_op;
+            dq_iq_entry[s].is_unsigned  = dq_deq_data[s].base.is_unsigned;
+            dq_iq_entry[s].use_imm      = dq_deq_data[s].base.use_imm;
+            dq_iq_entry[s].pc           = dq_deq_data[s].base.pc;
+            dq_iq_entry[s].bp_taken     = dq_deq_data[s].base.bp_taken;
+            dq_iq_entry[s].bp_target    = dq_deq_data[s].base.bp_target;
+            dq_iq_entry[s].is_fused     = dq_deq_data[s].base.is_fused;
+            dq_iq_entry[s].fusion_type  = dq_deq_data[s].base.fusion_type;
+            dq_iq_entry[s].fused_imm    = dq_deq_data[s].base.fused_imm;
+            dq_iq_entry[s].is_amo       = dq_deq_data[s].base.is_amo;
+            dq_iq_entry[s].amo_op       = dq_deq_data[s].base.amo_op;
+            dq_iq_entry[s].amo_aq       = dq_deq_data[s].base.amo_aq;
+            dq_iq_entry[s].amo_rl       = dq_deq_data[s].base.amo_rl;
+            dq_iq_entry[s].is_rvc       = dq_deq_data[s].base.is_rvc;
+            dq_iq_entry[s].checkpoint_id   = dq_deq_data[s].checkpoint_id;
+            dq_iq_entry[s].uses_checkpoint = dq_deq_data[s].uses_checkpoint;
+            dq_iq_entry[s].sq_idx       = dq_deq_data[s].sq_idx;
+            dq_iq_entry[s].lq_idx       = dq_deq_data[s].lq_idx;
+        end
+    end
 
     // Per-IQ enqueue counters for routing
     logic [2:0] iq0_enq_cnt, iq1_enq_cnt, iq2_enq_cnt;
@@ -594,21 +596,21 @@ module rv64gc_core_top
                 case (dq_deq_iq_target[i])
                     2'd0: begin // IQ0
                         if (iq0_enq_cnt < 3'd2) begin
-                            iq0_enq_data[iq0_enq_cnt[0]] = renamed_to_iq(dq_deq_data[i]);
+                            iq0_enq_data[iq0_enq_cnt[0]] = dq_iq_entry[i];
                             iq0_enq_valid[iq0_enq_cnt[0]] = 1'b1;
                             iq0_enq_cnt = iq0_enq_cnt + 3'd1;
                         end
                     end
                     2'd1: begin // IQ1
                         if (iq1_enq_cnt < 3'd2) begin
-                            iq1_enq_data[iq1_enq_cnt[0]] = renamed_to_iq(dq_deq_data[i]);
+                            iq1_enq_data[iq1_enq_cnt[0]] = dq_iq_entry[i];
                             iq1_enq_valid[iq1_enq_cnt[0]] = 1'b1;
                             iq1_enq_cnt = iq1_enq_cnt + 3'd1;
                         end
                     end
                     2'd2: begin // IQ2
                         if (iq2_enq_cnt < 3'd2) begin
-                            iq2_enq_data[iq2_enq_cnt[0]] = renamed_to_iq(dq_deq_data[i]);
+                            iq2_enq_data[iq2_enq_cnt[0]] = dq_iq_entry[i];
                             iq2_enq_valid[iq2_enq_cnt[0]] = 1'b1;
                             iq2_enq_cnt = iq2_enq_cnt + 3'd1;
                         end
@@ -616,13 +618,13 @@ module rv64gc_core_top
                     2'd3: begin // Memory IQ: split load/store
                         if (dq_deq_data[i].base.is_load) begin
                             if (iq_ld_enq_cnt < 3'd2) begin
-                                iq_load_enq_data[iq_ld_enq_cnt[0]] = renamed_to_iq(dq_deq_data[i]);
+                                iq_load_enq_data[iq_ld_enq_cnt[0]] = dq_iq_entry[i];
                                 iq_load_enq_valid[iq_ld_enq_cnt[0]] = 1'b1;
                                 iq_ld_enq_cnt = iq_ld_enq_cnt + 3'd1;
                             end
                         end else begin
                             if (iq_st_enq_cnt < 3'd2) begin
-                                iq_store_enq_data[iq_st_enq_cnt[0]] = renamed_to_iq(dq_deq_data[i]);
+                                iq_store_enq_data[iq_st_enq_cnt[0]] = dq_iq_entry[i];
                                 iq_store_enq_valid[iq_st_enq_cnt[0]] = 1'b1;
                                 iq_st_enq_cnt = iq_st_enq_cnt + 3'd1;
                             end

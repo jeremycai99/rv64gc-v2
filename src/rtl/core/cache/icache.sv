@@ -174,24 +174,7 @@ module icache
         end
     end
 
-    // Update PLRU on every access (hit or fill)
-    // "Point away from the accessed way"
-    task automatic update_plru;
-        input logic [L1I_SET_BITS-1:0] idx;
-        input logic [1:0]              way;
-        // synthesisable: update only the relevant bits
-        /* verilator lint_off UNPACKED */
-        begin
-            case (way)
-                2'd0: plru_state[idx] <= {1'b1, 1'b1, plru_state[idx][0]};
-                2'd1: plru_state[idx] <= {1'b1, 1'b0, plru_state[idx][0]};
-                2'd2: plru_state[idx] <= {1'b0, plru_state[idx][1], 1'b1};
-                2'd3: plru_state[idx] <= {1'b0, plru_state[idx][1], 1'b0};
-                default: ; // unreachable
-            endcase
-        end
-        /* verilator lint_on UNPACKED */
-    endtask
+    // PLRU update helper macro: point away from accessed way (inlined below)
 
     // =========================================================================
     // Miss FSM
@@ -274,9 +257,21 @@ module icache
         end else if (invalidate_all) begin
             // No PLRU update during invalidation
         end else if (s1_valid && cache_hit) begin
-            update_plru(s1_index, hit_way);
+            case (hit_way)
+                2'd0: plru_state[s1_index] <= {1'b1, 1'b1, plru_state[s1_index][0]};
+                2'd1: plru_state[s1_index] <= {1'b1, 1'b0, plru_state[s1_index][0]};
+                2'd2: plru_state[s1_index] <= {1'b0, plru_state[s1_index][1], 1'b1};
+                2'd3: plru_state[s1_index] <= {1'b0, plru_state[s1_index][1], 1'b0};
+                default: ;
+            endcase
         end else if (state_q == ST_WAIT_FILL && fill_resp_valid) begin
-            update_plru(miss_addr_q[INDEX_HI:INDEX_LO], miss_way_q);
+            case (miss_way_q)
+                2'd0: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b1, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][0]};
+                2'd1: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b0, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][0]};
+                2'd2: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][1], 1'b1};
+                2'd3: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][1], 1'b0};
+                default: ;
+            endcase
         end
     end
 

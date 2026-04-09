@@ -197,32 +197,13 @@ module csr_file
     end
 
     // =========================================================================
-    // Helper functions (module-scope)
+    // Inline CSR apply_op: wire-based for all (cur, wdata, op) combinations.
+    // ((op == 2'd0) ? (wdata) : (op == 2'd1) ? ((cur) | (wdata)) : (op == 2'd2) ? ((cur) & ~(wdata)) : (cur)) = (op==0) ? wdata : (op==1) ? cur|wdata :
+    //                            (op==2) ? cur & ~wdata : cur;
+    //
+    // norm_mstatus(ms): force SXL/UXL=2 (RV64) and compute SD bit.
+    // Both inlined at every usage site.
     // =========================================================================
-
-    // Apply CSR write operation: RW / RS / RC
-    function automatic logic [63:0] apply_op(
-        input logic [63:0] cur,
-        input logic [63:0] wdata,
-        input logic [1:0]  op
-    );
-        case (op)
-            2'd0:    return wdata;
-            2'd1:    return cur | wdata;
-            2'd2:    return cur & ~wdata;
-            default: return cur;
-        endcase
-    endfunction
-
-    // Normalise mstatus: force SXL/UXL=2 (RV64) and compute SD
-    function automatic logic [63:0] norm_mstatus(input logic [63:0] ms);
-        logic [63:0] n;
-        n        = ms;
-        n[35:34] = 2'b10;
-        n[33:32] = 2'b10;
-        n[63]    = (n[14:13] == 2'b11) || (n[16:15] == 2'b11);
-        return n;
-    endfunction
 
     // =========================================================================
     // Intermediate signals for mstatus/sstatus bypass (module-scope wires)
@@ -240,19 +221,67 @@ module csr_file
     assign csr_bypass = write_valid && !trap_valid && !mret_valid && !sret_valid &&
                         (write_addr == read_addr);
 
-    assign mstatus_wdata_op      = apply_op(mstatus_r, write_data, write_op);
-    assign mstatus_norm          = norm_mstatus(mstatus_r);
-    assign mstatus_norm_bypass   = norm_mstatus(mstatus_wdata_op);
+    assign mstatus_wdata_op      = ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mstatus_r) | (write_data)) : (write_op == 2'd2) ? ((mstatus_r) & ~(write_data)) : (mstatus_r));
+    // Inline norm_mstatus: force SXL=2, UXL=2, compute SD
+    always_comb begin
+        mstatus_norm         = mstatus_r;
+        mstatus_norm[35:34]  = 2'b10;
+        mstatus_norm[33:32]  = 2'b10;
+        mstatus_norm[63]     = (mstatus_norm[14:13] == 2'b11) ||
+                               (mstatus_norm[16:15] == 2'b11);
+    end
+    always_comb begin
+        mstatus_norm_bypass         = mstatus_wdata_op;
+        mstatus_norm_bypass[35:34]  = 2'b10;
+        mstatus_norm_bypass[33:32]  = 2'b10;
+        mstatus_norm_bypass[63]     = (mstatus_norm_bypass[14:13] == 2'b11) ||
+                                      (mstatus_norm_bypass[16:15] == 2'b11);
+    end
 
     // sstatus: apply write only to writable S-visible bits
-    assign ss_wdata_op           = apply_op(mstatus_r & SSTATUS_WMASK,
-                                            write_data & SSTATUS_WMASK,
-                                            write_op);
+    assign ss_wdata_op           = ((write_op == 2'd0) ? (write_data & SSTATUS_WMASK) : (write_op == 2'd1) ? ((mstatus_r & SSTATUS_WMASK) | (write_data & SSTATUS_WMASK)) : (write_op == 2'd2) ? ((mstatus_r & SSTATUS_WMASK) & ~(write_data & SSTATUS_WMASK)) : (mstatus_r & SSTATUS_WMASK));
     assign sstatus_applied       = (mstatus_r & ~SSTATUS_WMASK) |
                                    (ss_wdata_op & SSTATUS_WMASK);
-    assign sstatus_applied_norm  = norm_mstatus(sstatus_applied);
+    always_comb begin
+        sstatus_applied_norm         = sstatus_applied;
+        sstatus_applied_norm[35:34]  = 2'b10;
+        sstatus_applied_norm[33:32]  = 2'b10;
+        sstatus_applied_norm[63]     = (sstatus_applied_norm[14:13] == 2'b11) ||
+                                       (sstatus_applied_norm[16:15] == 2'b11);
+    end
     assign sstatus_view          = mstatus_norm        & SSTATUS_MASK;
     assign sstatus_view_bypass   = sstatus_applied_norm & SSTATUS_MASK;
+
+    // =========================================================================
+    // Precomputed CSR operation results for FFLAGS/FRM/FCSR/SATP bypass
+    // =========================================================================
+    logic [63:0] csr_op_fflags, csr_op_frm, csr_op_fcsr, csr_op_satp;
+    always_comb begin
+        case (write_op)
+            2'd0:    csr_op_fflags = write_data;
+            2'd1:    csr_op_fflags = {59'd0,fflags_r} | write_data;
+            2'd2:    csr_op_fflags = {59'd0,fflags_r} & ~write_data;
+            default: csr_op_fflags = {59'd0,fflags_r};
+        endcase
+        case (write_op)
+            2'd0:    csr_op_frm = write_data;
+            2'd1:    csr_op_frm = {61'd0,frm_r} | write_data;
+            2'd2:    csr_op_frm = {61'd0,frm_r} & ~write_data;
+            default: csr_op_frm = {61'd0,frm_r};
+        endcase
+        case (write_op)
+            2'd0:    csr_op_fcsr = write_data;
+            2'd1:    csr_op_fcsr = {56'd0,frm_r,fflags_r} | write_data;
+            2'd2:    csr_op_fcsr = {56'd0,frm_r,fflags_r} & ~write_data;
+            default: csr_op_fcsr = {56'd0,frm_r,fflags_r};
+        endcase
+        case (write_op)
+            2'd0:    csr_op_satp = write_data;
+            2'd1:    csr_op_satp = satp_r | write_data;
+            2'd2:    csr_op_satp = satp_r & ~write_data;
+            default: csr_op_satp = satp_r;
+        endcase
+    end
 
     // =========================================================================
     // Combinational read port (with same-cycle bypass)
@@ -260,51 +289,51 @@ module csr_file
     always_comb begin
         case (read_addr)
             CSR_FFLAGS:    read_data = csr_bypass ?
-                               {59'd0, apply_op({59'd0,fflags_r}, write_data, write_op)[4:0]}
+                               {59'd0, csr_op_fflags[4:0]}
                              : {59'd0, fflags_r};
             CSR_FRM:       read_data = csr_bypass ?
-                               {61'd0, apply_op({61'd0,frm_r}, write_data, write_op)[2:0]}
+                               {61'd0, csr_op_frm[2:0]}
                              : {61'd0, frm_r};
             CSR_FCSR:      read_data = csr_bypass ?
-                               {56'd0, apply_op({56'd0,frm_r,fflags_r}, write_data, write_op)[7:0]}
+                               {56'd0, csr_op_fcsr[7:0]}
                              : {56'd0, frm_r, fflags_r};
 
             CSR_SSTATUS:   read_data = csr_bypass ? sstatus_view_bypass : sstatus_view;
             CSR_SIE:       read_data = csr_bypass ?
-                               (apply_op(mie_r, write_data, write_op) & mideleg_r)
+                               (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mie_r) | (write_data)) : (write_op == 2'd2) ? ((mie_r) & ~(write_data)) : (mie_r)) & mideleg_r)
                              : (mie_r & mideleg_r);
-            CSR_STVEC:     read_data = csr_bypass ? apply_op(stvec_r, write_data, write_op) : stvec_r;
-            CSR_SCOUNTEREN:read_data = csr_bypass ? apply_op(scounteren_r, write_data, write_op) : scounteren_r;
-            CSR_SENVCFG:   read_data = csr_bypass ? apply_op(senvcfg_r, write_data, write_op) : senvcfg_r;
-            CSR_SSCRATCH:  read_data = csr_bypass ? apply_op(sscratch_r, write_data, write_op) : sscratch_r;
-            CSR_SEPC:      read_data = csr_bypass ? apply_op(sepc_r, write_data, write_op) : sepc_r;
-            CSR_SCAUSE:    read_data = csr_bypass ? apply_op(scause_r, write_data, write_op) : scause_r;
-            CSR_STVAL:     read_data = csr_bypass ? apply_op(stval_r, write_data, write_op) : stval_r;
+            CSR_STVEC:     read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((stvec_r) | (write_data)) : (write_op == 2'd2) ? ((stvec_r) & ~(write_data)) : (stvec_r)) : stvec_r;
+            CSR_SCOUNTEREN:read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((scounteren_r) | (write_data)) : (write_op == 2'd2) ? ((scounteren_r) & ~(write_data)) : (scounteren_r)) : scounteren_r;
+            CSR_SENVCFG:   read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((senvcfg_r) | (write_data)) : (write_op == 2'd2) ? ((senvcfg_r) & ~(write_data)) : (senvcfg_r)) : senvcfg_r;
+            CSR_SSCRATCH:  read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((sscratch_r) | (write_data)) : (write_op == 2'd2) ? ((sscratch_r) & ~(write_data)) : (sscratch_r)) : sscratch_r;
+            CSR_SEPC:      read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((sepc_r) | (write_data)) : (write_op == 2'd2) ? ((sepc_r) & ~(write_data)) : (sepc_r)) : sepc_r;
+            CSR_SCAUSE:    read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((scause_r) | (write_data)) : (write_op == 2'd2) ? ((scause_r) & ~(write_data)) : (scause_r)) : scause_r;
+            CSR_STVAL:     read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((stval_r) | (write_data)) : (write_op == 2'd2) ? ((stval_r) & ~(write_data)) : (stval_r)) : stval_r;
             CSR_SIP:       read_data = csr_bypass ?
-                               (apply_op(mip_eff, write_data, write_op) & mideleg_r)
+                               (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mip_eff) | (write_data)) : (write_op == 2'd2) ? ((mip_eff) & ~(write_data)) : (mip_eff)) & mideleg_r)
                              : (mip_eff & mideleg_r);
-            CSR_SATP:      read_data = csr_bypass ? apply_op(satp_r, write_data, write_op) : satp_r;
+            CSR_SATP:      read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((satp_r) | (write_data)) : (write_op == 2'd2) ? ((satp_r) & ~(write_data)) : (satp_r)) : satp_r;
 
             CSR_MSTATUS:   read_data = csr_bypass ? mstatus_norm_bypass : mstatus_norm;
             CSR_MISA:      read_data = MISA_VAL;
-            CSR_MEDELEG:   read_data = csr_bypass ? apply_op(medeleg_r, write_data, write_op) : medeleg_r;
-            CSR_MIDELEG:   read_data = csr_bypass ? apply_op(mideleg_r, write_data, write_op) : mideleg_r;
-            CSR_MIE:       read_data = csr_bypass ? apply_op(mie_r, write_data, write_op) : mie_r;
-            CSR_MTVEC:     read_data = csr_bypass ? apply_op(mtvec_r, write_data, write_op) : mtvec_r;
-            CSR_MCOUNTEREN:read_data = csr_bypass ? apply_op(mcounteren_r, write_data, write_op) : mcounteren_r;
+            CSR_MEDELEG:   read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((medeleg_r) | (write_data)) : (write_op == 2'd2) ? ((medeleg_r) & ~(write_data)) : (medeleg_r)) : medeleg_r;
+            CSR_MIDELEG:   read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mideleg_r) | (write_data)) : (write_op == 2'd2) ? ((mideleg_r) & ~(write_data)) : (mideleg_r)) : mideleg_r;
+            CSR_MIE:       read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mie_r) | (write_data)) : (write_op == 2'd2) ? ((mie_r) & ~(write_data)) : (mie_r)) : mie_r;
+            CSR_MTVEC:     read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mtvec_r) | (write_data)) : (write_op == 2'd2) ? ((mtvec_r) & ~(write_data)) : (mtvec_r)) : mtvec_r;
+            CSR_MCOUNTEREN:read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mcounteren_r) | (write_data)) : (write_op == 2'd2) ? ((mcounteren_r) & ~(write_data)) : (mcounteren_r)) : mcounteren_r;
             CSR_MCOUNTINHIBIT: read_data = csr_bypass ?
-                               apply_op(mcountinhibit_r, write_data, write_op) : mcountinhibit_r;
-            CSR_MSCRATCH:  read_data = csr_bypass ? apply_op(mscratch_r, write_data, write_op) : mscratch_r;
-            CSR_MEPC:      read_data = csr_bypass ? apply_op(mepc_r, write_data, write_op) : mepc_r;
-            CSR_MCAUSE:    read_data = csr_bypass ? apply_op(mcause_r, write_data, write_op) : mcause_r;
-            CSR_MTVAL:     read_data = csr_bypass ? apply_op(mtval_r, write_data, write_op) : mtval_r;
-            CSR_MIP:       read_data = csr_bypass ? apply_op(mip_eff, write_data, write_op) : mip_eff;
-            CSR_PMPCFG0:   read_data = csr_bypass ? apply_op(pmpcfg0_r, write_data, write_op) : pmpcfg0_r;
-            CSR_PMPADDR0:  read_data = csr_bypass ? apply_op(pmpaddr0_r, write_data, write_op) : pmpaddr0_r;
+                               ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mcountinhibit_r) | (write_data)) : (write_op == 2'd2) ? ((mcountinhibit_r) & ~(write_data)) : (mcountinhibit_r)) : mcountinhibit_r;
+            CSR_MSCRATCH:  read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mscratch_r) | (write_data)) : (write_op == 2'd2) ? ((mscratch_r) & ~(write_data)) : (mscratch_r)) : mscratch_r;
+            CSR_MEPC:      read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mepc_r) | (write_data)) : (write_op == 2'd2) ? ((mepc_r) & ~(write_data)) : (mepc_r)) : mepc_r;
+            CSR_MCAUSE:    read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mcause_r) | (write_data)) : (write_op == 2'd2) ? ((mcause_r) & ~(write_data)) : (mcause_r)) : mcause_r;
+            CSR_MTVAL:     read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mtval_r) | (write_data)) : (write_op == 2'd2) ? ((mtval_r) & ~(write_data)) : (mtval_r)) : mtval_r;
+            CSR_MIP:       read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mip_eff) | (write_data)) : (write_op == 2'd2) ? ((mip_eff) & ~(write_data)) : (mip_eff)) : mip_eff;
+            CSR_PMPCFG0:   read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((pmpcfg0_r) | (write_data)) : (write_op == 2'd2) ? ((pmpcfg0_r) & ~(write_data)) : (pmpcfg0_r)) : pmpcfg0_r;
+            CSR_PMPADDR0:  read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((pmpaddr0_r) | (write_data)) : (write_op == 2'd2) ? ((pmpaddr0_r) & ~(write_data)) : (pmpaddr0_r)) : pmpaddr0_r;
             CSR_TSELECT:   read_data = 64'd0;
             CSR_TDATA1:    read_data = 64'd0;
             CSR_TDATA2:    read_data = 64'd0;
-            CSR_TCONTROL:  read_data = csr_bypass ? apply_op(tcontrol_r, write_data, write_op) : tcontrol_r;
+            CSR_TCONTROL:  read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((tcontrol_r) | (write_data)) : (write_op == 2'd2) ? ((tcontrol_r) & ~(write_data)) : (tcontrol_r)) : tcontrol_r;
             CSR_MVENDORID: read_data = 64'd0;
             CSR_MARCHID:   read_data = 64'd0;
             CSR_MIMPID:    read_data = 64'd0;
@@ -407,66 +436,75 @@ module csr_file
             end else if (write_valid) begin
                 case (write_addr)
                     CSR_FFLAGS: begin
-                        fflags_r        <= apply_op({59'd0,fflags_r}, write_data, write_op)[4:0];
+                        fflags_r        <= csr_op_fflags[4:0];
                         mstatus_r[14:13]<= 2'b11;
                     end
                     CSR_FRM: begin
-                        frm_r           <= apply_op({61'd0,frm_r}, write_data, write_op)[2:0];
+                        frm_r           <= csr_op_frm[2:0];
                         mstatus_r[14:13]<= 2'b11;
                     end
                     CSR_FCSR: begin
                         // no local variable: compute inline
-                        fflags_r        <= apply_op({56'd0,frm_r,fflags_r}, write_data, write_op)[4:0];
-                        frm_r           <= apply_op({56'd0,frm_r,fflags_r}, write_data, write_op)[7:5];
+                        fflags_r        <= csr_op_fcsr[4:0];
+                        frm_r           <= csr_op_fcsr[7:5];
                         mstatus_r[14:13]<= 2'b11;
                     end
                     CSR_SSTATUS:
-                        mstatus_r <= norm_mstatus(
-                                        (mstatus_r & ~SSTATUS_WMASK) |
-                                        (apply_op(mstatus_r & SSTATUS_WMASK,
-                                                  write_data & SSTATUS_WMASK,
-                                                  write_op) & SSTATUS_WMASK));
+                    begin
+                        automatic logic [63:0] _nm = ((mstatus_r & ~SSTATUS_WMASK) |
+                                        (((write_op == 2'd0) ? (write_data & SSTATUS_WMASK) : (write_op == 2'd1) ? ((mstatus_r & SSTATUS_WMASK) | (write_data & SSTATUS_WMASK)) : (write_op == 2'd2) ? ((mstatus_r & SSTATUS_WMASK) & ~(write_data & SSTATUS_WMASK)) : (mstatus_r & SSTATUS_WMASK)) & SSTATUS_WMASK));
+                        _nm[35:34] = 2'b10;
+                        _nm[33:32] = 2'b10;
+                        _nm[63]    = (_nm[14:13] == 2'b11) || (_nm[16:15] == 2'b11);
+                        mstatus_r <= _nm;
+                    end
                     CSR_SIE:
                         mie_r <= (mie_r & ~mideleg_r) |
-                                 (apply_op(mie_r, write_data, write_op) & mideleg_r);
-                    CSR_STVEC:       stvec_r      <= apply_op(stvec_r,      write_data, write_op);
-                    CSR_SCOUNTEREN:  scounteren_r <= apply_op(scounteren_r, write_data, write_op);
-                    CSR_SENVCFG:     senvcfg_r    <= apply_op(senvcfg_r,    write_data, write_op);
-                    CSR_SSCRATCH:    sscratch_r   <= apply_op(sscratch_r,   write_data, write_op);
-                    CSR_SEPC:        sepc_r       <= apply_op(sepc_r,       write_data, write_op);
-                    CSR_SCAUSE:      scause_r     <= apply_op(scause_r,     write_data, write_op);
-                    CSR_STVAL:       stval_r      <= apply_op(stval_r,      write_data, write_op);
+                                 (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mie_r) | (write_data)) : (write_op == 2'd2) ? ((mie_r) & ~(write_data)) : (mie_r)) & mideleg_r);
+                    CSR_STVEC:       stvec_r      <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((stvec_r) | (write_data)) : (write_op == 2'd2) ? ((stvec_r) & ~(write_data)) : (stvec_r));
+                    CSR_SCOUNTEREN:  scounteren_r <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((scounteren_r) | (write_data)) : (write_op == 2'd2) ? ((scounteren_r) & ~(write_data)) : (scounteren_r));
+                    CSR_SENVCFG:     senvcfg_r    <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((senvcfg_r) | (write_data)) : (write_op == 2'd2) ? ((senvcfg_r) & ~(write_data)) : (senvcfg_r));
+                    CSR_SSCRATCH:    sscratch_r   <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((sscratch_r) | (write_data)) : (write_op == 2'd2) ? ((sscratch_r) & ~(write_data)) : (sscratch_r));
+                    CSR_SEPC:        sepc_r       <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((sepc_r) | (write_data)) : (write_op == 2'd2) ? ((sepc_r) & ~(write_data)) : (sepc_r));
+                    CSR_SCAUSE:      scause_r     <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((scause_r) | (write_data)) : (write_op == 2'd2) ? ((scause_r) & ~(write_data)) : (scause_r));
+                    CSR_STVAL:       stval_r      <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((stval_r) | (write_data)) : (write_op == 2'd2) ? ((stval_r) & ~(write_data)) : (stval_r));
                     CSR_SIP:
                         mip_r <= (mip_r & ~mideleg_r) |
-                                 (apply_op(mip_r, write_data, write_op) & mideleg_r);
+                                 (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mip_r) | (write_data)) : (write_op == 2'd2) ? ((mip_r) & ~(write_data)) : (mip_r)) & mideleg_r);
                     CSR_SATP: begin
                         // Accept Bare (0), Sv39 (8), Sv48 (9)
-                        if (apply_op(satp_r, write_data, write_op)[63:60] == 4'd0 ||
-                            apply_op(satp_r, write_data, write_op)[63:60] == 4'd8 ||
-                            apply_op(satp_r, write_data, write_op)[63:60] == 4'd9)
-                            satp_r <= apply_op(satp_r, write_data, write_op);
+                        if (csr_op_satp[63:60] == 4'd0 ||
+                            csr_op_satp[63:60] == 4'd8 ||
+                            csr_op_satp[63:60] == 4'd9)
+                            satp_r <= csr_op_satp;
                     end
                     CSR_MSTATUS:
-                        mstatus_r <= norm_mstatus(apply_op(mstatus_r, write_data, write_op));
-                    CSR_MEDELEG:     medeleg_r    <= apply_op(medeleg_r,    write_data, write_op);
-                    CSR_MIDELEG:     mideleg_r    <= apply_op(mideleg_r,    write_data, write_op);
-                    CSR_MIE:         mie_r        <= apply_op(mie_r,        write_data, write_op);
-                    CSR_MTVEC:       mtvec_r      <= apply_op(mtvec_r,      write_data, write_op);
-                    CSR_MCOUNTEREN:  mcounteren_r <= apply_op(mcounteren_r, write_data, write_op);
+                    begin
+                        automatic logic [63:0] _nm = (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mstatus_r) | (write_data)) : (write_op == 2'd2) ? ((mstatus_r) & ~(write_data)) : (mstatus_r)));
+                        _nm[35:34] = 2'b10;
+                        _nm[33:32] = 2'b10;
+                        _nm[63]    = (_nm[14:13] == 2'b11) || (_nm[16:15] == 2'b11);
+                        mstatus_r <= _nm;
+                    end
+                    CSR_MEDELEG:     medeleg_r    <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((medeleg_r) | (write_data)) : (write_op == 2'd2) ? ((medeleg_r) & ~(write_data)) : (medeleg_r));
+                    CSR_MIDELEG:     mideleg_r    <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mideleg_r) | (write_data)) : (write_op == 2'd2) ? ((mideleg_r) & ~(write_data)) : (mideleg_r));
+                    CSR_MIE:         mie_r        <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mie_r) | (write_data)) : (write_op == 2'd2) ? ((mie_r) & ~(write_data)) : (mie_r));
+                    CSR_MTVEC:       mtvec_r      <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mtvec_r) | (write_data)) : (write_op == 2'd2) ? ((mtvec_r) & ~(write_data)) : (mtvec_r));
+                    CSR_MCOUNTEREN:  mcounteren_r <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mcounteren_r) | (write_data)) : (write_op == 2'd2) ? ((mcounteren_r) & ~(write_data)) : (mcounteren_r));
                     CSR_MCOUNTINHIBIT:
-                        mcountinhibit_r <= apply_op(mcountinhibit_r, write_data, write_op);
-                    CSR_MSCRATCH:    mscratch_r   <= apply_op(mscratch_r,   write_data, write_op);
-                    CSR_MEPC:        mepc_r       <= apply_op(mepc_r,       write_data, write_op);
-                    CSR_MCAUSE:      mcause_r     <= apply_op(mcause_r,     write_data, write_op);
-                    CSR_MTVAL:       mtval_r      <= apply_op(mtval_r,      write_data, write_op);
-                    CSR_MIP:         mip_r        <= apply_op(mip_r,        write_data, write_op);
-                    CSR_PMPCFG0:     pmpcfg0_r    <= apply_op(pmpcfg0_r,   write_data, write_op);
-                    CSR_PMPADDR0:    pmpaddr0_r   <= apply_op(pmpaddr0_r,  write_data, write_op);
-                    CSR_TCONTROL:    tcontrol_r   <= apply_op(tcontrol_r,   write_data, write_op);
+                        mcountinhibit_r <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mcountinhibit_r) | (write_data)) : (write_op == 2'd2) ? ((mcountinhibit_r) & ~(write_data)) : (mcountinhibit_r));
+                    CSR_MSCRATCH:    mscratch_r   <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mscratch_r) | (write_data)) : (write_op == 2'd2) ? ((mscratch_r) & ~(write_data)) : (mscratch_r));
+                    CSR_MEPC:        mepc_r       <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mepc_r) | (write_data)) : (write_op == 2'd2) ? ((mepc_r) & ~(write_data)) : (mepc_r));
+                    CSR_MCAUSE:      mcause_r     <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mcause_r) | (write_data)) : (write_op == 2'd2) ? ((mcause_r) & ~(write_data)) : (mcause_r));
+                    CSR_MTVAL:       mtval_r      <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mtval_r) | (write_data)) : (write_op == 2'd2) ? ((mtval_r) & ~(write_data)) : (mtval_r));
+                    CSR_MIP:         mip_r        <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mip_r) | (write_data)) : (write_op == 2'd2) ? ((mip_r) & ~(write_data)) : (mip_r));
+                    CSR_PMPCFG0:     pmpcfg0_r    <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((pmpcfg0_r) | (write_data)) : (write_op == 2'd2) ? ((pmpcfg0_r) & ~(write_data)) : (pmpcfg0_r));
+                    CSR_PMPADDR0:    pmpaddr0_r   <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((pmpaddr0_r) | (write_data)) : (write_op == 2'd2) ? ((pmpaddr0_r) & ~(write_data)) : (pmpaddr0_r));
+                    CSR_TCONTROL:    tcontrol_r   <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((tcontrol_r) | (write_data)) : (write_op == 2'd2) ? ((tcontrol_r) & ~(write_data)) : (tcontrol_r));
                     CSR_MCYCLE,
-                    CSR_CYCLE:       mcycle_r     <= apply_op(mcycle_r,    write_data, write_op);
+                    CSR_CYCLE:       mcycle_r     <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mcycle_r) | (write_data)) : (write_op == 2'd2) ? ((mcycle_r) & ~(write_data)) : (mcycle_r));
                     CSR_MINSTRET,
-                    CSR_INSTRET:     minstret_r   <= apply_op(minstret_r,  write_data, write_op);
+                    CSR_INSTRET:     minstret_r   <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((minstret_r) | (write_data)) : (write_op == 2'd2) ? ((minstret_r) & ~(write_data)) : (minstret_r));
                     // read-only: misa, mhartid, mvendorid, marchid, mimpid
                     default: ;
                 endcase

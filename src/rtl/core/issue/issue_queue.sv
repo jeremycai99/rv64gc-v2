@@ -76,15 +76,9 @@ module issue_queue
     // Computes the ROB distance from rob_head using wrap_sub for
     // non-power-of-2 ROB_DEPTH.
     // =====================================================================
-    function automatic logic [AGE_BITS-1:0] rob_age(
-        input logic [ROB_IDX_BITS-1:0] idx,
-        input logic [ROB_IDX_BITS-1:0] head
-    );
-        if (idx >= head)
-            rob_age = {1'b0, idx} - {1'b0, head};
-        else
-            rob_age = ROB_DEPTH[AGE_BITS-1:0] - {1'b0, head} + {1'b0, idx};
-    endfunction
+    // rob_age inlined at each usage site:
+    // (idx >= head) ? ({1'b0, idx} - {1'b0, head})
+    //              : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, head} + {1'b0, idx})
 
     // =====================================================================
     // Wakeup logic (combinational)
@@ -184,7 +178,7 @@ module issue_queue
 
     always_comb begin
         for (int e = 0; e < DEPTH; e++) begin
-            entry_age[e] = rob_age(rob_idx_r[e], rob_head);
+            entry_age[e] = ((rob_idx_r[e] >= rob_head) ? ({1'b0, rob_idx_r[e]} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, rob_idx_r[e]}));
         end
     end
 
@@ -277,13 +271,13 @@ module issue_queue
         logic [AGE_BITS-1:0] fl_entry_age;
 
         flush_remove = '0;
-        tail_age = rob_age(flush_rob_tail, rob_head);
+        tail_age = ((flush_rob_tail >= rob_head) ? ({1'b0, flush_rob_tail} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, flush_rob_tail}));
         fl_entry_age = '0;
 
         if (flush_valid && !flush_full) begin
             for (int e = 0; e < DEPTH; e++) begin
                 if (entry_valid[e]) begin
-                    fl_entry_age = rob_age(rob_idx_r[e], rob_head);
+                    fl_entry_age = ((rob_idx_r[e] >= rob_head) ? ({1'b0, rob_idx_r[e]} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, rob_idx_r[e]}));
                     if (fl_entry_age > tail_age)
                         flush_remove[e] = 1'b1;
                 end

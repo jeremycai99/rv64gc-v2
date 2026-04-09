@@ -295,57 +295,50 @@ module dcache
     logic [LINE_SIZE*8-1:0] ld0_line_data;
     assign ld0_line_data = dr_rdata;   // single data RAM port returns ld0's data
 
-    // Extract the requested word from the cache line for load port 0
-    function automatic logic [63:0] extract_word(
-        input logic [LINE_SIZE*8-1:0] line,
-        input logic [63:0]            addr,
-        input logic [1:0]             sz,
-        input logic                   is_unsigned
-    );
-        logic [5:0]  byte_off;
-        logic [63:0] raw;
-        logic [63:0] result;
-        byte_off = addr[OFFSET_HI:0];
-        raw = line[byte_off*8 +: 64];
-        case (sz)
-            2'd0: result = is_unsigned ? {56'b0, raw[7:0]}  : {{56{raw[7]}},  raw[7:0]};
-            2'd1: result = is_unsigned ? {48'b0, raw[15:0]} : {{48{raw[15]}}, raw[15:0]};
-            2'd2: result = is_unsigned ? {32'b0, raw[31:0]} : {{32{raw[31]}}, raw[31:0]};
-            default: result = raw;
-        endcase
-        return result;
-    endfunction
-
     // =========================================================================
     // PLRU state (3-bit binary tree per set)
     // =========================================================================
     logic [2:0] plru_state [L1D_SETS];
 
-    function automatic logic [1:0] plru_victim(input logic [2:0] ps);
-        logic [1:0] v;
-        if (!ps[2])
-            v = ps[1] ? 2'd0 : 2'd1;
-        else
-            v = ps[0] ? 2'd2 : 2'd3;
-        return v;
-    endfunction
-
+    // Inline PLRU victim selection from current set state
     logic [1:0] victim_way_s1;
-    assign victim_way_s1 = plru_victim(plru_state[s1_ld0_index]);
+    always_comb begin
+        if (!plru_state[s1_ld0_index][2])
+            victim_way_s1 = plru_state[s1_ld0_index][1] ? 2'd0 : 2'd1;
+        else
+            victim_way_s1 = plru_state[s1_ld0_index][0] ? 2'd2 : 2'd3;
+    end
 
-    // PLRU update task (for use inside always_ff)
-    // Points away from the accessed way
-    task automatic update_plru_state;
-        input logic [L1D_SET_BITS-1:0] idx;
-        input logic [1:0]              way;
-        case (way)
-            2'd0: plru_state[idx] <= {1'b1, 1'b1, plru_state[idx][0]};
-            2'd1: plru_state[idx] <= {1'b1, 1'b0, plru_state[idx][0]};
-            2'd2: plru_state[idx] <= {1'b0, plru_state[idx][1], 1'b1};
-            2'd3: plru_state[idx] <= {1'b0, plru_state[idx][1], 1'b0};
-            default: ;
+    // =========================================================================
+    // Inline extract_word: combinational word extraction from cache line
+    // =========================================================================
+    logic [63:0] ld0_extracted, ld1_extracted;
+
+    always_comb begin
+        logic [5:0]  byte_off0;
+        logic [63:0] raw0;
+        byte_off0 = s1_ld0_addr[OFFSET_HI:0];
+        raw0 = dr_rdata[byte_off0*8 +: 64];
+        case (s1_ld0_size)
+            2'd0: ld0_extracted = s1_ld0_unsigned ? {56'b0, raw0[7:0]}  : {{56{raw0[7]}},  raw0[7:0]};
+            2'd1: ld0_extracted = s1_ld0_unsigned ? {48'b0, raw0[15:0]} : {{48{raw0[15]}}, raw0[15:0]};
+            2'd2: ld0_extracted = s1_ld0_unsigned ? {32'b0, raw0[31:0]} : {{32{raw0[31]}}, raw0[31:0]};
+            default: ld0_extracted = raw0;
         endcase
-    endtask
+    end
+
+    always_comb begin
+        logic [5:0]  byte_off1;
+        logic [63:0] raw1;
+        byte_off1 = s1_ld1_addr[OFFSET_HI:0];
+        raw1 = dr_rdata[byte_off1*8 +: 64];
+        case (s1_ld1_size)
+            2'd0: ld1_extracted = s1_ld1_unsigned ? {56'b0, raw1[7:0]}  : {{56{raw1[7]}},  raw1[7:0]};
+            2'd1: ld1_extracted = s1_ld1_unsigned ? {48'b0, raw1[15:0]} : {{48{raw1[15]}}, raw1[15:0]};
+            2'd2: ld1_extracted = s1_ld1_unsigned ? {32'b0, raw1[31:0]} : {{32{raw1[31]}}, raw1[31:0]};
+            default: ld1_extracted = raw1;
+        endcase
+    end
 
     // =========================================================================
     // MSHR (16 entries)
@@ -617,8 +610,7 @@ module dcache
             if (s1_ld0_valid && ld0_cache_hit) begin
                 load_resp_valid[0] <= 1'b1;
                 load_resp_hit[0]   <= 1'b1;
-                load_resp_data[0]  <= extract_word(dr_rdata, s1_ld0_addr,
-                                                   s1_ld0_size, s1_ld0_unsigned);
+                load_resp_data[0]  <= ld0_extracted;
             end
 
             // Load port 1: tag comparison against s1_ld1_tag using tr_valid/tag_out.
@@ -633,8 +625,7 @@ module dcache
                 load_resp_hit[1]   <= 1'b1;
                 // Port 1 reads the same data RAM word — this is the simplification:
                 // on simultaneous hits to the same line the upstream must handle.
-                load_resp_data[1]  <= extract_word(dr_rdata, s1_ld1_addr,
-                                                   s1_ld1_size, s1_ld1_unsigned);
+                load_resp_data[1]  <= ld1_extracted;
             end
         end
     end
@@ -650,11 +641,23 @@ module dcache
         end else if (invalidate_all) begin
             // No PLRU update during invalidation
         end else begin
-            if (s1_ld0_valid && ld0_cache_hit)
-                update_plru_state(s1_ld0_index, ld0_hit_way);
-            else if (fill_done_avail)
-                update_plru_state(mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO],
-                                  mshr[fill_done_idx].victim);
+            if (s1_ld0_valid && ld0_cache_hit) begin
+                case (ld0_hit_way)
+                    2'd0: plru_state[s1_ld0_index] <= {1'b1, 1'b1, plru_state[s1_ld0_index][0]};
+                    2'd1: plru_state[s1_ld0_index] <= {1'b1, 1'b0, plru_state[s1_ld0_index][0]};
+                    2'd2: plru_state[s1_ld0_index] <= {1'b0, plru_state[s1_ld0_index][1], 1'b1};
+                    2'd3: plru_state[s1_ld0_index] <= {1'b0, plru_state[s1_ld0_index][1], 1'b0};
+                    default: ;
+                endcase
+            end else if (fill_done_avail) begin
+                case (mshr[fill_done_idx].victim)
+                    2'd0: plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b1, plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]][0]};
+                    2'd1: plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b0, plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]][0]};
+                    2'd2: plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]][1], 1'b1};
+                    2'd3: plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]][1], 1'b0};
+                    default: ;
+                endcase
+            end
         end
     end
 

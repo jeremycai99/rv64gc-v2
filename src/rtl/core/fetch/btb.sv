@@ -111,23 +111,29 @@ module btb
     end
 
     // =========================================================================
-    // PLRU update helper function
-    // Update the PLRU bits to mark 'way' as most recently used
+    // PLRU update: inline at each usage site below
     // =========================================================================
-    function automatic logic [2:0] plru_update(input logic [2:0] state,
-                                                input logic [1:0] way);
-        logic [2:0] ns;
-        ns = state;
-        // Root bit: 0=left pair (W0,W1) is LRU-candidate, 1=right pair (W2,W3)
-        // Mark accessed way's side as recently used (set bit to point AWAY from it)
-        ns[2] = way[1];          // if way>=2, root points left (W0/W1 are older)
-        if (!way[1]) begin
-            ns[1] = way[0];      // left subtree: point to opposite leaf
-        end else begin
-            ns[0] = way[0];      // right subtree: point to opposite leaf
-        end
-        return ns;
-    endfunction
+
+    // Precompute PLRU next-state for both hit and victim updates
+    logic [2:0] plru_ns_hit, plru_ns_victim;
+
+    always_comb begin
+        plru_ns_hit = plru[upd_idx];
+        plru_ns_hit[2] = upd_hit_way[1];
+        if (!upd_hit_way[1])
+            plru_ns_hit[1] = upd_hit_way[0];
+        else
+            plru_ns_hit[0] = upd_hit_way[0];
+    end
+
+    always_comb begin
+        plru_ns_victim = plru[upd_idx];
+        plru_ns_victim[2] = victim_way[1];
+        if (!victim_way[1])
+            plru_ns_victim[1] = victim_way[0];
+        else
+            plru_ns_victim[0] = victim_way[0];
+    end
 
     // =========================================================================
     // Sequential update
@@ -145,14 +151,14 @@ module btb
                 // Update existing entry in place
                 targets[upd_idx][upd_hit_way] <= update_target;
                 btypes [upd_idx][upd_hit_way] <= update_type;
-                plru   [upd_idx]              <= plru_update(plru[upd_idx], upd_hit_way);
+                plru   [upd_idx]              <= plru_ns_hit;
             end else begin
                 // Allocate new entry at victim way
                 valid  [upd_idx][victim_way] <= 1'b1;
                 tags   [upd_idx][victim_way] <= upd_tag;
                 targets[upd_idx][victim_way] <= update_target;
                 btypes [upd_idx][victim_way] <= update_type;
-                plru   [upd_idx]             <= plru_update(plru[upd_idx], victim_way);
+                plru   [upd_idx]             <= plru_ns_victim;
             end
         end
     end

@@ -73,54 +73,37 @@ module tage_sc_l
     end
 
     // =========================================================================
-    // XOR-fold helper function
-    // Fold 'len' bits of GHR into 'width'-bit result via iterated XOR
+    // Combinational hash wires: fold_ghr, index_hash, tag_hash (inlined)
     // =========================================================================
-    function automatic logic [TAGE_TAG_BITS-1:0] fold_ghr(
-        input logic [GHR_BITS-1:0] ghr,
-        input int                  len,
-        input int                  width
-    );
-        logic [TAGE_TAG_BITS-1:0] result;
-        result = '0;
-        for (int i = 0; i < GHR_BITS; i++) begin
-            if (i < len) begin
-                result[i % width] = result[i % width] ^ ghr[i];
+    logic [TAGE_IDX_BITS-1:0] fold_idx [TAGE_NUM_TABLES];
+    logic [TAGE_TAG_BITS-1:0] fold_tag1 [TAGE_NUM_TABLES];
+    logic [TAGE_TAG_BITS-1:0] fold_tag2 [TAGE_NUM_TABLES];
+    logic [TAGE_IDX_BITS-1:0] upd_fold_idx [TAGE_NUM_TABLES];
+    logic [TAGE_TAG_BITS-1:0] upd_fold_tag1 [TAGE_NUM_TABLES];
+    logic [TAGE_TAG_BITS-1:0] upd_fold_tag2 [TAGE_NUM_TABLES];
+
+    always_comb begin
+        for (int t = 0; t < TAGE_NUM_TABLES; t++) begin
+            fold_idx[t] = '0;
+            fold_tag1[t] = '0;
+            fold_tag2[t] = '0;
+            upd_fold_idx[t] = '0;
+            upd_fold_tag1[t] = '0;
+            upd_fold_tag2[t] = '0;
+            for (int i = 0; i < GHR_BITS; i++) begin
+                if (i < GHR_LENGTHS[t]) begin
+                    fold_idx[t][i % TAGE_IDX_BITS] = fold_idx[t][i % TAGE_IDX_BITS] ^ ghr_r[i];
+                    fold_tag1[t][i % TAGE_TAG_BITS] = fold_tag1[t][i % TAGE_TAG_BITS] ^ ghr_r[i];
+                    upd_fold_idx[t][i % TAGE_IDX_BITS] = upd_fold_idx[t][i % TAGE_IDX_BITS] ^ ghr_r[i];
+                    upd_fold_tag1[t][i % TAGE_TAG_BITS] = upd_fold_tag1[t][i % TAGE_TAG_BITS] ^ ghr_r[i];
+                end
+                if (i < (GHR_LENGTHS[t] + 3)) begin
+                    fold_tag2[t][i % TAGE_TAG_BITS] = fold_tag2[t][i % TAGE_TAG_BITS] ^ ghr_r[i];
+                    upd_fold_tag2[t][i % TAGE_TAG_BITS] = upd_fold_tag2[t][i % TAGE_TAG_BITS] ^ ghr_r[i];
+                end
             end
         end
-        return result;
-    endfunction
-
-    // =========================================================================
-    // Index and tag hash functions for tagged tables
-    // =========================================================================
-    function automatic logic [TAGE_IDX_BITS-1:0] index_hash(
-        input logic [63:0]        lpc,
-        input logic [GHR_BITS-1:0] ghr,
-        input int                  tbl
-    );
-        logic [TAGE_IDX_BITS-1:0] folded;
-        logic [TAGE_IDX_BITS-1:0] pc_lo;
-        logic [TAGE_IDX_BITS-1:0] pc_hi;
-        pc_lo  = lpc[TAGE_IDX_BITS+1:2];
-        pc_hi  = TAGE_IDX_BITS'(lpc[21:12] >> tbl);
-        folded = TAGE_IDX_BITS'(fold_ghr(ghr, GHR_LENGTHS[tbl], TAGE_IDX_BITS));
-        return pc_lo ^ folded[TAGE_IDX_BITS-1:0] ^ pc_hi[TAGE_IDX_BITS-1:0];
-    endfunction
-
-    function automatic logic [TAGE_TAG_BITS-1:0] tag_hash(
-        input logic [63:0]        lpc,
-        input logic [GHR_BITS-1:0] ghr,
-        input int                  tbl
-    );
-        logic [TAGE_TAG_BITS-1:0] fold1;
-        logic [TAGE_TAG_BITS-1:0] fold2;
-        logic [TAGE_TAG_BITS-1:0] pc_part;
-        pc_part = lpc[TAGE_TAG_BITS+1:2];
-        fold1   = fold_ghr(ghr, GHR_LENGTHS[tbl], TAGE_TAG_BITS);
-        fold2   = fold_ghr(ghr, GHR_LENGTHS[tbl] + 3, TAGE_TAG_BITS);
-        return pc_part ^ fold1 ^ fold2;
-    endfunction
+    end
 
     // =========================================================================
     //  1. Base predictor — 4096-entry bimodal (2-bit counters)
@@ -156,8 +139,8 @@ module tage_sc_l
 
     always_comb begin
         for (int t = 0; t < TAGE_NUM_TABLES; t++) begin
-            tage_lkp_idx[t] = index_hash(pc, ghr_r, t);
-            tage_lkp_tag[t] = tag_hash(pc, ghr_r, t);
+            tage_lkp_idx[t] = pc[TAGE_IDX_BITS+1:2] ^ fold_idx[t] ^ TAGE_IDX_BITS'(pc[21:12] >> t);
+            tage_lkp_tag[t] = pc[TAGE_TAG_BITS+1:2] ^ fold_tag1[t] ^ fold_tag2[t];
             tage_hit[t]     = tage_valid[t][tage_lkp_idx[t]] &&
                               (tage_tags[t][tage_lkp_idx[t]] == tage_lkp_tag[t]);
             tage_hit_ctr[t] = tage_ctrs[t][tage_lkp_idx[t]];
@@ -306,8 +289,8 @@ module tage_sc_l
         upd_any_hit  = 1'b0;
         upd_provider = 2'd0;
         for (int t = 0; t < TAGE_NUM_TABLES; t++) begin
-            upd_tage_idx[t] = index_hash(update_pc, ghr_r, t);
-            upd_tage_tag[t] = tag_hash(update_pc, ghr_r, t);
+            upd_tage_idx[t] = update_pc[TAGE_IDX_BITS+1:2] ^ upd_fold_idx[t] ^ TAGE_IDX_BITS'(update_pc[21:12] >> t);
+            upd_tage_tag[t] = update_pc[TAGE_TAG_BITS+1:2] ^ upd_fold_tag1[t] ^ upd_fold_tag2[t];
             upd_tage_hit[t] = tage_valid[t][upd_tage_idx[t]] &&
                               (tage_tags[t][upd_tage_idx[t]] == upd_tage_tag[t]);
             if (upd_tage_hit[t]) begin
@@ -323,80 +306,7 @@ module tage_sc_l
     // Useful-counter periodic reset
     logic [USEFUL_RESET_PERIOD-1:0] branch_count_r;
 
-    // =========================================================================
-    //  Saturating counter helpers
-    // =========================================================================
-    function automatic logic [BASE_CTR_BITS-1:0] sat_inc2(
-        input logic [BASE_CTR_BITS-1:0] val
-    );
-        if (val == {BASE_CTR_BITS{1'b1}})
-            return val;
-        else
-            return val + {{(BASE_CTR_BITS-1){1'b0}}, 1'b1};
-    endfunction
-
-    function automatic logic [BASE_CTR_BITS-1:0] sat_dec2(
-        input logic [BASE_CTR_BITS-1:0] val
-    );
-        if (val == '0)
-            return val;
-        else
-            return val - {{(BASE_CTR_BITS-1){1'b0}}, 1'b1};
-    endfunction
-
-    function automatic logic [TAGE_CTR_BITS-1:0] sat_inc3(
-        input logic [TAGE_CTR_BITS-1:0] val
-    );
-        if (val == {TAGE_CTR_BITS{1'b1}})
-            return val;
-        else
-            return val + {{(TAGE_CTR_BITS-1){1'b0}}, 1'b1};
-    endfunction
-
-    function automatic logic [TAGE_CTR_BITS-1:0] sat_dec3(
-        input logic [TAGE_CTR_BITS-1:0] val
-    );
-        if (val == '0)
-            return val;
-        else
-            return val - {{(TAGE_CTR_BITS-1){1'b0}}, 1'b1};
-    endfunction
-
-    function automatic logic signed [SC_CTR_BITS-1:0] sc_sat_inc(
-        input logic signed [SC_CTR_BITS-1:0] val
-    );
-        if (val == $signed({1'b0, {(SC_CTR_BITS-1){1'b1}}}))
-            return val;
-        else
-            return val + 6'(1);
-    endfunction
-
-    function automatic logic signed [SC_CTR_BITS-1:0] sc_sat_dec(
-        input logic signed [SC_CTR_BITS-1:0] val
-    );
-        if (val == $signed({1'b1, {(SC_CTR_BITS-1){1'b0}}}))
-            return val;
-        else
-            return val - 6'(1);
-    endfunction
-
-    function automatic logic [USEFUL_BITS-1:0] useful_inc(
-        input logic [USEFUL_BITS-1:0] val
-    );
-        if (val == {USEFUL_BITS{1'b1}})
-            return val;
-        else
-            return val + {{(USEFUL_BITS-1){1'b0}}, 1'b1};
-    endfunction
-
-    function automatic logic [USEFUL_BITS-1:0] useful_dec(
-        input logic [USEFUL_BITS-1:0] val
-    );
-        if (val == '0)
-            return val;
-        else
-            return val - {{(USEFUL_BITS-1){1'b0}}, 1'b1};
-    endfunction
+    // Saturating counter operations inlined at each call site below.
 
     // =========================================================================
     //  Sequential update logic
@@ -437,9 +347,9 @@ module tage_sc_l
             //  (1) Base predictor update
             // =================================================================
             if (update_taken) begin
-                base_table[upd_base_idx] <= sat_inc2(base_table[upd_base_idx]);
+                base_table[upd_base_idx] <= ((base_table[upd_base_idx] == {BASE_CTR_BITS{1'b1}}) ? base_table[upd_base_idx] : base_table[upd_base_idx] + {{(BASE_CTR_BITS-1){1'b0}}, 1'b1});
             end else begin
-                base_table[upd_base_idx] <= sat_dec2(base_table[upd_base_idx]);
+                base_table[upd_base_idx] <= ((base_table[upd_base_idx] == '0) ? base_table[upd_base_idx] : base_table[upd_base_idx] - {{(BASE_CTR_BITS-1){1'b0}}, 1'b1});
             end
 
             // =================================================================
@@ -449,18 +359,18 @@ module tage_sc_l
                 // Provider was correct: bump useful
                 if (!update_mispredict) begin
                     tage_useful[upd_provider][upd_tage_idx[upd_provider]] <=
-                        useful_inc(tage_useful[upd_provider][upd_tage_idx[upd_provider]]);
+                        ((tage_useful[upd_provider][upd_tage_idx[upd_provider]] == {USEFUL_BITS{1'b1}}) ? tage_useful[upd_provider][upd_tage_idx[upd_provider]] : tage_useful[upd_provider][upd_tage_idx[upd_provider]] + {{(USEFUL_BITS-1){1'b0}}, 1'b1});
                 end else begin
                     // Provider was wrong: decrement useful and adjust counter
                     tage_useful[upd_provider][upd_tage_idx[upd_provider]] <=
-                        useful_dec(tage_useful[upd_provider][upd_tage_idx[upd_provider]]);
+                        ((tage_useful[upd_provider][upd_tage_idx[upd_provider]] == '0) ? tage_useful[upd_provider][upd_tage_idx[upd_provider]] : tage_useful[upd_provider][upd_tage_idx[upd_provider]] - {{(USEFUL_BITS-1){1'b0}}, 1'b1});
 
                     if (update_taken) begin
                         tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] <=
-                            sat_inc3(tage_ctrs[upd_provider][upd_tage_idx[upd_provider]]);
+                            ((tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] == {TAGE_CTR_BITS{1'b1}}) ? tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] : tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] + {{(TAGE_CTR_BITS-1){1'b0}}, 1'b1});
                     end else begin
                         tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] <=
-                            sat_dec3(tage_ctrs[upd_provider][upd_tage_idx[upd_provider]]);
+                            ((tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] == '0) ? tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] : tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] - {{(TAGE_CTR_BITS-1){1'b0}}, 1'b1});
                     end
 
                     // Allocate in a longer table if one exists
@@ -482,10 +392,10 @@ module tage_sc_l
                 if (!update_mispredict) begin
                     if (update_taken) begin
                         tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] <=
-                            sat_inc3(tage_ctrs[upd_provider][upd_tage_idx[upd_provider]]);
+                            ((tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] == {TAGE_CTR_BITS{1'b1}}) ? tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] : tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] + {{(TAGE_CTR_BITS-1){1'b0}}, 1'b1});
                     end else begin
                         tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] <=
-                            sat_dec3(tage_ctrs[upd_provider][upd_tage_idx[upd_provider]]);
+                            ((tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] == '0) ? tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] : tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] - {{(TAGE_CTR_BITS-1){1'b0}}, 1'b1});
                     end
                 end
             end
@@ -503,9 +413,9 @@ module tage_sc_l
             //  (3) SC update
             // =================================================================
             if (update_taken) begin
-                sc_table[upd_sc_idx] <= sc_sat_inc(sc_table[upd_sc_idx]);
+                sc_table[upd_sc_idx] <= ((sc_table[upd_sc_idx] == $signed({1'b0, {(SC_CTR_BITS-1){1'b1}}})) ? sc_table[upd_sc_idx] : sc_table[upd_sc_idx] + 6'(1));
             end else begin
-                sc_table[upd_sc_idx] <= sc_sat_dec(sc_table[upd_sc_idx]);
+                sc_table[upd_sc_idx] <= ((sc_table[upd_sc_idx] == $signed({1'b1, {(SC_CTR_BITS-1){1'b0}}})) ? sc_table[upd_sc_idx] : sc_table[upd_sc_idx] - 6'(1));
             end
 
             // =================================================================

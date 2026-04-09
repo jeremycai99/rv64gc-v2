@@ -105,36 +105,29 @@ module rob
     assign alloc_ready = (free_count >= 8'd6);
 
     // =========================================================================
-    // Modular index helper: (base + offset) % ROB_DEPTH
+    // Allocation indices: combinational output (inline wrap-add)
     // =========================================================================
-    function automatic logic [7:0] wrap_add(
-        input logic [7:0] base,
-        input logic [7:0] offset
-    );
-        logic [8:0] sum;
-        sum = {1'b0, base} + {1'b0, offset};
-        if (sum >= 9'(ROB_DEPTH))
-            wrap_add = sum[7:0] - ROB_DEPTH_U8;
-        else
-            wrap_add = sum[7:0];
-    endfunction
-
-    // =========================================================================
-    // Allocation indices: combinational output
-    // =========================================================================
+    logic [8:0] alloc_sum [0:PIPE_WIDTH-1];
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            alloc_idx[i] = wrap_add(tail_r, 8'(i));
+            alloc_sum[i] = {1'b0, tail_r} + 9'(i);
+            alloc_idx[i] = (alloc_sum[i] >= 9'(ROB_DEPTH))
+                           ? alloc_sum[i][7:0] - ROB_DEPTH_U8
+                           : alloc_sum[i][7:0];
         end
     end
 
     // =========================================================================
-    // Head read indices: combinational
+    // Head read indices: combinational (inline wrap-add)
     // =========================================================================
+    logic [8:0] head_sum_w [0:PIPE_WIDTH-1];
     logic [7:0] head_idx_w [0:PIPE_WIDTH-1];
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            head_idx_w[i] = wrap_add(head_r, 8'(i));
+            head_sum_w[i] = {1'b0, head_r} + 9'(i);
+            head_idx_w[i] = (head_sum_w[i] >= 9'(ROB_DEPTH))
+                            ? head_sum_w[i][7:0] - ROB_DEPTH_U8
+                            : head_sum_w[i][7:0];
         end
     end
 
@@ -198,23 +191,20 @@ module rob
     end
 
     // =========================================================================
-    // Flush helper: check if index is in the range [start, end) in circular
-    // buffer space. Used for partial-flush invalidation.
+    // Flush helper: precompute in-range for every entry (inline)
+    // rob_in_range[i] = 1 when entry i is in [flush_rob_tail, tail_r)
     // =========================================================================
-    function automatic logic rob_idx_in_range(
-        input logic [7:0] idx,
-        input logic [7:0] start_idx,
-        input logic [7:0] end_idx
-    );
-        begin
-            if (start_idx == end_idx)
-                rob_idx_in_range = 1'b0;
-            else if (start_idx < end_idx)
-                rob_idx_in_range = (idx >= start_idx) && (idx < end_idx);
+    logic [ROB_DEPTH-1:0] rob_in_range;
+    always_comb begin
+        for (int i = 0; i < ROB_DEPTH; i++) begin
+            if (flush_rob_tail == tail_r)
+                rob_in_range[i] = 1'b0;
+            else if (flush_rob_tail < tail_r)
+                rob_in_range[i] = (8'(i) >= flush_rob_tail) && (8'(i) < tail_r);
             else
-                rob_idx_in_range = (idx >= start_idx) || (idx < end_idx);
+                rob_in_range[i] = (8'(i) >= flush_rob_tail) || (8'(i) < tail_r);
         end
-    endfunction
+    end
 
     // =========================================================================
     // Sequential logic: allocate, writeback, commit, flush
@@ -274,7 +264,7 @@ module rob
         end else if (flush_valid) begin
             // Partial flush (checkpoint restore)
             for (int i = 0; i < ROB_DEPTH; i++) begin
-                if (rob_idx_in_range(8'(i), flush_rob_tail, tail_r)) begin
+                if (rob_in_range[i]) begin
                     valid_r[i]  <= 1'b0;
                     ready_r[i]  <= 1'b0;
                     is_branch_r[i]     <= 1'b0;
@@ -355,7 +345,10 @@ module rob
 
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (alloc_count > i[2:0]) begin
-                        automatic logic [7:0] ai = wrap_add(tail_r, 8'(i));
+                        automatic logic [8:0] ai_sum = {1'b0, tail_r} + 9'(i);
+                        automatic logic [7:0] ai = (ai_sum >= 9'(ROB_DEPTH))
+                                                   ? ai_sum[7:0] - ROB_DEPTH_U8
+                                                   : ai_sum[7:0];
                         valid_r[ai]  <= 1'b1;
                         ready_r[ai]  <= 1'b0;
                         pc_packed[ai*64 +: 64]       <= alloc_pc[i];
