@@ -1,0 +1,6 @@
+obj_dir/
+*.o
+*.elf
+*.hex
+*.vcd
+*.stackdump
