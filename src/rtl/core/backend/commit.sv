@@ -129,6 +129,10 @@ module commit
     // Per-slot eligibility
     logic [PIPE_WIDTH-1:0] slot_can_commit;
 
+    // verilator lint_off UNOPTFLAT
+    logic scan_stopped;
+    // verilator lint_on UNOPTFLAT
+
     always_comb begin
         scan_count       = 3'd0;
         found_exception  = 1'b0;
@@ -138,25 +142,25 @@ module commit
         found_ret        = 1'b0;
         store_cnt        = 3'd0;
         load_cnt         = 3'd0;
+        scan_stopped     = 1'b0;
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             slot_can_commit[i] = 1'b0;
         end
 
-        // Scan slots 0..5 in order
+        // Scan slots 0..5 in order, stopping at the first gap
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            // Stop if we already found an exception, mispredict, or return
-            if (found_exception || found_mispredict || found_ret) begin
+            // Stop if we already found an exception, mispredict, return, or gap
+            if (scan_stopped || found_exception || found_mispredict || found_ret) begin
                 // Do not commit further entries
             end
             // Stop if entry not valid
             else if (!head_valid[i]) begin
-                // No more entries; break out of scan
-                found_exception = found_exception; // no-op to stay in else-if
+                scan_stopped = 1'b1;
             end
             // Stop if entry not ready
             else if (!head_ready[i]) begin
-                found_exception = found_exception; // no-op
+                scan_stopped = 1'b1;
             end
             // Exception at this entry: commit it (for arch state update), then stop
             else if (head_has_exception[i]) begin
@@ -169,7 +173,7 @@ module commit
             end
             // Serializing instruction at slot > 0: stop (don't commit it)
             else if ((i > 0) && is_serializing[i]) begin
-                found_exception = found_exception; // no-op, stop scanning
+                scan_stopped = 1'b1;
             end
             // Normal committable entry
             else begin
@@ -221,11 +225,12 @@ module commit
             flush_out.full_flush  = 1'b1;
             flush_out.redirect_pc = trap_vector;
         end else if (found_mispredict) begin
-            // Branch mispredict: partial flush via checkpoint restore
+            // Branch mispredict: use full flush for correctness
+            // (checkpoint restore is only valid for branches that saved checkpoints;
+            //  unconditional jumps like JAL don't save checkpoints)
             flush_out.valid         = 1'b1;
-            flush_out.full_flush    = 1'b0;
+            flush_out.full_flush    = 1'b1;
             flush_out.redirect_pc   = head_branch_target[misp_slot];
-            flush_out.checkpoint_id = head_checkpoint_id[misp_slot];
         end else if (found_ret) begin
             // MRET/SRET: full flush, redirect to mepc/sepc
             flush_out.valid       = 1'b1;

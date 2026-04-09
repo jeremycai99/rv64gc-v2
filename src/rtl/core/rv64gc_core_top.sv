@@ -679,7 +679,8 @@ module rv64gc_core_top
     // =========================================================================
     // IQ instances
     // =========================================================================
-    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2))
+    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2),
+                  .PORT0_ONLY_FU(3'd1))  // FU_BRU = 3'd1 -> port 0 only
     u_iq0 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -1318,8 +1319,14 @@ module rv64gc_core_top
     // With registered wakeup, consumers issue 1 cycle after the producer,
     // so the PRF already has the data. Bypass from registered CDB provides
     // the same data — redundant but harmless and loop-free.
-    assign bypass_valid = {cdb_valid_r[5], cdb_valid_r[4], cdb_valid_r[3],
-                           cdb_valid_r[2], cdb_valid_r[1], cdb_valid_r[0]};
+    // Suppress bypass for p0 (hardwired zero register) -- CDB may carry
+    // non-zero data for instructions with pdst=p0 (e.g., JAL x0)
+    assign bypass_valid = {cdb_valid_r[5] && (cdb_tag_r[5] != '0),
+                           cdb_valid_r[4] && (cdb_tag_r[4] != '0),
+                           cdb_valid_r[3] && (cdb_tag_r[3] != '0),
+                           cdb_valid_r[2] && (cdb_tag_r[2] != '0),
+                           cdb_valid_r[1] && (cdb_tag_r[1] != '0),
+                           cdb_valid_r[0] && (cdb_tag_r[0] != '0)};
     assign bypass_tag[0] = cdb_tag_r[0];
     assign bypass_tag[1] = cdb_tag_r[1];
     assign bypass_tag[2] = cdb_tag_r[2];

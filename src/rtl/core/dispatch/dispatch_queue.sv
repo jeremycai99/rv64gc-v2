@@ -124,6 +124,8 @@ module dispatch_queue
             max_int = int_count[2:0];
 
         // Cannot dequeue int if all IQs full
+        // Note: actual_deq_int is the maximum; accepted_int_count (computed
+        // later by rr_assign_comb) may be lower due to per-IQ capacity limits.
         actual_deq_int = all_int_iq_full ? 3'd0 : max_int;
 
         // Remaining slots for mem
@@ -138,24 +140,90 @@ module dispatch_queue
 
     // =========================================================================
     // Round-robin IQ target assignment (combinational)
+    //
+    // Certain fu_types MUST go to specific IQs:
+    //   FU_BRU  -> IQ0 (BRU is on IQ0 port 0)
+    //   FU_MUL  -> IQ1 (MUL shares IQ1 port 0)
+    //   FU_DIV  -> IQ2 (DIV shares IQ2 port 0)
+    //   FU_CSR  -> IQ2 (CSR shares IQ2 port 0)
+    //   FU_ALU  -> round-robin across IQ0/IQ1/IQ2
     // =========================================================================
     logic [1:0] rr_target [0:PIPE_WIDTH-1];
     logic [1:0] rr_next;
+    // Pre-read fu_type from int FIFO for IQ routing decisions
+    fu_type_e   int_fifo_fu [0:PIPE_WIDTH-1];
+
+    always_comb begin
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            int_fifo_fu[i] = int_fifo[int_rd_addr[i]].base.fu_type;
+        end
+    end
+
+    // Track per-IQ usage to cap at 2 entries per IQ per cycle
+    logic [1:0] iq_used [0:NUM_INT_IQS-1];
+    logic [PIPE_WIDTH-1:0] slot_accepted;  // which int deq slots actually get accepted
+    logic [2:0] accepted_int_count;
 
     always_comb begin : rr_assign_comb
         logic [1:0] rr_cur;
+        logic [1:0] tgt;
+        logic       ok;
+        logic       stopped;
         rr_cur = rr_ptr;
+        stopped = 1'b0;
+
+        for (int q = 0; q < NUM_INT_IQS; q++)
+            iq_used[q] = 2'd0;
+        accepted_int_count = 3'd0;
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             rr_target[i] = 2'd0;
-            if (i < int'(actual_deq_int)) begin
-                // Skip full IQs (scan up to NUM_INT_IQS times)
-                for (int k = 0; k < NUM_INT_IQS; k++) begin
-                    if (iq_full[rr_cur])
-                        rr_cur = (rr_cur == 2'(NUM_INT_IQS-1)) ? 2'd0 : rr_cur + 2'd1;
+            slot_accepted[i] = 1'b0;
+
+            if (!stopped && i < int'(actual_deq_int)) begin
+                ok = 1'b0;
+                tgt = 2'd0;
+
+                // Force specific IQs for non-ALU functional units
+                case (int_fifo_fu[i])
+                    FU_BRU: begin
+                        tgt = 2'd0;  // IQ0 only
+                        ok = (iq_used[0] < 2'd2) && !iq_full[0];
+                    end
+                    FU_MUL: begin
+                        tgt = 2'd1;  // IQ1 only
+                        ok = (iq_used[1] < 2'd2) && !iq_full[1];
+                    end
+                    FU_DIV, FU_CSR: begin
+                        tgt = 2'd2;  // IQ2 only
+                        ok = (iq_used[2] < 2'd2) && !iq_full[2];
+                    end
+                    default: begin
+                        // ALU: round-robin, skip full or capacity-exhausted IQs
+                        ok = 1'b0;
+                        for (int k = 0; k < NUM_INT_IQS; k++) begin
+                            if (!ok && !iq_full[rr_cur] && (iq_used[rr_cur] < 2'd2)) begin
+                                tgt = rr_cur;
+                                ok = 1'b1;
+                            end
+                            if (!ok)
+                                rr_cur = (rr_cur == 2'(NUM_INT_IQS-1)) ? 2'd0 : rr_cur + 2'd1;
+                        end
+                        // Advance past the one we picked
+                        if (ok)
+                            rr_cur = (rr_cur == 2'(NUM_INT_IQS-1)) ? 2'd0 : rr_cur + 2'd1;
+                    end
+                endcase
+
+                if (ok) begin
+                    rr_target[i] = tgt;
+                    slot_accepted[i] = 1'b1;
+                    iq_used[tgt] = iq_used[tgt] + 2'd1;
+                    accepted_int_count = accepted_int_count + 3'd1;
+                end else begin
+                    // FIFO is in-order: stop dequeuing when an entry can't be routed
+                    stopped = 1'b1;
                 end
-                rr_target[i] = rr_cur;
-                rr_cur = (rr_cur == 2'(NUM_INT_IQS-1)) ? 2'd0 : rr_cur + 2'd1;
             end
         end
         rr_next = rr_cur;
@@ -179,25 +247,26 @@ module dispatch_queue
     always_comb begin : deq_output_comb
         int mem_slot;
 
-        deq_count = actual_deq_int + actual_deq_mem;
+        // Use accepted_int_count (which stops at the first unroutable entry)
+        deq_count = accepted_int_count + actual_deq_mem;
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             deq_data[i]      = '0;
             deq_iq_target[i] = 2'd0;
         end
 
-        // Integer slots: indices 0 .. actual_deq_int-1
+        // Integer slots: indices 0 .. accepted_int_count-1
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if (i < int'(actual_deq_int)) begin
+            if (slot_accepted[i]) begin
                 deq_data[i]      = int_fifo[int_rd_addr[i]];
                 deq_iq_target[i] = rr_target[i];
             end
         end
 
-        // Memory slots: indices actual_deq_int .. actual_deq_int+actual_deq_mem-1
+        // Memory slots: indices accepted_int_count .. accepted_int_count+actual_deq_mem-1
         mem_slot = 0;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if (i >= int'(actual_deq_int) && i < int'(actual_deq_int) + int'(actual_deq_mem)) begin
+            if (i >= int'(accepted_int_count) && i < int'(accepted_int_count) + int'(actual_deq_mem)) begin
                 deq_data[i]      = mem_fifo[mem_rd_addr[mem_slot]];
                 deq_iq_target[i] = IQ_MEM_TARGET;
                 mem_slot         = mem_slot + 1;
@@ -255,15 +324,15 @@ module dispatch_queue
             mem_tail <= mem_tail + MEM_IDX_BITS'(enq_mem_count);
 
             // -------------------------------------------------------------------
-            // Dequeue: advance heads
+            // Dequeue: advance heads (use accepted counts, not max available)
             // -------------------------------------------------------------------
-            int_head <= int_head + INT_IDX_BITS'(actual_deq_int);
+            int_head <= int_head + INT_IDX_BITS'(accepted_int_count);
             mem_head <= mem_head + MEM_IDX_BITS'(actual_deq_mem);
 
             // -------------------------------------------------------------------
             // Update occupancy counts (net = enq - deq)
             // -------------------------------------------------------------------
-            int_count <= int_count + {3'b000, enq_int_count} - {3'b000, actual_deq_int};
+            int_count <= int_count + {3'b000, enq_int_count} - {3'b000, accepted_int_count};
             mem_count <= mem_count + {3'b000, enq_mem_count} - {3'b000, actual_deq_mem};
 
             // -------------------------------------------------------------------

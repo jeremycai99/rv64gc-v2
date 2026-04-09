@@ -574,9 +574,12 @@ module rename
                 // Intra-batch dependency: if an earlier slot in this batch
                 // allocates a new physical register that matches our source,
                 // the source is NOT ready (the producer hasn't executed yet).
+                // Skip zero-elim and move-elim producers: they don't allocate
+                // a new physical register, so the existing mapping is already valid.
                 for (int j = 0; j < i; j++) begin
                     if (slot_can_advance[j] && work_insn[j].rd_valid &&
-                        work_insn[j].rd_arch != 5'd0 && !is_zero_elim[j]) begin
+                        work_insn[j].rd_arch != 5'd0 &&
+                        !is_zero_elim[j] && !is_move_elim[j]) begin
                         if (work_insn[i].rs1_valid && work_insn[i].rs1_arch != 5'd0 &&
                             rat_rs1_phys[i] == rat_wr_phys[j]) begin
                             ren_insn[out_dest[i]].rs1_ready = 1'b0;

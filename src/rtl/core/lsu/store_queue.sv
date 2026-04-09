@@ -184,14 +184,28 @@ module store_queue
             end
         end else if (flush_valid && flush_full) begin
             // Discard all speculative (uncommitted) entries.
-            // Reset tail to commit_ptr; only committed entries remain.
-            tail_r  <= commit_ptr_r;
-            count_r <= {1'b0, commit_ptr_r} - {1'b0, head_r};
+            // Account for any stores committed THIS cycle before flushing.
+            automatic logic [SQ_IDX_BITS-1:0] new_commit_ptr;
+            automatic logic [SQ_DEPTH-1:0] newly_committed;
+            new_commit_ptr = SQ_IDX_BITS'(commit_ptr_r + commit_count);
+            // Identify which entries are being committed this cycle
+            newly_committed = '0;
+            for (int c = 0; c < PIPE_WIDTH; c++) begin
+                if (c < int'(commit_count)) begin
+                    newly_committed[SQ_IDX_BITS'(commit_ptr_r + SQ_IDX_BITS'(c))] = 1'b1;
+                end
+            end
+            // Mark newly committed entries AND discard speculative ones
             for (int i = 0; i < SQ_DEPTH; i++) begin
-                if (!queue[i].committed) begin
+                if (newly_committed[i]) begin
+                    queue[i].committed <= 1'b1;
+                end else if (!queue[i].committed) begin
                     queue[i].valid <= 1'b0;
                 end
             end
+            commit_ptr_r <= new_commit_ptr;
+            tail_r  <= new_commit_ptr;
+            count_r <= {1'b0, new_commit_ptr} - {1'b0, head_r};
         end else begin
             // --- Drain head committed entry ---
             if (drain_valid && drain_ready) begin

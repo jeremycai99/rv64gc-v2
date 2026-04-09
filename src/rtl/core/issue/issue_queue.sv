@@ -10,7 +10,11 @@ module issue_queue
 #(
     parameter int DEPTH      = 32,
     parameter int NUM_ENQUEUE = 2,
-    parameter int NUM_SELECT  = 2
+    parameter int NUM_SELECT  = 2,
+    // When non-zero, entries whose fu_type matches PORT0_ONLY_FU are
+    // excluded from port 1 selection (they can only issue on port 0).
+    // Set to a fu_type_e value (e.g., 3'd1 for FU_BRU) or 0 to disable.
+    parameter int PORT0_ONLY_FU = 0
 )(
     input  logic clk,
     input  logic rst_n,
@@ -59,6 +63,7 @@ module issue_queue
     logic [PHYS_REG_BITS-1:0]     rs1_phys_r   [0:DEPTH-1];
     logic [PHYS_REG_BITS-1:0]     rs2_phys_r   [0:DEPTH-1];
     logic [ROB_IDX_BITS-1:0]      rob_idx_r    [0:DEPTH-1];
+    logic [2:0]                   fu_type_r    [0:DEPTH-1];  // for port restriction
     logic [DEPTH-1:0]             src1_ready;
     logic [DEPTH-1:0]             src2_ready;
     logic [DEPTH-1:0]             src1_spec;     // rs1 was woken speculatively
@@ -158,10 +163,16 @@ module issue_queue
     // Eligibility: valid && both sources ready (after wakeup)
     // =====================================================================
     logic [DEPTH-1:0] eligible;
+    // Port 1 eligibility: exclude entries with PORT0_ONLY_FU
+    logic [DEPTH-1:0] eligible_port1;
 
     always_comb begin
         for (int e = 0; e < DEPTH; e++) begin
             eligible[e] = entry_valid[e] & next_src1_ready[e] & next_src2_ready[e];
+            if (PORT0_ONLY_FU != 0 && fu_type_r[e] == PORT0_ONLY_FU[2:0])
+                eligible_port1[e] = 1'b0;
+            else
+                eligible_port1[e] = eligible[e];
         end
     end
 
@@ -197,11 +208,11 @@ module issue_queue
             end
         end
 
-        // -- Port 1 selection (exclude port 0's winner) --
+        // -- Port 1 selection (exclude port 0's winner and port0-only entries) --
         sel_found[1] = 1'b0;
         sel_idx[1]   = '0;
         for (int e = 0; e < DEPTH; e++) begin
-            if (eligible[e] && !(sel_found[0] && (e[IDX_BITS-1:0] == sel_idx[0]))) begin
+            if (eligible_port1[e] && !(sel_found[0] && (e[IDX_BITS-1:0] == sel_idx[0]))) begin
                 if (!sel_found[1]) begin
                     sel_found[1] = 1'b1;
                     sel_idx[1]   = e[IDX_BITS-1:0];
@@ -341,6 +352,7 @@ module issue_queue
                     rs1_phys_r[free_idx[q]]  <= enq_data[q].rs1_phys;
                     rs2_phys_r[free_idx[q]]  <= enq_data[q].rs2_phys;
                     rob_idx_r[free_idx[q]]   <= enq_data[q].rob_idx;
+                    fu_type_r[free_idx[q]]   <= enq_data[q].fu_type;
                     src1_ready[free_idx[q]]  <= enq_data[q].rs1_ready;
                     src2_ready[free_idx[q]]  <= enq_data[q].rs2_ready;
                     src1_spec[free_idx[q]]   <= 1'b0;
