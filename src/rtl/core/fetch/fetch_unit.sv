@@ -671,6 +671,11 @@ module fetch_unit
 
     // =========================================================================
     // Remainder buffer: save the first 2 bytes of a straddling instruction
+    //
+    // The remainder must persist until the next cache line is actually
+    // available and the extraction logic consumes it (consume_remainder_c).
+    // If the next line misses in the I-cache, we may idle for several
+    // cycles with a valid remainder waiting for data.
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -681,14 +686,18 @@ module fetch_unit
             remainder_valid_r <= 1'b0;
         end else if (!backend_stall) begin
             if (straddle_detected && f2_valid_r && ic_resp_valid) begin
+                // New straddle detected on the current cache line: latch the
+                // first 2 bytes so the next cache line can complete it.
                 remainder_valid_r <= 1'b1;
                 remainder_hw_r    <= straddle_hw;
                 remainder_pc_r    <= straddle_pc;
-            end else begin
-                // Clear once consumed (the extraction logic will use it
-                // when the next line arrives at byte_pos 0).
+            end else if (consume_remainder_c) begin
+                // Successfully combined remainder with the new cache line;
+                // clear the buffer.
                 remainder_valid_r <= 1'b0;
             end
+            // Otherwise: hold the remainder while we wait for the next
+            // cache line to arrive (I-cache miss, backend stall, etc.).
         end
     end
 

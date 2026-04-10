@@ -59,13 +59,34 @@ module dcache_tag_ram
     end
 
     // =========================================================================
-    // Read (synchronous, 1-cycle latency)
+    // Read (synchronous, 1-cycle latency, write-first bypass)
+    //
+    // The dcache pipeline aligns s0 raddr with an s1 tag comparison via a
+    // 1-cycle latency read.  To keep fills visible immediately after they
+    // install (so a just-filled line isn't duplicated into a second way by
+    // a follow-up miss), the flop implements a write-first bypass: if the
+    // current cycle writes a way in the set being read, forward the new
+    // value to the output.
     // =========================================================================
     always_ff @(posedge clk) begin
         for (int w = 0; w < L1D_WAYS; w++) begin
-            valid_out[w] <= valid_arr[raddr][w];
-            dirty_out[w] <= dirty_arr[raddr][w];
-            tag_out[w]   <= tag_arr  [raddr][w];
+            logic hit_way_write;
+            logic hit_way_dirty;
+            hit_way_write = we       && (waddr        == raddr) && (wway       == 2'(w));
+            hit_way_dirty = dirty_we && (dirty_waddr  == raddr) && (dirty_wway == 2'(w));
+
+            if (hit_way_write) begin
+                valid_out[w] <= wvalid;
+                dirty_out[w] <= wdirty;
+                tag_out[w]   <= wtag;
+            end else begin
+                valid_out[w] <= valid_arr[raddr][w];
+                tag_out[w]   <= tag_arr  [raddr][w];
+                if (hit_way_dirty)
+                    dirty_out[w] <= 1'b1;
+                else
+                    dirty_out[w] <= dirty_arr[raddr][w];
+            end
         end
     end
 

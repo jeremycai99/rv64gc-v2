@@ -625,12 +625,11 @@ module lsu
             );
 
             // ---- D-cache hit path (2 cycles after issue) ----
-            assign load_extracted_dc[li] = extract_and_extend(
-                dcache_load_resp_data[li],
-                load_eff_addr_rr[li][2:0],
-                load_issue_data_rr[li].mem_size,
-                load_issue_data_rr[li].is_unsigned
-            );
+            // The dcache already extracts, sign/zero extends, and LSB-aligns
+            // its response based on the load's size and byte offset.
+            // Pass it through unchanged — a second extract_and_extend here
+            // would shift it again and corrupt non-dword-aligned loads.
+            assign load_extracted_dc[li] = dcache_load_resp_data[li];
         end
     endgenerate
 

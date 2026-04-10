@@ -100,6 +100,7 @@ module dcache
     logic [L1D_SET_BITS-1:0]  dr_raddr;
     logic [1:0]               dr_rway;
     logic [LINE_SIZE*8-1:0]   dr_rdata;
+    logic [LINE_SIZE*8-1:0]   dr_rdata_all [0:L1D_WAYS-1];
 
     logic                     dr_we;
     logic [L1D_SET_BITS-1:0]  dr_waddr;
@@ -113,19 +114,20 @@ module dcache
     logic [LINE_SIZE-1:0]     dr_bwmask;
 
     dcache_data_ram u_data_ram (
-        .clk    (clk),
-        .raddr  (dr_raddr),
-        .rway   (dr_rway),
-        .rdata  (dr_rdata),
-        .we     (dr_we),
-        .waddr  (dr_waddr),
-        .wway   (dr_wway),
-        .wdata  (dr_wdata),
-        .bwe    (dr_bwe),
-        .bwaddr (dr_bwaddr),
-        .bwway  (dr_bwway),
-        .bwdata (dr_bwdata),
-        .bwmask (dr_bwmask)
+        .clk       (clk),
+        .raddr     (dr_raddr),
+        .rway      (dr_rway),
+        .rdata     (dr_rdata),
+        .rdata_all (dr_rdata_all),
+        .we        (dr_we),
+        .waddr     (dr_waddr),
+        .wway      (dr_wway),
+        .wdata     (dr_wdata),
+        .bwe       (dr_bwe),
+        .bwaddr    (dr_bwaddr),
+        .bwway     (dr_bwway),
+        .bwdata    (dr_bwdata),
+        .bwmask    (dr_bwmask)
     );
 
     // =========================================================================
@@ -292,14 +294,10 @@ module dcache
     // =========================================================================
     // Data mux from RAM output (way selected by hit way)
     // The data RAM was read with the s0 address so its output is available in s1.
-    // We read all ways and mux by hit_way.  Because we have a single-port data
-    // RAM, for the two-load case we hold the result of the first load and replay
-    // the second the next cycle — load port 1 miss is handled separately.
-    // For the initial bring-up simplification we output hit data for load 0 only
-    // from the RAM; load 1 will be resolved through the miss path when needed.
+    // We read all ways via rdata_all and mux by ld0_hit_way here.
     // =========================================================================
     logic [LINE_SIZE*8-1:0] ld0_line_data;
-    assign ld0_line_data = dr_rdata;   // single data RAM port returns ld0's data
+    assign ld0_line_data = dr_rdata_all[ld0_hit_way];
 
     // =========================================================================
     // PLRU state (3-bit binary tree per set)
@@ -329,11 +327,15 @@ module dcache
     // =========================================================================
     logic [63:0] ld0_extracted, ld1_extracted;
 
+    // Select the cache line from the hit way for each port.
+    logic [LINE_SIZE*8-1:0] ld1_line_data;
+    assign ld1_line_data = dr_rdata_all[ld1_hit_way];
+
     always_comb begin
         logic [5:0]  byte_off0;
         logic [63:0] raw0;
         byte_off0 = s1_ld0_addr[OFFSET_HI:0];
-        raw0 = dr_rdata[byte_off0*8 +: 64];
+        raw0 = ld0_line_data[byte_off0*8 +: 64];
         case (s1_ld0_size)
             2'd0: ld0_extracted = s1_ld0_unsigned ? {56'b0, raw0[7:0]}  : {{56{raw0[7]}},  raw0[7:0]};
             2'd1: ld0_extracted = s1_ld0_unsigned ? {48'b0, raw0[15:0]} : {{48{raw0[15]}}, raw0[15:0]};
@@ -346,7 +348,7 @@ module dcache
         logic [5:0]  byte_off1;
         logic [63:0] raw1;
         byte_off1 = s1_ld1_addr[OFFSET_HI:0];
-        raw1 = dr_rdata[byte_off1*8 +: 64];
+        raw1 = ld1_line_data[byte_off1*8 +: 64];
         case (s1_ld1_size)
             2'd0: ld1_extracted = s1_ld1_unsigned ? {56'b0, raw1[7:0]}  : {{56{raw1[7]}},  raw1[7:0]};
             2'd1: ld1_extracted = s1_ld1_unsigned ? {48'b0, raw1[15:0]} : {{48{raw1[15]}}, raw1[15:0]};
@@ -590,26 +592,30 @@ module dcache
             dr_bwe    = 1'b1;
             dr_bwaddr = s1_st_index;
             dr_bwway  = st_hit_way;
-            dr_bwdata = {8{s1_st_data}};  // replicate data to full line; mask selects
-            // Expand byte_mask to line-granularity based on word offset
+            // Expand byte_mask / data to full-line granularity.
+            //
+            // s1_st_data is LSB-aligned to the store's effective address, so
+            // its byte 0 contains the byte that must land at line offset
+            // s1_st_addr[5:0].  s1_st_byte_mask[b]==1 means std_data[b*8 +: 8]
+            // is valid.  The line byte position is addr[5:0] + b.
             begin
-                automatic logic [LINE_SIZE-1:0] full_mask;
-                automatic logic [2:0]           byte_off;
+                automatic logic [LINE_SIZE-1:0]   full_mask;
+                automatic logic [LINE_SIZE*8-1:0] full_data;
+                automatic logic [5:0]             line_off;
                 full_mask = '0;
-                byte_off  = s1_st_addr[2:0];
+                full_data = '0;
+                line_off  = s1_st_addr[5:0];
                 for (int b = 0; b < 8; b++) begin
                     if (s1_st_byte_mask[b]) begin
-                        full_mask[int'(byte_off) + b] = 1'b1;
+                        automatic int line_byte = int'(line_off) + b;
+                        if (line_byte < LINE_SIZE) begin
+                            full_mask[line_byte] = 1'b1;
+                            full_data[line_byte*8 +: 8] = s1_st_data[b*8 +: 8];
+                        end
                     end
                 end
                 dr_bwmask = full_mask;
-                // Also write actual store data aligned correctly into bwdata
-                dr_bwdata = '0;
-                for (int b = 0; b < 8; b++) begin
-                    if (s1_st_byte_mask[b]) begin
-                        dr_bwdata[(int'(byte_off) + b)*8 +: 8] = s1_st_data[b*8 +: 8];
-                    end
-                end
+                dr_bwdata = full_data;
             end
         end
     end
@@ -763,8 +769,8 @@ module dcache
                 mshr[mshr_free_idx].writeback_pend <= dirty_v;
                 if (dirty_v) begin
                     // Need to evict dirty line: save its address and data
-                    // Evict address reconstructed from tag + index
-                    mshr[mshr_free_idx].evict_data <= dr_rdata; // data from last RAM read
+                    // (pick the victim way's data from the RAM read-all)
+                    mshr[mshr_free_idx].evict_data <= dr_rdata_all[vway];
                     mshr[mshr_free_idx].evict_addr <=
                         {tr_tag_out[vway], s1_ld0_index, {LINE_BITS{1'b0}}};
                 end
@@ -789,7 +795,7 @@ module dcache
                 mshr[mshr_free_idx].fill_done      <= 1'b0;
                 mshr[mshr_free_idx].writeback_pend <= dirty_v;
                 if (dirty_v) begin
-                    mshr[mshr_free_idx].evict_data <= dr_rdata;
+                    mshr[mshr_free_idx].evict_data <= dr_rdata_all[vway];
                     mshr[mshr_free_idx].evict_addr <=
                         {tr_tag_out[vway], s1_st_index, {LINE_BITS{1'b0}}};
                 end

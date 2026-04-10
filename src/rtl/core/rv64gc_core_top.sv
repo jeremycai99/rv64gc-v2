@@ -683,12 +683,14 @@ module rv64gc_core_top
                             // Stores are stored as a SINGLE store IQ entry that
                             // requires both rs1 (base addr) and rs2 (store data)
                             // ready. Issuing the entry fires the STA AND STD
-                            // pipelines together. Cap to 1 store per cycle so
-                            // that the LSU's 1-STA/1-STD pipeline keeps up.
-                            if (iq_st_enq_cnt == 3'd0) begin
-                                iq_store_enq_data[0]           = dq_iq_entry[i];
-                                iq_store_enq_data[0].fu_type   = FU_STA;
-                                iq_store_enq_valid[0]          = 1'b1;
+                            // pipelines together.  The store IQ has
+                            // NUM_ENQUEUE=2, so up to two stores per cycle can
+                            // be enqueued; the LSU's 1-STA/1-STD pipeline then
+                            // drains them one per cycle.
+                            if (iq_st_enq_cnt < 3'd2) begin
+                                iq_store_enq_data[iq_st_enq_cnt[0]]          = dq_iq_entry[i];
+                                iq_store_enq_data[iq_st_enq_cnt[0]].fu_type  = FU_STA;
+                                iq_store_enq_valid[iq_st_enq_cnt[0]]         = 1'b1;
                                 iq_st_enq_cnt = iq_st_enq_cnt + 3'd1;
                             end
                         end

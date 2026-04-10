@@ -135,13 +135,17 @@ module store_queue
             assign ent_full_cover[fi] = addr_match & ((ent_bmask & fwd_req_bmask) == fwd_req_bmask);
             assign ent_partial[fi]    = addr_match & (ent_overlap[fi] != 8'h00) & ~ent_full_cover[fi];
 
-            // Per-entry forwarding data: merge 8 bytes selecting from entry data
+            // Per-entry forwarding data: merge 8 bytes selecting from entry
+            // data.  queue[fi].data is LSB-aligned to the store's effective
+            // address, so its byte 0 holds the byte at memory offset
+            // queue[fi].addr[2:0].  For each output dword byte `b` that the
+            // store covers, pick queue[fi].data[b - addr[2:0]].
             always_comb begin
                 ent_fwd_data[fi] = '0;
                 for (int b = 0; b < 8; b++) begin
-                    if (ent_overlap[fi][b]) begin
+                    if (ent_overlap[fi][b] && (b >= int'(queue[fi].addr[2:0]))) begin
                         ent_fwd_data[fi][b*8 +: 8] =
-                            queue[fi].data[(int'(queue[fi].addr[2:0]) + b) * 8 +: 8];
+                            queue[fi].data[(b - int'(queue[fi].addr[2:0])) * 8 +: 8];
                     end
                 end
             end

@@ -105,13 +105,16 @@ module committed_store_buffer
             assign ent_overlap[fi]    = addr_match ? (ent_bmask & fwd_req_bmask) : 8'h00;
             assign ent_full_cover[fi] = addr_match & ((ent_bmask & fwd_req_bmask) == fwd_req_bmask);
 
-            // Per-entry forwarding data
+            // Per-entry forwarding data.  buf_q[fi].data is LSB-aligned to
+            // the store's effective address; byte 0 corresponds to memory
+            // byte buf_q[fi].addr[2:0].  Select buf_q[fi].data[b - addr[2:0]]
+            // for each output dword byte `b` that the store covers.
             always_comb begin
                 ent_fwd_data[fi] = '0;
                 for (int b = 0; b < 8; b++) begin
-                    if (ent_overlap[fi][b]) begin
+                    if (ent_overlap[fi][b] && (b >= int'(buf_q[fi].addr[2:0]))) begin
                         ent_fwd_data[fi][b*8 +: 8] =
-                            buf_q[fi].data[(int'(buf_q[fi].addr[2:0]) + b) * 8 +: 8];
+                            buf_q[fi].data[(b - int'(buf_q[fi].addr[2:0])) * 8 +: 8];
                     end
                 end
             end
@@ -151,7 +154,6 @@ module committed_store_buffer
             if (deq_valid && deq_ack) begin
                 buf_q[head_r].valid <= 1'b0;
                 head_r  <= IDX_BITS'(head_r + 1'b1);
-                count_r <= count_r - (IDX_BITS+1)'(1);
             end
 
             // Enqueue (committed store from SQ)
@@ -162,12 +164,18 @@ module committed_store_buffer
                 buf_q[tail_r].byte_mask <= enq_data.byte_mask;
                 buf_q[tail_r].size      <= enq_data.size;
                 tail_r  <= IDX_BITS'(tail_r + 1'b1);
-                // Adjust count: both deq and enq may fire the same cycle
-                if (!(deq_valid && deq_ack)) begin
-                    count_r <= count_r + (IDX_BITS+1)'(1);
-                end
-                // If both fire count stays the same — no additional update needed
             end
+
+            // Count update: handle both-fire case correctly.
+            // This must be ONE write to count_r — otherwise a same-cycle
+            // enq+deq would only apply the dequeue decrement, underflowing
+            // the count when a store queue drain races the D-cache drain.
+            if ((enq_valid && enq_ready) && (deq_valid && deq_ack))
+                count_r <= count_r;
+            else if (enq_valid && enq_ready)
+                count_r <= count_r + (IDX_BITS+1)'(1);
+            else if (deq_valid && deq_ack)
+                count_r <= count_r - (IDX_BITS+1)'(1);
         end
     end
 

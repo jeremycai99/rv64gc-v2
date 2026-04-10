@@ -128,6 +128,8 @@ module dispatch_queue
 
     always_comb begin : deq_count_comb
         logic [2:0] max_int, max_mem, rem_slots;
+        logic [2:0] candidate_mem;
+        logic [2:0] store_cnt;
 
         all_int_iq_full = (iq_full == {NUM_INT_IQS{1'b1}});
 
@@ -145,9 +147,37 @@ module dispatch_queue
         // Remaining slots for mem
         rem_slots = 3'(PIPE_WIDTH) - actual_deq_int;
         if (mem_count >= MEM_CNT_BITS'(rem_slots))
-            max_mem = rem_slots;
+            candidate_mem = rem_slots;
         else
-            max_mem = mem_count[2:0];
+            candidate_mem = mem_count[2:0];
+
+        // Cap mem releases so that at most 2 stores go in one cycle (the
+        // load IQ and store IQ each have NUM_ENQUEUE=2).  Walk the mem
+        // FIFO in the order it will be dequeued, and STOP at the first
+        // position we cannot accept — a third store — to preserve
+        // program order.  Loads and earlier stores still get released.
+        begin : mem_store_cap
+            logic stopped_m;
+            max_mem    = 3'd0;
+            store_cnt  = 3'd0;
+            stopped_m  = 1'b0;
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                automatic logic [MEM_IDX_BITS-1:0] rd_a;
+                rd_a = mem_head + MEM_IDX_BITS'(i);
+                if (!stopped_m && 3'(i) < candidate_mem) begin
+                    if (mem_fifo[rd_a].base.is_store) begin
+                        if (store_cnt < 3'd2) begin
+                            max_mem   = 3'(i) + 3'd1;
+                            store_cnt = store_cnt + 3'd1;
+                        end else begin
+                            stopped_m = 1'b1;
+                        end
+                    end else begin
+                        max_mem = 3'(i) + 3'd1;
+                    end
+                end
+            end
+        end
 
         actual_deq_mem = max_mem;
     end

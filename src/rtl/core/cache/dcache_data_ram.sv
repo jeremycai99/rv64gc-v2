@@ -8,10 +8,12 @@ module dcache_data_ram
     import rv64gc_pkg::*;
 (
     input  logic                        clk,
-    // Read port
+    // Read port: returns the line for the current raddr, one per way.
+    // Consumers mux by hit_way downstream.
     input  logic [L1D_SET_BITS-1:0]     raddr,
-    input  logic [1:0]                  rway,
-    output logic [LINE_SIZE*8-1:0]      rdata,
+    input  logic [1:0]                  rway,       // unused (legacy), kept for compat
+    output logic [LINE_SIZE*8-1:0]      rdata,       // muxed: way selected by rway_q
+    output logic [LINE_SIZE*8-1:0]      rdata_all [0:L1D_WAYS-1], // all ways
     // Write port (full cache-line, e.g., fill from L2)
     input  logic                        we,
     input  logic [L1D_SET_BITS-1:0]     waddr,
@@ -49,6 +51,11 @@ module dcache_data_ram
 
     // =========================================================================
     // Read (synchronous, 1-cycle latency)
+    //
+    // We expose all 4 ways so the dcache can mux on hit_way after tag
+    // comparison.  We also provide a single-way `rdata` output (muxed by
+    // the registered rway_q) for legacy consumers that select ahead of
+    // time (e.g., writeback eviction).
     // =========================================================================
     logic [L1D_SET_BITS-1:0] raddr_q;
     logic [1:0]              rway_q;
@@ -56,6 +63,12 @@ module dcache_data_ram
     always_ff @(posedge clk) begin
         raddr_q <= raddr;
         rway_q  <= rway;
+    end
+
+    always_comb begin
+        for (int w = 0; w < L1D_WAYS; w++) begin
+            rdata_all[w] = data_arr[raddr_q][w];
+        end
     end
 
     assign rdata = data_arr[raddr_q][rway_q];

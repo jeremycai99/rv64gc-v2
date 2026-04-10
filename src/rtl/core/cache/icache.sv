@@ -291,6 +291,17 @@ module icache
     // in s1_addr). The hit detection uses s1_tag vs tr_tag_out, and
     // hit_data = dr_rdata[hit_way]. All are available in the same cycle
     // as s1_valid, giving 1-cycle hit latency from request.
+    //
+    // Fill-path forwarding: when a miss is in flight and the fill response
+    // arrives, we can return the filled line directly — but ONLY if the
+    // current req_addr still matches the line being filled.  If a redirect
+    // has moved the fetch unit to a different line, the fill data is for
+    // the OLD request and must not be presented as the response for the
+    // new request (that would corrupt the instruction stream).
+    logic fill_addr_matches;
+    assign fill_addr_matches =
+        (req_addr[63:LINE_BITS] == miss_addr_q[63:LINE_BITS]);
+
     always_comb begin
         resp_valid = 1'b0;
         resp_hit   = 1'b0;
@@ -300,7 +311,8 @@ module icache
             resp_valid = 1'b1;
             resp_hit   = 1'b1;
             resp_data  = hit_data;
-        end else if (state_q == ST_WAIT_FILL && fill_resp_valid) begin
+        end else if (state_q == ST_WAIT_FILL && fill_resp_valid &&
+                     req_valid && fill_addr_matches) begin
             resp_valid = 1'b1;
             resp_hit   = 1'b0;
             resp_data  = fill_resp_data;
