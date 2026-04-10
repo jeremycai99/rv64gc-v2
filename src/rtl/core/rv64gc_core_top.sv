@@ -326,6 +326,13 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]    commit_release_cp;
     logic [CHECKPOINT_BITS-1:0] commit_cp_id [0:PIPE_WIDTH-1];
 
+    // Move/zero elimination flags from rename (per output slot)
+    logic [PIPE_WIDTH-1:0] ren_move_eliminated;
+    logic [PIPE_WIDTH-1:0] ren_zero_eliminated;
+    // Combined: instruction was eliminated and must not be dispatched
+    logic [PIPE_WIDTH-1:0] ren_eliminated;
+    assign ren_eliminated = ren_move_eliminated | ren_zero_eliminated;
+
     rename u_rename (
         .clk              (clk),
         .rst_n            (rst_n),
@@ -333,6 +340,8 @@ module rv64gc_core_top
         .dec_count        (rename_dec_count),
         .ren_insn         (ren_insn),
         .ren_count        (ren_count_w),
+        .ren_move_eliminated (ren_move_eliminated),
+        .ren_zero_eliminated (ren_zero_eliminated),
         .rob_alloc_idx    (rob_alloc_idx),
         .rob_alloc_ready  (rob_alloc_ready),
         .stall            (rename_stall),
@@ -558,6 +567,7 @@ module rv64gc_core_top
 
     always_comb begin
         for (int s = 0; s < PIPE_WIDTH; s++) begin
+            dq_iq_entry[s]._pad         = '0;
             dq_iq_entry[s].valid        = dq_deq_data[s].base.valid;
             dq_iq_entry[s].rob_idx      = dq_deq_data[s].rob_idx;
             dq_iq_entry[s].pdst         = dq_deq_data[s].pdst;
@@ -974,6 +984,7 @@ module rv64gc_core_top
         .fusion_type (iq0_issue_data[0].fusion_type),
         .bp_taken    (iq0_issue_data[0].bp_taken),
         .bp_target   (iq0_issue_data[0].bp_target),
+        .is_rvc      (iq0_issue_data[0].is_rvc),
         .result      (bru_result),
         .taken       (bru_taken),
         .target      (bru_target),
@@ -1350,6 +1361,12 @@ module rv64gc_core_top
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             preg_ready_table <= {INT_PRF_DEPTH{1'b1}};
+        end else if (flush_out.valid && flush_out.full_flush) begin
+            // Full flush: reset all pregs to ready.
+            // After flush the RAT maps arch regs 0-31 to phys 0-31 (committed
+            // state) and the free list marks 32-255 as free. No in-flight
+            // writers exist, so every physical register is ready.
+            preg_ready_table <= {INT_PRF_DEPTH{1'b1}};
         end else begin
             // Clear on new rename allocation
             for (int i = 0; i < PIPE_WIDTH; i++) begin
@@ -1635,15 +1652,20 @@ module rv64gc_core_top
         bpu_update_target    = 64'd0;
         bpu_update_type      = 3'd0;
 
-        // Scan committed entries for branches
+        // Scan committed entries for branches and mispredicted jumps.
+        // Update the BTB for:
+        //   - Conditional branches (rob_head_is_branch)
+        //   - Any instruction with branch_mispredict set (catches JAL/JALR)
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if (commit_out[i].valid && rob_head_is_branch[i] && !bpu_update_valid) begin
+            if (commit_out[i].valid && !bpu_update_valid &&
+                (rob_head_is_branch[i] || rob_head_branch_mispredict[i])) begin
                 bpu_update_valid     = 1'b1;
                 bpu_update_pc        = rob_head_pc[i];
                 bpu_update_taken     = rob_head_branch_taken[i];
                 bpu_update_mispredict = rob_head_branch_mispredict[i];
                 bpu_update_target    = rob_head_branch_target[i];
-                bpu_update_type      = 3'd0; // conditional by default
+                // Type: 0=cond, 1=jal for non-branch mispredicts
+                bpu_update_type      = rob_head_is_branch[i] ? 3'd0 : 3'd1;
             end
         end
     end
@@ -1756,5 +1778,10 @@ module rv64gc_core_top
     assign tohost_wr_valid = dc_store_req_valid &&
                              (dc_store_req_addr[31:3] == tohost_addr[31:3]);
     assign tohost_wr_data  = dc_store_req_data;
+
+    // =========================================================================
+    // Debug tracing (simulation only)
+    // =========================================================================
+    // (debug traces removed for clean test runs)
 
 endmodule

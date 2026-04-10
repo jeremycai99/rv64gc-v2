@@ -17,6 +17,7 @@ module bru
     input  logic [2:0]  fusion_type,   // which fused pattern
     input  logic        bp_taken,      // predicted taken
     input  logic [63:0] bp_target,     // predicted target
+    input  logic        is_rvc,        // compressed instruction (PC+2 for link)
     output logic [63:0] result,        // link address (PC+4 for JAL/JALR, unused for branches)
     output logic        taken,         // actual branch outcome
     output logic [63:0] target,        // actual branch target
@@ -66,25 +67,47 @@ module bru
 
     // =========================================================================
     // Target computation
+    //
+    // For conditional branches, the target stored in the ROB is the
+    // *redirect* target — the address the pipeline should fetch from on
+    // mispredict. When the branch is actually taken, that is the branch
+    // target (pc + imm). When the branch is actually not-taken, that is
+    // the fall-through address (pc + 4 or pc + 2 for RVC).
+    //
+    // JAL and JALR are unconditional: their target is always the jump
+    // destination and is used for mispredict-recovery of the target address.
     // =========================================================================
+    logic [63:0] branch_target;
+    logic [63:0] fallthrough;
+
     always_comb begin
         case (op)
-            BR_JALR: target = (operand_a + imm) & ~64'd1;
-            default: target = pc + imm;  // branches, JAL, and fused ops
+            BR_JALR: branch_target = (operand_a + imm) & ~64'd1;
+            default: branch_target = pc + imm;
+        endcase
+    end
+
+    assign fallthrough = pc + (is_rvc ? 64'd2 : 64'd4);
+
+    always_comb begin
+        case (op)
+            BR_JAL:  target = branch_target;
+            BR_JALR: target = branch_target;
+            default: target = taken ? branch_target : fallthrough;
         endcase
     end
 
     // =========================================================================
-    // Link address (PC + 4 for JAL/JALR)
+    // Link address (PC + 4 for 32-bit, PC + 2 for RVC)
     // =========================================================================
-    assign result = pc + 64'd4;
+    assign result = pc + (is_rvc ? 64'd2 : 64'd4);
 
     // =========================================================================
     // Mispredict detection
     // =========================================================================
     // Mispredicted if:
     //   - taken/not-taken differs from prediction, OR
-    //   - taken but target differs from predicted target
-    assign mispredict = (taken != bp_taken) || (taken && (target != bp_target));
+    //   - taken but branch target differs from predicted target
+    assign mispredict = (taken != bp_taken) || (taken && (branch_target != bp_target));
 
 endmodule

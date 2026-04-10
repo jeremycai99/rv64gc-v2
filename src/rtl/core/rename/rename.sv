@@ -19,6 +19,11 @@ module rename
     output renamed_insn_t ren_insn [0:PIPE_WIDTH-1],
     output logic [2:0]    ren_count,     // how many renamed this cycle (0..6)
 
+    // Move/zero elimination flags for each output slot (set when the
+    // instruction was eliminated at rename and must NOT be dispatched)
+    output logic [PIPE_WIDTH-1:0] ren_move_eliminated,
+    output logic [PIPE_WIDTH-1:0] ren_zero_eliminated,
+
     // ROB allocation interface
     input  logic [ROB_IDX_BITS-1:0] rob_alloc_idx [0:PIPE_WIDTH-1],
     input  logic                    rob_alloc_ready,  // ROB can accept
@@ -52,8 +57,15 @@ module rename
 
     // =========================================================================
     // Holding register: retains decoded instructions that could not advance
+    // Stored as flat bit-vectors to avoid Verilator packed-struct array bugs.
     // =========================================================================
+    localparam int HI_W = $bits(decoded_insn_t);
+    logic [HI_W-1:0] hold_insn_flat [0:PIPE_WIDTH-1];
     decoded_insn_t hold_insn [0:PIPE_WIDTH-1];
+    always_comb begin
+        for (int k = 0; k < PIPE_WIDTH; k++)
+            hold_insn[k] = decoded_insn_t'(hold_insn_flat[k]);
+    end
     logic [PIPE_WIDTH-1:0] hold_valid;
 
     // =========================================================================
@@ -305,28 +317,17 @@ module rename
                 work_insn[i].rd_arch != 5'd0 &&
                 work_insn[i].fu_type == FU_ALU) begin
 
-                // mv rd, rs = ADDI rd, rs1, 0
-                if (work_insn[i].alu_op == ALU_ADD &&
-                    work_insn[i].use_imm &&
-                    work_insn[i].imm == 64'd0 &&
-                    work_insn[i].rs1_arch != 5'd0) begin
-                    is_move_elim[i] = 1'b1;
-                end
-
-                // li rd, 0 = ADDI rd, x0, 0
-                if (work_insn[i].alu_op == ALU_ADD &&
-                    work_insn[i].use_imm &&
-                    work_insn[i].imm == 64'd0 &&
-                    work_insn[i].rs1_arch == 5'd0) begin
-                    is_zero_elim[i] = 1'b1;
-                end
-
-                // xor rd, rd, rd (self-XOR clears register)
-                if (work_insn[i].alu_op == ALU_XOR &&
-                    !work_insn[i].use_imm &&
-                    work_insn[i].rs1_arch == work_insn[i].rs2_arch) begin
-                    is_zero_elim[i] = 1'b1;
-                end
+                // Move/zero elimination is DISABLED: the current pipeline
+                // does not have the reference counting or IQ-enqueue-time
+                // CDB snoop needed to safely alias physical registers across
+                // architectural registers.  All eligible patterns (mv, li 0,
+                // xor rd,rd,rd) now flow through the normal ALU path, which
+                // is correct but uses an extra cycle and a free-list entry.
+                //
+                // Patterns kept as comments for future re-enablement:
+                //   mv rd, rs    = ALU_ADD, use_imm=1, imm==0, rs1!=x0
+                //   li rd, 0     = ALU_ADD, use_imm=1, imm==0, rs1==x0
+                //   xor rd,rd,rd = ALU_XOR, !use_imm, rs1==rs2
             end
         end
     end
@@ -534,6 +535,10 @@ module rename
             ren_insn[i] = '0;
         end
 
+        // Default: nothing eliminated
+        ren_move_eliminated = '0;
+        ren_zero_eliminated = '0;
+
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             if (slot_can_advance[i]) begin
                 ren_insn[out_dest[i]].base = work_insn[i];
@@ -596,6 +601,12 @@ module rename
                     ren_insn[out_dest[i]].rs1_ready = 1'b1;
                     ren_insn[out_dest[i]].rs2_ready = 1'b1;
                 end
+
+                // Flag eliminated instructions for the core top-level
+                if (is_move_elim[i])
+                    ren_move_eliminated[out_dest[i]] = 1'b1;
+                if (is_zero_elim[i])
+                    ren_zero_eliminated[out_dest[i]] = 1'b1;
 
                 // ROB index
                 ren_insn[out_dest[i]].rob_idx = rob_alloc_idx[out_dest[i]];
@@ -674,12 +685,12 @@ module rename
         if (!rst_n) begin
             hold_valid <= '0;
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                hold_insn[i] <= '0;
+                hold_insn_flat[i] <= '0;
             end
         end else if (do_flush || do_ckpt_restore) begin
             hold_valid <= '0;
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                hold_insn[i] <= '0;
+                hold_insn_flat[i] <= '0;
             end
         end else begin
             // Clear all slots first
@@ -691,7 +702,7 @@ module rename
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (work_valid[i] && !slot_can_advance[i]) begin
                     hold_valid[next_hold_dest[i]] <= 1'b1;
-                    hold_insn[next_hold_dest[i]]  <= work_insn[i];
+                    hold_insn_flat[next_hold_dest[i]]  <= HI_W'(work_insn[i]);
                 end
             end
         end
