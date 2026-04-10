@@ -93,17 +93,40 @@ module issue_queue
 
     // =====================================================================
     // Wakeup logic (combinational)
-    // For every valid entry, check CDB tags and speculative wakeup tag
-    // against rs1_phys / rs2_phys.
+    //
+    // CDB wakeup is COMBINATIONAL: cdb_valid is the registered cdb_r from
+    // the core top, so the producer broadcast on cdb is already 1 cycle
+    // delayed from the producer's compute cycle.  A consumer that observes
+    // a CDB hit can issue THIS cycle and read the right operand from the
+    // PRF (the PRF write fired the same cycle as the producer's combinational
+    // CDB, so the latched PRF data is current as of this cycle).
+    //
+    // SPECULATIVE wakeup is NOT applied to the combinational eligibility.
+    // It only sets the registered src1_ready / src1_spec flops, taking effect
+    // 1 cycle later.  The reason: spec_wk_valid pulses when the load is at
+    // the _r stage (1 cycle after AGU); the load CDB doesn't fire until the
+    // _rr stage (2 cycles after AGU).  We need the consumer to issue 1 cycle
+    // AFTER the spec_wk pulse, so the load result will be on the
+    // (combinational) CDB the cycle the consumer reads its operand via the
+    // bypass network.  Latching spec_wk into src1_ready (instead of
+    // overriding next_src1_ready combinationally) gives the right delay.
     // =====================================================================
     logic [DEPTH-1:0] next_src1_ready;
     logic [DEPTH-1:0] next_src2_ready;
     logic [DEPTH-1:0] next_src1_spec;
     logic [DEPTH-1:0] next_src2_spec;
+    // Latched spec wakeup: written into src1_ready / src1_spec at the next
+    // clock edge.  These are NOT visible to the same-cycle eligibility scan.
+    logic [DEPTH-1:0] spec_set_src1;
+    logic [DEPTH-1:0] spec_set_src2;
 
     // Per-entry CDB match signals (declared outside the always_comb)
     logic [DEPTH-1:0] rs1_cdb_hit;
     logic [DEPTH-1:0] rs2_cdb_hit;
+
+    // Per-entry spec-cancel match (combinational, used by both paths)
+    logic [DEPTH-1:0] spec_cancel_rs1;
+    logic [DEPTH-1:0] spec_cancel_rs2;
 
     always_comb begin
         next_src1_ready = src1_ready;
@@ -112,8 +135,12 @@ module issue_queue
         next_src2_spec  = src2_spec;
 
         for (int e = 0; e < DEPTH; e++) begin
-            rs1_cdb_hit[e] = 1'b0;
-            rs2_cdb_hit[e] = 1'b0;
+            rs1_cdb_hit[e]     = 1'b0;
+            rs2_cdb_hit[e]     = 1'b0;
+            spec_set_src1[e]   = 1'b0;
+            spec_set_src2[e]   = 1'b0;
+            spec_cancel_rs1[e] = 1'b0;
+            spec_cancel_rs2[e] = 1'b0;
         end
 
         for (int e = 0; e < DEPTH; e++) begin
@@ -126,7 +153,8 @@ module issue_queue
             end
 
             if (entry_valid[e]) begin
-                // CDB wakeup: set ready, clear speculative flag
+                // CDB wakeup: combinational override of next_src1_ready so
+                // the consumer can issue the same cycle.  Clears spec flag.
                 if (rs1_cdb_hit[e] && !src1_ready[e]) begin
                     next_src1_ready[e] = 1'b1;
                     next_src1_spec[e]  = 1'b0;
@@ -136,30 +164,39 @@ module issue_queue
                     next_src2_spec[e]  = 1'b0;
                 end
 
-                // -- Speculative wakeup (load AGU) --
+                // -- Speculative wakeup (load _r stage, 1 cycle pre-CDB) --
+                // LATCHED only: do NOT override next_src1_ready.  The
+                // sequential block below will write src1_ready=1 at the next
+                // clock edge so the consumer becomes eligible 1 cycle later
+                // (matching the cycle the load result lands on the
+                // combinational CDB and the bypass network).
                 if (spec_wk_valid && !src1_ready[e] && !rs1_cdb_hit[e] &&
                     (spec_wk_tag == rs1_phys_r[e])) begin
-                    next_src1_ready[e] = 1'b1;
-                    next_src1_spec[e]  = 1'b1;
+                    spec_set_src1[e] = 1'b1;
                 end
                 if (spec_wk_valid && !src2_ready[e] && !rs2_cdb_hit[e] &&
                     (spec_wk_tag == rs2_phys_r[e])) begin
-                    next_src2_ready[e] = 1'b1;
-                    next_src2_spec[e]  = 1'b1;
+                    spec_set_src2[e] = 1'b1;
                 end
 
                 // -- Speculative cancel (cache miss) --
+                // Cancel undoes any speculative wakeup that already latched
+                // into src1_ready, AND prevents this cycle's spec_set from
+                // taking effect.  CDB wakeup is unaffected (CDB is the
+                // authoritative result and overrides cancel).
                 if (spec_cancel_valid &&
                     (spec_cancel_tag == rs1_phys_r[e]) &&
-                    next_src1_spec[e]) begin
+                    src1_spec[e] && !rs1_cdb_hit[e]) begin
                     next_src1_ready[e] = 1'b0;
                     next_src1_spec[e]  = 1'b0;
+                    spec_cancel_rs1[e] = 1'b1;
                 end
                 if (spec_cancel_valid &&
                     (spec_cancel_tag == rs2_phys_r[e]) &&
-                    next_src2_spec[e]) begin
+                    src2_spec[e] && !rs2_cdb_hit[e]) begin
                     next_src2_ready[e] = 1'b0;
                     next_src2_spec[e]  = 1'b0;
+                    spec_cancel_rs2[e] = 1'b1;
                 end
             end
         end
@@ -342,10 +379,23 @@ module issue_queue
             count_r     <= '0;
         end else begin
             // ---- Wakeup: update ready / spec bits for all entries ----
-            src1_ready <= next_src1_ready;
-            src2_ready <= next_src2_ready;
-            src1_spec  <= next_src1_spec;
-            src2_spec  <= next_src2_spec;
+            // Start from the combinational wakeup result (CDB + cancel),
+            // then OR in the latched spec wakeup so it appears as "ready"
+            // on the *next* cycle (matching the load result on combinational
+            // CDB / bypass network).  Spec-set bits also light the spec flag
+            // so a cache miss can later cancel them.
+            //
+            // If a spec-cancel already fired this cycle for an entry, do
+            // NOT spec-set it (cancel wins over a same-cycle re-wake).
+            for (int e = 0; e < DEPTH; e++) begin
+                logic do_spec1, do_spec2;
+                do_spec1 = spec_set_src1[e] & ~spec_cancel_rs1[e];
+                do_spec2 = spec_set_src2[e] & ~spec_cancel_rs2[e];
+                src1_ready[e] <= next_src1_ready[e] | do_spec1;
+                src2_ready[e] <= next_src2_ready[e] | do_spec2;
+                src1_spec[e]  <= next_src1_spec[e]  | do_spec1;
+                src2_spec[e]  <= next_src2_spec[e]  | do_spec2;
+            end
 
             // ---- Issue: invalidate selected entries ----
             for (int p = 0; p < NUM_SELECT; p++) begin

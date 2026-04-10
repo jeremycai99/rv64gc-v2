@@ -22,6 +22,7 @@ module load_queue
     // Load execution (from load AGU — address computed)
     input logic exec_valid,
     input logic [LQ_IDX_BITS-1:0] exec_idx,
+    input logic [ROB_IDX_BITS-1:0] exec_rob_idx,
     input logic [63:0] exec_addr,
     input logic [1:0] exec_size,
     input logic exec_is_unsigned,
@@ -157,18 +158,20 @@ module load_queue
     logic [ROB_IDX_BITS-1:0] best_dist;
 
     always_comb begin
+        logic update_best;
         any_viol     = 1'b0;
         best_rob_idx = '0;
         best_dist    = '0;
+        update_best  = 1'b0;
         for (int v = 0; v < LQ_DEPTH; v++) begin
-            // Unconditionally compute; only update best when viol_mask set and
-            // this entry has a larger distance than current best.
-            // Keeping assignments outside nested if avoids latch.
-            any_viol     = any_viol | viol_mask[v];
-            best_dist    = (viol_mask[v] & (viol_rob_dist[v] > best_dist))
-                         ? viol_rob_dist[v]    : best_dist;
-            best_rob_idx = (viol_mask[v] & (viol_rob_dist[v] > best_dist))
-                         ? viol_rob_idx_arr[v] : best_rob_idx;
+            // Pick the youngest (largest rob_dist) violating load.  Use ">=" so
+            // the first violating entry overrides the initial best_dist=0.
+            any_viol    = any_viol | viol_mask[v];
+            update_best = viol_mask[v] & (viol_rob_dist[v] >= best_dist);
+            if (update_best) begin
+                best_dist    = viol_rob_dist[v];
+                best_rob_idx = viol_rob_idx_arr[v];
+            end
         end
     end
 
@@ -208,8 +211,11 @@ module load_queue
                 count_r <= count_r - {4'b0, commit_count};
             end
 
-            // --- Exec fill: record address and size ---
+            // --- Exec fill: record address, size, and ROB index ---
+            // The ROB index is needed by the ordering-violation comparison
+            // to determine which loads are younger than an incoming store.
             if (exec_valid) begin
+                queue[exec_idx].rob_idx     <= exec_rob_idx;
                 queue[exec_idx].addr        <= exec_addr;
                 queue[exec_idx].size        <= exec_size;
                 queue[exec_idx].is_unsigned <= exec_is_unsigned;

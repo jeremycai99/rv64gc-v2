@@ -133,6 +133,13 @@ module commit
     logic scan_stopped;
     // verilator lint_on UNOPTFLAT
 
+    // Memory ordering violation marker (encoded as has_exception with
+    // exc_code = 4'd15): replay the load by flushing from its PC, but do
+    // NOT commit the load (its data is stale).  This bypasses the normal
+    // exception path which would jump to the trap vector.
+    logic       found_replay;
+    logic [2:0] replay_slot;
+
     always_comb begin
         scan_count       = 3'd0;
         found_exception  = 1'b0;
@@ -140,6 +147,8 @@ module commit
         found_mispredict = 1'b0;
         misp_slot        = 3'd0;
         found_ret        = 1'b0;
+        found_replay     = 1'b0;
+        replay_slot      = 3'd0;
         store_cnt        = 3'd0;
         load_cnt         = 3'd0;
         scan_stopped     = 1'b0;
@@ -150,8 +159,10 @@ module commit
 
         // Scan slots 0..5 in order, stopping at the first gap
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            // Stop if we already found an exception, mispredict, return, or gap
-            if (scan_stopped || found_exception || found_mispredict || found_ret) begin
+            // Stop if we already found an exception, mispredict, return,
+            // replay, or gap.
+            if (scan_stopped || found_exception || found_mispredict ||
+                found_ret || found_replay) begin
                 // Do not commit further entries
             end
             // Stop if entry not valid
@@ -162,7 +173,13 @@ module commit
             else if (!head_ready[i]) begin
                 scan_stopped = 1'b1;
             end
-            // Exception at this entry: commit it (for arch state update), then stop
+            // Memory ordering violation: do NOT commit, flush from this entry
+            else if (head_has_exception[i] && (head_exc_code[i] == 4'd15)) begin
+                found_replay = 1'b1;
+                replay_slot  = i[2:0];
+            end
+            // Architectural exception at this entry: commit it (for arch
+            // state update), then stop
             else if (head_has_exception[i]) begin
                 slot_can_commit[i] = 1'b1;
                 scan_count = scan_count + 3'd1;
@@ -206,6 +223,7 @@ module commit
                           !found_exception &&
                           !found_mispredict &&
                           !found_ret &&
+                          !found_replay &&
                           !serializing_at_head;
 
     // =========================================================================
@@ -219,7 +237,14 @@ module commit
         flush_out.full_flush    = 1'b0;
         flush_out.ras_tos       = 5'd0;
 
-        if (found_exception) begin
+        if (found_replay) begin
+            // Memory ordering replay: full flush, redirect to the load's PC.
+            // The load is NOT committed; it will re-fetch and re-execute,
+            // this time after the older store's data is visible.
+            flush_out.valid       = 1'b1;
+            flush_out.full_flush  = 1'b1;
+            flush_out.redirect_pc = head_pc[replay_slot];
+        end else if (found_exception) begin
             // Exception: full flush, redirect to trap vector
             flush_out.valid       = 1'b1;
             flush_out.full_flush  = 1'b1;
@@ -297,5 +322,26 @@ module commit
             release_checkpoint_id[i] = head_checkpoint_id[i];
         end
     end
+
+`ifdef COMMIT_TRACE
+    integer dbg_cycle = 0;
+    always_ff @(posedge clk) begin
+        dbg_cycle <= dbg_cycle + 1;
+        if (scan_count > 3'd0) begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (slot_can_commit[i]) begin
+                    $display("[%0d] COMMIT[%0d]: pc=%016h ld=%b st=%b br=%b miss=%b exc=%b",
+                        dbg_cycle, i, head_pc[i],
+                        head_is_load[i], head_is_store[i], head_is_branch[i],
+                        head_branch_mispredict[i], head_has_exception[i]);
+                end
+            end
+        end
+        if (flush_out.valid) begin
+            $display("[%0d] FLUSH:    redirect_pc=%016h full=%b",
+                dbg_cycle, flush_out.redirect_pc, flush_out.full_flush);
+        end
+    end
+`endif
 
 endmodule

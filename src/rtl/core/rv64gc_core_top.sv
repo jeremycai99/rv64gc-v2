@@ -468,6 +468,8 @@ module rv64gc_core_top
         .wb_csr_wdata           (cdb_csr_wdata_r),
         .sta_wb_valid           (lsu_sta_wb_valid_r),
         .sta_wb_rob_idx         (lsu_sta_wb_rob_idx_r),
+        .ordering_violation_valid   (lsu_ordering_violation),
+        .ordering_violation_rob_idx (lsu_violation_rob_idx),
         .head_idx               (rob_head_idx),
         .head_valid             (rob_head_valid),
         .head_ready             (rob_head_ready),
@@ -1348,15 +1350,27 @@ module rv64gc_core_top
     //   [0]: ALU0/BRU  [1]: ALU1  [2]: ALU2/MUL  [3]: ALU3/DIV
     //   [4]: Load 0    [5]: Load 1
     // =========================================================================
-    // Use REGISTERED CDB for bypass to break the combinational loop:
-    //   CDB -> bypass -> ALU operand -> ALU result -> CDB
-    // With registered wakeup, consumers issue 1 cycle after the producer,
-    // so the PRF already has the data. Bypass from registered CDB provides
-    // the same data — redundant but harmless and loop-free.
-    // Suppress bypass for p0 (hardwired zero register) -- CDB may carry
-    // non-zero data for instructions with pdst=p0 (e.g., JAL x0)
-    assign bypass_valid = {cdb_valid_r[5] && (cdb_tag_r[5] != '0),
-                           cdb_valid_r[4] && (cdb_tag_r[4] != '0),
+    // For ALU sources [0..3]: use REGISTERED CDB.  ALU producers wake their
+    // consumers via the registered cdb_r path (1 cycle after compute), and
+    // by then the PRF write has already latched, so bypass-from-cdb_r is
+    // semantically equivalent to PRF read but cuts the read mux.  No
+    // combinational loop because cdb_r is registered.
+    //
+    // For LOAD sources [4..5]: use COMBINATIONAL CDB.  A load AGU at T+0
+    // sets spec_wakeup at T+1 (load _r stage), the IQ latches src1_ready at
+    // T+2 (next clock edge), and the consumer issues at T+2 — exactly the
+    // cycle the load result is on the combinational CDB (load_wb fires at
+    // the _rr stage = T+2).  The PRF write does not latch until T+3, so
+    // the consumer's PRF read at T+2 still returns the OLD value; the
+    // combinational bypass is the only path that delivers the load value
+    // to the consumer at T+2.  No combinational loop because loads do not
+    // chain into a same-cycle producer (the load result drives consumers,
+    // and consumer ALUs only feed cdb_r the next cycle).
+    //
+    // Suppress bypass for p0 (hardwired zero register) — CDB may carry
+    // non-zero data for instructions with pdst=p0 (e.g., JAL x0).
+    assign bypass_valid = {cdb_valid[5]   && (cdb_tag[5]   != '0),
+                           cdb_valid[4]   && (cdb_tag[4]   != '0),
                            cdb_valid_r[3] && (cdb_tag_r[3] != '0),
                            cdb_valid_r[2] && (cdb_tag_r[2] != '0),
                            cdb_valid_r[1] && (cdb_tag_r[1] != '0),
@@ -1365,14 +1379,14 @@ module rv64gc_core_top
     assign bypass_tag[1] = cdb_tag_r[1];
     assign bypass_tag[2] = cdb_tag_r[2];
     assign bypass_tag[3] = cdb_tag_r[3];
-    assign bypass_tag[4] = cdb_tag_r[4];
-    assign bypass_tag[5] = cdb_tag_r[5];
+    assign bypass_tag[4] = cdb_tag[4];
+    assign bypass_tag[5] = cdb_tag[5];
     assign bypass_data[0] = cdb_data_r[0];
     assign bypass_data[1] = cdb_data_r[1];
     assign bypass_data[2] = cdb_data_r[2];
     assign bypass_data[3] = cdb_data_r[3];
-    assign bypass_data[4] = cdb_data_r[4];
-    assign bypass_data[5] = cdb_data_r[5];
+    assign bypass_data[4] = cdb_data[4];
+    assign bypass_data[5] = cdb_data[5];
 
     // =========================================================================
     // PRF Ready Table

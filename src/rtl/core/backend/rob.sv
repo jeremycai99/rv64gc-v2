@@ -48,6 +48,13 @@ module rob
     input  logic                              sta_wb_valid,
     input  logic [ROB_IDX_BITS-1:0]           sta_wb_rob_idx,
 
+    // Memory ordering violation: a younger load executed before an older
+    // store with overlapping bytes was visible.  Force the violating load
+    // to be marked ready + mispredicted so the commit unit replays it (and
+    // every younger entry) by flushing to its own PC.
+    input  logic                              ordering_violation_valid,
+    input  logic [ROB_IDX_BITS-1:0]           ordering_violation_rob_idx,
+
     // Commit: read head entries for commit unit
     output logic [ROB_IDX_BITS-1:0]           head_idx,
     output logic [PIPE_WIDTH-1:0]             head_valid,     // which of the 6 head entries are valid
@@ -334,6 +341,8 @@ module rob
             end
 
             // Writebacks to surviving entries
+            // (do not clobber a previously-marked ordering violation; see
+            // the same comment in the normal-path block below.)
             for (int i = 0; i < CDB_WIDTH; i++) begin
                 if (wb_valid[i]) begin
                     ready_r[wb_idx[i]] <= 1'b1;
@@ -341,9 +350,11 @@ module rob
                         has_exc_r[wb_idx[i]] <= 1'b1;
                         exc_code_packed[wb_idx[i]*4 +: 4] <= wb_exc_code[i];
                     end
-                    branch_taken_r[wb_idx[i]]               <= wb_branch_taken[i];
-                    branch_target_packed[wb_idx[i]*64 +: 64] <= wb_branch_target[i];
-                    branch_mispredict_r[wb_idx[i]]          <= wb_branch_mispredict[i];
+                    if (!branch_mispredict_r[wb_idx[i]]) begin
+                        branch_taken_r[wb_idx[i]]                <= wb_branch_taken[i];
+                        branch_target_packed[wb_idx[i]*64 +: 64] <= wb_branch_target[i];
+                        branch_mispredict_r[wb_idx[i]]           <= wb_branch_mispredict[i];
+                    end
                     csr_we_r[wb_idx[i]]                     <= wb_csr_we[i];
                     csr_addr_packed[wb_idx[i]*12 +: 12]     <= wb_csr_addr[i];
                     csr_wdata_packed[wb_idx[i]*64 +: 64]    <= wb_csr_wdata[i];
@@ -353,6 +364,13 @@ module rob
             // STA sideband: mark store entry as ready
             if (sta_wb_valid)
                 ready_r[sta_wb_rob_idx] <= 1'b1;
+
+            // Ordering violation: see comment in normal-path block below.
+            if (ordering_violation_valid) begin
+                ready_r[ordering_violation_rob_idx]             <= 1'b1;
+                has_exc_r[ordering_violation_rob_idx]           <= 1'b1;
+                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+            end
         end else begin
             // Normal operation
 
@@ -397,6 +415,11 @@ module rob
             end
 
             // Writeback: mark entries as ready
+            // NB: do NOT clobber branch_mispredict_r/branch_target/branch_taken
+            // for an entry that has already been marked by an ordering
+            // violation in a previous cycle.  The load's normal CDB writeback
+            // arrives 1 cycle later (registered cdb_r) and would otherwise
+            // overwrite the violation marking.
             for (int i = 0; i < CDB_WIDTH; i++) begin
                 if (wb_valid[i]) begin
                     ready_r[wb_idx[i]] <= 1'b1;
@@ -404,9 +427,11 @@ module rob
                         has_exc_r[wb_idx[i]] <= 1'b1;
                         exc_code_packed[wb_idx[i]*4 +: 4] <= wb_exc_code[i];
                     end
-                    branch_taken_r[wb_idx[i]]               <= wb_branch_taken[i];
-                    branch_target_packed[wb_idx[i]*64 +: 64] <= wb_branch_target[i];
-                    branch_mispredict_r[wb_idx[i]]          <= wb_branch_mispredict[i];
+                    if (!branch_mispredict_r[wb_idx[i]]) begin
+                        branch_taken_r[wb_idx[i]]                <= wb_branch_taken[i];
+                        branch_target_packed[wb_idx[i]*64 +: 64] <= wb_branch_target[i];
+                        branch_mispredict_r[wb_idx[i]]           <= wb_branch_mispredict[i];
+                    end
                     csr_we_r[wb_idx[i]]                     <= wb_csr_we[i];
                     csr_addr_packed[wb_idx[i]*12 +: 12]     <= wb_csr_addr[i];
                     csr_wdata_packed[wb_idx[i]*64 +: 64]    <= wb_csr_wdata[i];
@@ -416,6 +441,17 @@ module rob
             // STA sideband: mark store entry as ready
             if (sta_wb_valid)
                 ready_r[sta_wb_rob_idx] <= 1'b1;
+
+            // Ordering violation: mark the violating load as ready, flag it
+            // with the EXC_LOAD_REPLAY (4'd15) special exception code so the
+            // commit unit can recognise it and redirect to the load's own
+            // PC without committing the load (its data is wrong; it must
+            // re-execute against the now-visible store).
+            if (ordering_violation_valid) begin
+                ready_r[ordering_violation_rob_idx]             <= 1'b1;
+                has_exc_r[ordering_violation_rob_idx]           <= 1'b1;
+                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+            end
 
             // Commit: advance head, clear valid and instruction-type flags
             begin

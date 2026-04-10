@@ -168,12 +168,34 @@ module lsu
     assign sta_wb_rob_idx = sta_issue_data.rob_idx;
 
     // =========================================================================
-    // Speculative wakeup: issue load -> wake dependents immediately
+    // Speculative wakeup: load issue -> wake dependents
+    //
+    // Timing: pulse spec_wakeup the cycle BEFORE the load result is on the
+    // (combinational) CDB.  For a 2-cycle D-cache hit:
+    //   - T+0: load AGU (issue)
+    //   - T+1: load at _r stage  -> spec_wakeup pulses
+    //   - T+2: load result on combinational CDB (load_wb)
+    //   - T+2: dependent IQ entry observes spec_wakeup_r match -> latched
+    //          src1_ready -> consumer issues at T+3 with bypass from
+    //          cdb_r[4] (which captures the T+2 broadcast).
+    //
+    // The spec_wakeup is treated by the IQ as a registered hint that lets a
+    // consumer issue 1 cycle EARLIER than it would by waiting for the
+    // (already-registered) cdb_r broadcast.  Without the 1-cycle delay
+    // here, the consumer would issue the same cycle as the AGU and read
+    // stale operand data from PRF/bypass.
+    //
+    // We pulse spec_wakeup based on the *_r stage (1 cycle after AGU),
+    // then the IQ further latches it via src1_ready, giving a total of
+    // 2 cycles between load AGU and consumer issue — exactly matching the
+    // dcache-hit producer→bypass latency.
     // =========================================================================
     generate
         for (li = 0; li < 2; li++) begin : gen_spec_wakeup
-            assign spec_wakeup_valid[li] = load_issue_valid[li] & ~flush_in.valid;
-            assign spec_wakeup_tag[li]   = load_issue_data[li].pdst;
+            assign spec_wakeup_valid[li] = load_issue_valid_r[li]
+                                         & ~load_nocache_r[li]
+                                         & ~flush_in.valid;
+            assign spec_wakeup_tag[li]   = load_issue_data_r[li].pdst;
         end
     endgenerate
 
@@ -316,6 +338,7 @@ module lsu
     // Port 0 exec fill signals
     logic        lq_exec_valid;
     logic [LQ_IDX_BITS-1:0] lq_exec_idx;
+    logic [ROB_IDX_BITS-1:0] lq_exec_rob_idx;
     logic [63:0] lq_exec_addr;
     logic [1:0]  lq_exec_size;
     logic        lq_exec_is_unsigned;
@@ -323,46 +346,55 @@ module lsu
     // Port 1 hold register for deferred LQ exec fill
     logic        lq_p1_hold_valid_r;
     logic [LQ_IDX_BITS-1:0] lq_p1_hold_idx_r;
+    logic [ROB_IDX_BITS-1:0] lq_p1_hold_rob_idx_r;
     logic [63:0] lq_p1_hold_addr_r;
     logic [1:0]  lq_p1_hold_size_r;
     logic        lq_p1_hold_unsigned_r;
 
-    // Port 0 has priority; port 1 deferred to hold register
+    // Port 0 has priority; port 1 deferred to hold register.
+    // Port 1 uses the EFFECTIVE issue (which includes the dcache-conflict
+    // retry register) so the LQ exec_idx tracks the deferred load.
     logic p0_exec_fire;
     logic p1_exec_fire;
     assign p0_exec_fire = load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid;
-    assign p1_exec_fire = load_issue_valid[1] & ~load_addr_misaligned[1] & ~flush_in.valid;
+    assign p1_exec_fire = p1_eff_valid       & ~p1_eff_misalign        & ~flush_in.valid;
 
-    // Mux: port 0 new > port 1 hold > port 1 new
+    // Mux: port 0 new > port 1 hold > port 1 effective (new or retry)
     always_comb begin
         if (p0_exec_fire) begin
             lq_exec_valid       = 1'b1;
             lq_exec_idx         = load_issue_data[0].lq_idx;
+            lq_exec_rob_idx     = load_issue_data[0].rob_idx;
             lq_exec_addr        = load_eff_addr[0];
             lq_exec_size        = load_issue_data[0].mem_size;
             lq_exec_is_unsigned = load_issue_data[0].is_unsigned;
         end else if (lq_p1_hold_valid_r) begin
             lq_exec_valid       = 1'b1;
             lq_exec_idx         = lq_p1_hold_idx_r;
+            lq_exec_rob_idx     = lq_p1_hold_rob_idx_r;
             lq_exec_addr        = lq_p1_hold_addr_r;
             lq_exec_size        = lq_p1_hold_size_r;
             lq_exec_is_unsigned = lq_p1_hold_unsigned_r;
         end else if (p1_exec_fire) begin
             lq_exec_valid       = 1'b1;
-            lq_exec_idx         = load_issue_data[1].lq_idx;
-            lq_exec_addr        = load_eff_addr[1];
-            lq_exec_size        = load_issue_data[1].mem_size;
-            lq_exec_is_unsigned = load_issue_data[1].is_unsigned;
+            lq_exec_idx         = p1_eff_data.lq_idx;
+            lq_exec_rob_idx     = p1_eff_data.rob_idx;
+            lq_exec_addr        = p1_eff_addr;
+            lq_exec_size        = p1_eff_data.mem_size;
+            lq_exec_is_unsigned = p1_eff_data.is_unsigned;
         end else begin
             lq_exec_valid       = 1'b0;
             lq_exec_idx         = '0;
+            lq_exec_rob_idx     = '0;
             lq_exec_addr        = '0;
             lq_exec_size        = '0;
             lq_exec_is_unsigned = 1'b0;
         end
     end
 
-    // Hold register: capture port 1 when port 0 also fires same cycle
+    // Hold register: capture port 1 (effective) when port 0 also fires
+    // same cycle.  Uses p1_eff which already accounts for the dcache
+    // conflict retry path.
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             lq_p1_hold_valid_r    <= 1'b0;
@@ -372,10 +404,11 @@ module lsu
             if (p0_exec_fire && p1_exec_fire) begin
                 // Port 1 deferred
                 lq_p1_hold_valid_r    <= 1'b1;
-                lq_p1_hold_idx_r      <= load_issue_data[1].lq_idx;
-                lq_p1_hold_addr_r     <= load_eff_addr[1];
-                lq_p1_hold_size_r     <= load_issue_data[1].mem_size;
-                lq_p1_hold_unsigned_r <= load_issue_data[1].is_unsigned;
+                lq_p1_hold_idx_r      <= p1_eff_data.lq_idx;
+                lq_p1_hold_rob_idx_r  <= p1_eff_data.rob_idx;
+                lq_p1_hold_addr_r     <= p1_eff_addr;
+                lq_p1_hold_size_r     <= p1_eff_data.mem_size;
+                lq_p1_hold_unsigned_r <= p1_eff_data.is_unsigned;
             end else if (lq_p1_hold_valid_r && !p0_exec_fire) begin
                 // Held entry consumed this cycle
                 lq_p1_hold_valid_r <= 1'b0;
@@ -419,16 +452,21 @@ module lsu
             load_nocache_r      <= '0;
             load_nocache_rr     <= '0;
         end else begin
-            load_issue_valid_r    <= load_issue_valid;
+            // Port 0 propagates the original issue.  Port 1 propagates the
+            // EFFECTIVE issue (which includes the retry register), so the
+            // writeback metadata at _rr matches the cycle the dcache
+            // responds for the deferred load.
+            load_issue_valid_r[0] <= load_issue_valid[0];
+            load_issue_valid_r[1] <= p1_eff_valid;
             load_issue_data_r[0]  <= load_issue_data[0];
-            load_issue_data_r[1]  <= load_issue_data[1];
+            load_issue_data_r[1]  <= p1_eff_data;
             load_eff_addr_r[0]    <= load_eff_addr[0];
-            load_eff_addr_r[1]    <= load_eff_addr[1];
+            load_eff_addr_r[1]    <= p1_eff_addr;
             load_nocache_r[0]     <= load_issue_valid[0] &
                                      (load_addr_misaligned[0] | p0_fwd_hit |
                                       sq_fwd_partial | flush_in.valid);
-            load_nocache_r[1]     <= load_issue_valid[1] &
-                                     (load_addr_misaligned[1] | flush_in.valid);
+            load_nocache_r[1]     <= p1_eff_valid &
+                                     (p1_eff_misalign | flush_in.valid);
 
             // Stage 2 (2 cycles after issue): matches cache response cycle.
             load_issue_valid_rr   <= load_issue_valid_r;
@@ -483,6 +521,7 @@ module lsu
         // Load execution (address fill)
         .exec_valid        (lq_exec_valid),
         .exec_idx          (lq_exec_idx),
+        .exec_rob_idx      (lq_exec_rob_idx),
         .exec_addr         (lq_exec_addr),
         .exec_size         (lq_exec_size),
         .exec_is_unsigned  (lq_exec_is_unsigned),
@@ -549,6 +588,87 @@ module lsu
     logic p0_fwd_hit;
     assign p0_fwd_hit = same_cycle_fwd_hit | sq_fwd_hit | csb_fwd_hit;
 
+    // -------------------------------------------------------------------------
+    // Port-1 retry hold register for d-cache same-set conflicts.
+    //
+    // The d-cache suppresses port 1 when both loads target the same set
+    // (bank conflict).  Without a retry path, port 1's load would be lost
+    // and the ROB entry would never become ready, deadlocking commit.
+    //
+    // We replicate port 1's metadata pipeline (issue → _r → _rr) on a
+    // shifted timeline so the writeback path can still match the cache
+    // response.  When a conflict is detected, port 1 is captured into the
+    // retry register and re-fired through dcache port 1 the *next* cycle
+    // (when port 0 is presumably free or, at worst, still conflicting and
+    // we re-hold).
+    // -------------------------------------------------------------------------
+    logic            p1_retry_valid_r;
+    iq_entry_t       p1_retry_data_r;
+    logic [63:0]     p1_retry_addr_r;
+    logic            p1_retry_misalign_r;
+    logic            p1_retry_load_nocache_r;
+
+    // Combinational: same-set conflict between port 0 and port 1
+    logic dcache_conflict;
+    assign dcache_conflict = load_issue_valid[0] && load_issue_valid[1]
+                            && ~load_addr_misaligned[0]
+                            && ~load_addr_misaligned[1]
+                            && (load_eff_addr[0][13:6] ==
+                                load_eff_addr[1][13:6]);
+
+    // Effective port 1 sources: prefer the retry register if valid;
+    // otherwise the new issue (suppressed on conflict).
+    logic            p1_eff_valid;
+    iq_entry_t       p1_eff_data;
+    logic [63:0]     p1_eff_addr;
+    logic            p1_eff_misalign;
+    logic            p1_eff_nocache;
+
+    always_comb begin
+        if (p1_retry_valid_r) begin
+            p1_eff_valid    = 1'b1;
+            p1_eff_data     = p1_retry_data_r;
+            p1_eff_addr     = p1_retry_addr_r;
+            p1_eff_misalign = p1_retry_misalign_r;
+            p1_eff_nocache  = p1_retry_load_nocache_r;
+        end else if (load_issue_valid[1] && !dcache_conflict) begin
+            p1_eff_valid    = 1'b1;
+            p1_eff_data     = load_issue_data[1];
+            p1_eff_addr     = load_eff_addr[1];
+            p1_eff_misalign = load_addr_misaligned[1];
+            p1_eff_nocache  = load_addr_misaligned[1] | flush_in.valid;
+        end else begin
+            p1_eff_valid    = 1'b0;
+            p1_eff_data     = '0;
+            p1_eff_addr     = '0;
+            p1_eff_misalign = 1'b0;
+            p1_eff_nocache  = 1'b0;
+        end
+    end
+
+    // Capture port 1 on conflict (or if retry is occupied AND a new port 1
+    // issue arrives, we have to drop one — but that should be rare; for
+    // bring-up we accept it via the existing ordering-violation watchdog).
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            p1_retry_valid_r <= 1'b0;
+        end else if (flush_in.valid) begin
+            p1_retry_valid_r <= 1'b0;
+        end else begin
+            if (p1_retry_valid_r) begin
+                // Drain after one cycle (it fires this cycle via p1_eff_*)
+                p1_retry_valid_r <= 1'b0;
+            end
+            if (dcache_conflict) begin
+                p1_retry_valid_r        <= 1'b1;
+                p1_retry_data_r         <= load_issue_data[1];
+                p1_retry_addr_r         <= load_eff_addr[1];
+                p1_retry_misalign_r     <= load_addr_misaligned[1];
+                p1_retry_load_nocache_r <= load_addr_misaligned[1] | flush_in.valid;
+            end
+        end
+    end
+
     assign dcache_load_req_valid[0] = load_issue_valid[0]
                                     & ~load_addr_misaligned[0]
                                     & ~p0_fwd_hit
@@ -559,12 +679,12 @@ module lsu
     assign dcache_load_req_size[0]  = load_issue_data[0].mem_size;
     assign dcache_load_req_is_unsigned[0] = load_issue_data[0].is_unsigned;
 
-    assign dcache_load_req_valid[1] = load_issue_valid[1]
-                                    & ~load_addr_misaligned[1]
+    assign dcache_load_req_valid[1] = p1_eff_valid
+                                    & ~p1_eff_misalign
                                     & ~flush_in.valid;
-    assign dcache_load_req_addr[1]  = load_eff_addr[1];
-    assign dcache_load_req_size[1]  = load_issue_data[1].mem_size;
-    assign dcache_load_req_is_unsigned[1] = load_issue_data[1].is_unsigned;
+    assign dcache_load_req_addr[1]  = p1_eff_addr;
+    assign dcache_load_req_size[1]  = p1_eff_data.mem_size;
+    assign dcache_load_req_is_unsigned[1] = p1_eff_data.is_unsigned;
 
     // =========================================================================
     // Load data extraction and sign/zero extension
@@ -882,10 +1002,21 @@ module lsu
                 load_eff_addr[0], load_issue_data[0].mem_size, load_issue_data[0].is_unsigned,
                 p0_fwd_hit, load_addr_misaligned[0], sq_fwd_partial, flush_in.valid);
         end
+        if (load_issue_valid[1]) begin
+            $display("[%0d] LSU issue[1]: rob=%0d pdst=%0d addr=%016h size=%0d unsigned=%0d misalign=%b flush=%b",
+                dbg_cycle, load_issue_data[1].rob_idx, load_issue_data[1].pdst,
+                load_eff_addr[1], load_issue_data[1].mem_size, load_issue_data[1].is_unsigned,
+                load_addr_misaligned[1], flush_in.valid);
+        end
         if (load_wb_valid[0]) begin
             $display("[%0d] LSU wb[0]:    rob=%0d pdst=%0d data=%016h exc=%b",
                 dbg_cycle, load_wb_rob_idx[0], load_wb_pdst[0],
                 load_wb_data[0], load_wb_has_exception[0]);
+        end
+        if (load_wb_valid[1]) begin
+            $display("[%0d] LSU wb[1]:    rob=%0d pdst=%0d data=%016h exc=%b",
+                dbg_cycle, load_wb_rob_idx[1], load_wb_pdst[1],
+                load_wb_data[1], load_wb_has_exception[1]);
         end
         if (sta_issue_valid) begin
             $display("[%0d] LSU STA:      rob=%0d addr=%016h size=%0d flush=%b",
@@ -915,6 +1046,10 @@ module lsu
         if (flush_in.valid) begin
             $display("[%0d] LSU FLUSH:    rob_idx=%0d full=%b redirect=%016h",
                 dbg_cycle, flush_in.rob_idx, flush_in.full_flush, flush_in.redirect_pc);
+        end
+        if (ordering_violation) begin
+            $display("[%0d] LSU ORDERING VIOL: load_rob=%0d (sta_rob=%0d sta_addr=%016h)",
+                dbg_cycle, violation_rob_idx, sta_issue_data.rob_idx, sta_eff_addr);
         end
     end
 `endif

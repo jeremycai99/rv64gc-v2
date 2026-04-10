@@ -110,4 +110,17 @@ module bru
     //   - taken but branch target differs from predicted target
     assign mispredict = (taken != bp_taken) || (taken && (branch_target != bp_target));
 
+`ifdef BRU_DEBUG
+    always_comb begin
+        if (op == BR_JALR) begin
+            $display("BRU JALR: pc=%016h opa=%016h opb=%016h imm=%016h target=%016h misp=%b bp_t=%016h bp_taken=%b",
+                pc, operand_a, operand_b, imm, branch_target, mispredict, bp_target, bp_taken);
+        end
+        if (op == BR_JAL) begin
+            $display("BRU JAL : pc=%016h imm=%016h target=%016h result=%016h",
+                pc, imm, branch_target, result);
+        end
+    end
+`endif
+
 endmodule
