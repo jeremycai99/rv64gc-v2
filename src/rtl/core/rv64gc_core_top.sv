@@ -33,7 +33,11 @@ module rv64gc_core_top
 
     // Tohost detection (snoops committed store buffer drain to D-cache)
     output logic        tohost_wr_valid,
-    output logic [63:0] tohost_wr_data
+    output logic [63:0] tohost_wr_data,
+
+    // Performance counters (for IPC measurement / benchmarking)
+    output logic [63:0] perf_mcycle,
+    output logic [63:0] perf_minstret
 );
 
     // =========================================================================
@@ -1802,6 +1806,12 @@ module rv64gc_core_top
     assign tohost_wr_valid = dc_store_req_valid &&
                              (dc_store_req_addr[31:3] == tohost_addr[31:3]);
     assign tohost_wr_data  = dc_store_req_data;
+
+    // =========================================================================
+    // Performance counter outputs (mcycle / minstret) for IPC measurement
+    // =========================================================================
+    assign perf_mcycle   = csr_mcycle_val;
+    assign perf_minstret = csr_minstret_val;
 
     // =========================================================================
     // Debug tracing (simulation only)

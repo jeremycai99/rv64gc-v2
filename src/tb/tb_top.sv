@@ -11,7 +11,11 @@ module tb_top
     input  logic        clk,
     input  logic        rst_n,
     output logic        tohost_valid,
-    output logic [63:0] tohost_value
+    output logic [63:0] tohost_value,
+
+    // Performance counters (for benchmark IPC reporting)
+    output logic [63:0] perf_mcycle,
+    output logic [63:0] perf_minstret
 );
 
     // =========================================================================
@@ -73,12 +77,30 @@ module tb_top
 
         // Tohost detection
         .tohost_wr_valid (core_tohost_valid),
-        .tohost_wr_data  (core_tohost_data)
+        .tohost_wr_data  (core_tohost_data),
+
+        // Performance counters
+        .perf_mcycle     (perf_mcycle),
+        .perf_minstret   (perf_minstret)
     );
 
     // Use core-level tohost detection (immediate, no cache writeback delay)
-    assign tohost_valid = core_tohost_valid;
-    assign tohost_value = core_tohost_data;
+    // Latch the core_tohost into a sticky flop so the C++ driver can see
+    // the pulse even if it sampled in the wrong half-cycle.
+    logic        core_tohost_seen_q;
+    logic [63:0] core_tohost_data_q;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            core_tohost_seen_q <= 1'b0;
+            core_tohost_data_q <= 64'd0;
+        end else if (core_tohost_valid && !core_tohost_seen_q) begin
+            core_tohost_seen_q <= 1'b1;
+            core_tohost_data_q <= core_tohost_data;
+        end
+    end
+
+    assign tohost_valid = core_tohost_seen_q;
+    assign tohost_value = core_tohost_data_q;
 
     // =========================================================================
     // Simulation memory instantiation

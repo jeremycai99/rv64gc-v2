@@ -270,6 +270,17 @@ module fetch_unit
                                  ic_resp_valid && (start_offset == 6'd0) &&
                                  (extract_count > 3'd0);
 
+    // Track whether the current f2_pc_r has already produced an emit.
+    // The f1->f2 pipeline currently leaves f2_pc_r unchanged for two
+    // consecutive cycles (f1_pc holds for one cycle while f2_pc_r catches
+    // up). We use this flag to suppress the second emit so each fetch
+    // group is delivered to decode exactly once.
+    logic f2_already_emitted_r;
+    logic f2_will_emit_c;
+    assign f2_will_emit_c = f2_valid_r && ic_resp_valid &&
+                             (extract_count > 3'd0) &&
+                             !f2_already_emitted_r;
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             f2_valid_r          <= 1'b0;
@@ -281,10 +292,12 @@ module fetch_unit
             f2_tage_confident_r <= 1'b0;
             consumed_remainder_r <= 1'b0;
             post_remainder_pc_r  <= '0;
+            f2_already_emitted_r <= 1'b0;
         end else if (redirect_valid) begin
-            // Flush F2 on redirect
-            f2_valid_r <= 1'b0;
+            // Flush F2 on redirect and clear the duplicate-suppress flag
+            f2_valid_r           <= 1'b0;
             consumed_remainder_r <= 1'b0;
+            f2_already_emitted_r <= 1'b0;
         end else if (!backend_stall) begin
             f2_valid_r          <= f1_valid;
             // Bypass the normal f1->f2 pipeline in two scenarios:
@@ -312,6 +325,23 @@ module fetch_unit
                 post_remainder_pc_r  <= f2_seq_next_pc;
             end else begin
                 consumed_remainder_r <= 1'b0;
+            end
+
+            // Update the "already emitted for this f2_pc_r" flag.
+            // Set it to 1 when we emit this cycle (so next cycle's stale
+            // replay is suppressed). Clear it when f2_pc_r is about to
+            // change to a new value.
+            if (f2_will_emit_c &&
+                ((!consume_remainder_c) && (!consumed_remainder_r) &&
+                 (f1_pc == f2_pc_r))) begin
+                // f2_pc_r will hold its current value next cycle (because
+                // f1_pc has not advanced past it yet). Mark this group
+                // as already emitted.
+                f2_already_emitted_r <= 1'b1;
+            end else begin
+                // f2_pc_r is going to change next cycle (or we are in
+                // a remainder-bypass case). Clear the flag.
+                f2_already_emitted_r <= 1'b0;
             end
         end
     end
@@ -664,6 +694,10 @@ module fetch_unit
 
     // =========================================================================
     // F2 output register (to decode stage)
+    //
+    // Gated on f2_will_emit_c so that the same fetch group is delivered
+    // exactly once even though the f1->f2 pipeline holds f2_pc_r for two
+    // cycles.
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -681,34 +715,48 @@ module fetch_unit
             fetch_is_rvc   <= '0;
             fetch_bp_taken <= '0;
         end else if (!backend_stall) begin
-            fetch_count    <= final_count;
-            fetch_is_rvc   <= '0;
-            fetch_bp_taken <= '0;
+            if (f2_will_emit_c) begin
+                fetch_count    <= final_count;
+                fetch_is_rvc   <= '0;
+                fetch_bp_taken <= '0;
 
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (3'(i) < final_count && slot_valid[i]) begin
-                    // Use decompressed instruction for RVC, raw for 32-bit
-                    if (slot_is_rvc[i]) begin
-                        fetch_insn[i] <= decomp_out[i];
-                    end else begin
-                        fetch_insn[i] <= raw_insn[i];
-                    end
-                    fetch_pc[i]        <= slot_pc[i];
-                    fetch_is_rvc[i]    <= slot_is_rvc[i];
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if (3'(i) < final_count && slot_valid[i]) begin
+                        // Use decompressed instruction for RVC, raw for 32-bit
+                        if (slot_is_rvc[i]) begin
+                            fetch_insn[i] <= decomp_out[i];
+                        end else begin
+                            fetch_insn[i] <= raw_insn[i];
+                        end
+                        fetch_pc[i]        <= slot_pc[i];
+                        fetch_is_rvc[i]    <= slot_is_rvc[i];
 
-                    // Mark branch prediction info on the branch slot
-                    if (bp_branch_found && bp_taken && (3'(i) == bp_branch_slot)) begin
-                        fetch_bp_taken[i]  <= 1'b1;
-                        fetch_bp_target[i] <= bp_target_addr;
+                        // Mark branch prediction info on the branch slot
+                        if (bp_branch_found && bp_taken && (3'(i) == bp_branch_slot)) begin
+                            fetch_bp_taken[i]  <= 1'b1;
+                            fetch_bp_target[i] <= bp_target_addr;
+                        end else begin
+                            fetch_bp_taken[i]  <= 1'b0;
+                            fetch_bp_target[i] <= '0;
+                        end
                     end else begin
+                        fetch_insn[i]      <= 32'h0000_0013; // NOP
+                        fetch_pc[i]        <= '0;
+                        fetch_is_rvc[i]    <= 1'b0;
                         fetch_bp_taken[i]  <= 1'b0;
                         fetch_bp_target[i] <= '0;
                     end
-                end else begin
+                end
+            end else begin
+                // No fresh emit this cycle (stale replay or no extract).
+                // Drive a bubble so decode does not double-latch the
+                // previous group's data.
+                fetch_count    <= 3'd0;
+                fetch_is_rvc   <= '0;
+                fetch_bp_taken <= '0;
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
                     fetch_insn[i]      <= 32'h0000_0013; // NOP
                     fetch_pc[i]        <= '0;
-                    fetch_is_rvc[i]    <= 1'b0;
-                    fetch_bp_taken[i]  <= 1'b0;
                     fetch_bp_target[i] <= '0;
                 end
             end
