@@ -195,8 +195,8 @@ module issue_queue
         end
     end
 
+    // Port 0 selection: oldest eligible entry
     always_comb begin
-        // -- Port 0 selection --
         sel_found[0] = 1'b0;
         sel_idx[0]   = '0;
         for (int e = 0; e < DEPTH; e++) begin
@@ -209,21 +209,29 @@ module issue_queue
                 end
             end
         end
+    end
 
-        // -- Port 1 selection (exclude port 0's winner and port0-only entries) --
-        sel_found[1] = 1'b0;
-        sel_idx[1]   = '0;
-        for (int e = 0; e < DEPTH; e++) begin
-            if (eligible_port1[e] && !(sel_found[0] && (e[IDX_BITS-1:0] == sel_idx[0]))) begin
-                if (!sel_found[1]) begin
-                    sel_found[1] = 1'b1;
-                    sel_idx[1]   = e[IDX_BITS-1:0];
-                end else if (entry_age[e] < entry_age[sel_idx[1]]) begin
-                    sel_idx[1] = e[IDX_BITS-1:0];
+    // Port 1 selection: only synthesised when the IQ is dual-issue.
+    // Single-issue variants (NUM_SELECT=1) skip this logic entirely so that
+    // no instruction is silently retired without a functional unit consuming it.
+    generate
+        if (NUM_SELECT >= 2) begin : gen_port1_select
+            always_comb begin
+                sel_found[1] = 1'b0;
+                sel_idx[1]   = '0;
+                for (int e = 0; e < DEPTH; e++) begin
+                    if (eligible_port1[e] && !(sel_found[0] && (e[IDX_BITS-1:0] == sel_idx[0]))) begin
+                        if (!sel_found[1]) begin
+                            sel_found[1] = 1'b1;
+                            sel_idx[1]   = e[IDX_BITS-1:0];
+                        end else if (entry_age[e] < entry_age[sel_idx[1]]) begin
+                            sel_idx[1] = e[IDX_BITS-1:0];
+                        end
+                    end
                 end
             end
         end
-    end
+    endgenerate
 
     // Drive issue outputs
     always_comb begin

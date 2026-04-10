@@ -308,25 +308,13 @@ module decode_slice
                         decoded.alu_op = ALU_SLTU;
                     end
                     F3_XOR: begin
-                        // XOR or ORC.B (funct12=0x287)
-                        if (funct12 == F12_ORCB) begin
-                            decoded.alu_op = ALU_ORCB;
-                            decoded.rs2_arch = 5'd0; // no rs2
-                        end else begin
-                            decoded.alu_op = ALU_XOR;
-                        end
+                        decoded.alu_op = ALU_XOR;
                     end
                     F3_OR: begin
                         decoded.alu_op = ALU_OR;
                     end
                     F3_AND: begin
-                        // AND or REV8 (funct12=0x6B8)
-                        if (funct12 == F12_REV8) begin
-                            decoded.alu_op = ALU_REV8;
-                            decoded.rs2_arch = 5'd0; // no rs2
-                        end else begin
-                            decoded.alu_op = ALU_AND;
-                        end
+                        decoded.alu_op = ALU_AND;
                     end
                     F3_SLL: begin
                         // SLL / CLZ / CTZ / CPOP / SEXTB / SEXTH / BSET(I)
@@ -354,8 +342,14 @@ module decode_slice
                         end
                     end
                     F3_SRL_SRA: begin
-                        // SRLI / SRAI / RORI / BEXTI
-                        if (insn[31:26] == 6'b000000) begin
+                        // SRLI / SRAI / RORI / BEXTI / REV8 / ORC.B
+                        if (funct12 == F12_REV8) begin
+                            decoded.alu_op = ALU_REV8;
+                            decoded.rs2_arch = 5'd0; // no rs2
+                        end else if (funct12 == F12_ORCB) begin
+                            decoded.alu_op = ALU_ORCB;
+                            decoded.rs2_arch = 5'd0; // no rs2
+                        end else if (insn[31:26] == 6'b000000) begin
                             decoded.alu_op = ALU_SRL;    // SRLI
                         end else if (insn[31:26] == 6'b010000) begin
                             decoded.alu_op = ALU_SRA;    // SRAI

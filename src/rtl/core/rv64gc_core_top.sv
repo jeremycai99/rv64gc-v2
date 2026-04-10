@@ -536,6 +536,9 @@ module rv64gc_core_top
     logic        iq1_full;
     logic [1:0]  iq1_issue_valid;
     iq_entry_t   iq1_issue_data [0:1];
+    // Single-issue wrapper signals for IQ1 (NUM_SELECT=1)
+    logic [0:0]  iq1_issue_valid_s;
+    iq_entry_t   iq1_issue_data_s [0:0];
 
     // --- IQ2: ALU3 + DIV + CSR ---
     logic [1:0]  iq2_enq_valid;
@@ -543,6 +546,9 @@ module rv64gc_core_top
     logic        iq2_full;
     logic [1:0]  iq2_issue_valid;
     iq_entry_t   iq2_issue_data [0:1];
+    // Single-issue wrapper signals for IQ2 (NUM_SELECT=1)
+    logic [0:0]  iq2_issue_valid_s;
+    iq_entry_t   iq2_issue_data_s [0:0];
 
     // --- Load IQ ---
     logic [1:0]  iq_load_enq_valid;
@@ -717,7 +723,11 @@ module rv64gc_core_top
         .flush_full      (flush_out.full_flush)
     );
 
-    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2))
+    // IQ1 and IQ2 are single-issue: only port 0 is wired to ALU2/MUL and
+    // ALU3/DIV/CSR respectively.  NUM_SELECT=1 prevents the IQ from
+    // retiring entries on port 1 that no functional unit executes
+    // (which would cause the ROB to fill up with orphaned entries).
+    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
     u_iq1 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -730,15 +740,19 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
-        .issue_valid     (iq1_issue_valid),
-        .issue_data      (iq1_issue_data),
+        .issue_valid     (iq1_issue_valid_s),
+        .issue_data      (iq1_issue_data_s),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush)
     );
+    assign iq1_issue_valid[0] = iq1_issue_valid_s[0];
+    assign iq1_issue_valid[1] = 1'b0;
+    assign iq1_issue_data[0]  = iq1_issue_data_s[0];
+    assign iq1_issue_data[1]  = '0;
 
-    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2))
+    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
     u_iq2 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -751,13 +765,17 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
-        .issue_valid     (iq2_issue_valid),
-        .issue_data      (iq2_issue_data),
+        .issue_valid     (iq2_issue_valid_s),
+        .issue_data      (iq2_issue_data_s),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush)
     );
+    assign iq2_issue_valid[0] = iq2_issue_valid_s[0];
+    assign iq2_issue_valid[1] = 1'b0;
+    assign iq2_issue_data[0]  = iq2_issue_data_s[0];
+    assign iq2_issue_data[1]  = '0;
 
     issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2))
     u_iq_load (

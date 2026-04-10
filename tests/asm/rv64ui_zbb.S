@@ -119,8 +119,8 @@ _start:
     slli a1, a1, 32
     li   a3, 0x04030201
     or   a3, a1, a3          # a3 = 0x0807060504030201
-    TEST_CASE 12, a2, 0      # Use explicit comparison below
-    # Manual check since the immediate is too large for TEST_CASE
+    # Explicit comparison because the expected immediate is 64-bit and does
+    # not fit in TEST_CASE's sign-extended 12-bit li.
     bne  a2, a3, rev8_fail
     j    rev8_ok
 rev8_fail:

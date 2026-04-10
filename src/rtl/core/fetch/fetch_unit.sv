@@ -78,6 +78,15 @@ module fetch_unit
     logic [63:0] f2_seq_next_pc;
     logic        f2_seq_valid;
 
+    // consumed_remainder_r: latched when the current cycle's extraction
+    // consumed a straddle remainder AND emitted at least one instruction.
+    // The following cycle must bypass the normal f1->f2 pipeline
+    // (which otherwise leaves f2_pc_r pointing at the already-processed
+    // cache-line base) and instead advance f2_pc_r directly to the
+    // f2_seq_next_pc captured on the consume cycle.
+    logic        consumed_remainder_r;
+    logic [63:0] post_remainder_pc_r;
+
     // =========================================================================
     // PC generation (F1)
     // Priority: redirect > BPU redirect > sequential
@@ -109,7 +118,13 @@ module fetch_unit
             f1_pc    <= redirect_pc;
             f1_valid <= 1'b1;
         end else if (!backend_stall) begin
-            f1_pc    <= next_pc;
+            // When the cycle after a remainder-consume is using the saved
+            // post-remainder PC, keep f1_pc matching f2_pc_r so the pipeline
+            // re-syncs (f1 should lead f2 again starting the cycle after).
+            if (consumed_remainder_r)
+                f1_pc    <= post_remainder_pc_r;
+            else
+                f1_pc    <= next_pc;
             f1_valid <= next_valid;
         end
     end
@@ -243,6 +258,18 @@ module fetch_unit
     logic        f2_tage_taken_r;
     logic        f2_tage_confident_r;
 
+    // On the cycle where f2 consumes a straddle remainder (start_offset=0,
+    // remainder_valid_r=1 and one or more instructions were emitted), the
+    // usual f1->f2 pipeline would leave f2_pc_r at the same cache-line base
+    // next cycle (because f1_pc lagged behind by one cycle across the
+    // straddle). Detect the consume event combinationally and advance
+    // f2_pc_r directly to f2_seq_next_pc so the following cycle processes
+    // the next real instruction stream.
+    logic consume_remainder_c;
+    assign consume_remainder_c = remainder_valid_r && f2_valid_r &&
+                                 ic_resp_valid && (start_offset == 6'd0) &&
+                                 (extract_count > 3'd0);
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             f2_valid_r          <= 1'b0;
@@ -252,17 +279,40 @@ module fetch_unit
             f2_btb_type_r       <= '0;
             f2_tage_taken_r     <= 1'b0;
             f2_tage_confident_r <= 1'b0;
+            consumed_remainder_r <= 1'b0;
+            post_remainder_pc_r  <= '0;
         end else if (redirect_valid) begin
             // Flush F2 on redirect
             f2_valid_r <= 1'b0;
+            consumed_remainder_r <= 1'b0;
         end else if (!backend_stall) begin
             f2_valid_r          <= f1_valid;
-            f2_pc_r             <= f1_pc;
+            // Bypass the normal f1->f2 pipeline in two scenarios:
+            //   1. consume_remainder_c: current cycle just combined a
+            //      remainder with the new line, so next cycle should skip
+            //      ahead to f2_seq_next_pc instead of re-reading the base.
+            //   2. consumed_remainder_r: set by scenario 1 last cycle -
+            //      this is a legacy backup path (should rarely fire).
+            if (consume_remainder_c)
+                f2_pc_r         <= f2_seq_next_pc;
+            else if (consumed_remainder_r)
+                f2_pc_r         <= post_remainder_pc_r;
+            else
+                f2_pc_r         <= f1_pc;
             f2_btb_hit_r        <= btb_hit;
             f2_btb_target_r     <= btb_target;
             f2_btb_type_r       <= btb_branch_type;
             f2_tage_taken_r     <= tage_pred_taken;
             f2_tage_confident_r <= tage_pred_confident;
+
+            // Latch the consume event and the post-remainder PC so the
+            // next cycle can also advance f1_pc in lock-step.
+            if (consume_remainder_c) begin
+                consumed_remainder_r <= 1'b1;
+                post_remainder_pc_r  <= f2_seq_next_pc;
+            end else begin
+                consumed_remainder_r <= 1'b0;
+            end
         end
     end
 
