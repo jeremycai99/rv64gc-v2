@@ -355,6 +355,8 @@ module rv64gc_core_top
         .commit_count     (commit_count),
         .commit_old_pdst  (commit_old_pdst),
         .commit_rd_valid  (commit_rd_valid),
+        .commit_rd_arch   (commit_rd_arch_w),
+        .commit_pdst      (commit_pdst_w),
         .commit_release_cp(commit_release_cp),
         .commit_cp_id     (commit_cp_id)
     );
@@ -387,10 +389,14 @@ module rv64gc_core_top
     end
 
     // Extract commit data
+    logic [4:0]               commit_rd_arch_w  [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] commit_pdst_w     [0:PIPE_WIDTH-1];
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             commit_old_pdst[i] = commit_out[i].old_pdst;
             commit_rd_valid[i] = commit_out[i].rd_valid;
+            commit_rd_arch_w[i] = commit_out[i].rd_arch;
+            commit_pdst_w[i]    = commit_out[i].pdst;
         end
     end
 

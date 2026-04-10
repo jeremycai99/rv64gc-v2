@@ -24,13 +24,18 @@ module rat
     // Old mapping output (for ROB old_pdst)
     output logic [PHYS_REG_BITS-1:0] old_phys [0:PIPE_WIDTH-1],
 
+    // Commit update to committed RAT (from commit unit)
+    input logic [PIPE_WIDTH-1:0]          commit_wr_en,
+    input logic [ARCH_REG_BITS-1:0]       commit_arch [0:PIPE_WIDTH-1],
+    input logic [PHYS_REG_BITS-1:0]       commit_phys [0:PIPE_WIDTH-1],
+
     // Checkpoint save
     input logic ckpt_save,
     input logic [CHECKPOINT_BITS-1:0] ckpt_save_id,
     // Checkpoint restore
     input logic ckpt_restore,
     input logic [CHECKPOINT_BITS-1:0] ckpt_restore_id,
-    // Full flush: reset to identity mapping
+    // Full flush: restore from committed RAT
     input logic flush
 );
 
@@ -38,6 +43,13 @@ module rat
     // RAT table: 32 entries, each PHYS_REG_BITS wide
     // -------------------------------------------------------------------------
     logic [PHYS_REG_BITS-1:0] rat_table [0:31];
+
+    // -------------------------------------------------------------------------
+    // Committed RAT (CRAT): tracks the architecturally committed mapping.
+    // Updated when instructions retire at commit. Used to restore the
+    // speculative RAT on a full flush.
+    // -------------------------------------------------------------------------
+    logic [PHYS_REG_BITS-1:0] committed_rat [0:31];
 
     // -------------------------------------------------------------------------
     // Checkpoint storage: NUM_CHECKPOINTS copies of the full table
@@ -82,9 +94,16 @@ module rat
                 rat_table[i] <= PHYS_REG_BITS'(i);
             end
         end else if (flush) begin
-            // Full flush: reset to identity mapping
+            // Full flush: restore from committed RAT.
+            // Also apply any same-cycle commit updates so that the
+            // mispredicting instruction's mapping is captured.
             for (int i = 0; i < 32; i++) begin
-                rat_table[i] <= PHYS_REG_BITS'(i);
+                rat_table[i] <= committed_rat[i];
+            end
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (commit_wr_en[i] && (commit_arch[i] != '0)) begin
+                    rat_table[commit_arch[i]] <= commit_phys[i];
+                end
             end
         end else if (ckpt_restore) begin
             // Checkpoint restore overrides normal writes
@@ -96,6 +115,24 @@ module rat
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (wr_en[i] && (wr_arch[i] != '0)) begin
                     rat_table[wr_arch[i]] <= wr_phys[i];
+                end
+            end
+        end
+    end
+
+    // -------------------------------------------------------------------------
+    // Committed RAT update: updated every cycle from commit signals.
+    // The committed RAT tracks the architecturally visible mapping.
+    // -------------------------------------------------------------------------
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int i = 0; i < 32; i++) begin
+                committed_rat[i] <= PHYS_REG_BITS'(i);
+            end
+        end else begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (commit_wr_en[i] && (commit_arch[i] != '0)) begin
+                    committed_rat[commit_arch[i]] <= commit_phys[i];
                 end
             end
         end

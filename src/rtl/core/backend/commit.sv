@@ -280,6 +280,7 @@ module commit
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             commit_out[i].valid    = slot_can_commit[i];
             commit_out[i].rob_idx  = '0; // ROB manages its own head advancement
+            commit_out[i].pdst     = head_pdst[i];
             commit_out[i].old_pdst = head_old_pdst[i];
             commit_out[i].rd_arch  = head_rd_arch[i];
             commit_out[i].rd_valid = slot_can_commit[i] & head_rd_valid[i];

@@ -68,6 +68,8 @@ module issue_queue
     logic [DEPTH-1:0]             src2_ready;
     logic [DEPTH-1:0]             src1_spec;     // rs1 was woken speculatively
     logic [DEPTH-1:0]             src2_spec;     // rs2 was woken speculatively
+    // Store payload as flat bit vectors to avoid Verilator packed-struct
+    // array misalignment.  Cast to/from iq_entry_t at write/read boundaries.
     logic [PW-1:0]                payload_r    [0:DEPTH-1];
 
     // =====================================================================
@@ -227,7 +229,7 @@ module issue_queue
     always_comb begin
         for (int p = 0; p < NUM_SELECT; p++) begin
             issue_valid[p] = sel_found[p];
-            issue_data[p]  = payload_r[sel_idx[p]];
+            issue_data[p]  = iq_entry_t'(payload_r[sel_idx[p]]);
             // Override ready flags with wakeup results so downstream sees
             // correct readiness even on the issue cycle.
             issue_data[p].rs1_ready = next_src1_ready[sel_idx[p]];
@@ -345,16 +347,33 @@ module issue_queue
             end
 
             // ---- Enqueue: write new entries into free slots ----
+            // Snoop the current CDB broadcast at enqueue time to avoid
+            // the classic simultaneous-enqueue-plus-wakeup race: a new
+            // entry arrives the same cycle its producer broadcasts, but
+            // the wakeup logic only sees entries that are already valid.
             for (int q = 0; q < NUM_ENQUEUE; q++) begin
                 if (enq_valid[q] && free_found[q]) begin
+                    automatic logic enq_s1_rdy;
+                    automatic logic enq_s2_rdy;
+                    enq_s1_rdy = enq_data[q].rs1_ready;
+                    enq_s2_rdy = enq_data[q].rs2_ready;
+                    // Check CDB for source match (override ready to 1)
+                    for (int c = 0; c < CDB_WIDTH; c++) begin
+                        if (cdb_valid[c]) begin
+                            if (cdb_tag[c] == enq_data[q].rs1_phys)
+                                enq_s1_rdy = 1'b1;
+                            if (cdb_tag[c] == enq_data[q].rs2_phys)
+                                enq_s2_rdy = 1'b1;
+                        end
+                    end
                     entry_valid[free_idx[q]] <= 1'b1;
-                    payload_r[free_idx[q]]   <= enq_data[q];
+                    payload_r[free_idx[q]]   <= PW'(enq_data[q]);
                     rs1_phys_r[free_idx[q]]  <= enq_data[q].rs1_phys;
                     rs2_phys_r[free_idx[q]]  <= enq_data[q].rs2_phys;
                     rob_idx_r[free_idx[q]]   <= enq_data[q].rob_idx;
                     fu_type_r[free_idx[q]]   <= enq_data[q].fu_type;
-                    src1_ready[free_idx[q]]  <= enq_data[q].rs1_ready;
-                    src2_ready[free_idx[q]]  <= enq_data[q].rs2_ready;
+                    src1_ready[free_idx[q]]  <= enq_s1_rdy;
+                    src2_ready[free_idx[q]]  <= enq_s2_rdy;
                     src1_spec[free_idx[q]]   <= 1'b0;
                     src2_spec[free_idx[q]]   <= 1'b0;
                 end

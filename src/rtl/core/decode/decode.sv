@@ -52,80 +52,46 @@ module decode
 
     // ---------------------------------------------------------------
     // Pipeline register (fetch -> decode output)
+    // Stored as flat bit-vectors to avoid Verilator packed-struct
+    // array misalignment that corrupts narrow fields like alu_op.
     // ---------------------------------------------------------------
+    localparam int DI_W = $bits(decoded_insn_t);
+    logic [DI_W-1:0] dec_insn_flat_r [0:PIPE_WIDTH-1];
+    logic [2:0]      dec_count_r;
+
+    // Reconstruct struct from flat storage for output
     decoded_insn_t dec_insn_r [0:PIPE_WIDTH-1];
-    logic [2:0]    dec_count_r;
+    always_comb begin
+        for (int j = 0; j < PIPE_WIDTH; j++) begin
+            dec_insn_r[j] = decoded_insn_t'(dec_insn_flat_r[j]);
+        end
+    end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             dec_count_r <= 3'd0;
             for (int j = 0; j < PIPE_WIDTH; j++) begin
-                dec_insn_r[j].valid         <= 1'b0;
-                dec_insn_r[j].pc            <= 64'd0;
-                dec_insn_r[j].insn          <= 32'd0;
-                dec_insn_r[j].rs1_arch      <= 5'd0;
-                dec_insn_r[j].rs2_arch      <= 5'd0;
-                dec_insn_r[j].rd_arch       <= 5'd0;
-                dec_insn_r[j].rs1_valid     <= 1'b0;
-                dec_insn_r[j].rs2_valid     <= 1'b0;
-                dec_insn_r[j].rd_valid      <= 1'b0;
-                dec_insn_r[j].imm           <= 64'd0;
-                dec_insn_r[j].fu_type       <= FU_ALU;
-                dec_insn_r[j].alu_op        <= ALU_ADD;
-                dec_insn_r[j].br_op         <= BR_EQ;
-                dec_insn_r[j].mul_op        <= MUL_MUL;
-                dec_insn_r[j].div_op        <= DIV_DIV;
-                dec_insn_r[j].mem_size      <= MEM_BYTE;
-                dec_insn_r[j].csr_op        <= CSR_NONE;
-                dec_insn_r[j].csr_addr      <= 12'd0;
-                dec_insn_r[j].is_branch     <= 1'b0;
-                dec_insn_r[j].is_jal        <= 1'b0;
-                dec_insn_r[j].is_jalr       <= 1'b0;
-                dec_insn_r[j].is_load       <= 1'b0;
-                dec_insn_r[j].is_store      <= 1'b0;
-                dec_insn_r[j].is_csr        <= 1'b0;
-                dec_insn_r[j].is_mul        <= 1'b0;
-                dec_insn_r[j].is_div        <= 1'b0;
-                dec_insn_r[j].is_w_op       <= 1'b0;
-                dec_insn_r[j].is_unsigned   <= 1'b0;
-                dec_insn_r[j].use_imm       <= 1'b0;
-                dec_insn_r[j].is_fence      <= 1'b0;
-                dec_insn_r[j].is_fence_i    <= 1'b0;
-                dec_insn_r[j].is_ecall      <= 1'b0;
-                dec_insn_r[j].is_ebreak     <= 1'b0;
-                dec_insn_r[j].is_mret       <= 1'b0;
-                dec_insn_r[j].is_sret       <= 1'b0;
-                dec_insn_r[j].is_sfence_vma <= 1'b0;
-                dec_insn_r[j].is_wfi        <= 1'b0;
-                dec_insn_r[j].is_amo        <= 1'b0;
-                dec_insn_r[j].amo_op        <= 5'd0;
-                dec_insn_r[j].amo_aq        <= 1'b0;
-                dec_insn_r[j].amo_rl        <= 1'b0;
-                dec_insn_r[j].is_rvc        <= 1'b0;
-                dec_insn_r[j].bp_taken      <= 1'b0;
-                dec_insn_r[j].bp_target     <= 64'd0;
-                dec_insn_r[j].has_exception <= 1'b0;
-                dec_insn_r[j].exc_code      <= 4'd0;
-                dec_insn_r[j].is_fused      <= 1'b0;
-                dec_insn_r[j].fused_imm     <= 32'd0;
-                dec_insn_r[j].fusion_type   <= 3'd0;
+                dec_insn_flat_r[j] <= '0;
             end
         end else if (flush) begin
             dec_count_r <= 3'd0;
             for (int j = 0; j < PIPE_WIDTH; j++) begin
-                dec_insn_r[j].valid <= 1'b0;
+                // Clear just the valid bit (MSB of the struct)
+                dec_insn_flat_r[j][DI_W-1] <= 1'b0;
             end
         end else if (!stall) begin
             dec_count_r <= fetch_count;
             for (int j = 0; j < PIPE_WIDTH; j++) begin
                 if (j < int'(fetch_count)) begin
-                    dec_insn_r[j]           <= slice_out[j];
-                    // Override valid and BP info from fetch
-                    dec_insn_r[j].valid     <= 1'b1;
-                    dec_insn_r[j].bp_taken  <= fetch_bp_taken[j];
-                    dec_insn_r[j].bp_target <= fetch_bp_target[j];
+                    automatic decoded_insn_t tmp;
+                    tmp           = slice_out[j];
+                    tmp.valid     = 1'b1;
+                    tmp.bp_taken  = fetch_bp_taken[j];
+                    tmp.bp_target = fetch_bp_target[j];
+                    dec_insn_flat_r[j] <= DI_W'(tmp);
                 end else begin
-                    dec_insn_r[j].valid <= 1'b0;
+                    // Clear valid bit only
+                    dec_insn_flat_r[j][DI_W-1] <= 1'b0;
                 end
             end
         end

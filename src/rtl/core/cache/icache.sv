@@ -130,8 +130,13 @@ module icache
     endgenerate
 
     // =========================================================================
-    // Hit detection (combinational from stage-1 registered values)
+    // Hit detection (combinational from stage-0 request address)
+    // With async tag/data RAMs, the tag outputs are for req_addr (stage-0).
+    // Hit comparison therefore uses req_addr tag, not s1 registered tag.
     // =========================================================================
+    logic [L1I_TAG_BITS-1:0] s0_tag;
+    assign s0_tag = req_addr[TAG_HI:TAG_LO];
+
     logic [L1I_WAYS-1:0] way_hit;
     logic                cache_hit;
     logic [1:0]          hit_way;
@@ -141,7 +146,7 @@ module icache
         cache_hit = 1'b0;
         hit_way   = 2'd0;
         for (int w = 0; w < L1I_WAYS; w++) begin
-            if (tr_valid_out[w] && (tr_tag_out[w] == s1_tag)) begin
+            if (tr_valid_out[w] && (tr_tag_out[w] == s0_tag)) begin
                 way_hit[w] = 1'b1;
                 cache_hit  = 1'b1;
                 hit_way    = 2'(w);
@@ -163,10 +168,13 @@ module icache
     // =========================================================================
     logic [2:0] plru_state [L1I_SETS];
 
-    // Victim way derived combinationally from PLRU state of s1_index
+    // Victim way derived combinationally from PLRU state of current request set
+    logic [L1I_SET_BITS-1:0] s0_index;
+    assign s0_index = req_addr[INDEX_HI:INDEX_LO];
+
     logic [1:0] victim_way;
     always_comb begin
-        automatic logic [2:0] ps = plru_state[s1_index];
+        automatic logic [2:0] ps = plru_state[s0_index];
         if (!ps[2]) begin
             victim_way = ps[1] ? 2'd0 : 2'd1;
         end else begin
@@ -198,8 +206,8 @@ module icache
             miss_way_q  <= '0;
         end else begin
             state_q <= state_d;
-            if (state_q == ST_IDLE && s1_valid && !cache_hit && !invalidate_all) begin
-                miss_addr_q <= s1_addr;
+            if (state_q == ST_IDLE && req_valid && !cache_hit && !invalidate_all) begin
+                miss_addr_q <= req_addr;
                 miss_way_q  <= victim_way;
             end
         end
@@ -218,10 +226,10 @@ module icache
 
         case (state_q)
             ST_IDLE: begin
-                if (s1_valid && !cache_hit && !invalidate_all) begin
+                if (req_valid && !cache_hit && !invalidate_all) begin
                     // Issue fill request immediately
                     fill_req_valid = 1'b1;
-                    fill_req_addr  = {s1_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
+                    fill_req_addr  = {req_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
                     state_d        = ST_WAIT_FILL;
                 end
             end
@@ -256,12 +264,12 @@ module icache
             end
         end else if (invalidate_all) begin
             // No PLRU update during invalidation
-        end else if (s1_valid && cache_hit) begin
+        end else if (req_valid && cache_hit) begin
             case (hit_way)
-                2'd0: plru_state[s1_index] <= {1'b1, 1'b1, plru_state[s1_index][0]};
-                2'd1: plru_state[s1_index] <= {1'b1, 1'b0, plru_state[s1_index][0]};
-                2'd2: plru_state[s1_index] <= {1'b0, plru_state[s1_index][1], 1'b1};
-                2'd3: plru_state[s1_index] <= {1'b0, plru_state[s1_index][1], 1'b0};
+                2'd0: plru_state[s0_index] <= {1'b1, 1'b1, plru_state[s0_index][0]};
+                2'd1: plru_state[s0_index] <= {1'b1, 1'b0, plru_state[s0_index][0]};
+                2'd2: plru_state[s0_index] <= {1'b0, plru_state[s0_index][1], 1'b1};
+                2'd3: plru_state[s0_index] <= {1'b0, plru_state[s0_index][1], 1'b0};
                 default: ;
             endcase
         end else if (state_q == ST_WAIT_FILL && fill_resp_valid) begin
@@ -276,30 +284,26 @@ module icache
     end
 
     // =========================================================================
-    // Response outputs
+    // Response outputs (combinational, using s1 registered address)
     // =========================================================================
-    // On a hit: resp_valid asserts the same cycle we have tag-compare results
-    // (i.e., one cycle after the request).
-    // On a fill completion: resp_valid asserts with the fill data.
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            resp_valid <= 1'b0;
-            resp_data  <= '0;
-            resp_hit   <= 1'b0;
-        end else begin
-            resp_valid <= 1'b0;
-            resp_hit   <= 1'b0;
-            resp_data  <= '0;
+    // Tag and data RAMs now use async reads, so their outputs correspond
+    // to the current cycle's raddr (= previous cycle's req_addr, registered
+    // in s1_addr). The hit detection uses s1_tag vs tr_tag_out, and
+    // hit_data = dr_rdata[hit_way]. All are available in the same cycle
+    // as s1_valid, giving 1-cycle hit latency from request.
+    always_comb begin
+        resp_valid = 1'b0;
+        resp_hit   = 1'b0;
+        resp_data  = '0;
 
-            if (s1_valid && cache_hit && !invalidate_all) begin
-                resp_valid <= 1'b1;
-                resp_hit   <= 1'b1;
-                resp_data  <= hit_data;
-            end else if (state_q == ST_WAIT_FILL && fill_resp_valid) begin
-                resp_valid <= 1'b1;
-                resp_hit   <= 1'b0;
-                resp_data  <= fill_resp_data;
-            end
+        if (req_valid && cache_hit && !invalidate_all) begin
+            resp_valid = 1'b1;
+            resp_hit   = 1'b1;
+            resp_data  = hit_data;
+        end else if (state_q == ST_WAIT_FILL && fill_resp_valid) begin
+            resp_valid = 1'b1;
+            resp_hit   = 1'b0;
+            resp_data  = fill_resp_data;
         end
     end
 

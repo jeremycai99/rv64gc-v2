@@ -190,8 +190,11 @@ package uarch_pkg;
 
     // =========================================================================
     // Renamed instruction (output of rename stage)
+    // Padded to 448 bits (7x64) to avoid Verilator struct-array misalignment.
+    // Unpadded width is 402 bits (345 decoded_insn_t + 57 rename fields).
     // =========================================================================
     typedef struct packed {
+        logic [45:0]                    _pad;           // 46 bits -> 402+46 = 448
         decoded_insn_t                  base;
         logic [ROB_IDX_BITS-1:0]        rob_idx;
         logic [PHYS_REG_BITS-1:0]       rs1_phys;
@@ -238,8 +241,12 @@ package uarch_pkg;
 
     // =========================================================================
     // Issue queue entry
+    // Padded to 384 bits (6x64) to ensure Verilator aligns struct arrays
+    // correctly. Without padding the 323-bit width causes field misalignment
+    // when stored in unpacked arrays, corrupting pc/imm in the BRU path.
     // =========================================================================
     typedef struct packed {
+        logic [60:0]                    _pad;           // 61 bits -> 323+61 = 384
         logic                           valid;
         logic [ROB_IDX_BITS-1:0]        rob_idx;
         logic [PHYS_REG_BITS-1:0]       pdst;
@@ -326,6 +333,7 @@ package uarch_pkg;
     typedef struct packed {
         logic                           valid;
         logic [ROB_IDX_BITS-1:0]        rob_idx;
+        logic [PHYS_REG_BITS-1:0]       pdst;
         logic [PHYS_REG_BITS-1:0]       old_pdst;
         logic [4:0]                     rd_arch;
         logic                           rd_valid;

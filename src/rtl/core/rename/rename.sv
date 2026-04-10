@@ -46,10 +46,12 @@ module rename
     // Flush (from commit)
     input  flush_t flush_in,
 
-    // Commit: release old_pdst to free list
+    // Commit: release old_pdst to free list + update committed RAT
     input  logic [2:0]               commit_count,
     input  logic [PHYS_REG_BITS-1:0] commit_old_pdst [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]    commit_rd_valid,
+    input  logic [4:0]               commit_rd_arch  [0:PIPE_WIDTH-1],
+    input  logic [PHYS_REG_BITS-1:0] commit_pdst     [0:PIPE_WIDTH-1],
     // Checkpoint release from commit
     input  logic [PIPE_WIDTH-1:0]              commit_release_cp,
     input  logic [CHECKPOINT_BITS-1:0]         commit_cp_id [0:PIPE_WIDTH-1]
@@ -141,6 +143,16 @@ module rename
     logic [PHYS_REG_BITS-1:0] fl_release_preg [0:PIPE_WIDTH-1];
 
     // =========================================================================
+    // Commit write-enable for CRAT and committed free-list bitmap
+    // =========================================================================
+    logic [PIPE_WIDTH-1:0] crat_wr_en;
+    always_comb begin
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            crat_wr_en[i] = commit_rd_valid[i] && (3'(i) < commit_count);
+        end
+    end
+
+    // =========================================================================
     // Internal flush signals
     // =========================================================================
     logic do_flush;
@@ -204,6 +216,9 @@ module rename
         .wr_arch      (rat_wr_arch),
         .wr_phys      (rat_wr_phys),
         .old_phys     (rat_old_phys),
+        .commit_wr_en (crat_wr_en),
+        .commit_arch  (commit_rd_arch),
+        .commit_phys  (commit_pdst),
         .ckpt_save    (ckpt_save_valid),
         .ckpt_save_id (ckpt_save_id),
         .ckpt_restore (do_ckpt_restore),
@@ -219,6 +234,8 @@ module rename
         .alloc_avail_count(fl_avail_count),
         .release_count    (fl_release_count),
         .release_preg     (fl_release_preg),
+        .commit_wr_valid  (crat_wr_en),
+        .commit_pdst      (commit_pdst),
         .ckpt_save        (ckpt_save_valid),
         .ckpt_save_id     (ckpt_save_id),
         .ckpt_restore     (do_ckpt_restore),

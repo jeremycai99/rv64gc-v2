@@ -128,14 +128,19 @@ module fetch_unit
     assign ic_req_valid = f1_valid && !backend_stall;
     assign ic_req_addr  = f1_pc;
 
+    // I-cache raw combinational outputs (same-cycle as request)
+    logic        ic_resp_valid_comb;
+    logic [511:0] ic_resp_data_comb;
+    logic        ic_resp_hit_comb;
+
     icache u_icache (
         .clk            (clk),
         .rst_n          (rst_n),
         .req_valid      (ic_req_valid),
         .req_addr       (ic_req_addr),
-        .resp_valid     (ic_resp_valid),
-        .resp_data      (ic_resp_data),
-        .resp_hit       (ic_resp_hit),
+        .resp_valid     (ic_resp_valid_comb),
+        .resp_data      (ic_resp_data_comb),
+        .resp_hit       (ic_resp_hit_comb),
         .fill_req_valid (icache_fill_req_valid),
         .fill_req_addr  (icache_fill_req_addr),
         .fill_resp_valid(icache_fill_resp_valid),
@@ -143,6 +148,19 @@ module fetch_unit
         .invalidate_all (fence_i),
         .invalidate_busy(ic_invalidate_busy)
     );
+
+    // Register I-cache response to align with F2 stage (1-cycle delay)
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ic_resp_valid <= 1'b0;
+            ic_resp_data  <= '0;
+            ic_resp_hit   <= 1'b0;
+        end else begin
+            ic_resp_valid <= ic_resp_valid_comb;
+            ic_resp_data  <= ic_resp_data_comb;
+            ic_resp_hit   <= ic_resp_hit_comb;
+        end
+    end
 
     // =========================================================================
     // BTB instance (combinational lookup in F1)
@@ -270,6 +288,20 @@ module fetch_unit
     logic [5:0] start_offset;
     assign start_offset = f2_pc_r[5:0];
 
+    // ---- Cross-line remainder buffer ----
+    // When a 32-bit instruction straddles a cache-line boundary, the first
+    // 2 bytes are saved here. On the next cache-line fetch the remainder is
+    // combined with the first 2 bytes of the new line to form the complete
+    // instruction. This prevents the fetch unit from stalling forever.
+    logic        remainder_valid_r;
+    logic [15:0] remainder_hw_r;       // first 2 bytes (lower half)
+    logic [63:0] remainder_pc_r;       // PC of the straddling instruction
+
+    // Combinational: detect straddling 32-bit instruction at line end
+    logic        straddle_detected;
+    logic [15:0] straddle_hw;
+    logic [63:0] straddle_pc;
+
     // Extract instructions from the cache line combinationally
     always_comb begin
         // Default all slots
@@ -280,13 +312,38 @@ module fetch_unit
             slot_valid[i]  = 1'b0;
             slot_pc[i]     = '0;
         end
-        extract_count = 3'd0;
+        extract_count      = 3'd0;
+        straddle_detected  = 1'b0;
+        straddle_hw        = 16'h0;
+        straddle_pc        = '0;
 
         if (f2_valid_r && ic_resp_valid) begin
             automatic logic [6:0] byte_pos;
+            automatic int slot_idx;
             byte_pos = {1'b0, start_offset};
+            slot_idx = 0;
+
+            // If the remainder buffer holds the first half of a straddling
+            // instruction, combine it with the start of this cache line.
+            if (remainder_valid_r && byte_pos == 7'd0) begin
+                // The remainder holds the low 16 bits; read bytes 0-1 of
+                // this line for the high 16 bits.
+                automatic logic [31:0] word32;
+                word32[15:0]  = remainder_hw_r;
+                word32[23:16] = ic_resp_data[0 +: 8];
+                word32[31:24] = ic_resp_data[8 +: 8];
+
+                slot_is_rvc[0] = 1'b0;
+                raw_insn[0]    = word32;
+                slot_valid[0]  = 1'b1;
+                slot_pc[0]     = remainder_pc_r;
+                extract_count  = 3'd1;
+                byte_pos       = 7'd2;   // consumed 2 bytes from this line
+                slot_idx       = 1;
+            end
 
             for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (i >= slot_idx) begin
                 // Check if we have at least 2 bytes remaining in the line
                 if (byte_pos <= 7'd62) begin
                     // Read 16-bit parcel at current position
@@ -324,10 +381,16 @@ module fetch_unit
                         slot_valid[i]  = 1'b1;
                         extract_count  = 3'(i + 1);
                         byte_pos       = byte_pos + 7'd4;
+                    end else begin
+                        // 32-bit instruction crosses line boundary.
+                        // Save the first 2 bytes for the next cache line.
+                        straddle_detected = 1'b1;
+                        straddle_hw       = hw;
+                        straddle_pc       = {f2_pc_r[63:6], bp[5:0]};
                     end
-                    // else: 32-bit instruction crosses line boundary, stop
                 end
                 // else: past end of line, stop
+                end
             end
         end
     end
@@ -460,6 +523,14 @@ module fetch_unit
             last_slot_rvc = slot_is_rvc[last_idx];
             f2_seq_next_pc = last_slot_pc + (last_slot_rvc ? 64'd2 : 64'd4);
             f2_seq_valid   = 1'b1;
+        end else if (straddle_detected) begin
+            // No complete instructions extracted, but a straddling 32-bit
+            // instruction was found. Advance to the next cache line so
+            // the remainder buffer can be combined with the new data.
+            last_slot_pc   = straddle_pc;
+            last_slot_rvc  = 1'b0;
+            f2_seq_next_pc = {f2_pc_r[63:6] + 58'd1, 6'd0};  // next line
+            f2_seq_valid   = 1'b1;
         end else begin
             last_slot_pc   = f2_pc_r;
             last_slot_rvc  = 1'b0;
@@ -514,6 +585,29 @@ module fetch_unit
             if (f2_btb_type_r == BT_COND) begin
                 tage_spec_update_valid = 1'b1;
                 tage_spec_taken        = f2_tage_taken_r;
+            end
+        end
+    end
+
+    // =========================================================================
+    // Remainder buffer: save the first 2 bytes of a straddling instruction
+    // =========================================================================
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            remainder_valid_r <= 1'b0;
+            remainder_hw_r    <= 16'h0;
+            remainder_pc_r    <= '0;
+        end else if (redirect_valid) begin
+            remainder_valid_r <= 1'b0;
+        end else if (!backend_stall) begin
+            if (straddle_detected && f2_valid_r && ic_resp_valid) begin
+                remainder_valid_r <= 1'b1;
+                remainder_hw_r    <= straddle_hw;
+                remainder_pc_r    <= straddle_pc;
+            end else begin
+                // Clear once consumed (the extraction logic will use it
+                // when the next line arrives at byte_pos 0).
+                remainder_valid_r <= 1'b0;
             end
         end
     end

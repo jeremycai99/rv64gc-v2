@@ -20,30 +20,22 @@ module icache_data_ram
 );
 
     // =========================================================================
-    // Storage: 4 independent way-banks for area efficiency
+    // Storage: single way-bank (one instance per way in the cache)
     // =========================================================================
-    logic [LINE_SIZE*8-1:0] data_arr [L1I_SETS][L1I_WAYS];
+    logic [LINE_SIZE*8-1:0] data_arr [L1I_SETS];
 
     // =========================================================================
     // Write (synchronous)
     // =========================================================================
     always_ff @(posedge clk) begin
         if (we) begin
-            data_arr[waddr][wway] <= wdata;
+            data_arr[waddr] <= wdata;
         end
     end
 
     // =========================================================================
-    // Read (synchronous) – register address + way, output next cycle
+    // Read (combinational / asynchronous for single-cycle cache hit)
     // =========================================================================
-    logic [L1I_SET_BITS-1:0] raddr_q;
-    logic [1:0]              rway_q;
-
-    always_ff @(posedge clk) begin
-        raddr_q <= raddr;
-        rway_q  <= rway;
-    end
-
-    assign rdata = data_arr[raddr_q][rway_q];
+    assign rdata = data_arr[raddr];
 
 endmodule

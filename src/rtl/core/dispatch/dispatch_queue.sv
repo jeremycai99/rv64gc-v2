@@ -43,19 +43,33 @@ module dispatch_queue
 
     // IQ target encoding: 3 = memory IQ
     localparam logic [1:0] IQ_MEM_TARGET = 2'd3;
+    // Flat-vector width for renamed_insn_t (avoids Verilator packed-struct array bugs)
+    localparam int RI_W = $bits(renamed_insn_t);
 
     // =========================================================================
-    // Integer FIFO
+    // Integer FIFO -- stored as flat bit-vectors to avoid struct corruption
     // =========================================================================
-    renamed_insn_t                   int_fifo  [0:INT_DEPTH-1];
+    logic [RI_W-1:0]                 int_fifo_flat [0:INT_DEPTH-1];
     logic [INT_IDX_BITS-1:0]         int_head;
     logic [INT_IDX_BITS-1:0]         int_tail;
     logic [INT_CNT_BITS-1:0]         int_count;
 
+    // Reconstruct structs for read access
+    renamed_insn_t                   int_fifo  [0:INT_DEPTH-1];
+    always_comb begin
+        for (int k = 0; k < INT_DEPTH; k++)
+            int_fifo[k] = renamed_insn_t'(int_fifo_flat[k]);
+    end
+
     // =========================================================================
-    // Memory FIFO
+    // Memory FIFO -- stored as flat bit-vectors
     // =========================================================================
+    logic [RI_W-1:0]                 mem_fifo_flat [0:MEM_DEPTH-1];
     renamed_insn_t                   mem_fifo  [0:MEM_DEPTH-1];
+    always_comb begin
+        for (int k = 0; k < MEM_DEPTH; k++)
+            mem_fifo[k] = renamed_insn_t'(mem_fifo_flat[k]);
+    end
     logic [MEM_IDX_BITS-1:0]         mem_head;
     logic [MEM_IDX_BITS-1:0]         mem_tail;
     logic [MEM_CNT_BITS-1:0]         mem_count;
@@ -309,10 +323,10 @@ module dispatch_queue
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (i < int'(enq_count)) begin
                         if (is_mem[i]) begin
-                            mem_fifo[mem_wr_addr[i_mem]] <= enq_data[i];
+                            mem_fifo_flat[mem_wr_addr[i_mem]] <= RI_W'(enq_data[i]);
                             i_mem = i_mem + 1;
                         end else begin
-                            int_fifo[int_wr_addr[i_int]] <= enq_data[i];
+                            int_fifo_flat[int_wr_addr[i_int]] <= RI_W'(enq_data[i]);
                             i_int = i_int + 1;
                         end
                     end

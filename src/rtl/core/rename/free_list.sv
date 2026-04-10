@@ -19,6 +19,10 @@ module free_list
     input logic [2:0] release_count,
     input logic [PHYS_REG_BITS-1:0] release_preg [0:PIPE_WIDTH-1],
 
+    // Commit pdst (new dest preg, to mark in-use in committed bitmap)
+    input logic [PIPE_WIDTH-1:0]          commit_wr_valid,
+    input logic [PHYS_REG_BITS-1:0]       commit_pdst [0:PIPE_WIDTH-1],
+
     // Checkpoint save
     input logic ckpt_save,
     input logic [CHECKPOINT_BITS-1:0] ckpt_save_id,
@@ -36,6 +40,13 @@ module free_list
 
     // Initial state constant: regs 0-31 in use, 32-255 free
     localparam logic [INT_PRF_DEPTH-1:0] INIT_BITMAP = {{(INT_PRF_DEPTH - ARCH_REGS){1'b1}}, {ARCH_REGS{1'b0}}};
+
+    // -------------------------------------------------------------------------
+    // Committed free bitmap: tracks which pregs are free in the committed
+    // architectural state.  Updated on every commit cycle.
+    // On full flush the speculative bitmap is restored from this.
+    // -------------------------------------------------------------------------
+    logic [INT_PRF_DEPTH-1:0] committed_bitmap;
 
     // -------------------------------------------------------------------------
     // Checkpoint storage
@@ -103,16 +114,20 @@ module free_list
         if (!rst_n) begin
             free_bitmap <= INIT_BITMAP;
         end else if (flush) begin
-            free_bitmap <= INIT_BITMAP;
+            // Restore from committed bitmap, then apply same-cycle commit
+            // updates so the mispredicting instruction's mapping is captured.
+            free_bitmap <= committed_bitmap;
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
+                    free_bitmap[release_preg[i]] <= 1'b1;
+                end
+                if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
+                    free_bitmap[commit_pdst[i]] <= 1'b0;
+                end
+            end
         end else if (ckpt_restore) begin
             free_bitmap <= ckpt_bitmap[ckpt_restore_id];
         end else begin
-            // Start with current bitmap
-            // Apply allocations: clear bits for allocated registers
-            // Apply releases: set bits for released registers
-            // Allocations and releases in the same cycle: alloc reads
-            // pre-release state (combinational), release happens at edge.
-            // Both modifications apply at the clock edge.
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 // Allocations: clear bits that were allocated
                 if (found_valid[i] && (3'(i) < alloc_req_count)) begin
@@ -121,6 +136,26 @@ module free_list
                 // Releases: set bits back to free (never release p0)
                 if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
                     free_bitmap[release_preg[i]] <= 1'b1;
+                end
+            end
+        end
+    end
+
+    // -------------------------------------------------------------------------
+    // Committed bitmap update: track committed state for full-flush recovery
+    // -------------------------------------------------------------------------
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            committed_bitmap <= INIT_BITMAP;
+        end else begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                // Release old_pdst (becomes free in committed state)
+                if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
+                    committed_bitmap[release_preg[i]] <= 1'b1;
+                end
+                // Mark pdst as in-use (committed destination)
+                if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
+                    committed_bitmap[commit_pdst[i]] <= 1'b0;
                 end
             end
         end

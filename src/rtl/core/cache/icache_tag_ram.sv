@@ -45,12 +45,12 @@ module icache_tag_ram
     end
 
     // =========================================================================
-    // Read (synchronous)
+    // Read (combinational / asynchronous for single-cycle cache hit)
     // =========================================================================
-    always_ff @(posedge clk) begin
+    always_comb begin
         for (int w = 0; w < L1I_WAYS; w++) begin
-            valid_out[w]  <= valid_arr[raddr][w];
-            tag_out[w]    <= tag_arr  [raddr][w];
+            valid_out[w]  = valid_arr[raddr][w];
+            tag_out[w]    = tag_arr  [raddr][w];
         end
     end
 
