@@ -567,6 +567,9 @@ module rv64gc_core_top
     logic        iq_store_full;
     logic [1:0]  iq_store_issue_valid;
     iq_entry_t   iq_store_issue_data [0:1];
+    // Single-issue wrapper signals for store IQ (NUM_SELECT=1)
+    logic [0:0]  iq_store_issue_valid_s;
+    iq_entry_t   iq_store_issue_data_s [0:0];
 
     assign iq_full_vec = {iq2_full, iq1_full, iq0_full};
 
@@ -677,23 +680,16 @@ module rv64gc_core_top
                                 iq_ld_enq_cnt = iq_ld_enq_cnt + 3'd1;
                             end
                         end else begin
-                            // Split each store into STA + STD using both enqueue ports.
-                            // Only 1 store split per cycle (uses both ports).
+                            // Stores are stored as a SINGLE store IQ entry that
+                            // requires both rs1 (base addr) and rs2 (store data)
+                            // ready. Issuing the entry fires the STA AND STD
+                            // pipelines together. Cap to 1 store per cycle so
+                            // that the LSU's 1-STA/1-STD pipeline keeps up.
                             if (iq_st_enq_cnt == 3'd0) begin
-                                // Port 0: STA entry — needs rs1 (base addr), not rs2
                                 iq_store_enq_data[0]           = dq_iq_entry[i];
                                 iq_store_enq_data[0].fu_type   = FU_STA;
-                                iq_store_enq_data[0].rs2_ready = 1'b1;  // STA doesn't use rs2
                                 iq_store_enq_valid[0]          = 1'b1;
-
-                                // Port 1: STD entry — needs rs2 (store data), not rs1
-                                iq_store_enq_data[1]           = dq_iq_entry[i];
-                                iq_store_enq_data[1].fu_type   = FU_STD;
-                                iq_store_enq_data[1].rs1_ready = 1'b1;  // STD doesn't use rs1
-                                iq_store_enq_data[1].pdst      = '0;    // STD has no dest reg
-                                iq_store_enq_valid[1]          = 1'b1;
-
-                                iq_st_enq_cnt = iq_st_enq_cnt + 3'd2;  // consumed both ports
+                                iq_st_enq_cnt = iq_st_enq_cnt + 3'd1;
                             end
                         end
                     end
@@ -719,6 +715,7 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .preg_ready_table(preg_ready_table),
         .issue_valid     (iq0_issue_valid),
         .issue_data      (iq0_issue_data),
         .rob_head        (rob_head_idx),
@@ -744,6 +741,7 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .preg_ready_table(preg_ready_table),
         .issue_valid     (iq1_issue_valid_s),
         .issue_data      (iq1_issue_data_s),
         .rob_head        (rob_head_idx),
@@ -769,6 +767,7 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .preg_ready_table(preg_ready_table),
         .issue_valid     (iq2_issue_valid_s),
         .issue_data      (iq2_issue_data_s),
         .rob_head        (rob_head_idx),
@@ -794,6 +793,7 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .preg_ready_table(preg_ready_table),
         .issue_valid     (iq_load_issue_valid),
         .issue_data      (iq_load_issue_data),
         .rob_head        (rob_head_idx),
@@ -802,7 +802,10 @@ module rv64gc_core_top
         .flush_full      (flush_out.full_flush)
     );
 
-    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2))
+    // Store IQ is single-issue (NUM_SELECT=1): each store is a SINGLE entry
+    // needing both rs1 and rs2 ready, and issuing fires BOTH the STA and STD
+    // pipelines with the same entry (matches the LSU's 1 STA + 1 STD capacity).
+    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
     u_iq_store (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -815,17 +818,26 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
-        .issue_valid     (iq_store_issue_valid),
-        .issue_data      (iq_store_issue_data),
+        .preg_ready_table(preg_ready_table),
+        .issue_valid     (iq_store_issue_valid_s),
+        .issue_data      (iq_store_issue_data_s),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush)
     );
+    assign iq_store_issue_valid[0] = iq_store_issue_valid_s[0];
+    assign iq_store_issue_valid[1] = 1'b0;
+    assign iq_store_issue_data[0]  = iq_store_issue_data_s[0];
+    assign iq_store_issue_data[1]  = '0;
 
     // =========================================================================
     // Store IQ issue → STA/STD routing
-    // Either issue port may produce STA or STD. Route by fu_type.
+    //
+    // The store IQ stores each store as a SINGLE entry (NUM_SELECT=1) that
+    // requires both rs1 (base address) and rs2 (store data) to be ready.
+    // When the entry issues, fire the STA AND STD pipelines together using
+    // the same data so the SQ gets both halves and the ROB ready bit is set.
     // =========================================================================
     logic       routed_sta_valid;
     iq_entry_t  routed_sta_data;
@@ -833,32 +845,13 @@ module rv64gc_core_top
     iq_entry_t  routed_std_data;
 
     always_comb begin
-        routed_sta_valid = 1'b0;
-        routed_sta_data  = '0;
-        routed_std_valid = 1'b0;
-        routed_std_data  = '0;
-
-        // Check port 0
-        if (iq_store_issue_valid[0]) begin
-            if (iq_store_issue_data[0].fu_type == FU_STA) begin
-                routed_sta_valid = 1'b1;
-                routed_sta_data  = iq_store_issue_data[0];
-            end else begin
-                routed_std_valid = 1'b1;
-                routed_std_data  = iq_store_issue_data[0];
-            end
-        end
-
-        // Check port 1
-        if (iq_store_issue_valid[1]) begin
-            if (iq_store_issue_data[1].fu_type == FU_STA) begin
-                routed_sta_valid = 1'b1;
-                routed_sta_data  = iq_store_issue_data[1];
-            end else begin
-                routed_std_valid = 1'b1;
-                routed_std_data  = iq_store_issue_data[1];
-            end
-        end
+        routed_sta_valid = iq_store_issue_valid[0];
+        routed_sta_data  = iq_store_issue_data[0];
+        routed_sta_data.fu_type = FU_STA;
+        routed_std_valid = iq_store_issue_valid[0];
+        routed_std_data  = iq_store_issue_data[0];
+        routed_std_data.fu_type = FU_STD;
+        routed_std_data.pdst    = '0;
     end
 
     // =========================================================================

@@ -35,6 +35,10 @@ module issue_queue
     input  logic                     spec_cancel_valid,
     input  logic [PHYS_REG_BITS-1:0] spec_cancel_tag,
 
+    // PRF ready table: lets enqueue see "already-broadcast" producers even
+    // when the entry arrives several cycles after the CDB pulse.
+    input  logic [INT_PRF_DEPTH-1:0] preg_ready_table,
+
     // Issue output (NUM_SELECT ports)
     output logic [NUM_SELECT-1:0]  issue_valid,
     output iq_entry_t              issue_data [0:NUM_SELECT-1],
@@ -359,12 +363,22 @@ module issue_queue
             // the classic simultaneous-enqueue-plus-wakeup race: a new
             // entry arrives the same cycle its producer broadcasts, but
             // the wakeup logic only sees entries that are already valid.
+            //
+            // Additionally snoop preg_ready_table to catch producers that
+            // broadcast BEFORE this enqueue cycle (e.g., the dispatch queue
+            // held the consumer in the FIFO while the producer already
+            // wrote back through the CDB).
             for (int q = 0; q < NUM_ENQUEUE; q++) begin
                 if (enq_valid[q] && free_found[q]) begin
                     automatic logic enq_s1_rdy;
                     automatic logic enq_s2_rdy;
                     enq_s1_rdy = enq_data[q].rs1_ready;
                     enq_s2_rdy = enq_data[q].rs2_ready;
+                    // preg_ready_table snoop (covers older broadcasts)
+                    if (preg_ready_table[enq_data[q].rs1_phys])
+                        enq_s1_rdy = 1'b1;
+                    if (preg_ready_table[enq_data[q].rs2_phys])
+                        enq_s2_rdy = 1'b1;
                     // Check CDB for source match (override ready to 1)
                     for (int c = 0; c < CDB_WIDTH; c++) begin
                         if (cdb_valid[c]) begin

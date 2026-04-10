@@ -149,8 +149,19 @@ module loop_buffer
                         wr_ptr_r   <= '0;
                         body_len_r <= '0;
                     end else if (backward_branch_taken) begin
-                        // Lock body length at second back-edge
-                        body_len_r <= cap_len;
+                        // Second back-edge: this decode group starts with the
+                        // closing backward branch.  Capture all instructions in
+                        // the group (including the branch at slot 0) before
+                        // locking the body length.  Without capturing the
+                        // branch, playback would emit the loop body without
+                        // its exit branch, causing an infinite loop.
+                        for (int i = 0; i < PIPE_WIDTH; i++) begin
+                            if (i < int'(dec_count)) begin
+                                buf_r[wr_ptr_r + IDX_BITS'(i)] <= dec_insn[i];
+                            end
+                        end
+                        wr_ptr_r   <= wr_ptr_r + IDX_BITS'(dec_count);
+                        body_len_r <= cap_len + {{(IDX_BITS-2){1'b0}}, dec_count};
                     end else begin
                         // Absorb dec_count instructions this cycle
                         for (int i = 0; i < PIPE_WIDTH; i++) begin
