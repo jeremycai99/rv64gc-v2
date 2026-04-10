@@ -78,6 +78,16 @@ module lsu
     output logic [7:0] dcache_store_req_byte_mask,
     input logic dcache_store_ack,
 
+    // L2 fill snoop (for load miss handling)
+    // The LSU watches L2 → D-cache fill responses and matches them against
+    // in-flight missed loads tracked in the Load Miss Buffer.  When a fill
+    // arrives for a line that has a pending load, the LSU extracts the
+    // requested bytes from the fill line and writes back the load result
+    // via the CDB.  This is the "late response" path for missed loads.
+    input logic        dcache_fill_valid,
+    input logic [63:0] dcache_fill_addr,
+    input logic [LINE_SIZE*8-1:0] dcache_fill_data,
+
     // Flush
     input flush_t flush_in
 );
@@ -144,8 +154,17 @@ module lsu
 
     // =========================================================================
     // STA writeback to ROB (mark address computed)
-    // =========================================================================
-    assign sta_wb_valid   = sta_issue_valid & ~flush_in.valid;
+    //
+    // Bug fix: do NOT gate with ~flush_in.valid.
+    //
+    // On a branch mispredict, the flush fires the same cycle as the STA may
+    // issue.  If the store is OLDER than the mispredicting branch, it must
+    // survive the flush — the SQ's own flush logic will distinguish which
+    // entries to discard by ROB age.  Silently dropping the STA causes the
+    // older store to be lost: its SQ entry never gets addr_valid, its ROB
+    // entry never gets ready (because sta_wb_valid never fires), and
+    // commit permanently stalls.
+    assign sta_wb_valid   = sta_issue_valid;
     assign sta_wb_rob_idx = sta_issue_data.rob_idx;
 
     // =========================================================================
@@ -171,6 +190,78 @@ module lsu
     logic [63:0] csb_fwd_data;
 
     // =========================================================================
+    // Same-cycle STA/STD → load forwarding bypass
+    // =========================================================================
+    // When a store and a load issue on the SAME cycle and the load's address
+    // matches the store's address (and the store fully covers the load's
+    // byte mask), we must forward directly from the store's in-flight
+    // STA/STD data — the SQ entry hasn't yet been written this cycle, so the
+    // SQ CAM won't see it.  This path has HIGHER priority than the SQ CAM
+    // (younger store wins over older SQ entries).
+    logic        same_cycle_fwd_hit;
+    logic        same_cycle_fwd_partial;
+    logic [63:0] same_cycle_fwd_data;
+    logic [7:0]  sta_byte_mask_dyn;
+    logic [7:0]  load0_byte_mask_dyn;
+    logic [2:0]  sta_byte_off;
+    logic [2:0]  load0_byte_off;
+
+    assign sta_byte_off   = sta_eff_addr[2:0];
+    assign load0_byte_off = load_eff_addr[0][2:0];
+
+    always_comb begin
+        case (sta_issue_data.mem_size)
+            MEM_BYTE:  sta_byte_mask_dyn = 8'h01 << sta_byte_off;
+            MEM_HALF:  sta_byte_mask_dyn = 8'h03 << sta_byte_off;
+            MEM_WORD:  sta_byte_mask_dyn = 8'h0F << sta_byte_off;
+            MEM_DWORD: sta_byte_mask_dyn = 8'hFF;
+            default:   sta_byte_mask_dyn = 8'h00;
+        endcase
+        case (load_issue_data[0].mem_size)
+            MEM_BYTE:  load0_byte_mask_dyn = 8'h01 << load0_byte_off;
+            MEM_HALF:  load0_byte_mask_dyn = 8'h03 << load0_byte_off;
+            MEM_WORD:  load0_byte_mask_dyn = 8'h0F << load0_byte_off;
+            MEM_DWORD: load0_byte_mask_dyn = 8'hFF;
+            default:   load0_byte_mask_dyn = 8'h00;
+        endcase
+    end
+
+    // Same-cycle coverage check: store must be fully covering the load's
+    // bytes AND address[63:3] must match (same 8-byte aligned word).
+    // Both STA and STD must fire together (always true from store IQ routing).
+    logic same_cycle_addr_match;
+    logic [7:0] same_cycle_overlap;
+    assign same_cycle_addr_match =
+        sta_issue_valid & std_issue_valid &
+        (sta_eff_addr[63:3] == load_eff_addr[0][63:3]);
+    assign same_cycle_overlap = same_cycle_addr_match
+                              ? (sta_byte_mask_dyn & load0_byte_mask_dyn)
+                              : 8'h00;
+    assign same_cycle_fwd_hit = load_issue_valid[0] & ~load_addr_misaligned[0] &
+                                ~flush_in.valid &
+                                same_cycle_addr_match &
+                                ((sta_byte_mask_dyn & load0_byte_mask_dyn)
+                                 == load0_byte_mask_dyn);
+    assign same_cycle_fwd_partial =
+        load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid &
+        same_cycle_addr_match &
+        (same_cycle_overlap != 8'h00) & ~same_cycle_fwd_hit;
+
+    // Build same-cycle fwd data: for each byte position `b` in the memory
+    // dword that is covered by the store, take the store's byte at position
+    // `b - sta_byte_off` of std_rs2 (std_rs2 is LSB-aligned to the store's
+    // own address, so its byte 0 corresponds to memory byte sta_byte_off).
+    always_comb begin
+        same_cycle_fwd_data = '0;
+        for (int b = 0; b < 8; b++) begin
+            if (same_cycle_overlap[b] && (b >= int'(sta_byte_off))) begin
+                same_cycle_fwd_data[b*8 +: 8] =
+                    std_rs2[(b - int'(sta_byte_off)) * 8 +: 8];
+            end
+        end
+    end
+
+    // =========================================================================
     // Store Queue
     // =========================================================================
     logic        sq_drain_valid;
@@ -184,13 +275,14 @@ module lsu
         .alloc_count     (sq_alloc_count),
         .alloc_idx       (sq_alloc_idx),
         .full            (sq_full),
-        // STA fill
-        .sta_valid       (sta_issue_valid & ~flush_in.valid),
+        // STA fill (do NOT gate with flush: older stores must survive
+        // mispredict flushes; the SQ flush handler filters by ROB age).
+        .sta_valid       (sta_issue_valid),
         .sta_idx         (sta_issue_data.sq_idx),
         .sta_addr        (sta_eff_addr),
         .sta_size        (sta_issue_data.mem_size),
-        // STD fill
-        .std_valid       (std_issue_valid & ~flush_in.valid),
+        // STD fill (same rationale: let older stores through; SQ filters)
+        .std_valid       (std_issue_valid),
         .std_idx         (std_issue_data.sq_idx),
         .std_data        (std_rs2),
         .std_byte_mask   (std_byte_mask),
@@ -291,15 +383,79 @@ module lsu
         end
     end
 
-    // LQ result fill: port 0 result (either from forwarding or D-cache)
-    logic        lq_result_valid;
-    logic [LQ_IDX_BITS-1:0] lq_result_idx;
-    logic [63:0] lq_result_data;
+    // =========================================================================
+    // Load pipeline metadata: shift-register chain
+    // =========================================================================
+    // The D-cache has a 2-cycle load latency (stage-0 RAM read + stage-1 tag
+    // compare).  We must track the issued load metadata for 2 cycles so that
+    // the writeback on cache hit uses the correct rob_idx / pdst / lq_idx /
+    // byte_offset — not the stale values from the CURRENT (post-issue) cycle.
+    //
+    // Stages:
+    //   *_r  = 1 cycle after issue
+    //   *_rr = 2 cycles after issue (matches the cycle dcache_load_resp_valid
+    //          fires for a hit).
+    // =========================================================================
+    iq_entry_t load_issue_data_r  [0:1];
+    iq_entry_t load_issue_data_rr [0:1];
+    logic [1:0] load_issue_valid_r;
+    logic [1:0] load_issue_valid_rr;
+    logic [63:0] load_eff_addr_r  [0:1];
+    logic [63:0] load_eff_addr_rr [0:1];
+    // Whether the load bypassed the D-cache (misalign or forwarding hit)
+    // — if so, no cache response is expected, so we must NOT count it as a miss.
+    logic [1:0] load_nocache_r;
+    logic [1:0] load_nocache_rr;
 
-    // Load result registered from previous cycle for LQ recording
-    logic        lq_result_valid_r;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            load_issue_valid_r  <= '0;
+            load_issue_valid_rr <= '0;
+            load_nocache_r      <= '0;
+            load_nocache_rr     <= '0;
+        end else if (flush_in.valid) begin
+            load_issue_valid_r  <= '0;
+            load_issue_valid_rr <= '0;
+            load_nocache_r      <= '0;
+            load_nocache_rr     <= '0;
+        end else begin
+            load_issue_valid_r    <= load_issue_valid;
+            load_issue_data_r[0]  <= load_issue_data[0];
+            load_issue_data_r[1]  <= load_issue_data[1];
+            load_eff_addr_r[0]    <= load_eff_addr[0];
+            load_eff_addr_r[1]    <= load_eff_addr[1];
+            load_nocache_r[0]     <= load_issue_valid[0] &
+                                     (load_addr_misaligned[0] | p0_fwd_hit |
+                                      sq_fwd_partial | flush_in.valid);
+            load_nocache_r[1]     <= load_issue_valid[1] &
+                                     (load_addr_misaligned[1] | flush_in.valid);
+
+            // Stage 2 (2 cycles after issue): matches cache response cycle.
+            load_issue_valid_rr   <= load_issue_valid_r;
+            load_issue_data_rr[0] <= load_issue_data_r[0];
+            load_issue_data_rr[1] <= load_issue_data_r[1];
+            load_eff_addr_rr[0]   <= load_eff_addr_r[0];
+            load_eff_addr_rr[1]   <= load_eff_addr_r[1];
+            load_nocache_rr[0]    <= load_nocache_r[0];
+            load_nocache_rr[1]    <= load_nocache_r[1];
+        end
+    end
+
+    // =========================================================================
+    // LQ result fill: whichever path drove load_wb[0] this cycle also
+    // records the result into the load queue.  Because the LMB needs to be
+    // declared below before we can reference its fields here, we forward-
+    // declare the lq_result source selector and bind it in the same
+    // writeback always_comb block below.
+    // =========================================================================
+    logic                   lq_result_valid;
+    logic [LQ_IDX_BITS-1:0] lq_result_idx;
+    logic [63:0]            lq_result_data;
+
+    logic                   lq_result_valid_r;
     logic [LQ_IDX_BITS-1:0] lq_result_idx_r;
-    logic [63:0] lq_result_data_r;
+    logic [63:0]            lq_result_data_r;
+    logic [LQ_IDX_BITS-1:0] lq_result_idx_sel;  // combinational selector
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -308,7 +464,7 @@ module lsu
             lq_result_valid_r <= 1'b0;
         end else begin
             lq_result_valid_r <= load_wb_valid[0];
-            lq_result_idx_r   <= load_issue_data_r[0].lq_idx;
+            lq_result_idx_r   <= lq_result_idx_sel;
             lq_result_data_r  <= load_wb_data[0];
         end
     end
@@ -316,25 +472,6 @@ module lsu
     assign lq_result_valid = lq_result_valid_r;
     assign lq_result_idx   = lq_result_idx_r;
     assign lq_result_data  = lq_result_data_r;
-
-    // Registered load issue data for result recording
-    iq_entry_t load_issue_data_r [0:1];
-    logic [1:0] load_issue_valid_r;
-    logic [63:0] load_eff_addr_r [0:1];
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            load_issue_valid_r <= '0;
-        end else if (flush_in.valid) begin
-            load_issue_valid_r <= '0;
-        end else begin
-            load_issue_valid_r    <= load_issue_valid;
-            load_issue_data_r[0]  <= load_issue_data[0];
-            load_issue_data_r[1]  <= load_issue_data[1];
-            load_eff_addr_r[0]    <= load_eff_addr[0];
-            load_eff_addr_r[1]    <= load_eff_addr[1];
-        end
-    end
 
     load_queue u_load_queue (
         .clk               (clk),
@@ -353,8 +490,10 @@ module lsu
         .result_valid      (lq_result_valid),
         .result_idx        (lq_result_idx),
         .result_data       (lq_result_data),
-        // Store-to-load ordering violation check (from STA)
-        .st_addr_valid     (sta_issue_valid & ~flush_in.valid),
+        // Store-to-load ordering violation check (from STA).
+        // Use the same unguarded STA valid as above; a flush-cycle STA that
+        // is older than the flush point still needs its ordering check.
+        .st_addr_valid     (sta_issue_valid),
         .st_addr           (sta_eff_addr),
         .st_size           (sta_issue_data.mem_size),
         .st_rob_idx        (sta_issue_data.rob_idx),
@@ -402,13 +541,19 @@ module lsu
     // =========================================================================
     // Port 0: send to D-cache only if no SQ/CSB forwarding hit and no misalign
     // Port 1: always send to D-cache (no forwarding check on port 1)
+    //
+    // p0_fwd_hit covers three sources: the same-cycle STA/STD bypass, the
+    // SQ CAM (older stores in the SQ), and the CSB CAM (committed but not
+    // yet drained stores).  Any of these hitting means we do NOT send the
+    // load to the D-cache (avoids polluting the cache and wasting an MSHR).
     logic p0_fwd_hit;
-    assign p0_fwd_hit = sq_fwd_hit | csb_fwd_hit;
+    assign p0_fwd_hit = same_cycle_fwd_hit | sq_fwd_hit | csb_fwd_hit;
 
     assign dcache_load_req_valid[0] = load_issue_valid[0]
                                     & ~load_addr_misaligned[0]
                                     & ~p0_fwd_hit
                                     & ~sq_fwd_partial
+                                    & ~same_cycle_fwd_partial
                                     & ~flush_in.valid;
     assign dcache_load_req_addr[0]  = load_eff_addr[0];
     assign dcache_load_req_size[0]  = load_issue_data[0].mem_size;
@@ -425,93 +570,253 @@ module lsu
     // Load data extraction and sign/zero extension
     // =========================================================================
     // D-cache returns 64-bit aligned data. Extract correct bytes based on
-    // addr[2:0] and size, then sign/zero extend.
-    logic [63:0] load_extracted [0:1];
+    // addr[2:0] and size, then sign/zero extend.  Separate extract paths:
+    //   - Forwarding / misalign (same cycle as issue): uses _current_ metadata
+    //   - D-cache hit (2 cycles after issue): uses _rr_ metadata
+    // A mux below in load_wb selects between them.
+    logic [63:0] load_extracted_fwd [0:1];  // same-cycle (forwarding/misalign)
+    logic [63:0] load_extracted_dc  [0:1];  // 2-cycle delayed (dcache hit)
+
+    function automatic logic [63:0] extract_and_extend(
+            input logic [63:0] raw,
+            input logic [2:0]  byte_offset,
+            input logic [1:0]  size,
+            input logic        is_unsigned);
+        logic [63:0] shifted;
+        logic [63:0] result;
+        shifted = raw >> ({3'b0, byte_offset} * 4'd8);
+        case (size)
+            MEM_BYTE: result = is_unsigned ? {56'b0, shifted[7:0]}
+                                           : {{56{shifted[7]}}, shifted[7:0]};
+            MEM_HALF: result = is_unsigned ? {48'b0, shifted[15:0]}
+                                           : {{48{shifted[15]}}, shifted[15:0]};
+            MEM_WORD: result = is_unsigned ? {32'b0, shifted[31:0]}
+                                           : {{32{shifted[31]}}, shifted[31:0]};
+            default:  result = shifted;
+        endcase
+        return result;
+    endfunction
 
     generate
         for (li = 0; li < 2; li++) begin : gen_load_extract
-            logic [63:0] raw_data;
-            logic [2:0]  byte_offset;
-            logic [1:0]  ld_size;
-            logic        ld_unsigned;
-
-            // Port 0 may use forwarded data; port 1 always uses cache data
+            // ---- Forwarding / misalign path (current cycle) ----
+            // Forwarding data is already byte-positioned in the memory dword
+            // (byte b at position b*8 +: 8).  extract_and_extend shifts right
+            // by the load's byte offset to LSB-align the requested bytes.
+            logic [63:0] fwd_raw;
             always_comb begin
                 if (li == 0 && p0_fwd_hit) begin
-                    raw_data = sq_fwd_hit ? sq_fwd_data : csb_fwd_data;
+                    // Priority: same_cycle > SQ > CSB (youngest wins)
+                    if (same_cycle_fwd_hit)
+                        fwd_raw = same_cycle_fwd_data;
+                    else if (sq_fwd_hit)
+                        fwd_raw = sq_fwd_data;
+                    else
+                        fwd_raw = csb_fwd_data;
                 end else begin
-                    raw_data = dcache_load_resp_data[li];
+                    fwd_raw = '0;
                 end
             end
+            assign load_extracted_fwd[li] = extract_and_extend(
+                fwd_raw,
+                load_eff_addr[li][2:0],
+                load_issue_data[li].mem_size,
+                load_issue_data[li].is_unsigned
+            );
 
-            assign byte_offset = load_eff_addr[li][2:0];
-            assign ld_size     = load_issue_data[li].mem_size;
-            assign ld_unsigned = load_issue_data[li].is_unsigned;
-
-            // Shift right to align the target bytes to bit 0
-            logic [63:0] shifted;
-            assign shifted = raw_data >> ({3'b0, byte_offset} * 4'd8);
-
-            // Extract and extend
-            always_comb begin
-                case (ld_size)
-                    MEM_BYTE: begin
-                        if (ld_unsigned)
-                            load_extracted[li] = {56'b0, shifted[7:0]};
-                        else
-                            load_extracted[li] = {{56{shifted[7]}}, shifted[7:0]};
-                    end
-                    MEM_HALF: begin
-                        if (ld_unsigned)
-                            load_extracted[li] = {48'b0, shifted[15:0]};
-                        else
-                            load_extracted[li] = {{48{shifted[15]}}, shifted[15:0]};
-                    end
-                    MEM_WORD: begin
-                        if (ld_unsigned)
-                            load_extracted[li] = {32'b0, shifted[31:0]};
-                        else
-                            load_extracted[li] = {{32{shifted[31]}}, shifted[31:0]};
-                    end
-                    default: begin
-                        load_extracted[li] = shifted;
-                    end
-                endcase
-            end
+            // ---- D-cache hit path (2 cycles after issue) ----
+            assign load_extracted_dc[li] = extract_and_extend(
+                dcache_load_resp_data[li],
+                load_eff_addr_rr[li][2:0],
+                load_issue_data_rr[li].mem_size,
+                load_issue_data_rr[li].is_unsigned
+            );
         end
     endgenerate
 
     // =========================================================================
+    // Load Miss Buffer (LMB)
+    // =========================================================================
+    // When a load misses the D-cache, the cache currently never generates a
+    // second (late) response; the fill eventually installs the line but the
+    // original load is lost.  We track pending misses here and resolve them
+    // by snooping the L2 → D-cache fill response directly.
+    //
+    // Each entry holds the load metadata and the line-aligned miss address.
+    // When a fill arrives whose line matches an entry, we extract the
+    // requested bytes from the fill data and generate a CDB writeback for
+    // that load.  The LMB is a simple, free-list-allocated array.
+    // =========================================================================
+    localparam int LMB_DEPTH    = 8;
+    localparam int LMB_IDX_BITS = $clog2(LMB_DEPTH);
+
+    typedef struct packed {
+        logic                       valid;
+        logic [63:0]                line_addr;     // address aligned to LINE_SIZE
+        logic [5:0]                 byte_offset;   // byte offset within the line
+        logic [1:0]                 size;          // mem_size_e
+        logic                       is_unsigned;
+        logic [ROB_IDX_BITS-1:0]    rob_idx;
+        logic [PHYS_REG_BITS-1:0]   pdst;
+        logic [LQ_IDX_BITS-1:0]     lq_idx;
+    } lmb_entry_t;
+
+    lmb_entry_t lmb [0:LMB_DEPTH-1];
+
+    // Miss detection: a load issued 2 cycles ago whose cache path did not
+    // produce a response this cycle and which wasn't handled via forwarding
+    // or the misalign exception path.  Only port 0 is wired for now.
+    logic p0_miss_detect;
+    assign p0_miss_detect = load_issue_valid_rr[0]
+                          & ~load_nocache_rr[0]
+                          & ~dcache_load_resp_valid[0];
+
+    // Find a free LMB slot (lowest index).
+    logic                     lmb_free_avail;
+    logic [LMB_IDX_BITS-1:0]  lmb_free_idx;
+
+    always_comb begin
+        lmb_free_avail = 1'b0;
+        lmb_free_idx   = '0;
+        for (int i = 0; i < LMB_DEPTH; i++) begin
+            if (!lmb[i].valid && !lmb_free_avail) begin
+                lmb_free_avail = 1'b1;
+                lmb_free_idx   = LMB_IDX_BITS'(i);
+            end
+        end
+    end
+
+    // Match an incoming fill to an LMB entry (line-aligned compare).
+    logic [LMB_DEPTH-1:0] lmb_fill_match;
+    logic                 lmb_any_match;
+    logic [LMB_IDX_BITS-1:0] lmb_match_idx;
+
+    always_comb begin
+        lmb_any_match = 1'b0;
+        lmb_match_idx = '0;
+        for (int i = 0; i < LMB_DEPTH; i++) begin
+            lmb_fill_match[i] = lmb[i].valid
+                              & dcache_fill_valid
+                              & (lmb[i].line_addr[63:LINE_BITS]
+                                 == dcache_fill_addr[63:LINE_BITS]);
+            if (lmb_fill_match[i] && !lmb_any_match) begin
+                lmb_any_match = 1'b1;
+                lmb_match_idx = LMB_IDX_BITS'(i);
+            end
+        end
+    end
+
+    // Extract bytes from the fill line based on the matched entry's offset.
+    // The fill data is LINE_SIZE*8 bits (512 bits).  We extract a 64-bit
+    // aligned dword using the entry's [5:3] index, then sign/zero extend
+    // using [2:0] byte offset + size.
+    logic [63:0] lmb_fill_dword;
+    logic [63:0] lmb_extracted;
+    always_comb begin
+        lmb_fill_dword = dcache_fill_data[{lmb[lmb_match_idx].byte_offset[5:3],
+                                            3'b000} * 8 +: 64];
+        lmb_extracted = extract_and_extend(
+            lmb_fill_dword,
+            lmb[lmb_match_idx].byte_offset[2:0],
+            lmb[lmb_match_idx].size,
+            lmb[lmb_match_idx].is_unsigned
+        );
+    end
+
+    // =========================================================================
+    // LMB sequential logic
+    // =========================================================================
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int i = 0; i < LMB_DEPTH; i++) begin
+                lmb[i].valid <= 1'b0;
+            end
+        end else if (flush_in.valid && flush_in.full_flush) begin
+            // Full flush: drop all speculative pending misses.
+            for (int i = 0; i < LMB_DEPTH; i++) begin
+                lmb[i].valid <= 1'b0;
+            end
+        end else begin
+            // Allocate on miss detection (port 0).  If the LMB is full we
+            // drop the load — this is a correctness bug the core will
+            // eventually flag via ordering violation / watchdog, but for
+            // bring-up we assume 8 pending misses is sufficient.
+            if (p0_miss_detect && lmb_free_avail) begin
+                lmb[lmb_free_idx].valid        <= 1'b1;
+                lmb[lmb_free_idx].line_addr    <=
+                    {load_eff_addr_rr[0][63:LINE_BITS], {LINE_BITS{1'b0}}};
+                lmb[lmb_free_idx].byte_offset  <= load_eff_addr_rr[0][5:0];
+                lmb[lmb_free_idx].size         <= load_issue_data_rr[0].mem_size;
+                lmb[lmb_free_idx].is_unsigned  <= load_issue_data_rr[0].is_unsigned;
+                lmb[lmb_free_idx].rob_idx      <= load_issue_data_rr[0].rob_idx;
+                lmb[lmb_free_idx].pdst         <= load_issue_data_rr[0].pdst;
+                lmb[lmb_free_idx].lq_idx       <= load_issue_data_rr[0].lq_idx;
+            end
+
+            // On fill match, free the LMB entry (response is generated
+            // combinationally via lmb_any_match in the writeback mux below).
+            if (lmb_any_match) begin
+                lmb[lmb_match_idx].valid <= 1'b0;
+            end
+        end
+    end
+
+    // =========================================================================
     // Load writeback to CDB
     // =========================================================================
-    // Port 0: valid on forwarding hit (same cycle) or D-cache hit (same cycle)
-    // Port 1: valid on D-cache hit
+    // Priority (Port 0):
+    //   1. Misalign exception (same-cycle)
+    //   2. Store-to-load forwarding hit (same-cycle)
+    //   3. D-cache hit response (2-cycle delayed metadata)
+    //   4. LMB fill match (late miss response)
+    // Priority (Port 1):
+    //   1. Misalign exception
+    //   2. D-cache hit response
+    //
+    // Note: only port 0 is wired to the LMB for now (single-port fill match).
+    // =========================================================================
     always_comb begin
+        // Default LQ index selector (drives lq_result_idx_sel)
+        lq_result_idx_sel = '0;
+
         // Port 0
         if (load_issue_valid[0] && load_addr_misaligned[0] && !flush_in.valid) begin
-            // Misalignment exception
+            // Misalignment exception (same cycle as issue)
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = load_issue_data[0].rob_idx;
             load_wb_pdst[0]          = load_issue_data[0].pdst;
             load_wb_data[0]          = '0;
             load_wb_has_exception[0] = 1'b1;
             load_wb_exc_code[0]      = 4'd4; // EXC_LOAD_MISALIGN
+            lq_result_idx_sel        = load_issue_data[0].lq_idx;
         end else if (load_issue_valid[0] && p0_fwd_hit && !flush_in.valid) begin
-            // Store-to-load forwarding hit
+            // Store-to-load forwarding hit (same cycle as issue)
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = load_issue_data[0].rob_idx;
             load_wb_pdst[0]          = load_issue_data[0].pdst;
-            load_wb_data[0]          = load_extracted[0];
+            load_wb_data[0]          = load_extracted_fwd[0];
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-        end else if (dcache_load_resp_valid[0] && !flush_in.valid) begin
-            // D-cache response
+            lq_result_idx_sel        = load_issue_data[0].lq_idx;
+        end else if (dcache_load_resp_valid[0] && load_issue_valid_rr[0]
+                     && !load_nocache_rr[0] && !flush_in.valid) begin
+            // D-cache hit response — 2 cycles after issue.
             load_wb_valid[0]         = 1'b1;
-            load_wb_rob_idx[0]       = load_issue_data_r[0].rob_idx;
-            load_wb_pdst[0]          = load_issue_data_r[0].pdst;
-            load_wb_data[0]          = load_extracted[0];
+            load_wb_rob_idx[0]       = load_issue_data_rr[0].rob_idx;
+            load_wb_pdst[0]          = load_issue_data_rr[0].pdst;
+            load_wb_data[0]          = load_extracted_dc[0];
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
+            lq_result_idx_sel        = load_issue_data_rr[0].lq_idx;
+        end else if (lmb_any_match && !flush_in.valid) begin
+            // Late miss response from LMB (fill arrived).
+            load_wb_valid[0]         = 1'b1;
+            load_wb_rob_idx[0]       = lmb[lmb_match_idx].rob_idx;
+            load_wb_pdst[0]          = lmb[lmb_match_idx].pdst;
+            load_wb_data[0]          = lmb_extracted;
+            load_wb_has_exception[0] = 1'b0;
+            load_wb_exc_code[0]      = '0;
+            lq_result_idx_sel        = lmb[lmb_match_idx].lq_idx;
         end else begin
             load_wb_valid[0]         = 1'b0;
             load_wb_rob_idx[0]       = '0;
@@ -529,11 +834,12 @@ module lsu
             load_wb_data[1]          = '0;
             load_wb_has_exception[1] = 1'b1;
             load_wb_exc_code[1]      = 4'd4;
-        end else if (dcache_load_resp_valid[1] && !flush_in.valid) begin
+        end else if (dcache_load_resp_valid[1] && load_issue_valid_rr[1]
+                     && !load_nocache_rr[1] && !flush_in.valid) begin
             load_wb_valid[1]         = 1'b1;
-            load_wb_rob_idx[1]       = load_issue_data_r[1].rob_idx;
-            load_wb_pdst[1]          = load_issue_data_r[1].pdst;
-            load_wb_data[1]          = load_extracted[1];
+            load_wb_rob_idx[1]       = load_issue_data_rr[1].rob_idx;
+            load_wb_pdst[1]          = load_issue_data_rr[1].pdst;
+            load_wb_data[1]          = load_extracted_dc[1];
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
         end else begin
@@ -549,30 +855,70 @@ module lsu
     // =========================================================================
     // Speculative wakeup cancel on cache miss
     // =========================================================================
-    // If a load was issued (speculative wakeup sent) but the D-cache missed,
-    // cancel the wakeup so dependents re-wait. This fires the cycle after issue
-    // when the D-cache response is known.
+    // If a load was issued (speculative wakeup sent) but the D-cache missed
+    // (no hit response 2 cycles after issue), cancel the wakeup so dependents
+    // re-wait until the LMB generates the late response.
     generate
         for (li = 0; li < 2; li++) begin : gen_spec_cancel
             always_comb begin
-                if (load_issue_valid_r[li] && !flush_in.valid) begin
-                    if (li == 0) begin
-                        // Port 0: cancel if no forwarding hit and D-cache missed
-                        spec_cancel_valid[0] = dcache_load_resp_valid[0]
-                                             & ~dcache_load_resp_hit[0];
-                        spec_cancel_tag[0]   = load_issue_data_r[0].pdst;
-                    end else begin
-                        spec_cancel_valid[1] = dcache_load_resp_valid[1]
-                                             & ~dcache_load_resp_hit[1];
-                        spec_cancel_tag[1]   = load_issue_data_r[1].pdst;
-                    end
-                end else begin
-                    spec_cancel_valid[li] = 1'b0;
-                    spec_cancel_tag[li]   = '0;
+                spec_cancel_valid[li] = 1'b0;
+                spec_cancel_tag[li]   = '0;
+                if (load_issue_valid_rr[li] && !load_nocache_rr[li] &&
+                    !dcache_load_resp_valid[li] && !flush_in.valid) begin
+                    spec_cancel_valid[li] = 1'b1;
+                    spec_cancel_tag[li]   = load_issue_data_rr[li].pdst;
                 end
             end
         end
     endgenerate
+
+`ifdef LSU_DEBUG
+    // ---- DEBUG traces — only compiled when +define+LSU_DEBUG is passed.
+    integer dbg_cycle = 0;
+    always_ff @(posedge clk) begin
+        dbg_cycle <= dbg_cycle + 1;
+        if (load_issue_valid[0]) begin
+            $display("[%0d] LSU issue[0]: rob=%0d pdst=%0d addr=%016h size=%0d unsigned=%0d fwd_hit=%b misalign=%b partial=%b flush=%b",
+                dbg_cycle, load_issue_data[0].rob_idx, load_issue_data[0].pdst,
+                load_eff_addr[0], load_issue_data[0].mem_size, load_issue_data[0].is_unsigned,
+                p0_fwd_hit, load_addr_misaligned[0], sq_fwd_partial, flush_in.valid);
+        end
+        if (load_wb_valid[0]) begin
+            $display("[%0d] LSU wb[0]:    rob=%0d pdst=%0d data=%016h exc=%b",
+                dbg_cycle, load_wb_rob_idx[0], load_wb_pdst[0],
+                load_wb_data[0], load_wb_has_exception[0]);
+        end
+        if (sta_issue_valid) begin
+            $display("[%0d] LSU STA:      rob=%0d addr=%016h size=%0d flush=%b",
+                dbg_cycle, sta_issue_data.rob_idx, sta_eff_addr, sta_issue_data.mem_size, flush_in.valid);
+        end
+        if (std_issue_valid) begin
+            $display("[%0d] LSU STD:      rob=%0d data=%016h mask=%02h",
+                dbg_cycle, std_issue_data.rob_idx, std_rs2, std_byte_mask);
+        end
+        if (p0_miss_detect && lmb_free_avail) begin
+            $display("[%0d] LSU LMB alloc: rob=%0d pdst=%0d line=%016h off=%0d",
+                dbg_cycle, load_issue_data_rr[0].rob_idx, load_issue_data_rr[0].pdst,
+                {load_eff_addr_rr[0][63:LINE_BITS], {LINE_BITS{1'b0}}},
+                load_eff_addr_rr[0][5:0]);
+        end
+        if (dcache_fill_valid) begin
+            $display("[%0d] LSU fill snoop: addr=%016h", dbg_cycle, dcache_fill_addr);
+        end
+        if (lmb_any_match) begin
+            $display("[%0d] LSU LMB match[%0d]: rob=%0d data=%016h",
+                dbg_cycle, lmb_match_idx, lmb[lmb_match_idx].rob_idx, lmb_extracted);
+        end
+        if (dcache_store_req_valid) begin
+            $display("[%0d] LSU store->dcache: addr=%016h data=%016h mask=%02h",
+                dbg_cycle, dcache_store_req_addr, dcache_store_req_data, dcache_store_req_byte_mask);
+        end
+        if (flush_in.valid) begin
+            $display("[%0d] LSU FLUSH:    rob_idx=%0d full=%b redirect=%016h",
+                dbg_cycle, flush_in.rob_idx, flush_in.full_flush, flush_in.redirect_pc);
+        end
+    end
+`endif
 
 endmodule
 

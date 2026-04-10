@@ -1500,6 +1500,10 @@ module rv64gc_core_top
         .dcache_store_req_data  (dc_store_req_data),
         .dcache_store_req_byte_mask(dc_store_req_byte_mask),
         .dcache_store_ack       (dc_store_ack),
+        // D-cache fill snoop (for load miss late response)
+        .dcache_fill_valid      (dc_fill_snoop_valid),
+        .dcache_fill_addr       (dc_fill_snoop_addr),
+        .dcache_fill_data       (dc_fill_snoop_data),
         // Flush
         .flush_in               (flush_out)
     );
@@ -1516,6 +1520,11 @@ module rv64gc_core_top
     logic [63:0] dc_l2_resp_addr;
     logic [511:0] dc_l2_resp_data;
     logic        dc_invalidate_busy;
+
+    // D-cache fill snoop (to LSU for missed-load late response)
+    logic        dc_fill_snoop_valid;
+    logic [63:0] dc_fill_snoop_addr;
+    logic [511:0] dc_fill_snoop_data;
 
     dcache u_dcache (
         .clk                (clk),
@@ -1540,6 +1549,9 @@ module rv64gc_core_top
         .l2_resp_valid      (dc_l2_resp_valid),
         .l2_resp_addr       (dc_l2_resp_addr),
         .l2_resp_data       (dc_l2_resp_data),
+        .fill_snoop_valid   (dc_fill_snoop_valid),
+        .fill_snoop_addr    (dc_fill_snoop_addr),
+        .fill_snoop_data    (dc_fill_snoop_data),
         .invalidate_all     (1'b0),
         .invalidate_busy    (dc_invalidate_busy)
     );

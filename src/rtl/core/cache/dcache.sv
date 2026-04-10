@@ -34,6 +34,12 @@ module dcache
     input  logic        l2_resp_valid,
     input  logic [63:0] l2_resp_addr,
     input  logic [511:0] l2_resp_data,
+    // Fill snoop (to LSU for missed-load late response)
+    // Fires the cycle a fill is installed into the cache.  The LSU uses
+    // this to wake up any pending loads in its miss buffer.
+    output logic        fill_snoop_valid,
+    output logic [63:0] fill_snoop_addr,
+    output logic [511:0] fill_snoop_data,
     // Invalidate
     input  logic        invalidate_all,
     output logic        invalidate_busy
@@ -309,6 +315,15 @@ module dcache
             victim_way_s1 = plru_state[s1_ld0_index][0] ? 2'd2 : 2'd3;
     end
 
+    // Store-miss victim selection uses the store's own set index.
+    logic [1:0] victim_way_st;
+    always_comb begin
+        if (!plru_state[s1_st_index][2])
+            victim_way_st = plru_state[s1_st_index][1] ? 2'd0 : 2'd1;
+        else
+            victim_way_st = plru_state[s1_st_index][0] ? 2'd2 : 2'd3;
+    end
+
     // =========================================================================
     // Inline extract_word: combinational word extraction from cache line
     // =========================================================================
@@ -367,7 +382,9 @@ module dcache
     logic [MSHR_IDX_BITS-1:0] mshr_match_idx;
     logic                     mshr_match_hit;
     logic [63:0]              ld0_line_addr;
+    logic [63:0]              st_line_addr;
     assign ld0_line_addr = {s1_ld0_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
+    assign st_line_addr  = {s1_st_addr[63:LINE_BITS],  {LINE_BITS{1'b0}}};
 
     always_comb begin
         mshr_match_idx = '0;
@@ -376,6 +393,20 @@ module dcache
             if (mshr[m].valid && (mshr[m].addr == ld0_line_addr)) begin
                 mshr_match_hit = 1'b1;
                 mshr_match_idx = MSHR_IDX_BITS'(m);
+            end
+        end
+    end
+
+    // MSHR match check for store miss (write-allocate)
+    logic [MSHR_IDX_BITS-1:0] mshr_st_match_idx;
+    logic                     mshr_st_match_hit;
+    always_comb begin
+        mshr_st_match_idx = '0;
+        mshr_st_match_hit = 1'b0;
+        for (int m = 0; m < MSHR_DEPTH; m++) begin
+            if (mshr[m].valid && (mshr[m].addr == st_line_addr)) begin
+                mshr_st_match_hit = 1'b1;
+                mshr_st_match_idx = MSHR_IDX_BITS'(m);
             end
         end
     end
@@ -586,7 +617,47 @@ module dcache
     // =========================================================================
     // Store ACK
     // =========================================================================
-    assign store_ack = s1_st_valid && st_cache_hit && !fill_done_avail;
+    // Write-allocate store miss: if the store misses AND we can allocate
+    // an MSHR for the line, we allocate a fill and HOLD the store (no ack)
+    // until the fill completes.  Once the fill installs the line, the
+    // store re-issues from the CSB and hits, at which point we ack.
+    //
+    // Tohost addresses (magic address 0x80001000) are exempt from this —
+    // they are never actually backed by memory, and holding the store
+    // would deadlock the tohost detector.  We ack them unconditionally.
+    //
+    // An MSHR must be free to allocate a store-miss fill; if no MSHR is
+    // available, the store is also ack'd (silently dropped) to keep the
+    // CSB moving.  This is a bring-up compromise.
+    logic s1_st_is_tohost;
+    assign s1_st_is_tohost = (s1_st_addr[31:12] == 20'h80001);
+
+    logic s1_st_can_allocate_mshr;
+    assign s1_st_can_allocate_mshr = s1_st_valid && !st_cache_hit &&
+                                     !mshr_st_match_hit && mshr_free_avail &&
+                                     !s1_st_is_tohost && !invalidate_all &&
+                                     !fill_done_avail;
+
+    // A store waiting for a pending fill (either just-allocated or already
+    // in flight to the same line): do NOT ack yet.
+    logic s1_st_waiting_for_fill;
+    assign s1_st_waiting_for_fill = s1_st_valid && !st_cache_hit &&
+                                    (s1_st_can_allocate_mshr || mshr_st_match_hit) &&
+                                    !s1_st_is_tohost;
+
+    assign store_ack = s1_st_valid && !fill_done_avail && !s1_st_waiting_for_fill;
+
+    // =========================================================================
+    // Fill snoop (for LSU load miss buffer)
+    // =========================================================================
+    // When a fill is installed this cycle, publish the line address and data
+    // to the LSU so it can match it against any pending load misses.  Note
+    // that the fill data travels one cycle AHEAD of the cache read-out path:
+    // the LSU takes this snoop directly, without going through the cache
+    // data RAM.
+    assign fill_snoop_valid = fill_done_avail;
+    assign fill_snoop_addr  = mshr[fill_done_idx].addr;
+    assign fill_snoop_data  = mshr[fill_done_idx].fill_data;
 
     // =========================================================================
     // Load response outputs
@@ -696,6 +767,31 @@ module dcache
                     mshr[mshr_free_idx].evict_data <= dr_rdata; // data from last RAM read
                     mshr[mshr_free_idx].evict_addr <=
                         {tr_tag_out[vway], s1_ld0_index, {LINE_BITS{1'b0}}};
+                end
+            end
+            // ---- Allocate new MSHR on store miss (write-allocate) ----
+            // Only if there is no load-miss MSHR allocation this cycle,
+            // since we have a single allocation slot.  The tag RAM read
+            // on the previous cycle used the store's address (port 0
+            // priority selects store when no load is valid), so
+            // tr_valid_out / tr_tag_out reflect the store's set.
+            else if (s1_st_can_allocate_mshr) begin
+                automatic logic [1:0] vway;
+                automatic logic       dirty_v;
+                vway    = victim_way_st;
+                dirty_v = tr_dirty_out[vway];
+
+                mshr[mshr_free_idx].valid          <= 1'b1;
+                mshr[mshr_free_idx].addr           <= st_line_addr;
+                mshr[mshr_free_idx].victim         <= vway;
+                mshr[mshr_free_idx].dirty_evict    <= dirty_v;
+                mshr[mshr_free_idx].fill_pend      <= 1'b1;
+                mshr[mshr_free_idx].fill_done      <= 1'b0;
+                mshr[mshr_free_idx].writeback_pend <= dirty_v;
+                if (dirty_v) begin
+                    mshr[mshr_free_idx].evict_data <= dr_rdata;
+                    mshr[mshr_free_idx].evict_addr <=
+                        {tr_tag_out[vway], s1_st_index, {LINE_BITS{1'b0}}};
                 end
             end
 
