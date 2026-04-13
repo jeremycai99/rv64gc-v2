@@ -24,11 +24,25 @@ The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep d
 ## Current Benchmark Status (2026-04-13)
 
 ```
-                    IPC (measured)   Status
-CoreMark (-O2):     3.33             running, all 23 regressions pass
-Dhrystone (-O2):    2.13             running, all 23 regressions pass
-CoreMark (-O3):     hangs            CSR corruption — different code path hits latent bug
+                    IPC (measured)   Verification            Status
+CoreMark (-O2):     3.33             CSR + VCD cross-check   23/23 regressions pass
+Dhrystone (-O2):    2.13             CSR                     23/23 regressions pass
+CoreMark (-O3):     hangs            —                       CSR corruption (latent bug)
 ```
+
+### CoreMark IPC Signoff
+
+| Method | IPC | Window |
+|--------|-----|--------|
+| CSR (mcycle/minstret) | 3.3332 | 0-2M cycles |
+| VCD sum(commit_count) | 3.3333 | 2K-5K warm window |
+| Steady-state windowed | 3.3333 | 100K-2M (excludes startup) |
+| Wall-clock (sim cycles) | 3.3326 | 0-2M cycles |
+| gem5 ceiling (no LB/dual-BRU) | 3.05-3.12 | — |
+
+Conservative signoff: **3.33 IPC** (steady-state, cross-validated).
+Startup bias: 0.021% at 2M cycles (negligible).
+Margin over 3.0 target: **+11.1%**.
 
 Optimization log: `doc/coremark_optimization_changelog.md`
 
