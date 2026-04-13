@@ -50,6 +50,10 @@ module rv64gc_core_top
     flush_t bru_flush;
     flush_t flush_out;
 
+    // Forward declarations for BRU signals used in fetch_unit port connections
+    logic        bru_early_redirect;
+    logic [63:0] bru_target;
+
     // =========================================================================
     // PRF Ready Table
     // =========================================================================
@@ -769,7 +773,7 @@ module rv64gc_core_top
     // IQ instances
     // =========================================================================
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2),
-                  .PORT0_ONLY_FU(3'd1))  // FU_BRU = 3'd1 -> port 0 only
+                  .PORT0_ONLY_FU(3'd0))  // BRU can issue from either port
     u_iq0 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -850,9 +854,8 @@ module rv64gc_core_top
     assign iq2_issue_data[0]  = iq2_issue_data_s[0];
     assign iq2_issue_data[1]  = '0;
 
-    // Single-select to avoid dcache tag-RAM port-1 starvation on
-    // same-set accesses.  Dual-select requires a dual-ported tag RAM.
-    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
+    // Dual-select: dcache tag/data RAMs are dual-ported.
+    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2))
     u_iq_load (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -866,19 +869,14 @@ module rv64gc_core_top
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .preg_ready_table(preg_ready_table_comb),
-        .issue_valid     (iq_load_issue_valid_s),
-        .issue_data      (iq_load_issue_data_s),
+        .issue_valid     (iq_load_issue_valid),
+        .issue_data      (iq_load_issue_data),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .port0_suppress  (lsu_port0_suppress)
     );
-
-    assign iq_load_issue_valid[0] = iq_load_issue_valid_s[0];
-    assign iq_load_issue_valid[1] = 1'b0;
-    assign iq_load_issue_data[0]  = iq_load_issue_data_s[0];
-    assign iq_load_issue_data[1]  = '0;
 
     // Store IQ is single-issue (NUM_SELECT=1): each store is a SINGLE entry
     // needing both rs1 and rs2 ready, and issuing fires BOTH the STA and STD
@@ -1068,7 +1066,7 @@ module rv64gc_core_top
     // =========================================================================
     logic [63:0] bru_result;
     logic        bru_taken;
-    logic [63:0] bru_target;
+    // bru_target declared earlier (forward decl for fetch_unit port)
     logic        bru_mispredict;
 
     logic        bru_issue;
@@ -1091,13 +1089,39 @@ module rv64gc_core_top
         .mispredict  (bru_mispredict)
     );
 
+    // BRU1: second branch unit on IQ0 port 1
+    logic [63:0] bru1_result;
+    logic        bru1_taken;
+    logic [63:0] bru1_target;
+    logic        bru1_mispredict;
+
+    logic        bru1_issue;
+    assign bru1_issue = iq0_issue_valid[1] && (iq0_issue_data[1].fu_type == FU_BRU);
+
+    bru u_bru1 (
+        .operand_a   (bypassed_data[2]),
+        .operand_b   (bypassed_data[3]),
+        .pc          (iq0_issue_data[1].pc),
+        .imm         (iq0_issue_data[1].imm),
+        .op          (iq0_issue_data[1].br_op),
+        .is_fused    (iq0_issue_data[1].is_fused),
+        .fusion_type (iq0_issue_data[1].fusion_type),
+        .bp_taken    (iq0_issue_data[1].bp_taken),
+        .bp_target   (iq0_issue_data[1].bp_target),
+        .is_rvc      (iq0_issue_data[1].is_rvc),
+        .result      (bru1_result),
+        .taken       (bru1_taken),
+        .target      (bru1_target),
+        .mispredict  (bru1_mispredict)
+    );
+
     // =========================================================================
     // BRU early fetch redirect (fetch-only, no pipeline flush)
     // =========================================================================
-    // On branch mispredict, redirect fetch to the correct target as soon
-    // as the BRU resolves.  The full pipeline flush still happens when the
-    // branch reaches commit.  This saves ~3-5 cycles of fetch latency.
-    logic bru_early_redirect;
+    // Only BRU0 (port 0, oldest branch) triggers early redirect.
+    // BRU1 (port 1, younger branch) uses the normal commit flush path.
+    // This prevents early-redirect storms from wrong-path branches on port 1.
+    // bru_early_redirect declared earlier (forward decl for fetch_unit port)
     assign bru_early_redirect = bru_issue && bru_mispredict;
 
     // Merge: commit flush takes priority.  BRU redirect only applies to
@@ -1247,21 +1271,24 @@ module rv64gc_core_top
         end
     end
 
-    // CDB[1]: ALU1
+    // CDB[1]: ALU1 / BRU1
     always_comb begin
         cdb_valid[1]            = iq0_issue_valid[1];
         cdb_tag[1]              = iq0_issue_data[1].pdst;
         cdb_rob_idx[1]          = iq0_issue_data[1].rob_idx;
-        cdb_data[1]             = alu1_result;
         cdb_has_exception[1]    = 1'b0;
         cdb_exc_code[1]         = 4'd0;
-        cdb_is_branch[1]        = 1'b0;
-        cdb_branch_taken[1]     = 1'b0;
-        cdb_branch_target[1]    = 64'd0;
-        cdb_branch_mispredict[1] = 1'b0;
+        cdb_is_branch[1]        = bru1_issue;
+        cdb_branch_taken[1]     = bru1_issue ? bru1_taken : 1'b0;
+        cdb_branch_target[1]    = bru1_issue ? bru1_target : 64'd0;
+        cdb_branch_mispredict[1] = bru1_issue ? bru1_mispredict : 1'b0;
         cdb_csr_we[1]           = 1'b0;
         cdb_csr_addr[1]         = 12'd0;
         cdb_csr_wdata[1]        = 64'd0;
+        if (bru1_issue)
+            cdb_data[1] = bru1_result;
+        else
+            cdb_data[1] = alu1_result;
     end
 
     // CDB[2]: ALU2 (same cycle) or MUL (3-cycle latency)
