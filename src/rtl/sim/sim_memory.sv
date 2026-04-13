@@ -52,6 +52,10 @@ module sim_memory
     // Always ready to accept (1-cycle latency model)
     assign mem_req_ready = 1'b1;
 
+    // Line-aligned address for read/write
+    logic [ADDR_BITS-1:0] mem_line_addr;
+    assign mem_line_addr = mem_req_addr[ADDR_BITS-1:0] & {{(ADDR_BITS-6){1'b1}}, 6'b0};
+
     // Response pipeline register
     logic        resp_valid_r;
     logic [511:0] resp_data_r;
@@ -65,9 +69,7 @@ module sim_memory
                 // Read request: return 64-byte cache line
                 resp_valid_r <= 1'b1;
                 for (int i = 0; i < 64; i++) begin
-                    automatic logic [ADDR_BITS-1:0] byte_addr;
-                    byte_addr = mem_req_addr[ADDR_BITS-1:0] & {{(ADDR_BITS-6){1'b1}}, 6'b0};
-                    resp_data_r[i*8 +: 8] <= mem[byte_addr + ADDR_BITS'(i)];
+                    resp_data_r[i*8 +: 8] <= mem[mem_line_addr + ADDR_BITS'(i)];
                 end
             end else begin
                 resp_valid_r <= 1'b0;
@@ -76,9 +78,7 @@ module sim_memory
             // Write request: update 64 bytes in memory
             if (mem_req_valid && mem_req_we) begin
                 for (int i = 0; i < 64; i++) begin
-                    automatic logic [ADDR_BITS-1:0] byte_addr;
-                    byte_addr = mem_req_addr[ADDR_BITS-1:0] & {{(ADDR_BITS-6){1'b1}}, 6'b0};
-                    mem[byte_addr + ADDR_BITS'(i)] <= mem_req_wdata[i*8 +: 8];
+                    mem[mem_line_addr + ADDR_BITS'(i)] <= mem_req_wdata[i*8 +: 8];
                 end
             end
         end

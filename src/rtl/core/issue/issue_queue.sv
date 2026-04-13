@@ -296,19 +296,19 @@ module issue_queue
     logic [IDX_BITS-1:0] free_idx  [0:NUM_ENQUEUE-1];
     logic [NUM_ENQUEUE-1:0] free_found;
 
-    always_comb begin
-        logic [DEPTH-1:0] occupied;
-        int slots_found;
+    logic [DEPTH-1:0] fs_occupied;
+    int               slots_found;
 
+    always_comb begin
         // Slots that are occupied after considering this-cycle issue
         // invalidations (not yet committed to flops, so we compute
         // effective validity for the free-slot scan).
-        occupied = entry_valid;
+        fs_occupied = entry_valid;
         // Entries about to be issued will be freed -- exclude them from
         // occupied so that back-to-back dispatch is not stalled.
         for (int p = 0; p < NUM_SELECT; p++) begin
             if (sel_found[p])
-                occupied[sel_idx[p]] = 1'b0;
+                fs_occupied[sel_idx[p]] = 1'b0;
         end
 
         for (int q = 0; q < NUM_ENQUEUE; q++) begin
@@ -318,10 +318,10 @@ module issue_queue
 
         slots_found = 0;
         for (int e = 0; e < DEPTH; e++) begin
-            if (!occupied[e] && slots_found < NUM_ENQUEUE) begin
+            if (!fs_occupied[e] && slots_found < NUM_ENQUEUE) begin
                 free_idx[slots_found]   = e[IDX_BITS-1:0];
                 free_found[slots_found] = 1'b1;
-                occupied[e] = 1'b1;  // mark taken for subsequent searches
+                fs_occupied[e] = 1'b1;  // mark taken for subsequent searches
                 slots_found = slots_found + 1;
             end
         end
@@ -331,20 +331,19 @@ module issue_queue
     // Flush logic: determine which entries to invalidate
     // =====================================================================
     logic [DEPTH-1:0] flush_remove;
+    logic [AGE_BITS-1:0] flush_tail_age;
+    logic [AGE_BITS-1:0] flush_entry_age;
 
     always_comb begin
-        logic [AGE_BITS-1:0] tail_age;
-        logic [AGE_BITS-1:0] fl_entry_age;
-
         flush_remove = '0;
-        tail_age = ((flush_rob_tail >= rob_head) ? ({1'b0, flush_rob_tail} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, flush_rob_tail}));
-        fl_entry_age = '0;
+        flush_tail_age = ((flush_rob_tail >= rob_head) ? ({1'b0, flush_rob_tail} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, flush_rob_tail}));
+        flush_entry_age = '0;
 
         if (flush_valid && !flush_full) begin
             for (int e = 0; e < DEPTH; e++) begin
                 if (entry_valid[e]) begin
-                    fl_entry_age = ((rob_idx_r[e] >= rob_head) ? ({1'b0, rob_idx_r[e]} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, rob_idx_r[e]}));
-                    if (fl_entry_age > tail_age)
+                    flush_entry_age = ((rob_idx_r[e] >= rob_head) ? ({1'b0, rob_idx_r[e]} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, rob_idx_r[e]}));
+                    if (flush_entry_age > flush_tail_age)
                         flush_remove[e] = 1'b1;
                 end
             end
@@ -371,6 +370,69 @@ module issue_queue
     end
 
     // =====================================================================
+    // Partial-flush recount (combinational, for ff count update)
+    // =====================================================================
+    logic [IDX_BITS:0]  flush_valid_count;
+    logic [DEPTH-1:0]   flush_survives;
+
+    always_comb begin
+        flush_valid_count = '0;
+        for (int e = 0; e < DEPTH; e++) begin
+            flush_survives[e] = entry_valid[e] && !flush_remove[e];
+            for (int p = 0; p < NUM_SELECT; p++) begin
+                if (sel_found[p] && (e[IDX_BITS-1:0] == sel_idx[p]))
+                    flush_survives[e] = 1'b0;
+            end
+            if (flush_survives[e])
+                flush_valid_count = flush_valid_count + 1'b1;
+        end
+        for (int q = 0; q < NUM_ENQUEUE; q++) begin
+            if (enq_valid[q] && free_found[q])
+                flush_valid_count = flush_valid_count + 1'b1;
+        end
+    end
+
+    // =====================================================================
+    // Enqueue source readiness (combinational, for ff enqueue path)
+    // =====================================================================
+    logic [NUM_ENQUEUE-1:0] enq_s1_rdy;
+    logic [NUM_ENQUEUE-1:0] enq_s2_rdy;
+
+    always_comb begin
+        for (int q = 0; q < NUM_ENQUEUE; q++) begin
+            enq_s1_rdy[q] = enq_data[q].rs1_ready;
+            enq_s2_rdy[q] = enq_data[q].rs2_ready;
+            // preg_ready_table snoop (covers older broadcasts)
+            if (preg_ready_table[enq_data[q].rs1_phys])
+                enq_s1_rdy[q] = 1'b1;
+            if (preg_ready_table[enq_data[q].rs2_phys])
+                enq_s2_rdy[q] = 1'b1;
+            // Check CDB for source match (override ready to 1)
+            for (int c = 0; c < CDB_WIDTH; c++) begin
+                if (cdb_valid[c]) begin
+                    if (cdb_tag[c] == enq_data[q].rs1_phys)
+                        enq_s1_rdy[q] = 1'b1;
+                    if (cdb_tag[c] == enq_data[q].rs2_phys)
+                        enq_s2_rdy[q] = 1'b1;
+                end
+            end
+        end
+    end
+
+    // =====================================================================
+    // Per-entry speculative wakeup gating (combinational, for ff update)
+    // =====================================================================
+    logic [DEPTH-1:0] do_spec1;
+    logic [DEPTH-1:0] do_spec2;
+
+    always_comb begin
+        for (int e = 0; e < DEPTH; e++) begin
+            do_spec1[e] = spec_set_src1[e] & ~spec_cancel_rs1[e];
+            do_spec2[e] = spec_set_src2[e] & ~spec_cancel_rs2[e];
+        end
+    end
+
+    // =====================================================================
     // Sequential state update
     // =====================================================================
     always_ff @(posedge clk or negedge rst_n) begin
@@ -392,13 +454,10 @@ module issue_queue
             // If a spec-cancel already fired this cycle for an entry, do
             // NOT spec-set it (cancel wins over a same-cycle re-wake).
             for (int e = 0; e < DEPTH; e++) begin
-                logic do_spec1, do_spec2;
-                do_spec1 = spec_set_src1[e] & ~spec_cancel_rs1[e];
-                do_spec2 = spec_set_src2[e] & ~spec_cancel_rs2[e];
-                src1_ready[e] <= next_src1_ready[e] | do_spec1;
-                src2_ready[e] <= next_src2_ready[e] | do_spec2;
-                src1_spec[e]  <= next_src1_spec[e]  | do_spec1;
-                src2_spec[e]  <= next_src2_spec[e]  | do_spec2;
+                src1_ready[e] <= next_src1_ready[e] | do_spec1[e];
+                src2_ready[e] <= next_src2_ready[e] | do_spec2[e];
+                src1_spec[e]  <= next_src1_spec[e]  | do_spec1[e];
+                src2_spec[e]  <= next_src2_spec[e]  | do_spec2[e];
             end
 
             // ---- Issue: invalidate selected entries ----
@@ -425,32 +484,14 @@ module issue_queue
             // wrote back through the CDB).
             for (int q = 0; q < NUM_ENQUEUE; q++) begin
                 if (enq_valid[q] && free_found[q]) begin
-                    automatic logic enq_s1_rdy;
-                    automatic logic enq_s2_rdy;
-                    enq_s1_rdy = enq_data[q].rs1_ready;
-                    enq_s2_rdy = enq_data[q].rs2_ready;
-                    // preg_ready_table snoop (covers older broadcasts)
-                    if (preg_ready_table[enq_data[q].rs1_phys])
-                        enq_s1_rdy = 1'b1;
-                    if (preg_ready_table[enq_data[q].rs2_phys])
-                        enq_s2_rdy = 1'b1;
-                    // Check CDB for source match (override ready to 1)
-                    for (int c = 0; c < CDB_WIDTH; c++) begin
-                        if (cdb_valid[c]) begin
-                            if (cdb_tag[c] == enq_data[q].rs1_phys)
-                                enq_s1_rdy = 1'b1;
-                            if (cdb_tag[c] == enq_data[q].rs2_phys)
-                                enq_s2_rdy = 1'b1;
-                        end
-                    end
                     entry_valid[free_idx[q]] <= 1'b1;
                     payload_r[free_idx[q]]   <= PW'(enq_data[q]);
                     rs1_phys_r[free_idx[q]]  <= enq_data[q].rs1_phys;
                     rs2_phys_r[free_idx[q]]  <= enq_data[q].rs2_phys;
                     rob_idx_r[free_idx[q]]   <= enq_data[q].rob_idx;
                     fu_type_r[free_idx[q]]   <= enq_data[q].fu_type;
-                    src1_ready[free_idx[q]]  <= enq_s1_rdy;
-                    src2_ready[free_idx[q]]  <= enq_s2_rdy;
+                    src1_ready[free_idx[q]]  <= enq_s1_rdy[q];
+                    src2_ready[free_idx[q]]  <= enq_s2_rdy[q];
                     src1_spec[free_idx[q]]   <= 1'b0;
                     src2_spec[free_idx[q]]   <= 1'b0;
                 end
@@ -471,24 +512,8 @@ module issue_queue
 
             // ---- Update count ----
             if (flush_valid && !flush_full) begin
-                // On partial flush recount valid entries
-                automatic logic [IDX_BITS:0] valid_count;
-                logic survives;
-                valid_count = '0;
-                for (int e = 0; e < DEPTH; e++) begin
-                    survives = entry_valid[e] && !flush_remove[e];
-                    for (int p = 0; p < NUM_SELECT; p++) begin
-                        if (sel_found[p] && (e[IDX_BITS-1:0] == sel_idx[p]))
-                            survives = 1'b0;
-                    end
-                    if (survives)
-                        valid_count = valid_count + 1'b1;
-                end
-                for (int q = 0; q < NUM_ENQUEUE; q++) begin
-                    if (enq_valid[q] && free_found[q])
-                        valid_count = valid_count + 1'b1;
-                end
-                count_r <= valid_count;
+                // On partial flush use pre-computed recount
+                count_r <= flush_valid_count;
             end else begin
                 count_r <= count_next;
             end

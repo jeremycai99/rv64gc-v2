@@ -68,19 +68,22 @@ module fusion_detector
     // LUI + ADDI/ADDIW fusion helper: compute the fused 64-bit immediate.
     // For ADDI (is_w_op=0): plain 64-bit sum.
     // For ADDIW (is_w_op=1): sum modulo 2^32 then sign-extend bit 31.
+    // Inline always_comb replaces the former function automatic.
     // =========================================================================
-    function automatic logic [63:0] lui_add_imm (input logic [63:0] lui_imm,
-                                                  input logic [63:0] add_imm,
-                                                  input logic        is_w_op);
-        logic [63:0] sum64;
-        logic [31:0] sum32;
-        sum64 = lui_imm + add_imm;
-        sum32 = sum64[31:0];
-        if (is_w_op)
-            return {{32{sum32[31]}}, sum32};
-        else
-            return sum64;
-    endfunction
+    logic [63:0] lui_add_imm_result [0:4];
+    logic [63:0] lui_add_sum64     [0:4];
+    logic [31:0] lui_add_sum32     [0:4];
+
+    always_comb begin
+        for (int p = 0; p < 5; p++) begin
+            lui_add_sum64[p] = dec_in[p].imm + dec_in[p+1].imm;
+            lui_add_sum32[p] = lui_add_sum64[p][31:0];
+            if (dec_in[p+1].is_w_op)
+                lui_add_imm_result[p] = {{32{lui_add_sum32[p][31]}}, lui_add_sum32[p]};
+            else
+                lui_add_imm_result[p] = lui_add_sum64[p];
+        end
+    end
 
     // -------------------------------------------------------------------------
     // Fusion eligibility and uop construction — one block per pair
@@ -109,9 +112,7 @@ module fusion_detector
                 fused_uop[0]            = dec_in[0];
                 // LUI+ADDI  -> 64-bit sum
                 // LUI+ADDIW -> sign-extend the low-32 bits of the sum
-                fused_uop[0].imm        = lui_add_imm(dec_in[0].imm,
-                                                      dec_in[1].imm,
-                                                      dec_in[1].is_w_op);
+                fused_uop[0].imm        = lui_add_imm_result[0];
                 fused_uop[0].is_w_op    = 1'b0;  // ALU_LUI ignores is_w_op
                 fused_uop[0].fused_imm  = 32'(dec_in[1].imm);
                 fused_uop[0].is_fused   = 1'b1;
@@ -326,9 +327,7 @@ module fusion_detector
                 (dec_in[1].rd_arch == dec_in[2].rd_arch)) begin
                 fusable[1]              = 1'b1;
                 fused_uop[1]            = dec_in[1];
-                fused_uop[1].imm        = lui_add_imm(dec_in[1].imm,
-                                                      dec_in[2].imm,
-                                                      dec_in[2].is_w_op);
+                fused_uop[1].imm        = lui_add_imm_result[1];
                 fused_uop[1].is_w_op    = 1'b0;
                 fused_uop[1].fused_imm  = 32'(dec_in[2].imm);
                 fused_uop[1].is_fused   = 1'b1;
@@ -513,9 +512,7 @@ module fusion_detector
                 (dec_in[2].rd_arch == dec_in[3].rd_arch)) begin
                 fusable[2]              = 1'b1;
                 fused_uop[2]            = dec_in[2];
-                fused_uop[2].imm        = lui_add_imm(dec_in[2].imm,
-                                                      dec_in[3].imm,
-                                                      dec_in[3].is_w_op);
+                fused_uop[2].imm        = lui_add_imm_result[2];
                 fused_uop[2].is_w_op    = 1'b0;
                 fused_uop[2].fused_imm  = 32'(dec_in[3].imm);
                 fused_uop[2].is_fused   = 1'b1;
@@ -700,9 +697,7 @@ module fusion_detector
                 (dec_in[3].rd_arch == dec_in[4].rd_arch)) begin
                 fusable[3]              = 1'b1;
                 fused_uop[3]            = dec_in[3];
-                fused_uop[3].imm        = lui_add_imm(dec_in[3].imm,
-                                                      dec_in[4].imm,
-                                                      dec_in[4].is_w_op);
+                fused_uop[3].imm        = lui_add_imm_result[3];
                 fused_uop[3].is_w_op    = 1'b0;
                 fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
                 fused_uop[3].is_fused   = 1'b1;
@@ -887,9 +882,7 @@ module fusion_detector
                 (dec_in[4].rd_arch == dec_in[5].rd_arch)) begin
                 fusable[4]              = 1'b1;
                 fused_uop[4]            = dec_in[4];
-                fused_uop[4].imm        = lui_add_imm(dec_in[4].imm,
-                                                      dec_in[5].imm,
-                                                      dec_in[5].is_w_op);
+                fused_uop[4].imm        = lui_add_imm_result[4];
                 fused_uop[4].is_w_op    = 1'b0;
                 fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
                 fused_uop[4].is_fused   = 1'b1;

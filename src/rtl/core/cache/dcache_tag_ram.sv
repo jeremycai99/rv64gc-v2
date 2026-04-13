@@ -8,11 +8,16 @@ module dcache_tag_ram
     import rv64gc_pkg::*;
 (
     input  logic                        clk,
-    // Read port
+    // Read port A (load port 0 / store)
     input  logic [L1D_SET_BITS-1:0]     raddr,
     output logic [L1D_WAYS-1:0]         valid_out,
     output logic [L1D_WAYS-1:0]         dirty_out,
     output logic [L1D_TAG_BITS-1:0]     tag_out [0:L1D_WAYS-1],
+    // Read port B (load port 1)
+    input  logic [L1D_SET_BITS-1:0]     raddr2,
+    output logic [L1D_WAYS-1:0]         valid_out2,
+    output logic [L1D_WAYS-1:0]         dirty_out2,
+    output logic [L1D_TAG_BITS-1:0]     tag_out2 [0:L1D_WAYS-1],
     // Write port
     input  logic                        we,
     input  logic [L1D_SET_BITS-1:0]     waddr,
@@ -59,14 +64,7 @@ module dcache_tag_ram
     end
 
     // =========================================================================
-    // Read (synchronous, 1-cycle latency, write-first bypass)
-    //
-    // The dcache pipeline aligns s0 raddr with an s1 tag comparison via a
-    // 1-cycle latency read.  To keep fills visible immediately after they
-    // install (so a just-filled line isn't duplicated into a second way by
-    // a follow-up miss), the flop implements a write-first bypass: if the
-    // current cycle writes a way in the set being read, forward the new
-    // value to the output.
+    // Read port A (synchronous, 1-cycle latency, write-first bypass)
     // =========================================================================
     always_ff @(posedge clk) begin
         for (int w = 0; w < L1D_WAYS; w++) begin
@@ -86,6 +84,31 @@ module dcache_tag_ram
                     dirty_out[w] <= 1'b1;
                 else
                     dirty_out[w] <= dirty_arr[raddr][w];
+            end
+        end
+    end
+
+    // =========================================================================
+    // Read port B (synchronous, 1-cycle latency, write-first bypass)
+    // =========================================================================
+    always_ff @(posedge clk) begin
+        for (int w = 0; w < L1D_WAYS; w++) begin
+            logic hit_way_write2;
+            logic hit_way_dirty2;
+            hit_way_write2 = we       && (waddr        == raddr2) && (wway       == 2'(w));
+            hit_way_dirty2 = dirty_we && (dirty_waddr  == raddr2) && (dirty_wway == 2'(w));
+
+            if (hit_way_write2) begin
+                valid_out2[w] <= wvalid;
+                dirty_out2[w] <= wdirty;
+                tag_out2[w]   <= wtag;
+            end else begin
+                valid_out2[w] <= valid_arr[raddr2][w];
+                tag_out2[w]   <= tag_arr  [raddr2][w];
+                if (hit_way_dirty2)
+                    dirty_out2[w] <= 1'b1;
+                else
+                    dirty_out2[w] <= dirty_arr[raddr2][w];
             end
         end
     end

@@ -174,12 +174,13 @@ module icache
     assign s0_index = req_addr[INDEX_HI:INDEX_LO];
 
     logic [1:0] victim_way;
+    logic [2:0] plru_victim_ps;
     always_comb begin
-        automatic logic [2:0] ps = plru_state[s0_index];
-        if (!ps[2]) begin
-            victim_way = ps[1] ? 2'd0 : 2'd1;
+        plru_victim_ps = plru_state[s0_index];
+        if (!plru_victim_ps[2]) begin
+            victim_way = plru_victim_ps[1] ? 2'd0 : 2'd1;
         end else begin
-            victim_way = ps[0] ? 2'd2 : 2'd3;
+            victim_way = plru_victim_ps[0] ? 2'd2 : 2'd3;
         end
     end
 

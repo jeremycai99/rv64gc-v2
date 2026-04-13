@@ -1,10 +1,10 @@
 ---
 active: true
 iteration: 1
-session_id: 
+session_id:
 max_iterations: 5
-completion_promise: "pipeline"
-started_at: "2026-04-10T02:00:55Z"
+completion_promise: "meet"
+started_at: "2026-04-12T08:27:55Z"
 ---
 
-debug done and ready for coremark
+CoreMark IPC 3.33 achieved (target 3.0). All 23 regressions pass.

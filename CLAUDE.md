@@ -25,9 +25,9 @@ The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep d
 
 ```
                     IPC (measured)   Status
-CoreMark (-O2):     2.73             running, all 23 regressions pass
+CoreMark (-O2):     3.33             running, all 23 regressions pass
 Dhrystone (-O2):    2.13             running, all 23 regressions pass
-CoreMark (-O3):     hangs            different code path hits latent bug
+CoreMark (-O3):     hangs            CSR corruption — different code path hits latent bug
 ```
 
 Optimization log: `doc/coremark_optimization_changelog.md`
@@ -42,11 +42,11 @@ Optimization log: `doc/coremark_optimization_changelog.md`
 7. SQ/LQ power-of-2 depths (fixes pointer-wrap count overflow)
 8. Dispatch load cap (limits to 2 loads/cycle matching IQ NUM_ENQUEUE)
 9. Combinational preg_ready_table (includes rename clears for IQ enrollment)
-10. Load IQ single-select (avoids dcache tag-RAM port-1 starvation)
+10. Dual-port dcache tag/data RAM (restores dual-select load IQ)
+11. Dual BRU on IQ0 (port 0 + port 1 both handle branches, eliminates BRU bottleneck)
 
 ### Known Issues
-- **Dcache tag RAM single-ported**: dual-issue loads to the same cache set cause port 1 starvation. Load IQ reduced to NUM_SELECT=1 as workaround. Fix: dual-port the tag RAM.
-- **CoreMark -O3 hangs**: different code patterns hit a latent pipeline bug. Needs investigation.
+- **CoreMark -O3 hangs**: CSR corruption (mcycle wraps) from a different code path. Needs CSR write path investigation.
 - **Verilator convergence**: structural CDB→bypass loop settled by forwarding hold register + address gating. Reading `fused_insn[1+]` in combinational context changes Verilator eval scheduling — use `always_ff` for signals derived from multi-slot decode arrays.
 
 ## Performance Targets
@@ -57,7 +57,7 @@ v1 (current):       0.47          —             0.13
 v2 hw-only:         2.5 target    3.2 target    0.8–1.2
 v2 + SW stack:     ~3.0 expected ~3.8           1.1–1.5
 gem5 ceiling:       3.15          3.92          —
-v2 measured:        2.73          2.13          —
+v2 measured:        3.33          2.13          —
 ```
 
 The ISA extensions + macro-op fusion + compiler opts add ~20–30% effective IPC on top of the microarchitecture alone.

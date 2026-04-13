@@ -48,7 +48,16 @@ module tage_sc_l
     localparam int LOOP_CONF_BITS  = 2;
 
     // Geometric history lengths for the 4 tagged tables
-    localparam int GHR_LENGTHS [TAGE_NUM_TABLES] = '{8, 16, 32, 64};
+    // (individual params for iverilog compatibility — no unpacked array params)
+    localparam int GHR_LEN_0 = 8;
+    localparam int GHR_LEN_1 = 16;
+    localparam int GHR_LEN_2 = 32;
+    localparam int GHR_LEN_3 = 64;
+    wire [31:0] GHR_LENGTHS [0:TAGE_NUM_TABLES-1];
+    assign GHR_LENGTHS[0] = GHR_LEN_0;
+    assign GHR_LENGTHS[1] = GHR_LEN_1;
+    assign GHR_LENGTHS[2] = GHR_LEN_2;
+    assign GHR_LENGTHS[3] = GHR_LEN_3;
 
     // Useful-counter reset period (every 256K branches)
     localparam int USEFUL_RESET_PERIOD = 18;  // log2(256K) = 18

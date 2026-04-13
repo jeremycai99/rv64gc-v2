@@ -543,10 +543,13 @@ module rename
         ren_count = advance_prefix[PIPE_WIDTH];
     end
 
+    int lq_cnt;
+    int sq_cnt;
+
     always_comb begin
         // Running counters for LQ/SQ allocation among advancing slots
-        automatic int lq_cnt = 0;
-        automatic int sq_cnt = 0;
+        lq_cnt = 0;
+        sq_cnt = 0;
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             ren_insn[i] = '0;

@@ -179,6 +179,22 @@ module store_queue
     assign fwd_partial = fwd_req_valid & (|ent_partial) & ~(|ent_full_cover);
 
     // =========================================================================
+    // Flush-path commit pointer and bitmap (combinational, for ff flush path)
+    // =========================================================================
+    logic [SQ_IDX_BITS-1:0] flush_new_commit_ptr;
+    logic [SQ_DEPTH-1:0]   flush_newly_committed;
+
+    always_comb begin
+        flush_new_commit_ptr = SQ_IDX_BITS'(commit_ptr_r + commit_count);
+        flush_newly_committed = '0;
+        for (int c = 0; c < PIPE_WIDTH; c++) begin
+            if (c < int'(commit_count)) begin
+                flush_newly_committed[SQ_IDX_BITS'(commit_ptr_r + SQ_IDX_BITS'(c))] = 1'b1;
+            end
+        end
+    end
+
+    // =========================================================================
     // Sequential logic
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
@@ -193,27 +209,17 @@ module store_queue
         end else if (flush_valid && flush_full) begin
             // Discard all speculative (uncommitted) entries.
             // Account for any stores committed THIS cycle before flushing.
-            automatic logic [SQ_IDX_BITS-1:0] new_commit_ptr;
-            automatic logic [SQ_DEPTH-1:0] newly_committed;
-            new_commit_ptr = SQ_IDX_BITS'(commit_ptr_r + commit_count);
-            // Identify which entries are being committed this cycle
-            newly_committed = '0;
-            for (int c = 0; c < PIPE_WIDTH; c++) begin
-                if (c < int'(commit_count)) begin
-                    newly_committed[SQ_IDX_BITS'(commit_ptr_r + SQ_IDX_BITS'(c))] = 1'b1;
-                end
-            end
             // Mark newly committed entries AND discard speculative ones
             for (int i = 0; i < SQ_DEPTH; i++) begin
-                if (newly_committed[i]) begin
+                if (flush_newly_committed[i]) begin
                     queue[i].committed <= 1'b1;
                 end else if (!queue[i].committed) begin
                     queue[i].valid <= 1'b0;
                 end
             end
-            commit_ptr_r <= new_commit_ptr;
-            tail_r  <= new_commit_ptr;
-            count_r <= {1'b0, new_commit_ptr} - {1'b0, head_r};
+            commit_ptr_r <= flush_new_commit_ptr;
+            tail_r  <= flush_new_commit_ptr;
+            count_r <= {1'b0, flush_new_commit_ptr} - {1'b0, head_r};
         end else begin
             // --- Drain head committed entry ---
             if (drain_valid && drain_ready) begin

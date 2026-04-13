@@ -722,33 +722,14 @@ module lsu
     logic [63:0] load_extracted_fwd [0:1];  // same-cycle (forwarding/misalign)
     logic [63:0] load_extracted_dc  [0:1];  // 2-cycle delayed (dcache hit)
 
-    function automatic logic [63:0] extract_and_extend(
-            input logic [63:0] raw,
-            input logic [2:0]  byte_offset,
-            input logic [1:0]  size,
-            input logic        is_unsigned);
-        logic [63:0] shifted;
-        logic [63:0] result;
-        shifted = raw >> ({3'b0, byte_offset} * 4'd8);
-        case (size)
-            MEM_BYTE: result = is_unsigned ? {56'b0, shifted[7:0]}
-                                           : {{56{shifted[7]}}, shifted[7:0]};
-            MEM_HALF: result = is_unsigned ? {48'b0, shifted[15:0]}
-                                           : {{48{shifted[15]}}, shifted[15:0]};
-            MEM_WORD: result = is_unsigned ? {32'b0, shifted[31:0]}
-                                           : {{32{shifted[31]}}, shifted[31:0]};
-            default:  result = shifted;
-        endcase
-        return result;
-    endfunction
-
     generate
         for (li = 0; li < 2; li++) begin : gen_load_extract
             // ---- Forwarding / misalign path (current cycle) ----
             // Forwarding data is already byte-positioned in the memory dword
-            // (byte b at position b*8 +: 8).  extract_and_extend shifts right
+            // (byte b at position b*8 +: 8).  The extraction shifts right
             // by the load's byte offset to LSB-align the requested bytes.
             logic [63:0] fwd_raw;
+            logic [63:0] fwd_shifted;
             always_comb begin
                 if (li == 0 && p0_fwd_hit) begin
                     // Priority: same_cycle > SQ > CSB (youngest wins)
@@ -761,18 +742,25 @@ module lsu
                 end else begin
                     fwd_raw = '0;
                 end
+                fwd_shifted = fwd_raw >> ({3'b0, load_eff_addr[li][2:0]} * 4'd8);
+                case (load_issue_data[li].mem_size)
+                    MEM_BYTE: load_extracted_fwd[li] = load_issue_data[li].is_unsigned
+                                ? {56'b0, fwd_shifted[7:0]}
+                                : {{56{fwd_shifted[7]}}, fwd_shifted[7:0]};
+                    MEM_HALF: load_extracted_fwd[li] = load_issue_data[li].is_unsigned
+                                ? {48'b0, fwd_shifted[15:0]}
+                                : {{48{fwd_shifted[15]}}, fwd_shifted[15:0]};
+                    MEM_WORD: load_extracted_fwd[li] = load_issue_data[li].is_unsigned
+                                ? {32'b0, fwd_shifted[31:0]}
+                                : {{32{fwd_shifted[31]}}, fwd_shifted[31:0]};
+                    default:  load_extracted_fwd[li] = fwd_shifted;
+                endcase
             end
-            assign load_extracted_fwd[li] = extract_and_extend(
-                fwd_raw,
-                load_eff_addr[li][2:0],
-                load_issue_data[li].mem_size,
-                load_issue_data[li].is_unsigned
-            );
 
             // ---- D-cache hit path (2 cycles after issue) ----
             // The dcache already extracts, sign/zero extends, and LSB-aligns
             // its response based on the load's size and byte offset.
-            // Pass it through unchanged — a second extract_and_extend here
+            // Pass it through unchanged -- a second extraction here
             // would shift it again and corrupt non-dword-aligned loads.
             assign load_extracted_dc[li] = dcache_load_resp_data[li];
         end
@@ -855,16 +843,24 @@ module lsu
     // aligned dword using the entry's [5:3] index, then sign/zero extend
     // using [2:0] byte offset + size.
     logic [63:0] lmb_fill_dword;
+    logic [63:0] lmb_fill_shifted;
     logic [63:0] lmb_extracted;
     always_comb begin
         lmb_fill_dword = dcache_fill_data[{lmb[lmb_match_idx].byte_offset[5:3],
                                             3'b000} * 8 +: 64];
-        lmb_extracted = extract_and_extend(
-            lmb_fill_dword,
-            lmb[lmb_match_idx].byte_offset[2:0],
-            lmb[lmb_match_idx].size,
-            lmb[lmb_match_idx].is_unsigned
-        );
+        lmb_fill_shifted = lmb_fill_dword >> ({3'b0, lmb[lmb_match_idx].byte_offset[2:0]} * 4'd8);
+        case (lmb[lmb_match_idx].size)
+            MEM_BYTE: lmb_extracted = lmb[lmb_match_idx].is_unsigned
+                        ? {56'b0, lmb_fill_shifted[7:0]}
+                        : {{56{lmb_fill_shifted[7]}}, lmb_fill_shifted[7:0]};
+            MEM_HALF: lmb_extracted = lmb[lmb_match_idx].is_unsigned
+                        ? {48'b0, lmb_fill_shifted[15:0]}
+                        : {{48{lmb_fill_shifted[15]}}, lmb_fill_shifted[15:0]};
+            MEM_WORD: lmb_extracted = lmb[lmb_match_idx].is_unsigned
+                        ? {32'b0, lmb_fill_shifted[31:0]}
+                        : {{32{lmb_fill_shifted[31]}}, lmb_fill_shifted[31:0]};
+            default:  lmb_extracted = lmb_fill_shifted;
+        endcase
     end
 
     // =========================================================================

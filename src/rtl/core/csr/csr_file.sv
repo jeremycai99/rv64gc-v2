@@ -450,14 +450,7 @@ module csr_file
                         mstatus_r[14:13]<= 2'b11;
                     end
                     CSR_SSTATUS:
-                    begin
-                        automatic logic [63:0] _nm = ((mstatus_r & ~SSTATUS_WMASK) |
-                                        (((write_op == 2'd0) ? (write_data & SSTATUS_WMASK) : (write_op == 2'd1) ? ((mstatus_r & SSTATUS_WMASK) | (write_data & SSTATUS_WMASK)) : (write_op == 2'd2) ? ((mstatus_r & SSTATUS_WMASK) & ~(write_data & SSTATUS_WMASK)) : (mstatus_r & SSTATUS_WMASK)) & SSTATUS_WMASK));
-                        _nm[35:34] = 2'b10;
-                        _nm[33:32] = 2'b10;
-                        _nm[63]    = (_nm[14:13] == 2'b11) || (_nm[16:15] == 2'b11);
-                        mstatus_r <= _nm;
-                    end
+                        mstatus_r <= sstatus_applied_norm;
                     CSR_SIE:
                         mie_r <= (mie_r & ~mideleg_r) |
                                  (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mie_r) | (write_data)) : (write_op == 2'd2) ? ((mie_r) & ~(write_data)) : (mie_r)) & mideleg_r);
@@ -479,13 +472,7 @@ module csr_file
                             satp_r <= csr_op_satp;
                     end
                     CSR_MSTATUS:
-                    begin
-                        automatic logic [63:0] _nm = (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mstatus_r) | (write_data)) : (write_op == 2'd2) ? ((mstatus_r) & ~(write_data)) : (mstatus_r)));
-                        _nm[35:34] = 2'b10;
-                        _nm[33:32] = 2'b10;
-                        _nm[63]    = (_nm[14:13] == 2'b11) || (_nm[16:15] == 2'b11);
-                        mstatus_r <= _nm;
-                    end
+                        mstatus_r <= mstatus_norm_bypass;
                     CSR_MEDELEG:     medeleg_r    <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((medeleg_r) | (write_data)) : (write_op == 2'd2) ? ((medeleg_r) & ~(write_data)) : (medeleg_r));
                     CSR_MIDELEG:     mideleg_r    <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mideleg_r) | (write_data)) : (write_op == 2'd2) ? ((mideleg_r) & ~(write_data)) : (mideleg_r));
                     CSR_MIE:         mie_r        <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mie_r) | (write_data)) : (write_op == 2'd2) ? ((mie_r) & ~(write_data)) : (mie_r));

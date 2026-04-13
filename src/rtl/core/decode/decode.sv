@@ -61,6 +61,9 @@ module decode
 
     // Reconstruct struct from flat storage for output
     decoded_insn_t dec_insn_r [0:PIPE_WIDTH-1];
+
+    // Per-slot temporary for pipeline register update (formerly automatic)
+    decoded_insn_t dec_tmp [0:PIPE_WIDTH-1];
     always_comb begin
         for (int j = 0; j < PIPE_WIDTH; j++) begin
             dec_insn_r[j] = decoded_insn_t'(dec_insn_flat_r[j]);
@@ -83,12 +86,11 @@ module decode
             dec_count_r <= fetch_count;
             for (int j = 0; j < PIPE_WIDTH; j++) begin
                 if (j < int'(fetch_count)) begin
-                    automatic decoded_insn_t tmp;
-                    tmp           = slice_out[j];
-                    tmp.valid     = 1'b1;
-                    tmp.bp_taken  = fetch_bp_taken[j];
-                    tmp.bp_target = fetch_bp_target[j];
-                    dec_insn_flat_r[j] <= DI_W'(tmp);
+                    dec_tmp[j]           = slice_out[j];
+                    dec_tmp[j].valid     = 1'b1;
+                    dec_tmp[j].bp_taken  = fetch_bp_taken[j];
+                    dec_tmp[j].bp_target = fetch_bp_target[j];
+                    dec_insn_flat_r[j] <= DI_W'(dec_tmp[j]);
                 end else begin
                     // Clear valid bit only
                     dec_insn_flat_r[j][DI_W-1] <= 1'b0;

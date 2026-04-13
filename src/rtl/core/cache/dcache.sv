@@ -58,12 +58,17 @@ module dcache
     localparam int TAG_HI    = 63;
 
     // =========================================================================
-    // Tag RAM interface signals
+    // Tag RAM interface signals (port A: load0 / store, port B: load1)
     // =========================================================================
     logic [L1D_SET_BITS-1:0]  tr_raddr;
     logic [L1D_WAYS-1:0]      tr_valid_out;
     logic [L1D_WAYS-1:0]      tr_dirty_out;
     logic [L1D_TAG_BITS-1:0]  tr_tag_out [0:L1D_WAYS-1];
+
+    logic [L1D_SET_BITS-1:0]  tr_raddr2;
+    logic [L1D_WAYS-1:0]      tr_valid_out2;
+    logic [L1D_WAYS-1:0]      tr_dirty_out2;
+    logic [L1D_TAG_BITS-1:0]  tr_tag_out2 [0:L1D_WAYS-1];
 
     logic                      tr_we;
     logic [L1D_SET_BITS-1:0]   tr_waddr;
@@ -82,6 +87,10 @@ module dcache
         .valid_out    (tr_valid_out),
         .dirty_out    (tr_dirty_out),
         .tag_out      (tr_tag_out),
+        .raddr2       (tr_raddr2),
+        .valid_out2   (tr_valid_out2),
+        .dirty_out2   (tr_dirty_out2),
+        .tag_out2     (tr_tag_out2),
         .we           (tr_we),
         .waddr        (tr_waddr),
         .wway         (tr_wway),
@@ -95,12 +104,15 @@ module dcache
     );
 
     // =========================================================================
-    // Data RAM interface signals
+    // Data RAM interface signals (port A: load0 / store, port B: load1)
     // =========================================================================
     logic [L1D_SET_BITS-1:0]  dr_raddr;
     logic [1:0]               dr_rway;
     logic [LINE_SIZE*8-1:0]   dr_rdata;
     logic [LINE_SIZE*8-1:0]   dr_rdata_all [0:L1D_WAYS-1];
+
+    logic [L1D_SET_BITS-1:0]  dr_raddr2;
+    logic [LINE_SIZE*8-1:0]   dr_rdata_all2 [0:L1D_WAYS-1];
 
     logic                     dr_we;
     logic [L1D_SET_BITS-1:0]  dr_waddr;
@@ -114,26 +126,28 @@ module dcache
     logic [LINE_SIZE-1:0]     dr_bwmask;
 
     dcache_data_ram u_data_ram (
-        .clk       (clk),
-        .raddr     (dr_raddr),
-        .rway      (dr_rway),
-        .rdata     (dr_rdata),
-        .rdata_all (dr_rdata_all),
-        .we        (dr_we),
-        .waddr     (dr_waddr),
-        .wway      (dr_wway),
-        .wdata     (dr_wdata),
-        .bwe       (dr_bwe),
-        .bwaddr    (dr_bwaddr),
-        .bwway     (dr_bwway),
-        .bwdata    (dr_bwdata),
-        .bwmask    (dr_bwmask)
+        .clk        (clk),
+        .raddr      (dr_raddr),
+        .rway       (dr_rway),
+        .rdata      (dr_rdata),
+        .rdata_all  (dr_rdata_all),
+        .raddr2     (dr_raddr2),
+        .rdata_all2 (dr_rdata_all2),
+        .we         (dr_we),
+        .waddr      (dr_waddr),
+        .wway       (dr_wway),
+        .wdata      (dr_wdata),
+        .bwe        (dr_bwe),
+        .bwaddr     (dr_bwaddr),
+        .bwway      (dr_bwway),
+        .bwdata     (dr_bwdata),
+        .bwmask     (dr_bwmask)
     );
 
     // =========================================================================
     // Pipeline stage registers
-    // Two load ports share a single tag RAM read port using a priority mux.
-    // Port 0 wins over port 1.  A bank-conflict stall retries port 1 next cycle.
+    // Dual-ported tag/data RAMs: port A for load0/store, port B for load1.
+    // No bank-conflict stall needed — both ports read independently.
     // =========================================================================
 
     // Stage-0 → Stage-1 pipeline registers for the primary (port 0) load
@@ -154,39 +168,32 @@ module dcache
     logic [63:0]             s1_st_data;
     logic [7:0]              s1_st_byte_mask;
 
-    // Bank-conflict: both ports hit the same set → stall port 1
-    logic conflict;
-    assign conflict = load_req_valid[0] && load_req_valid[1] &&
-                      (load_req_addr[0][INDEX_HI:INDEX_LO] ==
-                       load_req_addr[1][INDEX_HI:INDEX_LO]);
-
-    // The tag RAM is read with the stage-0 (incoming) address.
-    // We prioritise port 0; port 1 is suppressed on conflict.
-    // The tag RAM read address is port 0 if valid, else port 1.
+    // Tag RAM port A: load port 0 (priority), then store
     always_comb begin
         if (load_req_valid[0])
             tr_raddr = load_req_addr[0][INDEX_HI:INDEX_LO];
-        else if (load_req_valid[1])
-            tr_raddr = load_req_addr[1][INDEX_HI:INDEX_LO];
         else if (store_req_valid)
             tr_raddr = store_req_addr[INDEX_HI:INDEX_LO];
         else
             tr_raddr = '0;
     end
 
-    // Data RAM read address (same priority)
+    // Tag RAM port B: always load port 1
+    assign tr_raddr2 = load_req_addr[1][INDEX_HI:INDEX_LO];
+
+    // Data RAM port A: load port 0
     always_comb begin
         if (load_req_valid[0]) begin
             dr_raddr = load_req_addr[0][INDEX_HI:INDEX_LO];
-            dr_rway  = 2'd0; // way selected after hit detection in s1
-        end else if (load_req_valid[1]) begin
-            dr_raddr = load_req_addr[1][INDEX_HI:INDEX_LO];
             dr_rway  = 2'd0;
         end else begin
             dr_raddr = '0;
             dr_rway  = 2'd0;
         end
     end
+
+    // Data RAM port B: load port 1
+    assign dr_raddr2 = load_req_addr[1][INDEX_HI:INDEX_LO];
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -208,7 +215,8 @@ module dcache
             s1_ld0_size     <= load_req_size[0];
             s1_ld0_unsigned <= load_req_is_unsigned[0];
 
-            s1_ld1_valid    <= load_req_valid[1] && !conflict;
+            // No conflict suppression — port B handles port 1 independently
+            s1_ld1_valid    <= load_req_valid[1];
             s1_ld1_addr     <= load_req_addr[1];
             s1_ld1_size     <= load_req_size[1];
             s1_ld1_unsigned <= load_req_is_unsigned[1];
@@ -255,7 +263,7 @@ module dcache
         end
     end
 
-    // Hit detection for load port 1
+    // Hit detection for load port 1 (uses tag RAM port B)
     logic [L1D_WAYS-1:0] ld1_way_hit;
     logic                ld1_cache_hit;
     logic [1:0]          ld1_hit_way;
@@ -265,7 +273,7 @@ module dcache
         ld1_cache_hit = 1'b0;
         ld1_hit_way   = 2'd0;
         for (int w = 0; w < L1D_WAYS; w++) begin
-            if (tr_valid_out[w] && (tr_tag_out[w] == s1_ld1_tag)) begin
+            if (tr_valid_out2[w] && (tr_tag_out2[w] == s1_ld1_tag)) begin
                 ld1_way_hit[w] = 1'b1;
                 ld1_cache_hit  = 1'b1;
                 ld1_hit_way    = 2'(w);
@@ -328,8 +336,9 @@ module dcache
     logic [63:0] ld0_extracted, ld1_extracted;
 
     // Select the cache line from the hit way for each port.
+    // Port 1 uses data RAM port B (independent read port).
     logic [LINE_SIZE*8-1:0] ld1_line_data;
-    assign ld1_line_data = dr_rdata_all[ld1_hit_way];
+    assign ld1_line_data = dr_rdata_all2[ld1_hit_way];
 
     always_comb begin
         logic [5:0]  byte_off0;
@@ -544,6 +553,29 @@ module dcache
     end
 
     // =========================================================================
+    // Store byte expansion: compute full-line mask and data from byte mask
+    // =========================================================================
+    logic [LINE_SIZE-1:0]   st_full_mask;
+    logic [LINE_SIZE*8-1:0] st_full_data;
+    logic [5:0]             st_line_off;
+    int                     st_line_byte [0:7];
+
+    always_comb begin
+        st_full_mask = '0;
+        st_full_data = '0;
+        st_line_off  = s1_st_addr[5:0];
+        for (int b = 0; b < 8; b++) begin
+            st_line_byte[b] = int'(st_line_off) + b;
+            if (s1_st_byte_mask[b]) begin
+                if (st_line_byte[b] < LINE_SIZE) begin
+                    st_full_mask[st_line_byte[b]] = 1'b1;
+                    st_full_data[st_line_byte[b]*8 +: 8] = s1_st_data[b*8 +: 8];
+                end
+            end
+        end
+    end
+
+    // =========================================================================
     // Tag / Data RAM write control
     // Priorities: fill_install > store_hit (dirty update)
     // =========================================================================
@@ -598,25 +630,8 @@ module dcache
             // its byte 0 contains the byte that must land at line offset
             // s1_st_addr[5:0].  s1_st_byte_mask[b]==1 means std_data[b*8 +: 8]
             // is valid.  The line byte position is addr[5:0] + b.
-            begin
-                automatic logic [LINE_SIZE-1:0]   full_mask;
-                automatic logic [LINE_SIZE*8-1:0] full_data;
-                automatic logic [5:0]             line_off;
-                full_mask = '0;
-                full_data = '0;
-                line_off  = s1_st_addr[5:0];
-                for (int b = 0; b < 8; b++) begin
-                    if (s1_st_byte_mask[b]) begin
-                        automatic int line_byte = int'(line_off) + b;
-                        if (line_byte < LINE_SIZE) begin
-                            full_mask[line_byte] = 1'b1;
-                            full_data[line_byte*8 +: 8] = s1_st_data[b*8 +: 8];
-                        end
-                    end
-                end
-                dr_bwmask = full_mask;
-                dr_bwdata = full_data;
-            end
+            dr_bwmask = st_full_mask;
+            dr_bwdata = st_full_data;
         end
     end
 
@@ -690,18 +705,11 @@ module dcache
                 load_resp_data[0]  <= ld0_extracted;
             end
 
-            // Load port 1: tag comparison against s1_ld1_tag using tr_valid/tag_out.
-            // Note: tr_valid_out/tr_tag_out are the result of reading tr_raddr which
-            // was set to port 0's address in s0 when both ports were valid.  When only
-            // port 1 is active, tr_raddr was set to port 1's address.  This means port
-            // 1 hit detection is only valid when port 0 was NOT active in the same s0
-            // cycle (no conflict). On a conflict, port 1 was suppressed and will be
-            // re-issued the next cycle by the upstream LSU.
+            // Load port 1: uses tag RAM port B and data RAM port B.
+            // Both ports read independently — no conflict suppression needed.
             if (s1_ld1_valid && ld1_cache_hit) begin
                 load_resp_valid[1] <= 1'b1;
                 load_resp_hit[1]   <= 1'b1;
-                // Port 1 reads the same data RAM word — this is the simplification:
-                // on simultaneous hits to the same line the upstream must handle.
                 load_resp_data[1]  <= ld1_extracted;
             end
         end
@@ -739,6 +747,21 @@ module dcache
     end
 
     // =========================================================================
+    // MSHR victim way helpers (combinational, referenced in always_ff below)
+    // =========================================================================
+    logic [1:0] mshr_ld_vway;
+    logic       mshr_ld_dirty_v;
+    logic [1:0] mshr_st_vway;
+    logic       mshr_st_dirty_v;
+
+    always_comb begin
+        mshr_ld_vway    = victim_way_s1;
+        mshr_ld_dirty_v = tr_dirty_out[victim_way_s1];
+        mshr_st_vway    = victim_way_st;
+        mshr_st_dirty_v = tr_dirty_out[victim_way_st];
+    end
+
+    // =========================================================================
     // MSHR sequential logic
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
@@ -755,24 +778,19 @@ module dcache
             // ---- Allocate new MSHR on load miss ----
             if (s1_ld0_valid && !ld0_cache_hit && !mshr_match_hit && mshr_free_avail
                 && !invalidate_all) begin
-                automatic logic [1:0] vway;
-                automatic logic       dirty_v;
-                vway    = victim_way_s1;
-                dirty_v = tr_dirty_out[vway];
-
                 mshr[mshr_free_idx].valid          <= 1'b1;
                 mshr[mshr_free_idx].addr           <= ld0_line_addr;
-                mshr[mshr_free_idx].victim         <= vway;
-                mshr[mshr_free_idx].dirty_evict    <= dirty_v;
+                mshr[mshr_free_idx].victim         <= mshr_ld_vway;
+                mshr[mshr_free_idx].dirty_evict    <= mshr_ld_dirty_v;
                 mshr[mshr_free_idx].fill_pend      <= 1'b1;
                 mshr[mshr_free_idx].fill_done      <= 1'b0;
-                mshr[mshr_free_idx].writeback_pend <= dirty_v;
-                if (dirty_v) begin
+                mshr[mshr_free_idx].writeback_pend <= mshr_ld_dirty_v;
+                if (mshr_ld_dirty_v) begin
                     // Need to evict dirty line: save its address and data
                     // (pick the victim way's data from the RAM read-all)
-                    mshr[mshr_free_idx].evict_data <= dr_rdata_all[vway];
+                    mshr[mshr_free_idx].evict_data <= dr_rdata_all[mshr_ld_vway];
                     mshr[mshr_free_idx].evict_addr <=
-                        {tr_tag_out[vway], s1_ld0_index, {LINE_BITS{1'b0}}};
+                        {tr_tag_out[mshr_ld_vway], s1_ld0_index, {LINE_BITS{1'b0}}};
                 end
             end
             // ---- Allocate new MSHR on store miss (write-allocate) ----
@@ -782,22 +800,17 @@ module dcache
             // priority selects store when no load is valid), so
             // tr_valid_out / tr_tag_out reflect the store's set.
             else if (s1_st_can_allocate_mshr) begin
-                automatic logic [1:0] vway;
-                automatic logic       dirty_v;
-                vway    = victim_way_st;
-                dirty_v = tr_dirty_out[vway];
-
                 mshr[mshr_free_idx].valid          <= 1'b1;
                 mshr[mshr_free_idx].addr           <= st_line_addr;
-                mshr[mshr_free_idx].victim         <= vway;
-                mshr[mshr_free_idx].dirty_evict    <= dirty_v;
+                mshr[mshr_free_idx].victim         <= mshr_st_vway;
+                mshr[mshr_free_idx].dirty_evict    <= mshr_st_dirty_v;
                 mshr[mshr_free_idx].fill_pend      <= 1'b1;
                 mshr[mshr_free_idx].fill_done      <= 1'b0;
-                mshr[mshr_free_idx].writeback_pend <= dirty_v;
-                if (dirty_v) begin
-                    mshr[mshr_free_idx].evict_data <= dr_rdata_all[vway];
+                mshr[mshr_free_idx].writeback_pend <= mshr_st_dirty_v;
+                if (mshr_st_dirty_v) begin
+                    mshr[mshr_free_idx].evict_data <= dr_rdata_all[mshr_st_vway];
                     mshr[mshr_free_idx].evict_addr <=
-                        {tr_tag_out[vway], s1_st_index, {LINE_BITS{1'b0}}};
+                        {tr_tag_out[mshr_st_vway], s1_st_index, {LINE_BITS{1'b0}}};
                 end
             end
 

@@ -222,6 +222,45 @@ module rob
     end
 
     // =========================================================================
+    // Combinational signals replacing automatic variables in always_ff
+    // =========================================================================
+
+    // --- Next-head computation (commit pointer advance) ---
+    logic [8:0] nh_sum;
+    logic [7:0] nh;
+    assign nh_sum = {1'b0, head_r} + {6'd0, commit_count};
+    assign nh     = (nh_sum >= 9'(ROB_DEPTH)) ? nh_sum[7:0] - ROB_DEPTH_U8 : nh_sum[7:0];
+
+    // --- Flush count recomputation (partial flush + commit) ---
+    logic [7:0] max_valid;
+    logic [7:0] raw_count;
+    assign max_valid = count_r - {5'd0, commit_count};
+    always_comb begin
+        if (flush_rob_tail >= nh)
+            raw_count = flush_rob_tail - nh;
+        else
+            raw_count = ROB_DEPTH_U8 - nh + flush_rob_tail;
+    end
+
+    // --- Next-tail computation (alloc pointer advance) ---
+    logic [8:0] nt_sum;
+    logic [7:0] nt;
+    assign nt_sum = {1'b0, tail_r} + {6'd0, alloc_count};
+    assign nt     = (nt_sum >= 9'(ROB_DEPTH)) ? nt_sum[7:0] - ROB_DEPTH_U8 : nt_sum[7:0];
+
+    // --- Per-slot alloc index (inside for loop) ---
+    logic [8:0] ai_sum_w [0:PIPE_WIDTH-1];
+    logic [7:0] ai_w    [0:PIPE_WIDTH-1];
+    always_comb begin
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            ai_sum_w[i] = {1'b0, tail_r} + 9'(i);
+            ai_w[i]     = (ai_sum_w[i] >= 9'(ROB_DEPTH))
+                          ? ai_sum_w[i][7:0] - ROB_DEPTH_U8
+                          : ai_sum_w[i][7:0];
+        end
+    end
+
+    // =========================================================================
     // Sequential logic: allocate, writeback, commit, flush
     // Pointer updates (next_tail, next_head) are computed inline to avoid
     // evaluation-order issues with external combinational wires.
@@ -303,45 +342,32 @@ module rob
             tail_r <= flush_rob_tail;
 
             // Commit on same cycle as partial flush
-            begin
-                automatic logic [8:0] nh_sum = {1'b0, head_r} + {6'd0, commit_count};
-                automatic logic [7:0] nh = (nh_sum >= 9'(ROB_DEPTH)) ?
-                                           nh_sum[7:0] - ROB_DEPTH_U8 : nh_sum[7:0];
-                for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if (commit_count > i[2:0]) begin
-                        valid_r[head_idx_w[i]]      <= 1'b0;
-                        is_branch_r[head_idx_w[i]]  <= 1'b0;
-                        is_store_r[head_idx_w[i]]   <= 1'b0;
-                        is_load_r[head_idx_w[i]]    <= 1'b0;
-                        is_csr_r[head_idx_w[i]]     <= 1'b0;
-                        is_fence_r[head_idx_w[i]]   <= 1'b0;
-                        is_fence_i_r[head_idx_w[i]] <= 1'b0;
-                        is_mret_r[head_idx_w[i]]    <= 1'b0;
-                        is_sret_r[head_idx_w[i]]    <= 1'b0;
-                        is_sfence_vma_r[head_idx_w[i]] <= 1'b0;
-                        is_ecall_r[head_idx_w[i]]   <= 1'b0;
-                        is_wfi_r[head_idx_w[i]]     <= 1'b0;
-                    end
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (commit_count > i[2:0]) begin
+                    valid_r[head_idx_w[i]]      <= 1'b0;
+                    is_branch_r[head_idx_w[i]]  <= 1'b0;
+                    is_store_r[head_idx_w[i]]   <= 1'b0;
+                    is_load_r[head_idx_w[i]]    <= 1'b0;
+                    is_csr_r[head_idx_w[i]]     <= 1'b0;
+                    is_fence_r[head_idx_w[i]]   <= 1'b0;
+                    is_fence_i_r[head_idx_w[i]] <= 1'b0;
+                    is_mret_r[head_idx_w[i]]    <= 1'b0;
+                    is_sret_r[head_idx_w[i]]    <= 1'b0;
+                    is_sfence_vma_r[head_idx_w[i]] <= 1'b0;
+                    is_ecall_r[head_idx_w[i]]   <= 1'b0;
+                    is_wfi_r[head_idx_w[i]]     <= 1'b0;
                 end
-                if (commit_count > 0)
-                    head_r <= nh;
+            end
+            if (commit_count > 0)
+                head_r <= nh;
 
-                // Recompute count — cap at pre-flush occupancy to avoid
-                // wrap-around error when head advances past restored tail
-                begin
-                    automatic logic [7:0] max_valid = count_r - {5'd0, commit_count};
-                    automatic logic [7:0] raw_count;
-                    if (flush_rob_tail >= nh)
-                        raw_count = flush_rob_tail - nh;
-                    else
-                        raw_count = ROB_DEPTH_U8 - nh + flush_rob_tail;
-                    if (raw_count <= max_valid) begin
-                        count_r <= raw_count;
-                    end else begin
-                        count_r <= 8'd0;
-                        head_r  <= flush_rob_tail;  // head=tail when empty
-                    end
-                end
+            // Recompute count — cap at pre-flush occupancy to avoid
+            // wrap-around error when head advances past restored tail
+            if (raw_count <= max_valid) begin
+                count_r <= raw_count;
+            end else begin
+                count_r <= 8'd0;
+                head_r  <= flush_rob_tail;  // head=tail when empty
             end
 
             // Writebacks to surviving entries
@@ -379,45 +405,35 @@ module rob
             // Normal operation
 
             // Allocate new entries at tail
-            begin
-                automatic logic [8:0] nt_sum = {1'b0, tail_r} + {6'd0, alloc_count};
-                automatic logic [7:0] nt = (nt_sum >= 9'(ROB_DEPTH)) ?
-                                           nt_sum[7:0] - ROB_DEPTH_U8 : nt_sum[7:0];
-
-                for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if (alloc_count > i[2:0]) begin
-                        automatic logic [8:0] ai_sum = {1'b0, tail_r} + 9'(i);
-                        automatic logic [7:0] ai = (ai_sum >= 9'(ROB_DEPTH))
-                                                   ? ai_sum[7:0] - ROB_DEPTH_U8
-                                                   : ai_sum[7:0];
-                        valid_r[ai]  <= 1'b1;
-                        ready_r[ai]  <= 1'b0;
-                        pc_packed[ai*64 +: 64]       <= alloc_pc[i];
-                        has_exc_r[ai]                <= 1'b0;
-                        exc_code_packed[ai*4 +: 4]   <= 4'd0;
-                        is_branch_r[ai]      <= alloc_is_branch[i];
-                        bpu_type_r[ai]       <= alloc_bpu_type[i];
-                        is_store_r[ai]       <= alloc_is_store[i];
-                        is_load_r[ai]        <= alloc_is_load[i];
-                        is_csr_r[ai]         <= alloc_is_csr[i];
-                        is_fence_r[ai]       <= alloc_is_fence[i];
-                        is_fence_i_r[ai]     <= alloc_is_fence_i[i];
-                        is_mret_r[ai]        <= alloc_is_mret[i];
-                        is_sret_r[ai]        <= alloc_is_sret[i];
-                        is_sfence_vma_r[ai]  <= alloc_is_sfence_vma[i];
-                        is_ecall_r[ai]       <= alloc_is_ecall[i];
-                        is_wfi_r[ai]         <= alloc_is_wfi[i];
-                        branch_taken_r[ai]       <= 1'b0;
-                        branch_target_packed[ai*64 +: 64] <= 64'd0;
-                        branch_mispredict_r[ai]  <= 1'b0;
-                        csr_we_r[ai]             <= 1'b0;
-                        csr_addr_packed[ai*12 +: 12]   <= 12'd0;
-                        csr_wdata_packed[ai*64 +: 64]  <= 64'd0;
-                    end
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (alloc_count > i[2:0]) begin
+                    valid_r[ai_w[i]]  <= 1'b1;
+                    ready_r[ai_w[i]]  <= 1'b0;
+                    pc_packed[ai_w[i]*64 +: 64]       <= alloc_pc[i];
+                    has_exc_r[ai_w[i]]                <= 1'b0;
+                    exc_code_packed[ai_w[i]*4 +: 4]   <= 4'd0;
+                    is_branch_r[ai_w[i]]      <= alloc_is_branch[i];
+                    bpu_type_r[ai_w[i]]       <= alloc_bpu_type[i];
+                    is_store_r[ai_w[i]]       <= alloc_is_store[i];
+                    is_load_r[ai_w[i]]        <= alloc_is_load[i];
+                    is_csr_r[ai_w[i]]         <= alloc_is_csr[i];
+                    is_fence_r[ai_w[i]]       <= alloc_is_fence[i];
+                    is_fence_i_r[ai_w[i]]     <= alloc_is_fence_i[i];
+                    is_mret_r[ai_w[i]]        <= alloc_is_mret[i];
+                    is_sret_r[ai_w[i]]        <= alloc_is_sret[i];
+                    is_sfence_vma_r[ai_w[i]]  <= alloc_is_sfence_vma[i];
+                    is_ecall_r[ai_w[i]]       <= alloc_is_ecall[i];
+                    is_wfi_r[ai_w[i]]         <= alloc_is_wfi[i];
+                    branch_taken_r[ai_w[i]]       <= 1'b0;
+                    branch_target_packed[ai_w[i]*64 +: 64] <= 64'd0;
+                    branch_mispredict_r[ai_w[i]]  <= 1'b0;
+                    csr_we_r[ai_w[i]]             <= 1'b0;
+                    csr_addr_packed[ai_w[i]*12 +: 12]   <= 12'd0;
+                    csr_wdata_packed[ai_w[i]*64 +: 64]  <= 64'd0;
                 end
-                if (alloc_count > 0)
-                    tail_r <= nt;
             end
+            if (alloc_count > 0)
+                tail_r <= nt;
 
             // Writeback: mark entries as ready
             // NB: do NOT clobber branch_mispredict_r/branch_target/branch_taken
@@ -459,30 +475,24 @@ module rob
             end
 
             // Commit: advance head, clear valid and instruction-type flags
-            begin
-                automatic logic [8:0] nh_sum = {1'b0, head_r} + {6'd0, commit_count};
-                automatic logic [7:0] nh = (nh_sum >= 9'(ROB_DEPTH)) ?
-                                           nh_sum[7:0] - ROB_DEPTH_U8 : nh_sum[7:0];
-
-                for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if (commit_count > i[2:0]) begin
-                        valid_r[head_idx_w[i]]      <= 1'b0;
-                        is_branch_r[head_idx_w[i]]  <= 1'b0;
-                        is_store_r[head_idx_w[i]]   <= 1'b0;
-                        is_load_r[head_idx_w[i]]    <= 1'b0;
-                        is_csr_r[head_idx_w[i]]     <= 1'b0;
-                        is_fence_r[head_idx_w[i]]   <= 1'b0;
-                        is_fence_i_r[head_idx_w[i]] <= 1'b0;
-                        is_mret_r[head_idx_w[i]]    <= 1'b0;
-                        is_sret_r[head_idx_w[i]]    <= 1'b0;
-                        is_sfence_vma_r[head_idx_w[i]] <= 1'b0;
-                        is_ecall_r[head_idx_w[i]]   <= 1'b0;
-                        is_wfi_r[head_idx_w[i]]     <= 1'b0;
-                    end
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (commit_count > i[2:0]) begin
+                    valid_r[head_idx_w[i]]      <= 1'b0;
+                    is_branch_r[head_idx_w[i]]  <= 1'b0;
+                    is_store_r[head_idx_w[i]]   <= 1'b0;
+                    is_load_r[head_idx_w[i]]    <= 1'b0;
+                    is_csr_r[head_idx_w[i]]     <= 1'b0;
+                    is_fence_r[head_idx_w[i]]   <= 1'b0;
+                    is_fence_i_r[head_idx_w[i]] <= 1'b0;
+                    is_mret_r[head_idx_w[i]]    <= 1'b0;
+                    is_sret_r[head_idx_w[i]]    <= 1'b0;
+                    is_sfence_vma_r[head_idx_w[i]] <= 1'b0;
+                    is_ecall_r[head_idx_w[i]]   <= 1'b0;
+                    is_wfi_r[head_idx_w[i]]     <= 1'b0;
                 end
-                if (commit_count > 0)
-                    head_r <= nh;
             end
+            if (commit_count > 0)
+                head_r <= nh;
 
             // Update count
             count_r <= count_r + {5'd0, alloc_count} - {5'd0, commit_count};
