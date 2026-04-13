@@ -72,9 +72,12 @@ package rv64gc_pkg;
     // =========================================================================
     // Load/Store queues
     // =========================================================================
-    localparam int LQ_DEPTH       = 48;
-    localparam int SQ_DEPTH       = 48;
-    localparam int CSB_DEPTH      = 24;  // committed store buffer
+    // Power-of-2 depths: pointer arithmetic wraps correctly with simple
+    // bit truncation (idx mod 2^N).  Non-power-of-2 (original 48) caused
+    // pointer wrap past physical entries → SQ count overflow after flush.
+    localparam int LQ_DEPTH       = 64;
+    localparam int SQ_DEPTH       = 64;
+    localparam int CSB_DEPTH      = 32;  // committed store buffer (was 24)
 
     localparam int LQ_IDX_BITS    = $clog2(LQ_DEPTH);   // 6
     localparam int SQ_IDX_BITS    = $clog2(SQ_DEPTH);   // 6

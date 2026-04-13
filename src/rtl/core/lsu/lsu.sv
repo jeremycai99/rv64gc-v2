@@ -463,8 +463,13 @@ module lsu
             load_nocache_r      <= '0;
             load_nocache_rr     <= '0;
         end else if (flush_in.valid) begin
-            load_issue_valid_r  <= '0;
+            // Clear _rr (2-cycle stale) to prevent wrong-path writebacks
+            // from hitting reallocated ROB entries after a full flush.
+            // Leave _r: a load that issued 1 cycle ago will age into _rr
+            // next cycle; if the flush is full, the next cycle's _rr eval
+            // will see flush_in cleared and process normally.
             load_issue_valid_rr <= '0;
+            load_nocache_rr     <= '0;
             load_nocache_r      <= '0;
             load_nocache_rr     <= '0;
         end else begin
@@ -961,8 +966,10 @@ module lsu
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = load_issue_data[0].lq_idx;
         end else if (dcache_load_resp_valid[0] && load_issue_valid_rr[0]
-                     && !load_nocache_rr[0] && !flush_in.valid) begin
+                     && !load_nocache_rr[0]) begin
             // D-cache hit response — 2 cycles after issue.
+            // NOT gated by flush: an older load must write back even if a
+            // younger instruction triggers a flush in the same cycle.
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = load_issue_data_rr[0].rob_idx;
             load_wb_pdst[0]          = load_issue_data_rr[0].pdst;
@@ -970,7 +977,7 @@ module lsu
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = load_issue_data_rr[0].lq_idx;
-        end else if (lmb_any_match && !flush_in.valid) begin
+        end else if (lmb_any_match) begin
             // Late miss response from LMB (fill arrived).
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = lmb[lmb_match_idx].rob_idx;
@@ -997,7 +1004,7 @@ module lsu
             load_wb_has_exception[1] = 1'b1;
             load_wb_exc_code[1]      = 4'd4;
         end else if (dcache_load_resp_valid[1] && load_issue_valid_rr[1]
-                     && !load_nocache_rr[1] && !flush_in.valid) begin
+                     && !load_nocache_rr[1]) begin
             load_wb_valid[1]         = 1'b1;
             load_wb_rob_idx[1]       = load_issue_data_rr[1].rob_idx;
             load_wb_pdst[1]          = load_issue_data_rr[1].pdst;
