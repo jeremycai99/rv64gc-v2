@@ -21,6 +21,34 @@ Clean-sheet 6-wide out-of-order RV64GC processor core (v2). This is a ground-up 
 
 The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep data is at `D:/agent-workspace/rv64gc-gem5/`. Companion SoC peripherals spec (UART, GPIO, SPI, I2C, DMA, JTAG, PMU, watchdog, framebuffer): `D:/agent-workspace/rv64gc-gem5/study/rv64gc_next_gen_soc.md`.
 
+## Current Benchmark Status (2026-04-13)
+
+```
+                    IPC (measured)   Status
+CoreMark (-O2):     2.73             running, all 23 regressions pass
+Dhrystone (-O2):    2.13             running, all 23 regressions pass
+CoreMark (-O3):     hangs            different code path hits latent bug
+```
+
+Optimization log: `doc/coremark_optimization_changelog.md`
+
+### Key Optimizations Applied
+1. BTB offset-based truncation (fetch delivers full group, not just slot 0)
+2. BPU update type (CALL/RET/JALR stored in BTB for RAS prediction)
+3. BRU early fetch redirect (redirect at execute, not commit)
+4. 1-cycle redirect bubble (icache + f2_pc bypass on BPU redirect)
+5. Loop buffer all-slot trigger (registered to avoid Verilator eval artifact)
+6. Forwarding hold register (breaks CDB→bypass→SQ_fwd→CDB loop)
+7. SQ/LQ power-of-2 depths (fixes pointer-wrap count overflow)
+8. Dispatch load cap (limits to 2 loads/cycle matching IQ NUM_ENQUEUE)
+9. Combinational preg_ready_table (includes rename clears for IQ enrollment)
+10. Load IQ single-select (avoids dcache tag-RAM port-1 starvation)
+
+### Known Issues
+- **Dcache tag RAM single-ported**: dual-issue loads to the same cache set cause port 1 starvation. Load IQ reduced to NUM_SELECT=1 as workaround. Fix: dual-port the tag RAM.
+- **CoreMark -O3 hangs**: different code patterns hit a latent pipeline bug. Needs investigation.
+- **Verilator convergence**: structural CDB→bypass loop settled by forwarding hold register + address gating. Reading `fused_insn[1+]` in combinational context changes Verilator eval scheduling — use `always_ff` for signals derived from multi-slot decode arrays.
+
 ## Performance Targets
 
 ```
@@ -29,6 +57,7 @@ v1 (current):       0.47          —             0.13
 v2 hw-only:         2.5 target    3.2 target    0.8–1.2
 v2 + SW stack:     ~3.0 expected ~3.8           1.1–1.5
 gem5 ceiling:       3.15          3.92          —
+v2 measured:        2.73          2.13          —
 ```
 
 The ISA extensions + macro-op fusion + compiler opts add ~20–30% effective IPC on top of the microarchitecture alone.
@@ -106,7 +135,7 @@ These are the authoritative values — do not deviate without gem5 evidence:
 | FP PRF | 128 × 64-bit | — |
 | Int IQs | 3 × 32, dual-select | >32 per IQ (symptom, not cause) |
 | ALUs | 4 | 5 (+0.000 IPC) |
-| LQ/SQ | 48/48 | — |
+| LQ/SQ | 64/64 (power-of-2) | 48 (pointer-wrap bug) |
 | L1D | 64 kB, 4-way, 4-bank | >64 kB (zero gain) |
 | L1I | 32 kB, 4-way | — |
 | L2 | 2 MB, 8-way, 32 MSHRs | >2 MB (zero gain) |
