@@ -111,6 +111,9 @@ module loop_buffer
             CAPTURING: begin
                 if (invalidate) begin
                     state_next = IDLE;
+                end else if (cap_len >= (IDX_BITS+1)'(DEPTH)) begin
+                    // Capture overflow: loop body too large, abort.
+                    state_next = IDLE;
                 end else if (backward_branch_taken) begin
                     // Second back-edge: body complete.
                     // Only play back if it fits within LOOP_BUF_DEPTH.

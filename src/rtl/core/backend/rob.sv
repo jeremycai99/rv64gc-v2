@@ -18,6 +18,7 @@ module rob
     // Data to write at allocation time (per-entry fields)
     input  logic [63:0]             alloc_pc [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   alloc_is_branch,
+    input  logic [2:0]             alloc_bpu_type [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   alloc_is_store,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_load,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_csr,
@@ -63,6 +64,7 @@ module rob
     output logic [PIPE_WIDTH-1:0]             head_has_exception,
     output logic [3:0]                        head_exc_code [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_is_branch,
+    output logic [2:0]                       head_bpu_type [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_is_store,
     output logic [PIPE_WIDTH-1:0]             head_is_load,
     output logic [PIPE_WIDTH-1:0]             head_is_csr,
@@ -151,6 +153,7 @@ module rob
     reg [ROB_DEPTH-1:0]          has_exc_r;
     reg [4*ROB_DEPTH-1:0]        exc_code_packed;
     reg [ROB_DEPTH-1:0]          is_branch_r;
+    reg [2:0]                    bpu_type_r [0:ROB_DEPTH-1];
     reg [ROB_DEPTH-1:0]          is_store_r;
     reg [ROB_DEPTH-1:0]          is_load_r;
     reg [ROB_DEPTH-1:0]          is_csr_r;
@@ -182,6 +185,7 @@ module rob
             head_has_exception[i]    = has_exc_r[head_idx_w[i]];
             head_exc_code[i]         = exc_code_packed[head_idx_w[i]*4 +: 4];
             head_is_branch[i]        = is_branch_r[head_idx_w[i]];
+            head_bpu_type[i]         = bpu_type_r[head_idx_w[i]];
             head_is_store[i]         = is_store_r[head_idx_w[i]];
             head_is_load[i]          = is_load_r[head_idx_w[i]];
             head_is_csr[i]           = is_csr_r[head_idx_w[i]];
@@ -392,6 +396,7 @@ module rob
                         has_exc_r[ai]                <= 1'b0;
                         exc_code_packed[ai*4 +: 4]   <= 4'd0;
                         is_branch_r[ai]      <= alloc_is_branch[i];
+                        bpu_type_r[ai]       <= alloc_bpu_type[i];
                         is_store_r[ai]       <= alloc_is_store[i];
                         is_load_r[ai]        <= alloc_is_load[i];
                         is_csr_r[ai]         <= alloc_is_csr[i];

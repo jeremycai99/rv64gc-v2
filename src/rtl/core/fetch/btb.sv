@@ -14,6 +14,7 @@ module btb
     output logic        hit,
     output logic [63:0] target,
     output logic [2:0]  branch_type,  // 0=cond, 1=jal, 2=jalr, 3=call, 4=ret
+    output logic [5:0]  branch_offset, // byte offset of branch within cache line
     // Update (from commit/BRU resolution)
     input  logic        update_valid,
     input  logic [63:0] update_pc,
@@ -37,6 +38,7 @@ module btb
     logic [TAG_BITS-1:0]         tags   [BTB_SETS][BTB_WAYS];
     logic [63:0]                 targets[BTB_SETS][BTB_WAYS];
     logic [2:0]                  btypes [BTB_SETS][BTB_WAYS];
+    logic [5:0]                  boffs  [BTB_SETS][BTB_WAYS]; // branch byte offset in line
 
     // PLRU state: 3 bits per set for 4-way PLRU tree
     // Bit layout: [2]=root (left=0/right=1), [1]=left-subtree, [0]=right-subtree
@@ -52,14 +54,16 @@ module btb
     assign lkp_tag = lookup_pc[63:IDX_BITS+2];  // bits [63:10]
 
     always_comb begin
-        hit         = 1'b0;
-        target      = 64'd0;
-        branch_type = 3'd0;
+        hit           = 1'b0;
+        target        = 64'd0;
+        branch_type   = 3'd0;
+        branch_offset = 6'd0;
         for (int w = 0; w < BTB_WAYS; w++) begin
             if (valid[lkp_idx][w] && (tags[lkp_idx][w] == lkp_tag)) begin
-                hit         = 1'b1;
-                target      = targets[lkp_idx][w];
-                branch_type = btypes[lkp_idx][w];
+                hit           = 1'b1;
+                target        = targets[lkp_idx][w];
+                branch_type   = btypes[lkp_idx][w];
+                branch_offset = boffs[lkp_idx][w];
             end
         end
     end
@@ -151,6 +155,7 @@ module btb
                 // Update existing entry in place
                 targets[upd_idx][upd_hit_way] <= update_target;
                 btypes [upd_idx][upd_hit_way] <= update_type;
+                boffs  [upd_idx][upd_hit_way] <= update_pc[5:0];
                 plru   [upd_idx]              <= plru_ns_hit;
             end else begin
                 // Allocate new entry at victim way
@@ -158,6 +163,7 @@ module btb
                 tags   [upd_idx][victim_way] <= upd_tag;
                 targets[upd_idx][victim_way] <= update_target;
                 btypes [upd_idx][victim_way] <= update_type;
+                boffs  [upd_idx][victim_way] <= update_pc[5:0];
                 plru   [upd_idx]             <= plru_ns_victim;
             end
         end

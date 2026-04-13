@@ -125,8 +125,12 @@ module store_queue
                 endcase
             end
 
+            // Gate addr_match on fwd_req_valid to prevent stale
+            // fwd_req_addr from driving the CAM comparison when no load
+            // is issuing — breaks Verilator convergence loop.
             logic addr_match;
-            assign addr_match = queue[fi].valid
+            assign addr_match = fwd_req_valid
+                              & queue[fi].valid
                               & queue[fi].addr_valid
                               & queue[fi].data_valid
                               & (queue[fi].addr[63:3] == fwd_req_addr[63:3]);

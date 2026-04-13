@@ -22,6 +22,7 @@ module committed_store_buffer
     output logic [1:0]  deq_size,
     input  logic        deq_ack,       // D-cache accepted the write
     // Store-to-load forwarding (check CSB before going to cache)
+    input  logic        fwd_valid,
     input  logic [63:0] fwd_addr,
     input  logic [1:0]  fwd_size,
     output logic        fwd_hit,
@@ -99,7 +100,8 @@ module committed_store_buffer
             end
 
             logic addr_match;
-            assign addr_match = buf_q[fi].valid
+            assign addr_match = fwd_valid
+                              & buf_q[fi].valid
                               & (buf_q[fi].addr[63:3] == fwd_addr[63:3]);
 
             assign ent_overlap[fi]    = addr_match ? (ent_bmask & fwd_req_bmask) : 8'h00;

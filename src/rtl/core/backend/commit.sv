@@ -250,9 +250,8 @@ module commit
             flush_out.full_flush  = 1'b1;
             flush_out.redirect_pc = trap_vector;
         end else if (found_mispredict) begin
-            // Branch mispredict: use full flush for correctness
-            // (checkpoint restore is only valid for branches that saved checkpoints;
-            //  unconditional jumps like JAL don't save checkpoints)
+            // Branch mispredict: full flush.  The BRU may have already
+            // redirected fetch to the correct target (early redirect).
             flush_out.valid         = 1'b1;
             flush_out.full_flush    = 1'b1;
             flush_out.redirect_pc   = head_branch_target[misp_slot];

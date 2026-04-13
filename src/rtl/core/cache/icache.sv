@@ -20,6 +20,7 @@ module icache
     output logic         fill_req_valid,
     output logic [63:0]  fill_req_addr,  // line-aligned
     input  logic         fill_resp_valid,
+    input  logic [63:0]  fill_resp_addr, // line-aligned, used to filter stale L2 hit-pipe replays
     input  logic [511:0] fill_resp_data,
     // Invalidate (FENCE.I)
     input  logic         invalidate_all,
@@ -213,6 +214,16 @@ module icache
         end
     end
 
+    // A fill response is only valid for THIS miss if its line address
+    // matches the latched miss address.  The L2's hit-pipe re-emits
+    // earlier requests' responses 8 cycles after they were originally
+    // delivered (the pipe stages are not invalidated after the first
+    // delivery), so the icache MUST ignore unmatched replays.
+    logic fill_resp_for_this_miss;
+    assign fill_resp_for_this_miss =
+        fill_resp_valid &&
+        (fill_resp_addr[63:LINE_BITS] == miss_addr_q[63:LINE_BITS]);
+
     // FSM combinational
     always_comb begin
         state_d        = state_q;
@@ -239,7 +250,7 @@ module icache
                 fill_req_valid = 1'b1;
                 fill_req_addr  = {miss_addr_q[63:LINE_BITS], {LINE_BITS{1'b0}}};
 
-                if (fill_resp_valid) begin
+                if (fill_resp_for_this_miss) begin
                     // Write tag RAM
                     tr_we     = 1'b1;
                     tr_waddr  = miss_addr_q[INDEX_HI:INDEX_LO];
@@ -272,7 +283,7 @@ module icache
                 2'd3: plru_state[s0_index] <= {1'b0, plru_state[s0_index][1], 1'b0};
                 default: ;
             endcase
-        end else if (state_q == ST_WAIT_FILL && fill_resp_valid) begin
+        end else if (state_q == ST_WAIT_FILL && fill_resp_for_this_miss) begin
             case (miss_way_q)
                 2'd0: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b1, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][0]};
                 2'd1: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b0, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][0]};
@@ -311,7 +322,7 @@ module icache
             resp_valid = 1'b1;
             resp_hit   = 1'b1;
             resp_data  = hit_data;
-        end else if (state_q == ST_WAIT_FILL && fill_resp_valid &&
+        end else if (state_q == ST_WAIT_FILL && fill_resp_for_this_miss &&
                      req_valid && fill_addr_matches) begin
             resp_valid = 1'b1;
             resp_hit   = 1'b0;

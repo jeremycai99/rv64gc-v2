@@ -95,13 +95,20 @@ module lsu
     // =========================================================================
     // Load AGU: effective address computation (x2)
     // =========================================================================
+    // For fused AUIPC+LD: base address comes from the PC of the AUIPC half,
+    // not from rs1 (which is x0/zero for the fused uop because the auipc has
+    // no source register).  Detect this case via is_fused on a load and use
+    // pc + imm.  Other fusions never produce loads.
     logic [63:0] load_eff_addr [0:1];
     logic [1:0]  load_addr_misaligned;
 
     genvar li;
     generate
         for (li = 0; li < 2; li++) begin : gen_load_agu
-            assign load_eff_addr[li] = load_rs1[li] + load_issue_data[li].imm;
+            wire is_pc_rel_ld = load_issue_data[li].is_fused;
+            assign load_eff_addr[li] =
+                (is_pc_rel_ld ? load_issue_data[li].pc : load_rs1[li])
+                + load_issue_data[li].imm;
 
             // Misalignment check based on access size
             logic [2:0] ld_off;
@@ -121,11 +128,15 @@ module lsu
     // =========================================================================
     // Store AGU: effective address computation (x1)
     // =========================================================================
+    // For fused AUIPC+ST: same logic as fused loads — use pc instead of rs1
+    // because the store's base register comes from the auipc half.
     logic [63:0] sta_eff_addr;
     logic        sta_addr_misaligned;
     logic [2:0]  sta_off;
 
-    assign sta_eff_addr = sta_rs1 + sta_issue_data.imm;
+    wire sta_is_pc_rel = sta_issue_data.is_fused;
+    assign sta_eff_addr = (sta_is_pc_rel ? sta_issue_data.pc : sta_rs1)
+                        + sta_issue_data.imm;
     assign sta_off = sta_eff_addr[2:0];
 
     always_comb begin
@@ -253,8 +264,10 @@ module lsu
     // Both STA and STD must fire together (always true from store IQ routing).
     logic same_cycle_addr_match;
     logic [7:0] same_cycle_overlap;
+    // Gate on load_issue_valid to prevent stale load_eff_addr from
+    // oscillating through the same-cycle forwarding comparison.
     assign same_cycle_addr_match =
-        sta_issue_valid & std_issue_valid &
+        load_issue_valid[0] & sta_issue_valid & std_issue_valid &
         (sta_eff_addr[63:3] == load_eff_addr[0][63:3]);
     assign same_cycle_overlap = same_cycle_addr_match
                               ? (sta_byte_mask_dyn & load0_byte_mask_dyn)
@@ -308,9 +321,12 @@ module lsu
         .std_idx         (std_issue_data.sq_idx),
         .std_data        (std_rs2),
         .std_byte_mask   (std_byte_mask),
-        // Store-to-load forwarding (from load port 0)
+        // Store-to-load forwarding (from load port 0).
+        // Gate fwd_req_addr to 0 when invalid to prevent stale
+        // load_eff_addr from oscillating through Verilator's eval loop.
         .fwd_req_valid   (load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
-        .fwd_req_addr    (load_eff_addr[0]),
+        .fwd_req_addr    ((load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
+                          ? load_eff_addr[0] : 64'd0),
         .fwd_req_size    (load_issue_data[0].mem_size),
         .fwd_hit         (sq_fwd_hit),
         .fwd_partial     (sq_fwd_partial),
@@ -565,7 +581,9 @@ module lsu
         .deq_size       (),
         .deq_ack        (dcache_store_ack),
         // Store-to-load forwarding (from load port 0)
-        .fwd_addr       (load_eff_addr[0]),
+        .fwd_valid      (load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
+        .fwd_addr       ((load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
+                          ? load_eff_addr[0] : 64'd0),
         .fwd_size       (load_issue_data[0].mem_size),
         .fwd_hit        (csb_fwd_hit),
         .fwd_data       (csb_fwd_data),
@@ -881,11 +899,42 @@ module lsu
     end
 
     // =========================================================================
+    // Store-to-load forwarding hold register
+    // =========================================================================
+    // Delay forwarding writeback by 1 cycle to break the combinational loop:
+    //   CDB → bypass → IQ → issue → load_eff_addr → SQ fwd → load_wb → CDB
+    // The consumer reads from PRF (written at the next edge from this CDB).
+    logic        fwd_hold_valid_r;
+    logic [ROB_IDX_BITS-1:0] fwd_hold_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] fwd_hold_pdst_r;
+    logic [63:0] fwd_hold_data_r;
+    logic [LQ_IDX_BITS-1:0] fwd_hold_lq_idx_r;
+
+    logic fwd_hold_is_exc_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_in.valid) begin
+            fwd_hold_valid_r  <= 1'b0;
+            fwd_hold_is_exc_r <= 1'b0;
+        end else begin
+            // Capture ANY same-cycle load writeback (fwd OR misalign)
+            // to eliminate all same-cycle CDB loops from load port 0.
+            fwd_hold_valid_r   <= load_issue_valid[0] && !flush_in.valid
+                                  && (p0_fwd_hit || load_addr_misaligned[0]);
+            fwd_hold_is_exc_r  <= load_addr_misaligned[0];
+            fwd_hold_rob_idx_r <= load_issue_data[0].rob_idx;
+            fwd_hold_pdst_r    <= load_issue_data[0].pdst;
+            fwd_hold_data_r    <= load_addr_misaligned[0] ? 64'd0 : load_extracted_fwd[0];
+            fwd_hold_lq_idx_r  <= load_issue_data[0].lq_idx;
+        end
+    end
+
+    // =========================================================================
     // Load writeback to CDB
     // =========================================================================
     // Priority (Port 0):
-    //   1. Misalign exception (same-cycle)
-    //   2. Store-to-load forwarding hit (same-cycle)
+    //   1. Misalign exception (same-cycle, rare — doesn't oscillate)
+    //   2. Forwarding hold (1-cycle delayed SQ/CSB fwd)
     //   3. D-cache hit response (2-cycle delayed metadata)
     //   4. LMB fill match (late miss response)
     // Priority (Port 1):
@@ -898,22 +947,16 @@ module lsu
         // Default LQ index selector (drives lq_result_idx_sel)
         lq_result_idx_sel = '0;
 
-        // Port 0
-        if (load_issue_valid[0] && load_addr_misaligned[0] && !flush_in.valid) begin
-            // Misalignment exception (same cycle as issue)
+        // Port 0 — no same-cycle paths.  Misalign + fwd both go through
+        // the hold register (1-cycle delayed) to eliminate CDB loops.
+        if (fwd_hold_valid_r) begin
             load_wb_valid[0]         = 1'b1;
-            load_wb_rob_idx[0]       = load_issue_data[0].rob_idx;
-            load_wb_pdst[0]          = load_issue_data[0].pdst;
-            load_wb_data[0]          = '0;
-            load_wb_has_exception[0] = 1'b1;
-            load_wb_exc_code[0]      = 4'd4; // EXC_LOAD_MISALIGN
-            lq_result_idx_sel        = load_issue_data[0].lq_idx;
-        end else if (load_issue_valid[0] && p0_fwd_hit && !flush_in.valid) begin
-            // Store-to-load forwarding hit (same cycle as issue)
-            load_wb_valid[0]         = 1'b1;
-            load_wb_rob_idx[0]       = load_issue_data[0].rob_idx;
-            load_wb_pdst[0]          = load_issue_data[0].pdst;
-            load_wb_data[0]          = load_extracted_fwd[0];
+            load_wb_rob_idx[0]       = fwd_hold_rob_idx_r;
+            load_wb_pdst[0]          = fwd_hold_pdst_r;
+            load_wb_data[0]          = fwd_hold_data_r;
+            load_wb_has_exception[0] = fwd_hold_is_exc_r;
+            load_wb_exc_code[0]      = fwd_hold_is_exc_r ? 4'd4 : 4'd0;
+            lq_result_idx_sel        = fwd_hold_lq_idx_r;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = load_issue_data[0].lq_idx;

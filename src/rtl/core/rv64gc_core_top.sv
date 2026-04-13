@@ -41,8 +41,13 @@ module rv64gc_core_top
 );
 
     // =========================================================================
-    // Flush signal (from commit, broadcast everywhere)
+    // Flush signals
     // =========================================================================
+    // commit_flush: from commit module (exceptions, ordering violations)
+    // bru_flush:    from BRU at execute time (branch mispredicts — early redirect)
+    // flush_out:    merged signal broadcast everywhere
+    flush_t commit_flush;
+    flush_t bru_flush;
     flush_t flush_out;
 
     // =========================================================================
@@ -109,6 +114,7 @@ module rv64gc_core_top
     logic        icache_fill_req_valid;
     logic [63:0] icache_fill_req_addr;
     logic        icache_fill_resp_valid;
+    logic [63:0] icache_fill_resp_addr;
     logic [511:0] icache_fill_resp_data;
 
     // BPU update signals (from commit)
@@ -135,8 +141,9 @@ module rv64gc_core_top
         .fetch_bp_taken         (fetch_bp_taken),
         .fetch_bp_target        (fetch_bp_target),
         .backend_stall          (backend_stall),
-        .redirect_valid         (flush_out.valid),
-        .redirect_pc            (flush_out.redirect_pc),
+        // Redirect from commit flush OR BRU early redirect (commit wins).
+        .redirect_valid         (flush_out.valid || bru_early_redirect),
+        .redirect_pc            (flush_out.valid ? flush_out.redirect_pc : bru_target),
         .bpu_update_valid       (bpu_update_valid),
         .bpu_update_pc          (bpu_update_pc),
         .bpu_update_taken       (bpu_update_taken),
@@ -151,6 +158,7 @@ module rv64gc_core_top
         .icache_fill_req_valid  (icache_fill_req_valid),
         .icache_fill_req_addr   (icache_fill_req_addr),
         .icache_fill_resp_valid (icache_fill_resp_valid),
+        .icache_fill_resp_addr  (icache_fill_resp_addr),
         .icache_fill_resp_data  (icache_fill_resp_data),
         .fence_i                (fence_i_signal)
     );
@@ -196,12 +204,27 @@ module rv64gc_core_top
     logic [2:0]    lb_count;
     logic          lb_active;
 
-    // Detect backward taken branch for loop buffer trigger
+    // Detect backward taken branch for loop buffer trigger.
+    // REGISTERED computation to avoid changing Verilator's combinational
+    // eval scheduling (reading fused_insn[1+] in a combinational block
+    // creates new dependencies that corrupt load-writeback timing).
+    // The 1-cycle delay is acceptable — it just means the loop buffer
+    // starts capturing 1 cycle later.
     logic backward_branch_taken;
-    assign backward_branch_taken = (fused_count > 3'd0) &&
-                                    fused_insn[0].bp_taken &&
-                                    fused_insn[0].is_branch &&
-                                    (fused_insn[0].bp_target < fused_insn[0].pc);
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            backward_branch_taken <= 1'b0;
+        end else begin
+            backward_branch_taken <= 1'b0;
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (3'(i) < fused_count &&
+                    fused_insn[i].bp_taken &&
+                    fused_insn[i].is_branch &&
+                    (fused_insn[i].bp_target < fused_insn[i].pc))
+                    backward_branch_taken <= 1'b1;
+            end
+        end
+    end
 
     // Rename stall signal
     logic rename_stall;
@@ -252,6 +275,7 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]   rob_head_has_exception;
     logic [3:0]              rob_head_exc_code    [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_is_branch;
+    logic [2:0]              rob_head_bpu_type [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_is_store;
     logic [PIPE_WIDTH-1:0]   rob_head_is_load;
     logic [PIPE_WIDTH-1:0]   rob_head_is_csr;
@@ -419,11 +443,44 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_sfence_vma;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_ecall;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_wfi;
+    logic [2:0]             rob_alloc_bpu_type [0:PIPE_WIDTH-1];
 
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             rob_alloc_pc[i]          = ren_insn[i].base.pc;
             rob_alloc_is_branch[i]   = ren_insn[i].base.is_branch;
+
+            // Compute BTB branch type for BPU update at commit:
+            //   BT_COND=0 BT_JAL=1 BT_JALR=2 BT_CALL=3 BT_RET=4
+            if (ren_insn[i].base.fu_type == FU_BRU) begin
+                case (ren_insn[i].base.br_op)
+                    BR_JAL: begin
+                        // CALL if rd = x1 or x5 (link registers)
+                        if (ren_insn[i].base.rd_arch == 5'd1 ||
+                            ren_insn[i].base.rd_arch == 5'd5)
+                            rob_alloc_bpu_type[i] = 3'd3; // BT_CALL
+                        else
+                            rob_alloc_bpu_type[i] = 3'd1; // BT_JAL
+                    end
+                    BR_JALR: begin
+                        // RET if rs1 = x1 or x5, rd = x0
+                        if ((ren_insn[i].base.rs1_arch == 5'd1 ||
+                             ren_insn[i].base.rs1_arch == 5'd5) &&
+                            ren_insn[i].base.rd_arch == 5'd0)
+                            rob_alloc_bpu_type[i] = 3'd4; // BT_RET
+                        // CALL if rd = x1 or x5
+                        else if (ren_insn[i].base.rd_arch == 5'd1 ||
+                                 ren_insn[i].base.rd_arch == 5'd5)
+                            rob_alloc_bpu_type[i] = 3'd3; // BT_CALL
+                        else
+                            rob_alloc_bpu_type[i] = 3'd2; // BT_JALR
+                    end
+                    default:
+                        rob_alloc_bpu_type[i] = 3'd0; // BT_COND
+                endcase
+            end else begin
+                rob_alloc_bpu_type[i] = 3'd0;
+            end
             rob_alloc_is_store[i]    = ren_insn[i].base.is_store;
             rob_alloc_is_load[i]     = ren_insn[i].base.is_load;
             rob_alloc_is_csr[i]      = ren_insn[i].base.is_csr;
@@ -445,6 +502,7 @@ module rv64gc_core_top
         .alloc_ready            (rob_alloc_ready),
         .alloc_pc               (rob_alloc_pc),
         .alloc_is_branch        (rob_alloc_is_branch),
+        .alloc_bpu_type         (rob_alloc_bpu_type),
         .alloc_is_store         (rob_alloc_is_store),
         .alloc_is_load          (rob_alloc_is_load),
         .alloc_is_csr           (rob_alloc_is_csr),
@@ -477,6 +535,7 @@ module rv64gc_core_top
         .head_has_exception     (rob_head_has_exception),
         .head_exc_code          (rob_head_exc_code),
         .head_is_branch         (rob_head_is_branch),
+        .head_bpu_type          (rob_head_bpu_type),
         .head_is_store          (rob_head_is_store),
         .head_is_load           (rob_head_is_load),
         .head_is_csr            (rob_head_is_csr),
@@ -1017,6 +1076,22 @@ module rv64gc_core_top
     );
 
     // =========================================================================
+    // BRU early fetch redirect (fetch-only, no pipeline flush)
+    // =========================================================================
+    // On branch mispredict, redirect fetch to the correct target as soon
+    // as the BRU resolves.  The full pipeline flush still happens when the
+    // branch reaches commit.  This saves ~3-5 cycles of fetch latency.
+    logic bru_early_redirect;
+    assign bru_early_redirect = bru_issue && bru_mispredict;
+
+    // Merge: commit flush takes priority.  BRU redirect only applies to
+    // the fetch unit's redirect_valid / redirect_pc.
+    assign flush_out = commit_flush;
+
+    // The fetch unit sees redirect from EITHER commit_flush OR bru_redirect.
+    // This is wired in the fetch_unit instantiation below.
+
+    // =========================================================================
     // 12. MULTIPLIER (shared with ALU2 on IQ1 port 0)
     // =========================================================================
     logic        mul_valid_out;
@@ -1115,6 +1190,12 @@ module rv64gc_core_top
     logic [3:0]               lsu_load_wb_exc_code [0:1];
     logic                     lsu_sta_wb_valid;
     logic [ROB_IDX_BITS-1:0]  lsu_sta_wb_rob_idx;
+
+    // Build the LSU's load_rs1 unpacked-array port using explicit indexing
+    // (a packed concat would be silently re-ordered by Verilator).
+    logic [63:0] lsu_load_rs1_arr [0:1];
+    assign lsu_load_rs1_arr[0] = bypassed_data[8];
+    assign lsu_load_rs1_arr[1] = bypassed_data[9];
 
     // ALU0 is used when not BRU
     logic alu0_issue;
@@ -1369,6 +1450,8 @@ module rv64gc_core_top
     //
     // Suppress bypass for p0 (hardwired zero register) — CDB may carry
     // non-zero data for instructions with pdst=p0 (e.g., JAL x0).
+    // Bypass sources [0..3] (ALU): REGISTERED CDB.
+    // Bypass sources [4..5] (Load): COMBINATIONAL CDB for 2-cycle latency.
     assign bypass_valid = {cdb_valid[5]   && (cdb_tag[5]   != '0),
                            cdb_valid[4]   && (cdb_tag[4]   != '0),
                            cdb_valid_r[3] && (cdb_tag_r[3] != '0),
@@ -1473,7 +1556,14 @@ module rv64gc_core_top
         .std_issue_valid        (routed_std_valid),
         .std_issue_data         (routed_std_data),
         // PRF read data
-        .load_rs1               ({bypassed_data[9], bypassed_data[8]}),
+        // NOTE: load_rs1 is an unpacked array [0:1].  The packed concat
+        // {bypassed_data[9], bypassed_data[8]} maps the first element of
+        // the brace list to index [0], so we MUST list bypassed_data[8]
+        // (= load port 0's rs1 in the bypass network) first.  The previous
+        // ordering crossed port 0 and port 1 sources, causing every port-0
+        // load to read its base register from the speculative-port-1 load —
+        // the root cause of the CoreMark divergence bug.
+        .load_rs1               (lsu_load_rs1_arr),
         .sta_rs1                (bypassed_data[10]),
         .std_rs2                (bypassed_data[11]),
         // Writeback
@@ -1581,6 +1671,13 @@ module rv64gc_core_top
     logic [511:0] l2_icache_resp_data;
     logic l2_invalidate_busy;
 
+    // The L2 hit pipeline does not invalidate stages after delivery, so a
+    // response for an earlier icache fetch reappears L2_HIT_LATENCY cycles
+    // later as a stale "fill_resp_valid" pulse with the OLD line data.
+    // Forward the L2's response address to the icache so it can filter
+    // those replays by comparing against its own miss_addr_q.
+    assign icache_fill_resp_addr = l2_icache_resp_addr;
+
     l2_cache u_l2_cache (
         .clk                (clk),
         .rst_n              (rst_n),
@@ -1666,7 +1763,7 @@ module rv64gc_core_top
         .commit_out             (commit_out),
         .store_commit_count     (store_commit_count),
         .load_commit_count      (load_commit_count),
-        .flush_out              (flush_out),
+        .flush_out              (commit_flush),
         .csr_commit_valid       (csr_commit_valid),
         .csr_commit_addr        (csr_commit_addr),
         .csr_commit_wdata       (csr_commit_wdata),
@@ -1714,7 +1811,7 @@ module rv64gc_core_top
                 bpu_update_mispredict = rob_head_branch_mispredict[i];
                 bpu_update_target    = rob_head_branch_target[i];
                 // Type: 0=cond, 1=jal for non-branch mispredicts
-                bpu_update_type      = rob_head_is_branch[i] ? 3'd0 : 3'd1;
+                bpu_update_type      = rob_head_bpu_type[i];
             end
         end
     end

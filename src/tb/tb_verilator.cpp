@@ -18,16 +18,22 @@ int main(int argc, char** argv) {
 
     // Default cycle limit; allow override via +MAX_CYCLES=N
     long max_cycles = 5000;
+    bool enable_vcd = true;
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+MAX_CYCLES=", 12) == 0) {
             max_cycles = atol(argv[i] + 12);
+        }
+        if (strncmp(argv[i], "+NOVCD", 6) == 0) {
+            enable_vcd = false;
         }
     }
 
     Vtb_top* top = new Vtb_top;
     VerilatedVcdC* tfp = new VerilatedVcdC;
-    top->trace(tfp, 99);
-    tfp->open("sim.vcd");
+    if (enable_vcd) {
+        top->trace(tfp, 99);
+        tfp->open("sim.vcd");
+    }
 
     // Reset -- hold rst_n low for 10 full clock cycles (20 half-cycles)
     top->clk   = 0;
@@ -47,7 +53,7 @@ int main(int argc, char** argv) {
         // Rising edge
         top->clk = 1;
         top->eval();
-        tfp->dump((uint64_t)(20 + cycle * 2));
+        if (enable_vcd) tfp->dump((uint64_t)(20 + cycle * 2));
 
         // Check tohost write
         if (top->tohost_valid) {
@@ -65,7 +71,7 @@ int main(int argc, char** argv) {
         // Falling edge
         top->clk = 0;
         top->eval();
-        tfp->dump((uint64_t)(20 + cycle * 2 + 1));
+        if (enable_vcd) tfp->dump((uint64_t)(20 + cycle * 2 + 1));
         cycle++;
 
         if (cycle % 1000 == 0)
@@ -101,7 +107,7 @@ int main(int argc, char** argv) {
                ipc, (unsigned long)minstret, (unsigned long)mcycle);
     }
 
-    tfp->close();
+    if (enable_vcd) tfp->close();
     delete tfp;
     delete top;
     return (done && pass) ? 0 : 1;

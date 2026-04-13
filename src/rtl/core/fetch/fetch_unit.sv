@@ -48,6 +48,7 @@ module fetch_unit
     output logic        icache_fill_req_valid,
     output logic [63:0] icache_fill_req_addr,
     input  logic        icache_fill_resp_valid,
+    input  logic [63:0] icache_fill_resp_addr,
     input  logic [511:0] icache_fill_resp_data,
 
     // Invalidate (FENCE.I)
@@ -141,7 +142,12 @@ module fetch_unit
 
     // Request to I-cache: issue when F1 is valid and not stalled
     assign ic_req_valid = f1_valid && !backend_stall;
-    assign ic_req_addr  = f1_pc;
+    // On BPU redirect, bypass f1_pc and send the redirect target directly
+    // to the icache.  This reduces the taken-branch fetch bubble from 2
+    // cycles to 1: the icache starts the new lookup in the SAME cycle as
+    // the redirect instead of waiting for f1_pc to update next cycle.
+    assign ic_req_addr  = (f2_bpu_redirect && !redirect_valid)
+                          ? f2_bpu_target : f1_pc;
 
     // I-cache raw combinational outputs (same-cycle as request)
     logic        ic_resp_valid_comb;
@@ -159,6 +165,7 @@ module fetch_unit
         .fill_req_valid (icache_fill_req_valid),
         .fill_req_addr  (icache_fill_req_addr),
         .fill_resp_valid(icache_fill_resp_valid),
+        .fill_resp_addr (icache_fill_resp_addr),
         .fill_resp_data (icache_fill_resp_data),
         .invalidate_all (fence_i),
         .invalidate_busy(ic_invalidate_busy)
@@ -183,19 +190,21 @@ module fetch_unit
     logic        btb_hit;
     logic [63:0] btb_target;
     logic [2:0]  btb_branch_type;
+    logic [5:0]  btb_branch_offset;
 
     btb u_btb (
-        .clk          (clk),
-        .rst_n        (rst_n),
-        .lookup_pc    (f1_pc),
-        .hit          (btb_hit),
-        .target       (btb_target),
-        .branch_type  (btb_branch_type),
-        .update_valid (bpu_update_valid),
-        .update_pc    (bpu_update_pc),
-        .update_target(bpu_update_target),
-        .update_type  (bpu_update_type),
-        .flush        (1'b0)
+        .clk           (clk),
+        .rst_n         (rst_n),
+        .lookup_pc     (f1_pc),
+        .hit           (btb_hit),
+        .target        (btb_target),
+        .branch_type   (btb_branch_type),
+        .branch_offset (btb_branch_offset),
+        .update_valid  (bpu_update_valid),
+        .update_pc     (bpu_update_pc),
+        .update_target (bpu_update_target),
+        .update_type   (bpu_update_type),
+        .flush         (1'b0)
     );
 
     // =========================================================================
@@ -255,6 +264,7 @@ module fetch_unit
     logic        f2_btb_hit_r;
     logic [63:0] f2_btb_target_r;
     logic [2:0]  f2_btb_type_r;
+    logic [5:0]  f2_btb_offset_r;
     logic        f2_tage_taken_r;
     logic        f2_tage_confident_r;
 
@@ -288,6 +298,7 @@ module fetch_unit
             f2_btb_hit_r        <= 1'b0;
             f2_btb_target_r     <= '0;
             f2_btb_type_r       <= '0;
+            f2_btb_offset_r     <= '0;
             f2_tage_taken_r     <= 1'b0;
             f2_tage_confident_r <= 1'b0;
             consumed_remainder_r <= 1'b0;
@@ -298,14 +309,14 @@ module fetch_unit
             f2_valid_r           <= 1'b0;
             consumed_remainder_r <= 1'b0;
             f2_already_emitted_r <= 1'b0;
+        end else if (f2_bpu_redirect && !backend_stall) begin
+            // BPU redirect: set f2_pc to target so the icache bypass
+            // response (arriving next cycle) matches the expected PC.
+            f2_valid_r          <= 1'b1;
+            f2_pc_r             <= f2_bpu_target;
+            f2_already_emitted_r <= 1'b0;
         end else if (!backend_stall) begin
             f2_valid_r          <= f1_valid;
-            // Bypass the normal f1->f2 pipeline in two scenarios:
-            //   1. consume_remainder_c: current cycle just combined a
-            //      remainder with the new line, so next cycle should skip
-            //      ahead to f2_seq_next_pc instead of re-reading the base.
-            //   2. consumed_remainder_r: set by scenario 1 last cycle -
-            //      this is a legacy backup path (should rarely fire).
             if (consume_remainder_c)
                 f2_pc_r         <= f2_seq_next_pc;
             else if (consumed_remainder_r)
@@ -315,6 +326,7 @@ module fetch_unit
             f2_btb_hit_r        <= btb_hit;
             f2_btb_target_r     <= btb_target;
             f2_btb_type_r       <= btb_branch_type;
+            f2_btb_offset_r     <= btb_branch_offset;
             f2_tage_taken_r     <= tage_pred_taken;
             f2_tage_confident_r <= tage_pred_confident;
 
@@ -546,32 +558,32 @@ module fetch_unit
                     bp_target_addr  = f2_btb_target_r;
                 end
                 BT_RET: begin
-                    // Return: always taken, use RAS pop address
-                    bp_branch_found = 1'b1;
-                    bp_taken        = 1'b1;
-                    bp_target_addr  = ras_pop_addr;
+                    // Return: use RAS pop address if non-zero (non-empty).
+                    // When the RAS is empty, stack returns 0x0 — do not
+                    // predict in that case; let the BRU resolve it.
+                    if (ras_pop_addr != 64'd0) begin
+                        bp_branch_found = 1'b1;
+                        bp_taken        = 1'b1;
+                        bp_target_addr  = ras_pop_addr;
+                    end
                 end
                 default: begin
                     bp_branch_found = 1'b0;
                 end
             endcase
 
-            // If a taken branch is found, truncate fetch after the branch
-            // instruction. The branch is at the first slot that falls within
-            // the BTB's PC range -- for simplicity, we include the first
-            // instruction and truncate at the branch.
+            // If a taken branch is found, truncate fetch after the branch.
+            // The BTB stores the branch's byte offset within the cache line
+            // (f2_btb_offset_r).  Scan extracted slots for the one whose PC
+            // matches that offset; truncate immediately after it.
             if (bp_branch_found && bp_taken) begin
-                // The BTB predicts a branch at f2_pc_r. The branch instruction
-                // is the first extracted instruction (slot 0) if the BTB PC
-                // matches the fetch PC. Truncate to include just slot 0.
-                // In a more refined implementation, we'd scan for which slot
-                // matches the BTB PC. For now, truncate at slot 0 + 1.
-                bp_truncated_count = 3'd1;
+                // Default: include all extracted instructions (no truncation).
+                // This covers the case where the BTB entry is aliased and the
+                // branch isn't actually in this fetch group.
+                bp_truncated_count = extract_count;
 
-                // Check if more slots match -- scan for the branch within
-                // the fetch window
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if (slot_valid[i] && (slot_pc[i] == f2_pc_r)) begin
+                    if (slot_valid[i] && (slot_pc[i][5:0] == f2_btb_offset_r)) begin
                         bp_branch_slot     = 3'(i);
                         bp_truncated_count = 3'(i + 1);
                     end
