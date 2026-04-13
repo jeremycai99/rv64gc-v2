@@ -61,6 +61,7 @@ module lsu
     // Ordering violation (to commit for flush)
     output logic ordering_violation,
     output logic [ROB_IDX_BITS-1:0] violation_rob_idx,
+    output logic load_port0_suppress,
 
     // D-cache interface
     output logic [1:0] dcache_load_req_valid,
@@ -630,6 +631,7 @@ module lsu
     logic [63:0]     p1_retry_addr_r;
     logic            p1_retry_misalign_r;
     logic            p1_retry_load_nocache_r;
+    assign load_port0_suppress = 1'b0; // not used with single-select load IQ
 
     // Combinational: same-set conflict between port 0 and port 1
     logic dcache_conflict;

@@ -151,15 +151,14 @@ module dispatch_queue
         else
             candidate_mem = mem_count[2:0];
 
-        // Cap mem releases so that at most 2 stores go in one cycle (the
-        // load IQ and store IQ each have NUM_ENQUEUE=2).  Walk the mem
-        // FIFO in the order it will be dequeued, and STOP at the first
-        // position we cannot accept — a third store — to preserve
-        // program order.  Loads and earlier stores still get released.
-        begin : mem_store_cap
+        // Cap mem releases: at most 2 stores AND 2 loads per cycle
+        // (both IQs have NUM_ENQUEUE=2).
+        begin : mem_cap
             logic stopped_m;
+            logic [2:0] load_cnt;
             max_mem    = 3'd0;
             store_cnt  = 3'd0;
+            load_cnt   = 3'd0;
             stopped_m  = 1'b0;
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 automatic logic [MEM_IDX_BITS-1:0] rd_a;
@@ -173,7 +172,12 @@ module dispatch_queue
                             stopped_m = 1'b1;
                         end
                     end else begin
-                        max_mem = 3'(i) + 3'd1;
+                        if (load_cnt < 3'd2) begin
+                            max_mem  = 3'(i) + 3'd1;
+                            load_cnt = load_cnt + 3'd1;
+                        end else begin
+                            stopped_m = 1'b1;
+                        end
                     end
                 end
             end

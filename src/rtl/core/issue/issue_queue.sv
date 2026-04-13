@@ -43,6 +43,9 @@ module issue_queue
     output logic [NUM_SELECT-1:0]  issue_valid,
     output iq_entry_t              issue_data [0:NUM_SELECT-1],
 
+    // Backpressure: suppress port 0 issue and preserve entry for re-issue
+    input  logic                    port0_suppress,
+
     // ROB head for age comparison
     input  logic [ROB_IDX_BITS-1:0] rob_head,
 
@@ -277,7 +280,8 @@ module issue_queue
     // Drive issue outputs
     always_comb begin
         for (int p = 0; p < NUM_SELECT; p++) begin
-            issue_valid[p] = sel_found[p];
+            // port0_suppress: don't issue on port 0 (dcache conflict retry)
+            issue_valid[p] = sel_found[p] & ~(p == 0 && port0_suppress);
             issue_data[p]  = iq_entry_t'(payload_r[sel_idx[p]]);
             // Override ready flags with wakeup results so downstream sees
             // correct readiness even on the issue cycle.
@@ -398,8 +402,9 @@ module issue_queue
             end
 
             // ---- Issue: invalidate selected entries ----
+            // Skip invalidation when port 0 is suppressed (entry re-issues)
             for (int p = 0; p < NUM_SELECT; p++) begin
-                if (sel_found[p]) begin
+                if (sel_found[p] && !(p == 0 && port0_suppress)) begin
                     entry_valid[sel_idx[p]] <= 1'b0;
                     src1_ready[sel_idx[p]]  <= 1'b0;
                     src2_ready[sel_idx[p]]  <= 1'b0;

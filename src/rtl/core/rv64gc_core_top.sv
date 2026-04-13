@@ -54,6 +54,7 @@ module rv64gc_core_top
     // PRF Ready Table
     // =========================================================================
     logic [INT_PRF_DEPTH-1:0] preg_ready_table;
+    logic [INT_PRF_DEPTH-1:0] preg_ready_table_comb;
 
     // =========================================================================
     // CDB signals (6 writeback buses)
@@ -621,6 +622,9 @@ module rv64gc_core_top
     logic        iq_load_full;
     logic [1:0]  iq_load_issue_valid;
     iq_entry_t   iq_load_issue_data [0:1];
+    // Single-select wrapper for load IQ
+    logic [0:0]  iq_load_issue_valid_s;
+    iq_entry_t   iq_load_issue_data_s [0:0];
 
     // --- Store IQ ---
     logic [1:0]  iq_store_enq_valid;
@@ -778,13 +782,14 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
-        .preg_ready_table(preg_ready_table),
+        .preg_ready_table(preg_ready_table_comb),
         .issue_valid     (iq0_issue_valid),
         .issue_data      (iq0_issue_data),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
-        .flush_full      (flush_out.full_flush)
+        .flush_full      (flush_out.full_flush),
+        .port0_suppress  (1'b0)
     );
 
     // IQ1 and IQ2 are single-issue: only port 0 is wired to ALU2/MUL and
@@ -804,13 +809,14 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
-        .preg_ready_table(preg_ready_table),
+        .preg_ready_table(preg_ready_table_comb),
         .issue_valid     (iq1_issue_valid_s),
         .issue_data      (iq1_issue_data_s),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
-        .flush_full      (flush_out.full_flush)
+        .flush_full      (flush_out.full_flush),
+        .port0_suppress  (1'b0)
     );
     assign iq1_issue_valid[0] = iq1_issue_valid_s[0];
     assign iq1_issue_valid[1] = 1'b0;
@@ -830,20 +836,23 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
-        .preg_ready_table(preg_ready_table),
+        .preg_ready_table(preg_ready_table_comb),
         .issue_valid     (iq2_issue_valid_s),
         .issue_data      (iq2_issue_data_s),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
-        .flush_full      (flush_out.full_flush)
+        .flush_full      (flush_out.full_flush),
+        .port0_suppress  (1'b0)
     );
     assign iq2_issue_valid[0] = iq2_issue_valid_s[0];
     assign iq2_issue_valid[1] = 1'b0;
     assign iq2_issue_data[0]  = iq2_issue_data_s[0];
     assign iq2_issue_data[1]  = '0;
 
-    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2))
+    // Single-select to avoid dcache tag-RAM port-1 starvation on
+    // same-set accesses.  Dual-select requires a dual-ported tag RAM.
+    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
     u_iq_load (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -856,14 +865,20 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
-        .preg_ready_table(preg_ready_table),
-        .issue_valid     (iq_load_issue_valid),
-        .issue_data      (iq_load_issue_data),
+        .preg_ready_table(preg_ready_table_comb),
+        .issue_valid     (iq_load_issue_valid_s),
+        .issue_data      (iq_load_issue_data_s),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
-        .flush_full      (flush_out.full_flush)
+        .flush_full      (flush_out.full_flush),
+        .port0_suppress  (lsu_port0_suppress)
     );
+
+    assign iq_load_issue_valid[0] = iq_load_issue_valid_s[0];
+    assign iq_load_issue_valid[1] = 1'b0;
+    assign iq_load_issue_data[0]  = iq_load_issue_data_s[0];
+    assign iq_load_issue_data[1]  = '0;
 
     // Store IQ is single-issue (NUM_SELECT=1): each store is a SINGLE entry
     // needing both rs1 and rs2 ready, and issuing fires BOTH the STA and STD
@@ -881,13 +896,14 @@ module rv64gc_core_top
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
-        .preg_ready_table(preg_ready_table),
+        .preg_ready_table(preg_ready_table_comb),
         .issue_valid     (iq_store_issue_valid_s),
         .issue_data      (iq_store_issue_data_s),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
-        .flush_full      (flush_out.full_flush)
+        .flush_full      (flush_out.full_flush),
+        .port0_suppress  (1'b0)
     );
     assign iq_store_issue_valid[0] = iq_store_issue_valid_s[0];
     assign iq_store_issue_valid[1] = 1'b0;
@@ -1509,6 +1525,17 @@ module rv64gc_core_top
         end
     end
 
+    // Combinational ready table: includes THIS cycle's rename clears.
+    always_comb begin
+        preg_ready_table_comb = preg_ready_table;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if (3'(i) < ren_count_w && ren_insn[i].base.rd_valid &&
+                ren_insn[i].pdst != '0) begin
+                preg_ready_table_comb[ren_insn[i].pdst] = 1'b0;
+            end
+        end
+    end
+
     // =========================================================================
     // 15. LSU (Load/Store Unit)
     // =========================================================================
@@ -1529,6 +1556,7 @@ module rv64gc_core_top
     // LSU ordering violation
     logic                     lsu_ordering_violation;
     logic [ROB_IDX_BITS-1:0]  lsu_violation_rob_idx;
+    logic                     lsu_port0_suppress;
 
     // LQ/SQ alloc counts from rename
     logic [2:0] lq_alloc_count;
@@ -1592,6 +1620,7 @@ module rv64gc_core_top
         .sq_full                (sq_full),
         // Ordering violation
         .ordering_violation     (lsu_ordering_violation),
+        .load_port0_suppress   (lsu_port0_suppress),
         .violation_rob_idx      (lsu_violation_rob_idx),
         // D-cache interface
         .dcache_load_req_valid  (dc_load_req_valid),
