@@ -125,7 +125,8 @@ module icache
                 .we    (dr_we_w),
                 .waddr (tr_waddr),
                 .wway  (2'd0),          // dummy
-                .wdata (fill_resp_data)
+                .wdata (sc_install_valid   ? fill_resp_data :
+                        ic_mshr_install_avail ? ic_mshr_fill_data[ic_mshr_install_idx] : '0)
             );
         end
     endgenerate
@@ -187,83 +188,182 @@ module icache
     // PLRU update helper macro: point away from accessed way (inlined below)
 
     // =========================================================================
-    // Miss FSM
+    // Miss handling: 2-entry MSHR array (miss-under-miss support)
+    //
+    // Each MSHR tracks one outstanding miss: addr, victim way, whether the
+    // fill request has been sent to L2, and whether the fill data arrived.
+    // On a new miss, a free MSHR is allocated.  Fill requests are issued
+    // one at a time (L2 accepts one per cycle).  Fill responses are matched
+    // against all MSHRs by address.  Completed fills install one per cycle.
     // =========================================================================
-    typedef enum logic [0:0] {
-        ST_IDLE      = 1'b0,
-        ST_WAIT_FILL = 1'b1
-    } fsm_state_e;
+    localparam int IC_MSHR_DEPTH = 2;
 
-    fsm_state_e state_q, state_d;
+    logic                ic_mshr_valid    [0:IC_MSHR_DEPTH-1];
+    logic [63:0]         ic_mshr_addr     [0:IC_MSHR_DEPTH-1];
+    logic [1:0]          ic_mshr_victim   [0:IC_MSHR_DEPTH-1];
+    logic                ic_mshr_req_sent [0:IC_MSHR_DEPTH-1];
+    logic                ic_mshr_fill_done[0:IC_MSHR_DEPTH-1];
+    logic [511:0]        ic_mshr_fill_data[0:IC_MSHR_DEPTH-1];
 
-    // Latch the miss address and victim
-    logic [63:0] miss_addr_q;
-    logic [1:0]  miss_way_q;
-
-    // Fill write-back controls driven from FSM
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            state_q     <= ST_IDLE;
-            miss_addr_q <= '0;
-            miss_way_q  <= '0;
-        end else begin
-            state_q <= state_d;
-            if (state_q == ST_IDLE && req_valid && !cache_hit && !invalidate_all) begin
-                miss_addr_q <= req_addr;
-                miss_way_q  <= victim_way;
+    // Find a free MSHR for allocation
+    logic ic_mshr_free_avail;
+    logic ic_mshr_free_idx;
+    always_comb begin
+        ic_mshr_free_avail = 1'b0;
+        ic_mshr_free_idx   = 1'b0;
+        for (int m = IC_MSHR_DEPTH-1; m >= 0; m--) begin
+            if (!ic_mshr_valid[m]) begin
+                ic_mshr_free_avail = 1'b1;
+                ic_mshr_free_idx   = m[0];
             end
         end
     end
 
-    // A fill response is only valid for THIS miss if its line address
-    // matches the latched miss address.  The L2's hit-pipe re-emits
-    // earlier requests' responses 8 cycles after they were originally
-    // delivered (the pipe stages are not invalidated after the first
-    // delivery), so the icache MUST ignore unmatched replays.
-    logic fill_resp_for_this_miss;
-    assign fill_resp_for_this_miss =
-        fill_resp_valid &&
-        (fill_resp_addr[63:LINE_BITS] == miss_addr_q[63:LINE_BITS]);
-
-    // FSM combinational
+    // Check if the current request already has an MSHR allocated
+    logic ic_mshr_addr_match;
     always_comb begin
-        state_d        = state_q;
-        tr_we          = 1'b0;
-        tr_waddr       = '0;
-        tr_wway        = '0;
-        tr_wvalid      = 1'b0;
-        tr_wtag        = '0;
-        fill_req_valid = 1'b0;
-        fill_req_addr  = '0;
+        ic_mshr_addr_match = 1'b0;
+        for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
+            if (ic_mshr_valid[m] &&
+                ic_mshr_addr[m][63:LINE_BITS] == req_addr[63:LINE_BITS])
+                ic_mshr_addr_match = 1'b1;
+        end
+    end
 
-        case (state_q)
-            ST_IDLE: begin
-                if (req_valid && !cache_hit && !invalidate_all) begin
-                    // Issue fill request immediately
-                    fill_req_valid = 1'b1;
-                    fill_req_addr  = {req_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
-                    state_d        = ST_WAIT_FILL;
+    // Find an MSHR that needs the fill request held to L2.
+    // Keep asserting fill_req_valid every cycle until the fill arrives
+    // (the old FSM held it in ST_WAIT_FILL). The L2 has no req_ready
+    // handshake on the icache port, so a single-cycle pulse can be
+    // lost if the L2 arbiter is busy with dcache that cycle.
+    logic ic_mshr_need_req;
+    logic ic_mshr_req_idx;
+    always_comb begin
+        ic_mshr_need_req = 1'b0;
+        ic_mshr_req_idx  = 1'b0;
+        for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
+            if (ic_mshr_valid[m] && !ic_mshr_fill_done[m] && !ic_mshr_need_req) begin
+                ic_mshr_need_req = 1'b1;
+                ic_mshr_req_idx  = m[0];
+            end
+        end
+    end
+
+    // Find an MSHR with completed fill (ready to install into cache)
+    logic ic_mshr_install_avail;
+    logic ic_mshr_install_idx;
+    always_comb begin
+        ic_mshr_install_avail = 1'b0;
+        ic_mshr_install_idx   = 1'b0;
+        for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
+            if (ic_mshr_valid[m] && ic_mshr_fill_done[m] && !ic_mshr_install_avail) begin
+                ic_mshr_install_avail = 1'b1;
+                ic_mshr_install_idx   = m[0];
+            end
+        end
+    end
+
+    // Fill request to L2: issue for the first MSHR that needs it
+    assign fill_req_valid = ic_mshr_need_req;
+    assign fill_req_addr  = {ic_mshr_addr[ic_mshr_req_idx][63:LINE_BITS],
+                             {LINE_BITS{1'b0}}};
+
+    // Same-cycle install: when a fill response arrives and matches an MSHR,
+    // install immediately (don't wait for fill_done next cycle).
+    logic        sc_install_valid;
+    logic        sc_install_idx;
+    logic [63:0] sc_install_addr;
+    logic [1:0]  sc_install_victim;
+    always_comb begin
+        sc_install_valid  = 1'b0;
+        sc_install_idx    = 1'b0;
+        sc_install_addr   = '0;
+        sc_install_victim = '0;
+        if (fill_resp_valid) begin
+            for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
+                if (ic_mshr_valid[m] && !ic_mshr_fill_done[m] &&
+                    fill_resp_addr[63:LINE_BITS] == ic_mshr_addr[m][63:LINE_BITS]) begin
+                    sc_install_valid  = 1'b1;
+                    sc_install_idx    = m[0];
+                    sc_install_addr   = ic_mshr_addr[m];
+                    sc_install_victim = ic_mshr_victim[m];
+                end
+            end
+        end
+    end
+
+    // Tag/data RAM write: same-cycle install (priority) or deferred install
+    always_comb begin
+        tr_we     = 1'b0;
+        tr_waddr  = '0;
+        tr_wway   = '0;
+        tr_wvalid = 1'b0;
+        tr_wtag   = '0;
+
+        if (sc_install_valid) begin
+            // Install directly from fill response (same cycle)
+            tr_we     = 1'b1;
+            tr_waddr  = sc_install_addr[INDEX_HI:INDEX_LO];
+            tr_wway   = sc_install_victim;
+            tr_wvalid = 1'b1;
+            tr_wtag   = sc_install_addr[TAG_HI:TAG_LO];
+        end else if (ic_mshr_install_avail) begin
+            // Deferred install from stored fill data
+            tr_we     = 1'b1;
+            tr_waddr  = ic_mshr_addr[ic_mshr_install_idx][INDEX_HI:INDEX_LO];
+            tr_wway   = ic_mshr_victim[ic_mshr_install_idx];
+            tr_wvalid = 1'b1;
+            tr_wtag   = ic_mshr_addr[ic_mshr_install_idx][TAG_HI:TAG_LO];
+        end
+    end
+
+    // MSHR sequential logic: allocate, receive fill, install
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || invalidate_all) begin
+            for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
+                ic_mshr_valid[m]     <= 1'b0;
+                ic_mshr_req_sent[m]  <= 1'b0;
+                ic_mshr_fill_done[m] <= 1'b0;
+            end
+        end else begin
+            // 1. Allocate: on miss, grab a free MSHR
+            if (req_valid && !cache_hit && !invalidate_all &&
+                ic_mshr_free_avail && !ic_mshr_addr_match) begin
+                ic_mshr_valid[ic_mshr_free_idx]     <= 1'b1;
+                ic_mshr_addr[ic_mshr_free_idx]      <= req_addr;
+                ic_mshr_victim[ic_mshr_free_idx]    <= victim_way;
+                ic_mshr_req_sent[ic_mshr_free_idx]  <= 1'b0;
+                ic_mshr_fill_done[ic_mshr_free_idx] <= 1'b0;
+            end
+
+            // 2. Mark fill request as sent
+            if (ic_mshr_need_req) begin
+                ic_mshr_req_sent[ic_mshr_req_idx] <= 1'b1;
+            end
+
+            // 3. Receive fill response: same-cycle install frees the MSHR
+            //    immediately.  Otherwise store data for deferred install.
+            if (sc_install_valid) begin
+                // Same-cycle install: free MSHR now (tag/data RAM written
+                // combinationally via tr_we from sc_install_valid)
+                ic_mshr_valid[sc_install_idx] <= 1'b0;
+            end else if (fill_resp_valid) begin
+                // No same-cycle install possible (e.g., another install
+                // in progress) — store data for deferred install
+                for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
+                    if (ic_mshr_valid[m] && ic_mshr_req_sent[m] &&
+                        !ic_mshr_fill_done[m] &&
+                        fill_resp_addr[63:LINE_BITS] == ic_mshr_addr[m][63:LINE_BITS]) begin
+                        ic_mshr_fill_done[m] <= 1'b1;
+                        ic_mshr_fill_data[m] <= fill_resp_data;
+                    end
                 end
             end
 
-            ST_WAIT_FILL: begin
-                // Hold fill request until acknowledged
-                fill_req_valid = 1'b1;
-                fill_req_addr  = {miss_addr_q[63:LINE_BITS], {LINE_BITS{1'b0}}};
-
-                if (fill_resp_for_this_miss) begin
-                    // Write tag RAM
-                    tr_we     = 1'b1;
-                    tr_waddr  = miss_addr_q[INDEX_HI:INDEX_LO];
-                    tr_wway   = miss_way_q;
-                    tr_wvalid = 1'b1;
-                    tr_wtag   = miss_addr_q[TAG_HI:TAG_LO];
-                    state_d   = ST_IDLE;
-                end
+            // 4. Deferred install: free the MSHR after writing to tag/data RAM
+            if (!sc_install_valid && ic_mshr_install_avail) begin
+                ic_mshr_valid[ic_mshr_install_idx] <= 1'b0;
             end
-
-            default: state_d = ST_IDLE;
-        endcase
+        end
     end
 
     // =========================================================================
@@ -284,35 +384,61 @@ module icache
                 2'd3: plru_state[s0_index] <= {1'b0, plru_state[s0_index][1], 1'b0};
                 default: ;
             endcase
-        end else if (state_q == ST_WAIT_FILL && fill_resp_for_this_miss) begin
-            case (miss_way_q)
-                2'd0: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b1, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][0]};
-                2'd1: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b0, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][0]};
-                2'd2: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][1], 1'b1};
-                2'd3: plru_state[miss_addr_q[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[miss_addr_q[INDEX_HI:INDEX_LO]][1], 1'b0};
-                default: ;
-            endcase
+        end else if (sc_install_valid || ic_mshr_install_avail) begin
+            // Update PLRU for the just-installed fill
+            begin
+                logic [L1I_SET_BITS-1:0] inst_set;
+                logic [1:0] inst_way;
+                inst_set = sc_install_valid ? sc_install_addr[INDEX_HI:INDEX_LO]
+                                           : ic_mshr_addr[ic_mshr_install_idx][INDEX_HI:INDEX_LO];
+                inst_way = sc_install_valid ? sc_install_victim
+                                           : ic_mshr_victim[ic_mshr_install_idx];
+                case (inst_way)
+                    2'd0: plru_state[inst_set] <= {1'b1, 1'b1, plru_state[inst_set][0]};
+                    2'd1: plru_state[inst_set] <= {1'b1, 1'b0, plru_state[inst_set][0]};
+                    2'd2: plru_state[inst_set] <= {1'b0, plru_state[inst_set][1], 1'b1};
+                    2'd3: plru_state[inst_set] <= {1'b0, plru_state[inst_set][1], 1'b0};
+                    default: ;
+                endcase
+            end
         end
     end
 
     // =========================================================================
-    // Response outputs (combinational, using s1 registered address)
+    // Response outputs (combinational)
     // =========================================================================
-    // Tag and data RAMs now use async reads, so their outputs correspond
-    // to the current cycle's raddr (= previous cycle's req_addr, registered
-    // in s1_addr). The hit detection uses s1_tag vs tr_tag_out, and
-    // hit_data = dr_rdata[hit_way]. All are available in the same cycle
-    // as s1_valid, giving 1-cycle hit latency from request.
+    // Priority: 1) cache hit, 2) MSHR fill-forward (just-completed fill
+    // whose address matches the current request).
     //
-    // Fill-path forwarding: when a miss is in flight and the fill response
-    // arrives, we can return the filled line directly — but ONLY if the
-    // current req_addr still matches the line being filled.  If a redirect
-    // has moved the fetch unit to a different line, the fill data is for
-    // the OLD request and must not be presented as the response for the
-    // new request (that would corrupt the instruction stream).
-    logic fill_addr_matches;
-    assign fill_addr_matches =
-        (req_addr[63:LINE_BITS] == miss_addr_q[63:LINE_BITS]);
+    // Fill-forward from MSHR: when a fill response arrives this cycle AND
+    // the current req_addr matches the MSHR being filled, forward the data
+    // directly.  Also check MSHRs with fill_done (already received).
+    logic mshr_fwd_valid;
+    logic [511:0] mshr_fwd_data;
+    always_comb begin
+        mshr_fwd_valid = 1'b0;
+        mshr_fwd_data  = '0;
+        // Check for just-arriving fill response matching current request
+        if (fill_resp_valid && req_valid) begin
+            for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
+                if (ic_mshr_valid[m] && ic_mshr_req_sent[m] &&
+                    fill_resp_addr[63:LINE_BITS] == req_addr[63:LINE_BITS]) begin
+                    mshr_fwd_valid = 1'b1;
+                    mshr_fwd_data  = fill_resp_data;
+                end
+            end
+        end
+        // Check for already-completed MSHR matching current request
+        if (!mshr_fwd_valid && req_valid) begin
+            for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
+                if (ic_mshr_valid[m] && ic_mshr_fill_done[m] &&
+                    ic_mshr_addr[m][63:LINE_BITS] == req_addr[63:LINE_BITS]) begin
+                    mshr_fwd_valid = 1'b1;
+                    mshr_fwd_data  = ic_mshr_fill_data[m];
+                end
+            end
+        end
+    end
 
     always_comb begin
         resp_valid = 1'b0;
@@ -323,11 +449,10 @@ module icache
             resp_valid = 1'b1;
             resp_hit   = 1'b1;
             resp_data  = hit_data;
-        end else if (state_q == ST_WAIT_FILL && fill_resp_for_this_miss &&
-                     req_valid && fill_addr_matches) begin
+        end else if (mshr_fwd_valid) begin
             resp_valid = 1'b1;
             resp_hit   = 1'b0;
-            resp_data  = fill_resp_data;
+            resp_data  = mshr_fwd_data;
         end
     end
 
