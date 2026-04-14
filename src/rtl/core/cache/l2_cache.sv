@@ -29,6 +29,14 @@ module l2_cache
     output logic [63:0] icache_resp_addr,
     output logic [511:0] icache_resp_data,
 
+    // Prefetch port (lowest priority, read-only)
+    input  logic        prefetch_req_valid,
+    input  logic [63:0] prefetch_req_addr,
+    output logic        prefetch_req_ready,
+    output logic        prefetch_resp_valid,
+    output logic [63:0] prefetch_resp_addr,
+    output logic [511:0] prefetch_resp_data,
+
     // Main memory interface (sim_memory / external)
     output logic        mem_req_valid,
     output logic [63:0] mem_req_addr,
@@ -81,7 +89,7 @@ module l2_cache
     typedef struct packed {
         logic           valid;
         logic [63:0]    addr;
-        logic           is_dcache;   // 1 = D-cache source, 0 = I-cache source
+        logic [1:0]     source;      // 0=icache, 1=dcache, 2=prefetch
         mshr_state_e    state;
     } mshr_entry_t;
 
@@ -89,13 +97,13 @@ module l2_cache
 
     // =========================================================================
     // Hit-latency pipeline (8 stages)
-    //   Each stage carries: valid, addr, data, is_dcache flag
+    //   Each stage carries: valid, addr, data, source tag
     // =========================================================================
     typedef struct packed {
         logic           valid;
         logic [63:0]    addr;
         logic [511:0]   data;
-        logic           is_dcache;
+        logic [1:0]     source;    // 0=icache, 1=dcache, 2=prefetch
     } pipe_entry_t;
 
     pipe_entry_t hit_pipe [0:L2_HIT_LATENCY-1];
@@ -126,7 +134,7 @@ module l2_cache
     logic [63:0]    arb_addr;
     logic           arb_we;
     logic [511:0]   arb_wdata;
-    logic           arb_is_dcache;
+    logic [1:0]     arb_source;
 
     // Tag-lookup results (combinational)
     logic [L2_SET_BITS-1:0] lookup_set;
@@ -285,7 +293,7 @@ module l2_cache
         arb_addr      = '0;
         arb_we        = 1'b0;
         arb_wdata     = '0;
-        arb_is_dcache = 1'b0;
+        arb_source = 2'd0;
 
         if (inv_state == INV_IDLE) begin
             if (dcache_req_valid) begin
@@ -293,13 +301,19 @@ module l2_cache
                 arb_addr      = dcache_req_addr;
                 arb_we        = dcache_req_we;
                 arb_wdata     = dcache_req_wdata;
-                arb_is_dcache = 1'b1;
+                arb_source    = 2'd1;  // dcache
             end else if (icache_req_valid) begin
                 arb_valid     = 1'b1;
                 arb_addr      = icache_req_addr;
                 arb_we        = 1'b0;
                 arb_wdata     = '0;
-                arb_is_dcache = 1'b0;
+                arb_source    = 2'd0;  // icache
+            end else if (prefetch_req_valid) begin
+                arb_valid     = 1'b1;
+                arb_addr      = prefetch_req_addr;
+                arb_we        = 1'b0;
+                arb_wdata     = '0;
+                arb_source    = 2'd2;  // prefetch
             end
         end
     end
@@ -308,9 +322,11 @@ module l2_cache
     // Ready signals: accept when not full / no duplicate / not invalidating
     // =========================================================================
     always_comb begin
-        dcache_req_ready = (inv_state == INV_IDLE) && !mshr_full;
-        icache_req_ready = (inv_state == INV_IDLE) && !mshr_full &&
-                           !dcache_req_valid;
+        dcache_req_ready   = (inv_state == INV_IDLE) && !mshr_full;
+        icache_req_ready   = (inv_state == INV_IDLE) && !mshr_full &&
+                             !dcache_req_valid;
+        prefetch_req_ready = (inv_state == INV_IDLE) && !mshr_full &&
+                             !dcache_req_valid && !icache_req_valid;
     end
 
     // =========================================================================
@@ -327,7 +343,7 @@ module l2_cache
                 hit_pipe[s].valid     <= 1'b0;
                 hit_pipe[s].addr      <= '0;
                 hit_pipe[s].data      <= '0;
-                hit_pipe[s].is_dcache <= 1'b0;
+                hit_pipe[s].source <= 2'd0;
             end
         end else begin
             // Stage 0: insert a hit on a fill request (read hit)
@@ -335,7 +351,7 @@ module l2_cache
             hit_pipe[0].valid     <= arb_valid && hit_any && !arb_we;
             hit_pipe[0].addr      <= arb_addr;
             hit_pipe[0].data      <= hit_data;
-            hit_pipe[0].is_dcache <= arb_is_dcache;
+            hit_pipe[0].source <= arb_source;
             // Stages 1..7: propagate
             for (int s = 1; s < L2_HIT_LATENCY; s++) begin
                 hit_pipe[s] <= hit_pipe[s-1];
@@ -346,15 +362,20 @@ module l2_cache
     // =========================================================================
     // Hit response outputs (end of 8-stage pipe)
     // =========================================================================
-    assign dcache_resp_valid = hit_pipe[L2_HIT_LATENCY-1].valid &&
-                               hit_pipe[L2_HIT_LATENCY-1].is_dcache;
-    assign dcache_resp_addr  = hit_pipe[L2_HIT_LATENCY-1].addr;
-    assign dcache_resp_data  = hit_pipe[L2_HIT_LATENCY-1].data;
+    assign dcache_resp_valid   = hit_pipe[L2_HIT_LATENCY-1].valid &&
+                                 (hit_pipe[L2_HIT_LATENCY-1].source == 2'd1);
+    assign dcache_resp_addr    = hit_pipe[L2_HIT_LATENCY-1].addr;
+    assign dcache_resp_data    = hit_pipe[L2_HIT_LATENCY-1].data;
 
-    assign icache_resp_valid = hit_pipe[L2_HIT_LATENCY-1].valid &&
-                               !hit_pipe[L2_HIT_LATENCY-1].is_dcache;
-    assign icache_resp_addr  = hit_pipe[L2_HIT_LATENCY-1].addr;
-    assign icache_resp_data  = hit_pipe[L2_HIT_LATENCY-1].data;
+    assign icache_resp_valid   = hit_pipe[L2_HIT_LATENCY-1].valid &&
+                                 (hit_pipe[L2_HIT_LATENCY-1].source == 2'd0);
+    assign icache_resp_addr    = hit_pipe[L2_HIT_LATENCY-1].addr;
+    assign icache_resp_data    = hit_pipe[L2_HIT_LATENCY-1].data;
+
+    assign prefetch_resp_valid = hit_pipe[L2_HIT_LATENCY-1].valid &&
+                                 (hit_pipe[L2_HIT_LATENCY-1].source == 2'd2);
+    assign prefetch_resp_addr  = hit_pipe[L2_HIT_LATENCY-1].addr;
+    assign prefetch_resp_data  = hit_pipe[L2_HIT_LATENCY-1].data;
 
     // =========================================================================
     // Memory request mux: MSHR issue vs invalidation writeback
@@ -398,7 +419,7 @@ module l2_cache
             for (int i = 0; i < L2_MSHR_DEPTH; i++) begin
                 mshr[i].valid     <= 1'b0;
                 mshr[i].addr      <= '0;
-                mshr[i].is_dcache <= 1'b0;
+                mshr[i].source <= 2'd0;
                 mshr[i].state     <= MSHR_IDLE;
             end
             inv_state      <= INV_IDLE;
@@ -472,7 +493,7 @@ module l2_cache
                             if (mshr_has_free) begin
                                 mshr[mshr_free_idx].valid     <= 1'b1;
                                 mshr[mshr_free_idx].addr      <= arb_addr;
-                                mshr[mshr_free_idx].is_dcache <= arb_is_dcache;
+                                mshr[mshr_free_idx].source <= arb_source;
                                 mshr[mshr_free_idx].state     <= MSHR_PENDING;
                             end
                         end
@@ -561,7 +582,7 @@ module l2_cache
                     hit_pipe[L2_HIT_LATENCY-1].valid     <= 1'b1;
                     hit_pipe[L2_HIT_LATENCY-1].addr      <= mshr[mshr_resp_idx].addr;
                     hit_pipe[L2_HIT_LATENCY-1].data      <= mem_resp_data;
-                    hit_pipe[L2_HIT_LATENCY-1].is_dcache <= mshr[mshr_resp_idx].is_dcache;
+                    hit_pipe[L2_HIT_LATENCY-1].source <= mshr[mshr_resp_idx].source;
 
                     // Deallocate MSHR
                     mshr[mshr_resp_idx].valid <= 1'b0;

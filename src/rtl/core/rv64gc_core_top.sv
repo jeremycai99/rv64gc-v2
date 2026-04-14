@@ -1775,6 +1775,13 @@ module rv64gc_core_top
         .icache_resp_valid  (icache_fill_resp_valid),
         .icache_resp_addr   (l2_icache_resp_addr),
         .icache_resp_data   (icache_fill_resp_data),
+        // Prefetch port (tied off — NLPB not yet wired)
+        .prefetch_req_valid (1'b0),
+        .prefetch_req_addr  (64'd0),
+        .prefetch_req_ready (),
+        .prefetch_resp_valid(),
+        .prefetch_resp_addr (),
+        .prefetch_resp_data (),
         // Main memory interface
         .mem_req_valid      (mem_req_valid),
         .mem_req_addr       (mem_req_addr),
