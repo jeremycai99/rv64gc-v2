@@ -34,6 +34,7 @@ module commit
     input  logic [11:0]             head_csr_addr [0:PIPE_WIDTH-1],
     input  logic [63:0]             head_csr_wdata [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   head_csr_we,
+    input  logic [1:0]              head_csr_op [0:PIPE_WIDTH-1],
 
     // Rename buffer data (for free list release)
     input  logic [PHYS_REG_BITS-1:0] head_pdst [0:PIPE_WIDTH-1],
@@ -58,6 +59,7 @@ module commit
     output logic                    csr_commit_valid,
     output logic [11:0]             csr_commit_addr,
     output logic [63:0]             csr_commit_wdata,
+    output logic [1:0]              csr_commit_op,
 
     // Checkpoint release (for checkpoint manager)
     output logic [PIPE_WIDTH-1:0]              release_checkpoint,
@@ -288,12 +290,14 @@ module commit
         csr_commit_valid = 1'b0;
         csr_commit_addr  = 12'd0;
         csr_commit_wdata = 64'd0;
+        csr_commit_op    = 2'd0;
 
         if (scan_count > 3'd0 && head_is_csr[0] && head_csr_we[0] &&
             !head_has_exception[0]) begin
             csr_commit_valid = 1'b1;
             csr_commit_addr  = head_csr_addr[0];
             csr_commit_wdata = head_csr_wdata[0];
+            csr_commit_op    = head_csr_op[0];
         end
     end
 

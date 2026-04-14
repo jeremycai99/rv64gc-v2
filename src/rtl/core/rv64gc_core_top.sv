@@ -77,6 +77,7 @@ module rv64gc_core_top
     logic [CDB_WIDTH-1:0]     cdb_csr_we;
     logic [11:0]              cdb_csr_addr     [0:CDB_WIDTH-1];
     logic [63:0]              cdb_csr_wdata    [0:CDB_WIDTH-1];
+    logic [1:0]               cdb_csr_op       [0:CDB_WIDTH-1];
 
     // =========================================================================
     // Registered CDB (1-cycle delayed) for wakeup / ROB writeback / preg_ready
@@ -98,6 +99,7 @@ module rv64gc_core_top
     logic [CDB_WIDTH-1:0]     cdb_csr_we_r;
     logic [11:0]              cdb_csr_addr_r     [0:CDB_WIDTH-1];
     logic [63:0]              cdb_csr_wdata_r    [0:CDB_WIDTH-1];
+    logic [1:0]               cdb_csr_op_r       [0:CDB_WIDTH-1];
 
     // =========================================================================
     // Bypass sources (6 sources: ALU0, ALU1, ALU2, ALU3, MUL, Load0)
@@ -297,6 +299,7 @@ module rv64gc_core_top
     logic [11:0]             rob_head_csr_addr    [0:PIPE_WIDTH-1];
     logic [63:0]             rob_head_csr_wdata   [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_csr_we;
+    logic [1:0]              rob_head_csr_op      [0:PIPE_WIDTH-1];
 
     // Commit signals
     logic [2:0]              commit_count;
@@ -529,6 +532,7 @@ module rv64gc_core_top
         .wb_csr_we              (cdb_csr_we_r),
         .wb_csr_addr            (cdb_csr_addr_r),
         .wb_csr_wdata           (cdb_csr_wdata_r),
+        .wb_csr_op              (cdb_csr_op_r),
         .sta_wb_valid           (lsu_sta_wb_valid_r),
         .sta_wb_rob_idx         (lsu_sta_wb_rob_idx_r),
         .ordering_violation_valid   (lsu_ordering_violation),
@@ -557,6 +561,7 @@ module rv64gc_core_top
         .head_csr_addr          (rob_head_csr_addr),
         .head_csr_wdata         (rob_head_csr_wdata),
         .head_csr_we            (rob_head_csr_we),
+        .head_csr_op            (rob_head_csr_op),
         .commit_count           (commit_count),
         .flush_valid            (flush_out.valid),
         .flush_rob_tail         (flush_out.rob_idx),
@@ -1264,6 +1269,7 @@ module rv64gc_core_top
         cdb_csr_we[0]           = 1'b0;
         cdb_csr_addr[0]         = 12'd0;
         cdb_csr_wdata[0]        = 64'd0;
+        cdb_csr_op[0]           = 2'd0;
         if (bru_issue) begin
             cdb_data[0] = bru_result;
         end else begin
@@ -1285,6 +1291,7 @@ module rv64gc_core_top
         cdb_csr_we[1]           = 1'b0;
         cdb_csr_addr[1]         = 12'd0;
         cdb_csr_wdata[1]        = 64'd0;
+        cdb_csr_op[1]           = 2'd0;
         if (bru1_issue)
             cdb_data[1] = bru1_result;
         else
@@ -1313,6 +1320,7 @@ module rv64gc_core_top
         cdb_csr_we[2]           = 1'b0;
         cdb_csr_addr[2]         = 12'd0;
         cdb_csr_wdata[2]        = 64'd0;
+        cdb_csr_op[2]           = 2'd0;
     end
 
     // CDB[3]: ALU3 (same cycle) or DIV (multi-cycle)
@@ -1322,9 +1330,18 @@ module rv64gc_core_top
             cdb_tag[3]           = iq2_issue_data[0].pdst;
             cdb_rob_idx[3]       = iq2_issue_data[0].rob_idx;
             cdb_data[3]          = alu3_result;
-            cdb_csr_we[3]        = (iq2_issue_data[0].fu_type == FU_CSR) ? 1'b1 : 1'b0;
+            // CSR write enable: only set for CSRRW (always writes) or
+            // CSRRS/CSRRC with rs1 != x0 (rs1=x0 is a read-only alias).
+            // The csr_op encodes: 0=RW, 1=RS, 2=RC, 3=NONE.
+            // For RS/RC with rs1=x0, the write is a no-op per RISC-V spec
+            // section 9.1: "shall not write to the CSR at all".
+            cdb_csr_we[3]        = (iq2_issue_data[0].fu_type == FU_CSR &&
+                                    iq2_issue_data[0].csr_op != 2'd3 &&
+                                    (iq2_issue_data[0].csr_op == 2'd0 ||
+                                     bypassed_data[6] != 64'd0)) ? 1'b1 : 1'b0;
             cdb_csr_addr[3]      = iq2_issue_data[0].csr_addr;
-            cdb_csr_wdata[3]     = alu3_result;
+            cdb_csr_wdata[3]     = bypassed_data[6];  // rs1 value (the write mask)
+            cdb_csr_op[3]        = iq2_issue_data[0].csr_op;
         end else begin
             cdb_valid[3]         = div_valid_out;
             cdb_tag[3]           = div_pdst_r;
@@ -1333,6 +1350,7 @@ module rv64gc_core_top
             cdb_csr_we[3]        = 1'b0;
             cdb_csr_addr[3]      = 12'd0;
             cdb_csr_wdata[3]     = 64'd0;
+            cdb_csr_op[3]        = 2'd0;
         end
         cdb_has_exception[3]     = 1'b0;
         cdb_exc_code[3]          = 4'd0;
@@ -1357,6 +1375,7 @@ module rv64gc_core_top
         cdb_csr_we[4]          = 1'b0;
         cdb_csr_addr[4]        = 12'd0;
         cdb_csr_wdata[4]       = 64'd0;
+        cdb_csr_op[4]          = 2'd0;
     end
 
     // CDB[5]: Load 1
@@ -1374,6 +1393,7 @@ module rv64gc_core_top
         cdb_csr_we[5]          = 1'b0;
         cdb_csr_addr[5]        = 12'd0;
         cdb_csr_wdata[5]       = 64'd0;
+        cdb_csr_op[5]          = 2'd0;
     end
 
     // =========================================================================
@@ -1398,6 +1418,7 @@ module rv64gc_core_top
                 cdb_branch_target_r[i]  <= '0;
                 cdb_csr_addr_r[i]       <= '0;
                 cdb_csr_wdata_r[i]      <= '0;
+                cdb_csr_op_r[i]         <= '0;
             end
         end else begin
             cdb_valid_r            <= cdb_valid;
@@ -1414,6 +1435,7 @@ module rv64gc_core_top
                 cdb_branch_target_r[i]  <= cdb_branch_target[i];
                 cdb_csr_addr_r[i]       <= cdb_csr_addr[i];
                 cdb_csr_wdata_r[i]      <= cdb_csr_wdata[i];
+                cdb_csr_op_r[i]         <= cdb_csr_op[i];
             end
         end
     end
@@ -1772,6 +1794,7 @@ module rv64gc_core_top
     logic        csr_commit_valid;
     logic [11:0] csr_commit_addr;
     logic [63:0] csr_commit_wdata;
+    logic [1:0]  csr_commit_op;
     logic [PIPE_WIDTH-1:0] release_checkpoint;
     logic [CHECKPOINT_BITS-1:0] release_checkpoint_id [0:PIPE_WIDTH-1];
 
@@ -1807,6 +1830,7 @@ module rv64gc_core_top
         .head_csr_addr          (rob_head_csr_addr),
         .head_csr_wdata         (rob_head_csr_wdata),
         .head_csr_we            (rob_head_csr_we),
+        .head_csr_op            (rob_head_csr_op),
         // Rename buffer data
         .head_pdst              (rb_head_pdst),
         .head_old_pdst          (rb_head_old_pdst),
@@ -1823,6 +1847,7 @@ module rv64gc_core_top
         .csr_commit_valid       (csr_commit_valid),
         .csr_commit_addr        (csr_commit_addr),
         .csr_commit_wdata       (csr_commit_wdata),
+        .csr_commit_op          (csr_commit_op),
         .release_checkpoint     (release_checkpoint),
         .release_checkpoint_id  (release_checkpoint_id),
         // Trap vectors
@@ -1932,7 +1957,7 @@ module rv64gc_core_top
         .write_valid        (csr_commit_valid),
         .write_addr         (csr_commit_addr),
         .write_data         (csr_commit_wdata),
-        .write_op           (2'b00),
+        .write_op           (csr_commit_op),
         .trap_valid         (trap_valid),
         .trap_cause         (trap_cause),
         .trap_pc            (trap_pc),

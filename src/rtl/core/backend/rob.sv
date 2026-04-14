@@ -44,6 +44,7 @@ module rob
     input  logic [CDB_WIDTH-1:0]              wb_csr_we,
     input  logic [11:0]                       wb_csr_addr [0:CDB_WIDTH-1],
     input  logic [63:0]                       wb_csr_wdata [0:CDB_WIDTH-1],
+    input  logic [1:0]                        wb_csr_op [0:CDB_WIDTH-1],
 
     // STA sideband writeback (marks store ROB entry as ready, no data)
     input  logic                              sta_wb_valid,
@@ -81,6 +82,7 @@ module rob
     output logic [11:0]                       head_csr_addr [0:PIPE_WIDTH-1],
     output logic [63:0]                       head_csr_wdata [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_csr_we,
+    output logic [1:0]                        head_csr_op [0:PIPE_WIDTH-1],
 
     // Commit acknowledgment: advance head pointer
     input  logic [2:0]              commit_count,    // 0..6 entries committed this cycle
@@ -170,6 +172,7 @@ module rob
     reg [12*ROB_DEPTH-1:0]       csr_addr_packed;
     reg [64*ROB_DEPTH-1:0]       csr_wdata_packed;
     reg [ROB_DEPTH-1:0]          csr_we_r;
+    reg [1:0]                    csr_op_r [0:ROB_DEPTH-1];
 
     // =========================================================================
     // Commit read: combinational from head
@@ -202,6 +205,7 @@ module rob
             head_csr_addr[i]         = csr_addr_packed[head_idx_w[i]*12 +: 12];
             head_csr_wdata[i]        = csr_wdata_packed[head_idx_w[i]*64 +: 64];
             head_csr_we[i]           = csr_we_r[head_idx_w[i]];
+            head_csr_op[i]           = csr_op_r[head_idx_w[i]];
         end
     end
 
@@ -287,6 +291,7 @@ module rob
             branch_taken_r       <= '0;
             branch_mispredict_r  <= '0;
             csr_we_r             <= '0;
+            for (int i = 0; i < ROB_DEPTH; i++) csr_op_r[i] <= 2'd0;
             /* verilator lint_off WIDTHCONCAT */
             pc_packed            <= '0;
             exc_code_packed      <= '0;
@@ -315,6 +320,7 @@ module rob
             branch_taken_r       <= '0;
             branch_mispredict_r  <= '0;
             csr_we_r             <= '0;
+            for (int i = 0; i < ROB_DEPTH; i++) csr_op_r[i] <= 2'd0;
         end else if (flush_valid) begin
             // Partial flush (checkpoint restore)
             for (int i = 0; i < ROB_DEPTH; i++) begin
@@ -336,6 +342,7 @@ module rob
                     branch_taken_r[i]      <= 1'b0;
                     branch_mispredict_r[i] <= 1'b0;
                     csr_we_r[i]            <= 1'b0;
+                    csr_op_r[i]            <= 2'd0;
                 end
             end
 
@@ -388,6 +395,7 @@ module rob
                     csr_we_r[wb_idx[i]]                     <= wb_csr_we[i];
                     csr_addr_packed[wb_idx[i]*12 +: 12]     <= wb_csr_addr[i];
                     csr_wdata_packed[wb_idx[i]*64 +: 64]    <= wb_csr_wdata[i];
+                    csr_op_r[wb_idx[i]]                     <= wb_csr_op[i];
                 end
             end
 
@@ -430,6 +438,7 @@ module rob
                     csr_we_r[ai_w[i]]             <= 1'b0;
                     csr_addr_packed[ai_w[i]*12 +: 12]   <= 12'd0;
                     csr_wdata_packed[ai_w[i]*64 +: 64]  <= 64'd0;
+                    csr_op_r[ai_w[i]]             <= 2'd0;
                 end
             end
             if (alloc_count > 0)
@@ -456,6 +465,7 @@ module rob
                     csr_we_r[wb_idx[i]]                     <= wb_csr_we[i];
                     csr_addr_packed[wb_idx[i]*12 +: 12]     <= wb_csr_addr[i];
                     csr_wdata_packed[wb_idx[i]*64 +: 64]    <= wb_csr_wdata[i];
+                    csr_op_r[wb_idx[i]]                     <= wb_csr_op[i];
                 end
             end
 
