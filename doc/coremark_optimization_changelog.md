@@ -1,8 +1,9 @@
 # CoreMark IPC Optimization Changelog
 
-**IPC progression**: 0.45 (livelock) → 0.87 → 2.10 → 2.76 → **2.98**
+**IPC progression**: 0.45 → 0.87 → 2.10 → 2.76 → 2.98 → 2.73 → 2.80 → **3.33**
 
 All 23 regression tests pass. Verilator converge-limit = 500 (default).
+Conservative signoff: **3.33 IPC** (cross-validated CSR + VCD, +11% over 3.0 target).
 
 ---
 
@@ -150,6 +151,73 @@ every cycle (100%), IC miss drops to 0%, backend stall drops to 0%.
 
 ---
 
+---
+
+## 8. SQ/LQ Power-of-2 Depths + Load Writeback Flush Gating (IPC 2.98, correctness)
+**Files**: `rv64gc_pkg.sv`, `lsu.sv`
+
+LQ/SQ depth changed from 48 to 64 (power-of-2) to fix pointer-wrap
+overflow after full flush. CSB depth 24→32. Load writeback de-gated from
+flush (dcache response must write back even on same-cycle flush).
+
+---
+
+## 9. Dispatch Load Cap + Preg Ready Table + Single-Select Load IQ (IPC 2.98 → 2.73)
+**Files**: `dispatch_queue.sv`, `rv64gc_core_top.sv`, `issue_queue.sv`
+
+Three fixes for Dhrystone correctness:
+1. **Dispatch load cap**: limit to 2 loads/cycle matching load IQ NUM_ENQUEUE.
+2. **Combinational preg_ready_table**: feed IQs with version including current
+   rename clears to prevent stale enrollment after flush.
+3. **Single-select load IQ**: NUM_SELECT=1 workaround for single-ported dcache
+   tag RAM (port-1 starvation). Dropped CoreMark from 2.98 to 2.73.
+
+---
+
+## 10. Dual-Port Dcache Tag/Data RAM (IPC 2.73 → 2.80)
+**Files**: `dcache_tag_ram.sv`, `dcache_data_ram.sv`, `dcache.sv`, `rv64gc_core_top.sv`
+
+Added second read port (port B) to both dcache tag and data RAMs. Load
+port 1 uses independent tag/data ports — no bank-conflict suppression
+needed. Restored load IQ to NUM_SELECT=2.
+
+---
+
+## 11. Dual BRU on IQ0 (IPC 2.80 → 3.33)
+**Files**: `rv64gc_core_top.sv`
+
+CoreMark's hot loop has 7 instructions with 2 branches. Single BRU was
+the bottleneck (1 branch/cycle → 2.5 cycles/iteration). Added BRU1 on
+IQ0 port 1 (combinational, zero area cost). Removed PORT0_ONLY_FU
+restriction. Both branches resolve in 1 cycle → 2 cycles/iteration.
+
+BRU0-only early redirect: only the oldest branch (port 0) triggers
+early fetch redirect. Port 1 defers to commit flush to prevent
+wrong-path redirect storms from younger speculative branches.
+
+---
+
+## 12. CSR Write-Op Pipeline (correctness, fixes -O3 hang)
+**Files**: `rv64gc_core_top.sv`, `rob.sv`, `commit.sv`
+
+`write_op` to the CSR file was hardcoded to CSRRW (2'b00). CSRRS with
+rs1=x0 (a read-only alias per RISC-V spec) was treated as CSRRW with
+write_data=0, resetting mcycle every time the benchmark read the cycle
+counter. Threaded `csr_op` through CDB→ROB→commit. Gated `csr_we` on
+actual write (CSRRW always, CSRRS/CSRRC only when rs1 value ≠ 0).
+
+---
+
+## 13. RTL Coding Convention Refactoring (no IPC change)
+**Files**: 14 RTL files + tage_sc_l.sv
+
+Removed all 48 `automatic` variable declarations and 2 `function
+automatic` definitions from synthesizable RTL. Converted to module-level
+signals with `always_comb`/`assign`. tage_sc_l.sv unpacked array
+parameter converted to wire array for iverilog compatibility.
+
+---
+
 ## Summary
 
 | # | Change | Files | IPC effect |
@@ -163,3 +231,9 @@ every cycle (100%), IC miss drops to 0%, backend stall drops to 0%.
 | 5 | BRU early redirect | core_top, commit | 0.87 → 2.10 |
 | 6 | 1-cycle redirect bubble | fetch_unit | 2.10 → 2.76 |
 | 7 | Loop buffer all-slot | core_top, loop_buffer | 2.76 → 2.98 |
+| 8 | SQ/LQ power-of-2 + flush gate | rv64gc_pkg, lsu | correctness |
+| 9 | Dispatch cap + preg table + 1-sel LQ | dispatch_queue, core_top, iq | 2.98 → 2.73 |
+| 10 | Dual-port dcache | dcache_tag/data_ram, dcache, core_top | 2.73 → 2.80 |
+| 11 | Dual BRU on IQ0 | core_top | 2.80 → 3.33 |
+| 12 | CSR write-op pipeline | core_top, rob, commit | -O3 fix |
+| 13 | automatic/function refactor | 14 files | convention |

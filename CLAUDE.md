@@ -27,7 +27,7 @@ The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep d
                     IPC (measured)   Verification            Status
 CoreMark (-O2):     3.33             CSR + VCD cross-check   23/23 regressions pass
 Dhrystone (-O2):    2.13             CSR                     23/23 regressions pass
-CoreMark (-O3):     hangs            —                       CSR corruption (latent bug)
+CoreMark (-O3):     0.37             CSR (fixed)             runs, separate perf bug
 ```
 
 ### CoreMark IPC Signoff
@@ -60,8 +60,15 @@ Optimization log: `doc/coremark_optimization_changelog.md`
 11. Dual BRU on IQ0 (port 0 + port 1 both handle branches, eliminates BRU bottleneck)
 
 ### Known Issues
-- **CoreMark -O3 hangs**: CSR corruption (mcycle wraps) from a different code path. Needs CSR write path investigation.
+- **Dhrystone 2-cycle fetch cadence**: 60% of cycles produce 0 instructions. Root cause: F2 extraction feeds back to F1 through registered SRAM, creating an emit-bubble-emit alternation. Active IPC is 2.91 when pipeline is fed. Fix requires NLPB integration (blocked by single-MSHR icache) or pipeline restructuring.
+- **BTB dead for Dhrystone**: BTB indexes by PC[9:2] but lookup uses fetch-group PC while update uses branch PC — index mismatch. Cache-line indexing (PC[13:6]) fixes index alignment but the hot branch falls just beyond the 6-slot extraction window (offset 14 vs window 2-13). Fix requires either wider extraction or eliminating the 2-cycle cadence first.
+- **CoreMark -O3 slow (0.37 IPC)**: CSR corruption fixed (write_op pipeline). The low IPC is a separate performance bug from -O3 code patterns.
 - **Verilator convergence**: structural CDB→bypass loop settled by forwarding hold register + address gating. Reading `fused_insn[1+]` in combinational context changes Verilator eval scheduling — use `always_ff` for signals derived from multi-slot decode arrays.
+
+### Infrastructure Ready (not yet active)
+- **L2 prefetch port**: 3-way arbitration (dcache > icache > prefetch) committed. Tied off, ready for NLPB.
+- **NLPB module**: `next_line_prefetch_buffer.sv` — 2-entry line buffer with FSM-driven L2 prefetch engine. Standalone, not yet wired into fetch pipeline. Activation blocked by icache single-MSHR (can't handle fetch running ahead via NLPB while icache fills an old miss).
+- **iverilog testbench**: `tb_iverilog.sv` wrapper for cross-simulator validation. iverilog 13.0 blocked by SV struct limitations in decode.sv.
 
 ## Performance Targets
 
