@@ -26,8 +26,8 @@ The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep d
 ```
                     IPC (measured)   Verification            Status
 CoreMark (-O2):     3.33             CSR + VCD cross-check   23/23 regressions pass
-Dhrystone (-O2):    2.13             CSR                     23/23 regressions pass
-CoreMark (-O3):     0.37             CSR (fixed)             runs, separate perf bug
+Dhrystone (-O2):    2.37             CSR + NLPB              23/23 regressions pass
+CoreMark (-O3):     0.37             CSR (fixed)             24.6% mispredict rate (dead BTB)
 ```
 
 ### CoreMark IPC Signoff
@@ -62,7 +62,7 @@ Optimization log: `doc/coremark_optimization_changelog.md`
 ### Known Issues
 - **Dhrystone 2-cycle fetch cadence**: 44% of cycles produce 0 instructions. F2→F1 feedback through registered SRAM. Active IPC is 2.91. Three incremental fix attempts failed (bypass, split-line, suppress flag) — all break f2_already_emitted/remainder/BPU redirect invariants. Needs decoupled F2 stage with independent PC counter (~200 LOC pipeline rewrite).
 - **BTB dead for Dhrystone**: BTB indexes by PC[9:2] but lookup uses fetch-group PC while update uses branch PC — index mismatch. Cache-line indexing works but CoreMark startup hangs (RAS/slot interaction). Coupled with cadence fix (hot branch at offset 14 falls beyond 6-slot window).
-- **CoreMark -O3 slow (0.37 IPC)**: CSR corruption fixed. Remaining low IPC is a separate performance bug.
+- **CoreMark -O3 slow (0.37 IPC)**: CSR corruption fixed. Root cause: 24.6% branch mispredict rate from dead BTB — -O3 code has many function calls/returns that the BTB can't learn (same index-mismatch bug as Dhrystone). Not a separate bug.
 - **Verilator convergence**: structural CDB→bypass loop settled by forwarding hold register + address gating. Reading `fused_insn[1+]` in combinational context changes Verilator eval scheduling — use `always_ff` for signals derived from multi-slot decode arrays.
 
 ### Infrastructure Committed
