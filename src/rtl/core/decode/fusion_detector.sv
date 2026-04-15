@@ -25,6 +25,7 @@ module fusion_detector
     logic [PIPE_WIDTH-1:0] w_is_load_insn, w_is_store_insn;
     logic [PIPE_WIDTH-1:0] w_is_slt, w_is_sltu, w_is_slti, w_is_sltiu;
     logic [PIPE_WIDTH-1:0] w_is_bne, w_is_beq;
+    logic [PIPE_WIDTH-1:0] w_is_sextw;  // ADDIW rd, rs, 0 (sign-extend word)
 
     genvar gi;
     generate
@@ -41,6 +42,8 @@ module fusion_detector
             assign w_is_sltiu[gi]      = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_SLTU) && dec_in[gi].use_imm;
             assign w_is_bne[gi]        = (dec_in[gi].fu_type == FU_BRU) && (dec_in[gi].br_op == BR_NE);
             assign w_is_beq[gi]        = (dec_in[gi].fu_type == FU_BRU) && (dec_in[gi].br_op == BR_EQ);
+            assign w_is_sextw[gi]      = (dec_in[gi].fu_type == FU_ALU) && (dec_in[gi].alu_op == ALU_ADD)
+                                          && dec_in[gi].use_imm && dec_in[gi].is_w_op && (dec_in[gi].imm == 64'd0);
         end
     endgenerate
 
@@ -308,6 +311,38 @@ module fusion_detector
                 fused_uop[0].imm        = dec_in[1].imm;
                 fused_uop[0].is_fused   = 1'b1;
                 fused_uop[0].fusion_type = 3'd5;  // SLTIU+BEQ (reuse type 5)
+
+            // ---------------------------------------------------------------
+            // Tier 3a: SEXT.W rd + BNE rd, x0  => fused word-nonzero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[0] && w_is_bne[1] &&
+                (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
+                (dec_in[1].rs2_arch == 5'd0)) begin
+                fusable[0]              = 1'b1;
+                fused_uop[0]            = dec_in[0];
+                fused_uop[0].fu_type    = FU_BRU;
+                fused_uop[0].br_op      = BR_NE;
+                fused_uop[0].is_branch  = 1'b1;
+                fused_uop[0].rd_valid   = 1'b0;
+                fused_uop[0].imm        = dec_in[1].imm;
+                fused_uop[0].is_fused   = 1'b1;
+                fused_uop[0].fusion_type = 3'd6;  // SEXT.W+BNE
+
+            // ---------------------------------------------------------------
+            // Tier 3b: SEXT.W rd + BEQ rd, x0  => fused word-zero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[0] && w_is_beq[1] &&
+                (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
+                (dec_in[1].rs2_arch == 5'd0)) begin
+                fusable[0]              = 1'b1;
+                fused_uop[0]            = dec_in[0];
+                fused_uop[0].fu_type    = FU_BRU;
+                fused_uop[0].br_op      = BR_EQ;
+                fused_uop[0].is_branch  = 1'b1;
+                fused_uop[0].rd_valid   = 1'b0;
+                fused_uop[0].imm        = dec_in[1].imm;
+                fused_uop[0].is_fused   = 1'b1;
+                fused_uop[0].fusion_type = 3'd7;  // SEXT.W+BEQ
             end
         end
     end : pair_0_1
@@ -493,6 +528,38 @@ module fusion_detector
                 fused_uop[1].imm        = dec_in[2].imm;
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd5;
+
+            // ---------------------------------------------------------------
+            // Tier 3a: SEXT.W rd + BNE rd, x0  => fused word-nonzero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[1] && w_is_bne[2] &&
+                (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
+                (dec_in[2].rs2_arch == 5'd0)) begin
+                fusable[1]              = 1'b1;
+                fused_uop[1]            = dec_in[1];
+                fused_uop[1].fu_type    = FU_BRU;
+                fused_uop[1].br_op      = BR_NE;
+                fused_uop[1].is_branch  = 1'b1;
+                fused_uop[1].rd_valid   = 1'b0;
+                fused_uop[1].imm        = dec_in[2].imm;
+                fused_uop[1].is_fused   = 1'b1;
+                fused_uop[1].fusion_type = 3'd6;  // SEXT.W+BNE
+
+            // ---------------------------------------------------------------
+            // Tier 3b: SEXT.W rd + BEQ rd, x0  => fused word-zero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[1] && w_is_beq[2] &&
+                (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
+                (dec_in[2].rs2_arch == 5'd0)) begin
+                fusable[1]              = 1'b1;
+                fused_uop[1]            = dec_in[1];
+                fused_uop[1].fu_type    = FU_BRU;
+                fused_uop[1].br_op      = BR_EQ;
+                fused_uop[1].is_branch  = 1'b1;
+                fused_uop[1].rd_valid   = 1'b0;
+                fused_uop[1].imm        = dec_in[2].imm;
+                fused_uop[1].is_fused   = 1'b1;
+                fused_uop[1].fusion_type = 3'd7;  // SEXT.W+BEQ
             end
         end
     end : pair_1_2
@@ -678,6 +745,38 @@ module fusion_detector
                 fused_uop[2].imm        = dec_in[3].imm;
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd5;
+
+            // ---------------------------------------------------------------
+            // Tier 3a: SEXT.W rd + BNE rd, x0  => fused word-nonzero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[2] && w_is_bne[3] &&
+                (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
+                (dec_in[3].rs2_arch == 5'd0)) begin
+                fusable[2]              = 1'b1;
+                fused_uop[2]            = dec_in[2];
+                fused_uop[2].fu_type    = FU_BRU;
+                fused_uop[2].br_op      = BR_NE;
+                fused_uop[2].is_branch  = 1'b1;
+                fused_uop[2].rd_valid   = 1'b0;
+                fused_uop[2].imm        = dec_in[3].imm;
+                fused_uop[2].is_fused   = 1'b1;
+                fused_uop[2].fusion_type = 3'd6;  // SEXT.W+BNE
+
+            // ---------------------------------------------------------------
+            // Tier 3b: SEXT.W rd + BEQ rd, x0  => fused word-zero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[2] && w_is_beq[3] &&
+                (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
+                (dec_in[3].rs2_arch == 5'd0)) begin
+                fusable[2]              = 1'b1;
+                fused_uop[2]            = dec_in[2];
+                fused_uop[2].fu_type    = FU_BRU;
+                fused_uop[2].br_op      = BR_EQ;
+                fused_uop[2].is_branch  = 1'b1;
+                fused_uop[2].rd_valid   = 1'b0;
+                fused_uop[2].imm        = dec_in[3].imm;
+                fused_uop[2].is_fused   = 1'b1;
+                fused_uop[2].fusion_type = 3'd7;  // SEXT.W+BEQ
             end
         end
     end : pair_2_3
@@ -863,6 +962,38 @@ module fusion_detector
                 fused_uop[3].imm        = dec_in[4].imm;
                 fused_uop[3].is_fused   = 1'b1;
                 fused_uop[3].fusion_type = 3'd5;
+
+            // ---------------------------------------------------------------
+            // Tier 3a: SEXT.W rd + BNE rd, x0  => fused word-nonzero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[3] && w_is_bne[4] &&
+                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
+                (dec_in[4].rs2_arch == 5'd0)) begin
+                fusable[3]              = 1'b1;
+                fused_uop[3]            = dec_in[3];
+                fused_uop[3].fu_type    = FU_BRU;
+                fused_uop[3].br_op      = BR_NE;
+                fused_uop[3].is_branch  = 1'b1;
+                fused_uop[3].rd_valid   = 1'b0;
+                fused_uop[3].imm        = dec_in[4].imm;
+                fused_uop[3].is_fused   = 1'b1;
+                fused_uop[3].fusion_type = 3'd6;  // SEXT.W+BNE
+
+            // ---------------------------------------------------------------
+            // Tier 3b: SEXT.W rd + BEQ rd, x0  => fused word-zero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[3] && w_is_beq[4] &&
+                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
+                (dec_in[4].rs2_arch == 5'd0)) begin
+                fusable[3]              = 1'b1;
+                fused_uop[3]            = dec_in[3];
+                fused_uop[3].fu_type    = FU_BRU;
+                fused_uop[3].br_op      = BR_EQ;
+                fused_uop[3].is_branch  = 1'b1;
+                fused_uop[3].rd_valid   = 1'b0;
+                fused_uop[3].imm        = dec_in[4].imm;
+                fused_uop[3].is_fused   = 1'b1;
+                fused_uop[3].fusion_type = 3'd7;  // SEXT.W+BEQ
             end
         end
     end : pair_3_4
@@ -1048,6 +1179,38 @@ module fusion_detector
                 fused_uop[4].imm        = dec_in[5].imm;
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd5;
+
+            // ---------------------------------------------------------------
+            // Tier 3a: SEXT.W rd + BNE rd, x0  => fused word-nonzero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[4] && w_is_bne[5] &&
+                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
+                (dec_in[5].rs2_arch == 5'd0)) begin
+                fusable[4]              = 1'b1;
+                fused_uop[4]            = dec_in[4];
+                fused_uop[4].fu_type    = FU_BRU;
+                fused_uop[4].br_op      = BR_NE;
+                fused_uop[4].is_branch  = 1'b1;
+                fused_uop[4].rd_valid   = 1'b0;
+                fused_uop[4].imm        = dec_in[5].imm;
+                fused_uop[4].is_fused   = 1'b1;
+                fused_uop[4].fusion_type = 3'd6;  // SEXT.W+BNE
+
+            // ---------------------------------------------------------------
+            // Tier 3b: SEXT.W rd + BEQ rd, x0  => fused word-zero branch
+            // ---------------------------------------------------------------
+            end else if (w_is_sextw[4] && w_is_beq[5] &&
+                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
+                (dec_in[5].rs2_arch == 5'd0)) begin
+                fusable[4]              = 1'b1;
+                fused_uop[4]            = dec_in[4];
+                fused_uop[4].fu_type    = FU_BRU;
+                fused_uop[4].br_op      = BR_EQ;
+                fused_uop[4].is_branch  = 1'b1;
+                fused_uop[4].rd_valid   = 1'b0;
+                fused_uop[4].imm        = dec_in[5].imm;
+                fused_uop[4].is_fused   = 1'b1;
+                fused_uop[4].fusion_type = 3'd7;  // SEXT.W+BEQ
             end
         end
     end : pair_4_5

@@ -58,6 +58,8 @@ module bru
             3'd3: fused_taken = (operand_a >= operand_b);                    // SLTU + BEQ -> branch if a >= b unsigned
             3'd4: fused_taken = ($signed(operand_a) < $signed(imm));         // SLTI + BNE -> branch if a < imm signed
             3'd5: fused_taken = (operand_a < imm);                           // SLTIU + BNE -> branch if a < imm unsigned
+            3'd6: fused_taken = (operand_a[31:0] != 32'd0);                // SEXT.W + BNE -> branch if word != 0
+            3'd7: fused_taken = (operand_a[31:0] == 32'd0);                // SEXT.W + BEQ -> branch if word == 0
             default: fused_taken = 1'b0;
         endcase
     end
