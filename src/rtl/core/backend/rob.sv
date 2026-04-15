@@ -151,6 +151,7 @@ module rob
     // =========================================================================
     reg [ROB_DEPTH-1:0]          valid_r;
     reg [ROB_DEPTH-1:0]          ready_r;
+    reg [7:0]                    rob_head_watchdog;
     reg [64*ROB_DEPTH-1:0]       pc_packed;
     reg [ROB_DEPTH-1:0]          has_exc_r;
     reg [4*ROB_DEPTH-1:0]        exc_code_packed;
@@ -276,6 +277,7 @@ module rob
             count_r  <= '0;
             valid_r  <= '0;
             ready_r  <= '0;
+            rob_head_watchdog <= 8'd0;
             has_exc_r        <= '0;
             is_branch_r      <= '0;
             is_store_r       <= '0;
@@ -305,6 +307,7 @@ module rob
             count_r  <= '0;
             valid_r  <= '0;
             ready_r  <= '0;
+            rob_head_watchdog <= 8'd0;
             has_exc_r        <= '0;
             is_branch_r      <= '0;
             is_store_r       <= '0;
@@ -482,6 +485,21 @@ module rob
                 ready_r[ordering_violation_rob_idx]             <= 1'b1;
                 has_exc_r[ordering_violation_rob_idx]           <= 1'b1;
                 exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+            end
+
+            // ROB head watchdog: if the head entry has been valid but
+            // not ready for too long, something is wrong (e.g. the IQ
+            // entry was flushed but the ROB entry survived).  Force-ready
+            // with an exception so commit can drain and flush.
+            if (valid_r[head_idx_w[0]] && !ready_r[head_idx_w[0]])
+                rob_head_watchdog <= rob_head_watchdog + 8'd1;
+            else
+                rob_head_watchdog <= 8'd0;
+
+            if (rob_head_watchdog == 8'd255) begin
+                ready_r[head_idx_w[0]]                <= 1'b1;
+                has_exc_r[head_idx_w[0]]              <= 1'b1;
+                exc_code_packed[head_idx_w[0]*4 +: 4] <= 4'd15; // trigger replay flush
             end
 
             // Commit: advance head, clear valid and instruction-type flags
