@@ -40,9 +40,9 @@ module next_line_prefetch_buffer
 );
 
     // =========================================================================
-    // Buffer storage (2 entries, flip-flop based)
+    // Buffer storage (4 entries, flip-flop based)
     // =========================================================================
-    localparam int NUM_ENTRIES = 2;
+    localparam int NUM_ENTRIES = 4;
     localparam int TAG_HI = 63;
     localparam int TAG_LO = LINE_BITS;  // 6 for 64-byte lines
 
@@ -50,7 +50,7 @@ module next_line_prefetch_buffer
     logic [TAG_HI:TAG_LO] buf_tag [0:NUM_ENTRIES-1];
     logic [511:0]        buf_data  [0:NUM_ENTRIES-1];
 
-    logic                replace_ptr;  // round-robin victim
+    logic [1:0]          replace_ptr;  // round-robin victim (2-bit for 4 entries)
 
     // =========================================================================
     // Combinational lookup
@@ -58,12 +58,20 @@ module next_line_prefetch_buffer
     logic [TAG_HI:TAG_LO] lookup_tag;
     assign lookup_tag = lookup_addr[TAG_HI:TAG_LO];
 
-    logic match0, match1;
-    assign match0 = buf_valid[0] && (buf_tag[0] == lookup_tag);
-    assign match1 = buf_valid[1] && (buf_tag[1] == lookup_tag);
+    logic [NUM_ENTRIES-1:0] entry_match;
+    always_comb begin
+        for (int i = 0; i < NUM_ENTRIES; i++)
+            entry_match[i] = buf_valid[i] && (buf_tag[i] == lookup_tag);
+    end
 
-    assign hit      = lookup_valid && (match0 || match1);
-    assign hit_data = match0 ? buf_data[0] : buf_data[1];
+    assign hit = lookup_valid && (|entry_match);
+
+    // Priority mux: lowest matching entry wins
+    always_comb begin
+        hit_data = '0;
+        for (int i = NUM_ENTRIES-1; i >= 0; i--)
+            if (entry_match[i]) hit_data = buf_data[i];
+    end
 
     // =========================================================================
     // Prefetch FSM
@@ -102,7 +110,7 @@ module next_line_prefetch_buffer
         if (!rst_n) begin
             pf_state_r  <= PF_IDLE;
             pf_addr_r   <= '0;
-            replace_ptr <= 1'b0;
+            replace_ptr <= 2'd0;
             for (int i = 0; i < NUM_ENTRIES; i++) begin
                 buf_valid[i] <= 1'b0;
                 buf_tag[i]   <= '0;
@@ -141,7 +149,7 @@ module next_line_prefetch_buffer
                         buf_valid[replace_ptr] <= 1'b1;
                         buf_tag[replace_ptr]   <= pf_addr_r[TAG_HI:TAG_LO];
                         buf_data[replace_ptr]  <= pf_resp_data;
-                        replace_ptr            <= ~replace_ptr;
+                        replace_ptr            <= replace_ptr + 2'd1;
                         pf_state_r             <= PF_IDLE;
                     end
                 end
