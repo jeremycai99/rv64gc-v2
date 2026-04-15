@@ -129,6 +129,7 @@ RTL_FILES = \
     $(RTL_DIR)/core/cache/icache_tag_ram.sv \
     $(RTL_DIR)/core/cache/icache_data_ram.sv \
     $(RTL_DIR)/core/cache/icache.sv \
+    $(RTL_DIR)/core/fetch/next_line_prefetch_buffer.sv \
     $(RTL_DIR)/core/fetch/fetch_unit.sv \
     $(RTL_DIR)/core/decode/decode_slice.sv \
     $(RTL_DIR)/core/decode/decode.sv \

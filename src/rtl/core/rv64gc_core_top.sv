@@ -167,7 +167,13 @@ module rv64gc_core_top
         .icache_fill_resp_valid (icache_fill_resp_valid),
         .icache_fill_resp_addr  (icache_fill_resp_addr),
         .icache_fill_resp_data  (icache_fill_resp_data),
-        .fence_i                (fence_i_signal)
+        .fence_i                (fence_i_signal),
+        .pf_l2_req_valid        (pf_l2_req_valid),
+        .pf_l2_req_addr         (pf_l2_req_addr),
+        .pf_l2_req_ready        (pf_l2_req_ready),
+        .pf_l2_resp_valid       (pf_l2_resp_valid),
+        .pf_l2_resp_addr        (pf_l2_resp_addr),
+        .pf_l2_resp_data        (pf_l2_resp_data)
     );
 
     // =========================================================================
@@ -1749,6 +1755,14 @@ module rv64gc_core_top
     logic [511:0] l2_icache_resp_data;
     logic l2_invalidate_busy;
 
+    // Prefetch L2 signals (from fetch_unit NLPB)
+    logic        pf_l2_req_valid;
+    logic [63:0] pf_l2_req_addr;
+    logic        pf_l2_req_ready;
+    logic        pf_l2_resp_valid;
+    logic [63:0] pf_l2_resp_addr;
+    logic [511:0] pf_l2_resp_data;
+
     // The L2 hit pipeline does not invalidate stages after delivery, so a
     // response for an earlier icache fetch reappears L2_HIT_LATENCY cycles
     // later as a stale "fill_resp_valid" pulse with the OLD line data.
@@ -1775,13 +1789,13 @@ module rv64gc_core_top
         .icache_resp_valid  (icache_fill_resp_valid),
         .icache_resp_addr   (l2_icache_resp_addr),
         .icache_resp_data   (icache_fill_resp_data),
-        // Prefetch port (tied off — NLPB not yet wired)
-        .prefetch_req_valid (1'b0),
-        .prefetch_req_addr  (64'd0),
-        .prefetch_req_ready (),
-        .prefetch_resp_valid(),
-        .prefetch_resp_addr (),
-        .prefetch_resp_data (),
+        // Prefetch port (from NLPB via fetch_unit)
+        .prefetch_req_valid (pf_l2_req_valid),
+        .prefetch_req_addr  (pf_l2_req_addr),
+        .prefetch_req_ready (pf_l2_req_ready),
+        .prefetch_resp_valid(pf_l2_resp_valid),
+        .prefetch_resp_addr (pf_l2_resp_addr),
+        .prefetch_resp_data (pf_l2_resp_data),
         // Main memory interface
         .mem_req_valid      (mem_req_valid),
         .mem_req_addr       (mem_req_addr),

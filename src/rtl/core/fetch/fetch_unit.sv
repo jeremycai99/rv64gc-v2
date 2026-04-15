@@ -52,7 +52,14 @@ module fetch_unit
     input  logic [511:0] icache_fill_resp_data,
 
     // Invalidate (FENCE.I)
-    input  logic        fence_i
+    input  logic        fence_i,
+    // Prefetch L2 interface (from NLPB)
+    output logic         pf_l2_req_valid,
+    output logic [63:0]  pf_l2_req_addr,
+    input  logic         pf_l2_req_ready,
+    input  logic         pf_l2_resp_valid,
+    input  logic [63:0]  pf_l2_resp_addr,
+    input  logic [511:0] pf_l2_resp_data
 );
 
     // =========================================================================
@@ -171,15 +178,55 @@ module fetch_unit
         .invalidate_busy(ic_invalidate_busy)
     );
 
-    // Register I-cache response to align with F2 stage (1-cycle delay)
+    // =========================================================================
+    // Next-line prefetch buffer (NLPB)
+    // =========================================================================
+    logic        nlpb_hit_comb;
+    logic [511:0] nlpb_data_comb;
+
+    // Trigger on icache HIT only (not fill-forwards from MSHRs)
+    logic        nlpb_trigger;
+    logic [63:0] nlpb_trigger_addr;
+    assign nlpb_trigger      = ic_resp_valid_comb && ic_resp_hit_comb;
+    assign nlpb_trigger_addr = {ic_req_addr[63:6], 6'b0};
+
+    next_line_prefetch_buffer u_nlpb (
+        .clk            (clk),
+        .rst_n          (rst_n),
+        .lookup_valid   (f1_valid && !backend_stall),
+        .lookup_addr    (ic_req_addr),
+        .hit            (nlpb_hit_comb),
+        .hit_data       (nlpb_data_comb),
+        .trigger_valid  (nlpb_trigger),
+        .trigger_addr   (nlpb_trigger_addr),
+        .flush          (redirect_valid),
+        .fence_i        (fence_i),
+        .pf_req_valid   (pf_l2_req_valid),
+        .pf_req_addr    (pf_l2_req_addr),
+        .pf_req_ready   (pf_l2_req_ready),
+        .pf_resp_valid  (pf_l2_resp_valid),
+        .pf_resp_addr   (pf_l2_resp_addr),
+        .pf_resp_data   (pf_l2_resp_data)
+    );
+
+    // Merged response: icache hit takes priority. NLPB provides data
+    // only when icache doesn't respond AND no redirect is active.
+    logic        merged_resp_valid_comb;
+    logic [511:0] merged_resp_data_comb;
+    assign merged_resp_valid_comb = ic_resp_valid_comb ||
+                                    (nlpb_hit_comb && !redirect_valid);
+    assign merged_resp_data_comb  = ic_resp_valid_comb ? ic_resp_data_comb
+                                                       : nlpb_data_comb;
+
+    // Register merged response to align with F2 stage (1-cycle SRAM latency)
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             ic_resp_valid <= 1'b0;
             ic_resp_data  <= '0;
             ic_resp_hit   <= 1'b0;
         end else begin
-            ic_resp_valid <= ic_resp_valid_comb;
-            ic_resp_data  <= ic_resp_data_comb;
+            ic_resp_valid <= merged_resp_valid_comb;
+            ic_resp_data  <= merged_resp_data_comb;
             ic_resp_hit   <= ic_resp_hit_comb;
         end
     end
