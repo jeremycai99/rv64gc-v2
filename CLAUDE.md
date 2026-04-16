@@ -26,19 +26,19 @@ The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep d
 ```
                     IPC (xsim authoritative)   Status
 CoreMark (-O2):     3.64                       23/23 regressions pass
-Dhrystone (-O2):    0.005 (deadlock)           pre-existing, see Known Issues
+Dhrystone (-O2):    0.055 (watchdog recovery)  rename/flush bug, root-cause TBD
 ```
 
 xsim is the authoritative simulator (IEEE 1800 4-state, matches synthesis).
 For tapeout: trust xsim, not Verilator.
 
-Dhrystone's Verilator-reported 2.37 IPC was ALSO a Verilator-hidden-bug
-reading.  On xsim the ROB head gets permanently stuck at PC=0x80002398
-after ~1058 instructions retire — a store at that PC commits with
-register x12 corrupted to 0xcd (a bogus sub-1MB address).  Signature
-points to a rename/RAT flush-recovery bug exposed by Dhrystone's
-constant mispredict storm (~1 flush/10 cycles from a dead BTB).
-Deferred until a dedicated debug session can trace the rename pipeline.
+Dhrystone's rename/flush-recovery bug: ROB head gets permanently stuck
+at PC=0x80002398 — a store commits with register x12 corrupted to 0xcd
+(a bogus sub-1MB address).  Mitigated by ROB head watchdog (commit
+197ea09): 12-bit counter fires replay exception at saturation, recovers
+the pipeline.  Dhrystone IPC improves 10x (0.005 → 0.055) but still
+~50x below target.  Underlying rename race requires dedicated VCD-first
+debugging — see `doc/xsim_lessons_learned.md` for full analysis.
 
 ### CoreMark IPC Signoff
 
@@ -55,6 +55,8 @@ Margin over 3.0 target: **+21%** on xsim.
 1. **Dcache/icache tag RAM reset init** (commit 8e280c6) — uninitialized valid/dirty arrays caused xsim to hang on 10 call/return tests and CoreMark. Reset now clears arrays. Impact: xsim 13/23 → 23/23 PASS.
 2. **LB trigger combinational** (commit b397582) — the registered Verilator-workaround dropped loop-buffer activation to 0% on xsim, starving fetch. Reverted to combinational per xsim_workflow.md refactor plan. Impact: xsim CoreMark 0.48 → 3.15 IPC.
 3. **Load-balanced IQ dispatch** (commit 2a92d6b) — round-robin over-fed single-issue IQ1/IQ2 while dual-issue IQ0 had room. Replaced with occupancy-minimizing routing (IQ0 weighted 1/2 to match 2× drain rate). Impact: xsim CoreMark 3.15 → 3.64 IPC, iq1/iq2_full 19%/18% → 1%/1%.
+4. **int_prf reset init** (commit 99b2199) — defensive same-class fix for regfile_copy arrays. Impact: no IPC change, prevents X propagation on un-renamed pdst reads.
+5. **ROB head watchdog** (commit 197ea09) — 12-bit stuck-entry detector that fires a replay exception for deadlock recovery. Impact: Dhrystone 0.005 → 0.055 IPC (10x); CoreMark unchanged.
 
 ### Simulator migration history (2026-04-16)
 
