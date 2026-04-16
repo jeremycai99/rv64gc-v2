@@ -350,6 +350,40 @@ module tb_top
                             u_core.preg_ready_table[u_core.u_iq_store.rs2_phys_r[e]]);
                     end
                 end
+                // Dump ALL stuck (not ready to issue) entries across all int
+                // IQs and load IQ — captures the full dependency chain.
+                $display("[WDOG-ALLIQ] all non-ready valid IQ entries:");
+                for (int e = 0; e < 32; e++) begin
+                    automatic iq_entry_t iq0_ent, iq1_ent, iq2_ent, iqld_ent;
+                    iq0_ent  = iq_entry_t'(u_core.u_iq0.payload_r[e]);
+                    iq1_ent  = iq_entry_t'(u_core.u_iq1.payload_r[e]);
+                    iq2_ent  = iq_entry_t'(u_core.u_iq2.payload_r[e]);
+                    iqld_ent = iq_entry_t'(u_core.u_iq_load.payload_r[e]);
+                    if (u_core.u_iq0.entry_valid[e]
+                        && (!u_core.u_iq0.src1_ready[e] || !u_core.u_iq0.src2_ready[e]))
+                        $display("  IQ0[%0d] pdst=%0d rob=%0d fu=%0d s1=%b s2=%b rs1_p=%0d rs2_p=%0d",
+                            e, iq0_ent.pdst, u_core.u_iq0.rob_idx_r[e], iq0_ent.fu_type,
+                            u_core.u_iq0.src1_ready[e], u_core.u_iq0.src2_ready[e],
+                            u_core.u_iq0.rs1_phys_r[e], u_core.u_iq0.rs2_phys_r[e]);
+                    if (u_core.u_iq1.entry_valid[e]
+                        && (!u_core.u_iq1.src1_ready[e] || !u_core.u_iq1.src2_ready[e]))
+                        $display("  IQ1[%0d] pdst=%0d rob=%0d fu=%0d s1=%b s2=%b rs1_p=%0d rs2_p=%0d",
+                            e, iq1_ent.pdst, u_core.u_iq1.rob_idx_r[e], iq1_ent.fu_type,
+                            u_core.u_iq1.src1_ready[e], u_core.u_iq1.src2_ready[e],
+                            u_core.u_iq1.rs1_phys_r[e], u_core.u_iq1.rs2_phys_r[e]);
+                    if (u_core.u_iq2.entry_valid[e]
+                        && (!u_core.u_iq2.src1_ready[e] || !u_core.u_iq2.src2_ready[e]))
+                        $display("  IQ2[%0d] pdst=%0d rob=%0d fu=%0d s1=%b s2=%b rs1_p=%0d rs2_p=%0d",
+                            e, iq2_ent.pdst, u_core.u_iq2.rob_idx_r[e], iq2_ent.fu_type,
+                            u_core.u_iq2.src1_ready[e], u_core.u_iq2.src2_ready[e],
+                            u_core.u_iq2.rs1_phys_r[e], u_core.u_iq2.rs2_phys_r[e]);
+                    if (u_core.u_iq_load.entry_valid[e]
+                        && (!u_core.u_iq_load.src1_ready[e] || !u_core.u_iq_load.src2_ready[e]))
+                        $display("  IQLD[%0d] pdst=%0d rob=%0d s1=%b s2=%b rs1_p=%0d",
+                            e, iqld_ent.pdst, u_core.u_iq_load.rob_idx_r[e],
+                            u_core.u_iq_load.src1_ready[e], u_core.u_iq_load.src2_ready[e],
+                            u_core.u_iq_load.rs1_phys_r[e]);
+                end
             end
             // Persistent CDB broadcast log for pdsts matching any store IQ
             // entry that's waiting on rs2 — captures the moment wakeup should
