@@ -266,6 +266,16 @@ module tb_top
                     u_core.flush_out.redirect_pc,
                     u_core.flush_out.full_flush);
             end
+            // Watchdog fire detection: log what ROB entry was stuck and type.
+            if (trace_commit_en && (u_core.u_rob.rob_head_watchdog == 12'd61)) begin
+                $display("[WDOG] cyc=%0d head_idx=%0d pc=%016h is_store=%b is_load=%b is_branch=%b",
+                    trace_cycle,
+                    u_core.u_rob.head_r,
+                    u_core.rob_head_pc[0],
+                    u_core.u_rob.is_store_r[u_core.u_rob.head_r],
+                    u_core.u_rob.is_load_r[u_core.u_rob.head_r],
+                    u_core.u_rob.is_branch_r[u_core.u_rob.head_r]);
+            end
             // ROB head snapshot when pipeline appears stalled
             // (fires every 1000 cycles so we can see progress vs stuck)
             if (trace_commit_en && (trace_cycle % 1000 == 0)) begin
