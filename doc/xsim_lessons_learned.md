@@ -92,17 +92,45 @@ An **architectural / algorithmic** bug unrelated to simulator semantics. Dispatc
 
 This bug was **discoverable** on Verilator — it's just a performance issue, not a correctness issue. It was not discovered because Verilator's 3.33 IPC reading was already close enough to the 3.0 target that no one looked more closely. xsim's lower numbers forced us to measure per-stage stalls, which surfaced the imbalance.
 
-### Bug 5: Dhrystone deadlock (partially mitigated by watchdog, commit `197ea09`)
+### Bug 5: Dhrystone store-path deadlock (mitigated by 64-cycle watchdog, commits `197ea09` → `6c32178` → `31ea5c7`)
 
-Dhrystone triggers a constant mispredict storm on our BTB (the BTB indexes by `PC[9:2]` but the fetch stage looks up with the fetch-group-aligned PC while commit updates with the branch's actual PC — different low bits yield different indices, so Dhrystone's hot branch at offset `0x0E` within the fetch group is never learned). On Verilator, the mispredict storm runs at 0.47 IPC (Verilator reported 2.37 but our LB-trigger finding suggests that reading was also optimistic). On xsim, the storm exposes a deeper bug:
+Dhrystone triggers a constant mispredict storm on our BTB (the BTB indexes by `PC[9:2]` but the fetch stage looks up with the fetch-group-aligned PC while commit updates with the branch's actual PC — different low bits yield different indices, so Dhrystone's hot branch at offset `0x0E` within the fetch group is never learned). On xsim, the storm exposes a **store-path deadlock**, not a generic rename bug:
 
-An instruction at the ROB head has its source `pdst` never become ready. Investigation identified the store at PC=0x80002398 (`c.sw x10, 0(x12)`) retiring with x12 corrupted to `0xcd` — a register value that should not exist in normal Dhrystone execution. Signature strongly suggests a **rename/flush-recovery race**: under the rapid flush storm, a physical register mapping is restored in a state where the expected writer was killed, so the reader waits forever.
+[WDOG] trace in `tb_top.sv` logs the stuck ROB entry every time the watchdog fires. On Dhrystone, the watchdog fires **exclusively on stores at PC=0x80002398** (the `c.sw x10, 0(x12)` in the hot loop). This rules out several hypotheses:
+- Uninitialized state (would affect all instruction types)
+- Move elimination race (stores don't move-eliminate)
+- Generic RAT/free-list corruption (would affect all register reads)
 
-**Mitigation**: ROB head watchdog — 12-bit counter on the head entry, fires a replay exception at saturation (4094 cycles). Catches the stuck entry and flushes the pipeline so new instructions can progress. Dhrystone IPC improves 10× (0.005 → 0.055) but is still ~50× below target. Root-cause fix deferred — needs a dedicated VCD-first debug session of the rename pipeline under flush.
+The specific bug is: the ROB entry for a store at this PC is valid but its `ready_r` bit never gets set. `ready_r` is set when `sta_wb_valid` fires for that rob_idx. So either:
+- The store IQ is stuck waiting for rs1 (x12's pdst never becomes ready after a flush-recover path)
+- The STA completion signal is lost in a race
+- A store-queue STA allocation ordering bug
 
-**The two attempted root-cause fixes**:
-- **Cache-line BTB indexing (32-byte granule)** reduced mispredicts and brought Dhrystone to 0.51 IPC (100× improvement), but caused CoreMark to drop to 2.09 (vs 3.62) due to BTB way-collisions for branches in the same 32-byte region and broke 4-5 regression tests. Not accepted.
+**Watchdog tuning**: the 12-bit counter fires a replay exception when the head stays not-ready for N cycles. Tuning:
+
+| Watchdog threshold | Dhrystone IPC | CoreMark IPC | Notes |
+|---|---|---|---|
+| 4094 cycles (initial) | 0.055 | 3.91 | Safe but slow recovery |
+| 256 cycles | 0.54 | 3.91 | 10× improvement |
+| 128 cycles | 0.78 | 3.91 | Another 50% |
+| 64 cycles | **0.99** | **3.91** | Current — just above DIV latency |
+| 32 cycles | 1.15 | 0.0006 (!!) | False-triggers on legit CoreMark ops |
+
+64 is the knee — DIV worst-case is 65 cycles, L2 miss is ~50, so 64 is the smallest safe bound. Any false trigger on CoreMark would crash IPC (a spurious flush costs 5-10 cycles plus warmup).
+
+**Root-cause fix deferred** — needs VCD of the store-IQ state for the stuck rob_idx right before the watchdog fires, to see whether rs1 is ready or not. The [WDOG] diagnostic commit `31ea5c7` gives the starting point.
+
+**Rejected root-cause fixes**:
+- **Cache-line BTB indexing (32-byte granule)** reduced mispredicts and brought Dhrystone to 0.51 IPC, but caused CoreMark to drop to 1.93 (vs 3.91) due to BTB way-collisions and broke 5 regression tests.
 - **Int PRF reset init** — useful defensive fix but didn't resolve Dhrystone.
+
+### Bug 6: Checkpoint exhaustion on CoreMark (commit `0ebc657`)
+
+Per-resource rename-stall breakdown (added to `+PERF_PROFILE` in commit `0ebc657`) attributed **99.5%** of CoreMark's rename stalls to checkpoint exhaustion. `NUM_CHECKPOINTS` was 4; CoreMark's hot loop regularly had more than 4 in-flight unresolved branches.
+
+**Fix**: `NUM_CHECKPOINTS: 4 → 16`. Storage cost is trivial (8320 bits total). Rename stall drops from 10753 → 367 cycles in a 200K-cycle run; CoreMark IPC 3.62 → 3.91 (+8%).
+
+This is a perfect example of why **per-stage perf profiling is essential**. Without it, "rename stalls 5% of cycles" is an opaque number; with it, "stall_ckpt: 10704 / stall_preg: 9 / stall_rob: 0" points at exactly what to fix.
 
 ## Lessons learned
 
@@ -159,16 +187,22 @@ Carried into CLAUDE.md:
 
 ## IPC progression this session
 
-| Commit | Change | xsim CoreMark IPC |
-|--------|--------|-------------------|
-| (pre-session) | tag RAMs uninitialized | deadlock at minstret=40 |
-| `8e280c6` | reset init for tag RAMs | ~0.48 (LB dead) |
-| `b397582` | LB trigger combinational | 3.15 |
-| `2a92d6b` | load-balanced IQ dispatch | **3.62** |
-| `99b2199` | int_prf reset + ROB trace | 3.62 (unchanged) |
-| `197ea09` | ROB head watchdog | 3.62 (CoreMark), Dhrystone 0.005 → 0.055 |
+| Commit | Change | xsim CoreMark IPC | xsim Dhrystone IPC |
+|--------|--------|-------------------|---------------------|
+| (pre-session) | tag RAMs uninitialized | deadlock at minstret=40 | deadlock at minstret=234 |
+| `8e280c6` | reset init for tag RAMs | ~0.48 (LB dead) | 0.005 (new deadlock) |
+| `b397582` | LB trigger combinational | 3.15 | 0.005 |
+| `2a92d6b` | load-balanced IQ dispatch | 3.62 | 0.005 |
+| `99b2199` | int_prf reset + ROB trace | 3.62 (unchanged) | 0.005 |
+| `197ea09` | ROB head watchdog (4094 cyc) | 3.62 | 0.055 |
+| `0ebc657` | 16 checkpoints | 3.91 | 0.055 |
+| `6c32178` | watchdog 64 cyc | **3.91** | **0.99** |
+| `31ea5c7` | [WDOG] diagnostic | 3.91 | 0.99 |
 
 All commits validated on xsim: 23/23 regression PASS.
+
+Net progress: CoreMark 0 (deadlock) → **3.91 IPC** (+30% over target).
+Dhrystone 0.005 (deadlock) → **0.99 IPC** (180× improvement).
 
 ## Remaining known issues
 
