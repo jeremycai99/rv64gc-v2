@@ -26,10 +26,19 @@ The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep d
 ```
                     IPC (xsim authoritative)   Status
 CoreMark (-O2):     3.64                       23/23 regressions pass
+Dhrystone (-O2):    0.005 (deadlock)           pre-existing, see Known Issues
 ```
 
 xsim is the authoritative simulator (IEEE 1800 4-state, matches synthesis).
 For tapeout: trust xsim, not Verilator.
+
+Dhrystone's Verilator-reported 2.37 IPC was ALSO a Verilator-hidden-bug
+reading.  On xsim the ROB head gets permanently stuck at PC=0x80002398
+after ~1058 instructions retire — a store at that PC commits with
+register x12 corrupted to 0xcd (a bogus sub-1MB address).  Signature
+points to a rename/RAT flush-recovery bug exposed by Dhrystone's
+constant mispredict storm (~1 flush/10 cycles from a dead BTB).
+Deferred until a dedicated debug session can trace the rename pipeline.
 
 ### CoreMark IPC Signoff
 
