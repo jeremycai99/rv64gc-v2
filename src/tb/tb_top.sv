@@ -350,6 +350,22 @@ module tb_top
                             u_core.preg_ready_table[u_core.u_iq_store.rs2_phys_r[e]]);
                     end
                 end
+                // RAT dump: ALL arch regs (full RAT state)
+                $display("[WDOG-RAT] full RAT dump:");
+                for (int a = 0; a < 32; a++) begin
+                    $display("  RAT[%0d] = pdst=%0d cra=%0d",
+                        a, u_core.u_rename.u_rat.rat_table[a],
+                        u_core.u_rename.u_rat.committed_rat[a]);
+                end
+                // Free list bitmaps for low pdsts
+                $display("[WDOG-FL] free/committed bitmaps for low pdsts:");
+                for (int p = 0; p < 32; p++) begin
+                    $display("  pdst=%0d free=%b cmt=%b preg_rdy=%b",
+                        p,
+                        u_core.u_rename.u_free_list.free_bitmap[p],
+                        u_core.u_rename.u_free_list.committed_bitmap[p],
+                        u_core.preg_ready_table[p]);
+                end
                 // Dump ALL stuck (not ready to issue) entries across all int
                 // IQs and load IQ — captures the full dependency chain.
                 $display("[WDOG-ALLIQ] all non-ready valid IQ entries:");
