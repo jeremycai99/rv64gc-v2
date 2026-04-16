@@ -21,28 +21,36 @@ Clean-sheet 6-wide out-of-order RV64GC processor core (v2). This is a ground-up 
 
 The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep data is at `D:/agent-workspace/rv64gc-gem5/`. Companion SoC peripherals spec (UART, GPIO, SPI, I2C, DMA, JTAG, PMU, watchdog, framebuffer): `D:/agent-workspace/rv64gc-gem5/study/rv64gc_next_gen_soc.md`.
 
-## Current Benchmark Status (2026-04-13)
+## Current Benchmark Status (2026-04-16)
 
 ```
-                    IPC (measured)   Verification            Status
-CoreMark (-O2):     3.33             CSR + VCD cross-check   23/23 regressions pass
-Dhrystone (-O2):    2.37             CSR + NLPB              23/23 regressions pass
-CoreMark (-O3):     0.37             CSR (fixed)             24.6% mispredict rate (dead BTB)
+                    IPC (xsim)    IPC (Verilator)   Verification            Status
+CoreMark (-O2):     3.15           3.31             both sims agree ~5%     23/23 regressions pass
 ```
+
+xsim is the authoritative simulator (IEEE 1800 4-state, matches synthesis).
+Verilator runs ~5% optimistic on CoreMark due to eval-scheduling artifacts
+still present in some paths. For tapeout: trust xsim.
 
 ### CoreMark IPC Signoff
 
-| Method | IPC | Window |
-|--------|-----|--------|
-| CSR (mcycle/minstret) | 3.3332 | 0-2M cycles |
-| VCD sum(commit_count) | 3.3333 | 2K-5K warm window |
-| Steady-state windowed | 3.3333 | 100K-2M (excludes startup) |
-| Wall-clock (sim cycles) | 3.3326 | 0-2M cycles |
-| gem5 ceiling (no LB/dual-BRU) | 3.05-3.12 | — |
+| Simulator | IPC | Window | Notes |
+|-----------|-----|--------|-------|
+| **xsim** (authoritative) | **3.15** | 500K cyc steady-state | Matches gem5 3.15 ceiling exactly |
+| Verilator | 3.31 | 500K cyc steady-state | ~5% optimistic |
+| gem5 (study) | 3.15 | — | Cycle-accurate reference |
 
-Conservative signoff: **3.33 IPC** (steady-state, cross-validated).
-Startup bias: 0.021% at 2M cycles (negligible).
-Margin over 3.0 target: **+11.1%**.
+Margin over 3.0 target: **+5%** on xsim / **+10%** on Verilator.
+
+### Simulator migration history (2026-04-16)
+
+Previously xsim reported 0.48 IPC — a 6.9x gap vs Verilator's 3.33. Root
+cause: `backward_branch_taken` in `rv64gc_core_top.sv` was registered as
+a Verilator eval-scheduling workaround. That 1-cycle delay caused the
+loop buffer to miss the activation window on xsim, dropping activation
+from ~99% to 0% and starving fetch 52% of cycles. Revert to combinational
+(commit b397582) restored real IPC. The `+PERF_PROFILE` plusarg in
+`tb_top.sv` dumps per-stage histograms used for this triage.
 
 Optimization log: `doc/coremark_optimization_changelog.md`
 
@@ -51,7 +59,7 @@ Optimization log: `doc/coremark_optimization_changelog.md`
 2. BPU update type (CALL/RET/JALR stored in BTB for RAS prediction)
 3. BRU early fetch redirect (redirect at execute, not commit)
 4. 1-cycle redirect bubble (icache + f2_pc bypass on BPU redirect)
-5. Loop buffer all-slot trigger (registered to avoid Verilator eval artifact)
+5. Loop buffer all-slot trigger (combinational — xsim-correct; reverted from registered Verilator workaround)
 6. Forwarding hold register (breaks CDB→bypass→SQ_fwd→CDB loop)
 7. SQ/LQ power-of-2 depths (fixes pointer-wrap count overflow)
 8. Dispatch load cap (limits to 2 loads/cycle matching IQ NUM_ENQUEUE)
@@ -60,10 +68,11 @@ Optimization log: `doc/coremark_optimization_changelog.md`
 11. Dual BRU on IQ0 (port 0 + port 1 both handle branches, eliminates BRU bottleneck)
 
 ### Known Issues
-- **Dhrystone 2-cycle fetch cadence**: 44% of cycles produce 0 instructions. F2→F1 feedback through registered SRAM. Active IPC is 2.91. Three incremental fix attempts failed (bypass, split-line, suppress flag) — all break f2_already_emitted/remainder/BPU redirect invariants. Needs decoupled F2 stage with independent PC counter (~200 LOC pipeline rewrite).
-- **BTB dead for Dhrystone**: BTB indexes by PC[9:2] but lookup uses fetch-group PC while update uses branch PC — index mismatch. Cache-line indexing works but CoreMark startup hangs (RAS/slot interaction). Coupled with cadence fix (hot branch at offset 14 falls beyond 6-slot window).
-- **CoreMark -O3 slow (0.37 IPC)**: CSR corruption fixed. Root cause: 24.6% branch mispredict rate from dead BTB — -O3 code has many function calls/returns that the BTB can't learn (same index-mismatch bug as Dhrystone). Not a separate bug.
-- **Verilator convergence**: structural CDB→bypass loop settled by forwarding hold register + address gating. Reading `fused_insn[1+]` in combinational context changes Verilator eval scheduling — use `always_ff` for signals derived from multi-slot decode arrays.
+- **Dhrystone 2-cycle fetch cadence**: 44% of cycles produce 0 instructions. F2→F1 feedback through registered SRAM. Needs decoupled F2 stage with independent PC counter (~200 LOC pipeline rewrite).
+- **BTB dead for Dhrystone**: BTB indexes by PC[9:2] but lookup uses fetch-group PC while update uses branch PC — index mismatch.
+- **CoreMark -O3 slow (0.37 IPC)**: 24.6% branch mispredict rate from dead BTB.
+- **xsim vs Verilator residual gap** (~5%): remaining Verilator eval-scheduling artifacts still elevate Verilator IPC above xsim. Suspected sources: forwarding hold register (adds 1 cycle to same-cycle forwarded loads), registered fetch_insn fields, converge-limit 500, UNOPTFLAT suppressions. Not blocking (xsim already meets 3.0 target).
+- **Verilator convergence**: structural CDB→bypass loop currently settled by forwarding hold register + address gating. The hold register is a real 1-cycle latency cost, not a Verilator-only artifact — on xsim it also applies. To remove, need structural CDB loop break at the source.
 
 ### Infrastructure Committed
 - **L2 prefetch port**: 3-way arbitration (dcache > icache > prefetch).
