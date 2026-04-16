@@ -318,7 +318,11 @@ module rv64gc_core_top
     // Rename buffer: parallel to ROB, stores pdst/old_pdst/rd_arch
     // =========================================================================
     rename_buf_entry_t rename_buf [0:ROB_DEPTH-1];
+    logic [2:0] ren_count_raw;
+    // Suppress rename output on flush cycle — prevent stale pre-flush
+    // instructions from entering the ROB/DQ/ready-table.
     logic [2:0] ren_count_w;
+    assign ren_count_w = (flush_out.valid) ? 3'd0 : ren_count_raw;
 
     // Read rename buffer at head for commit
     logic [PHYS_REG_BITS-1:0] rb_head_pdst      [0:PIPE_WIDTH-1];
@@ -381,7 +385,7 @@ module rv64gc_core_top
         .dec_insn         (rename_dec_in),
         .dec_count        (rename_dec_count),
         .ren_insn         (ren_insn),
-        .ren_count        (ren_count_w),
+        .ren_count        (ren_count_raw),
         .ren_move_eliminated (ren_move_eliminated),
         .ren_zero_eliminated (ren_zero_eliminated),
         .rob_alloc_idx    (rob_alloc_idx),
@@ -1304,7 +1308,42 @@ module rv64gc_core_top
             cdb_data[1] = alu1_result;
     end
 
-    // CDB[2]: ALU2 (same cycle) or MUL (3-cycle latency)
+    // MUL output hold register: when MUL completes but ALU2 takes the CDB,
+    // latch the MUL result and replay next cycle. Without this, the MUL
+    // result is silently dropped and the ROB entry never becomes ready.
+    logic        mul_hold_valid_r;
+    logic [ROB_IDX_BITS-1:0]  mul_hold_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] mul_hold_pdst_r;
+    logic [63:0] mul_hold_data_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_out.valid) begin
+            mul_hold_valid_r <= 1'b0;
+        end else if (mul_valid_out && alu2_issue) begin
+            // MUL ready but ALU2 wins — hold until drain
+            mul_hold_valid_r   <= 1'b1;
+            mul_hold_rob_idx_r <= mul_rob_idx_s3;
+            mul_hold_pdst_r    <= mul_pdst_s3;
+            mul_hold_data_r    <= mul_result;
+        end else if (mul_hold_valid_r && !alu2_issue) begin
+            // Drain: held MUL result goes to CDB this cycle
+            mul_hold_valid_r <= 1'b0;
+        end
+        // else: keep holding (ALU2 still issuing)
+    end
+
+    // Effective MUL output: fresh MUL result OR held result from last cycle
+    logic        mul_eff_valid;
+    logic [ROB_IDX_BITS-1:0]  mul_eff_rob_idx;
+    logic [PHYS_REG_BITS-1:0] mul_eff_pdst;
+    logic [63:0] mul_eff_data;
+
+    assign mul_eff_valid   = mul_valid_out || mul_hold_valid_r;
+    assign mul_eff_rob_idx = mul_valid_out ? mul_rob_idx_s3 : mul_hold_rob_idx_r;
+    assign mul_eff_pdst    = mul_valid_out ? mul_pdst_s3    : mul_hold_pdst_r;
+    assign mul_eff_data    = mul_valid_out ? mul_result      : mul_hold_data_r;
+
+    // CDB[2]: ALU2 (same cycle) or MUL (3-cycle latency, with hold)
     always_comb begin
         if (alu2_issue) begin
             cdb_valid[2]         = 1'b1;
@@ -1312,10 +1351,10 @@ module rv64gc_core_top
             cdb_rob_idx[2]       = iq1_issue_data[0].rob_idx;
             cdb_data[2]          = alu2_result;
         end else begin
-            cdb_valid[2]         = mul_valid_out;
-            cdb_tag[2]           = mul_pdst_s3;
-            cdb_rob_idx[2]       = mul_rob_idx_s3;
-            cdb_data[2]          = mul_result;
+            cdb_valid[2]         = mul_eff_valid;
+            cdb_tag[2]           = mul_eff_pdst;
+            cdb_rob_idx[2]       = mul_eff_rob_idx;
+            cdb_data[2]          = mul_eff_data;
         end
         cdb_has_exception[2]     = 1'b0;
         cdb_exc_code[2]          = 4'd0;
@@ -1329,7 +1368,36 @@ module rv64gc_core_top
         cdb_csr_op[2]           = 2'd0;
     end
 
-    // CDB[3]: ALU3 (same cycle) or DIV (multi-cycle)
+    // DIV output hold register (same pattern as MUL hold)
+    logic        div_hold_valid_r;
+    logic [ROB_IDX_BITS-1:0]  div_hold_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] div_hold_pdst_r;
+    logic [63:0] div_hold_data_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_out.valid) begin
+            div_hold_valid_r <= 1'b0;
+        end else if (div_valid_out && alu3_issue) begin
+            div_hold_valid_r   <= 1'b1;
+            div_hold_rob_idx_r <= div_rob_idx_r;
+            div_hold_pdst_r    <= div_pdst_r;
+            div_hold_data_r    <= div_result;
+        end else if (div_hold_valid_r && !alu3_issue) begin
+            div_hold_valid_r <= 1'b0;
+        end
+    end
+
+    logic        div_eff_valid;
+    logic [ROB_IDX_BITS-1:0]  div_eff_rob_idx;
+    logic [PHYS_REG_BITS-1:0] div_eff_pdst;
+    logic [63:0] div_eff_data;
+
+    assign div_eff_valid   = div_valid_out || div_hold_valid_r;
+    assign div_eff_rob_idx = div_valid_out ? div_rob_idx_r   : div_hold_rob_idx_r;
+    assign div_eff_pdst    = div_valid_out ? div_pdst_r      : div_hold_pdst_r;
+    assign div_eff_data    = div_valid_out ? div_result       : div_hold_data_r;
+
+    // CDB[3]: ALU3 (same cycle) or DIV (multi-cycle, with hold)
     always_comb begin
         if (alu3_issue) begin
             cdb_valid[3]         = 1'b1;
@@ -1349,10 +1417,10 @@ module rv64gc_core_top
             cdb_csr_wdata[3]     = bypassed_data[6];  // rs1 value (the write mask)
             cdb_csr_op[3]        = iq2_issue_data[0].csr_op;
         end else begin
-            cdb_valid[3]         = div_valid_out;
-            cdb_tag[3]           = div_pdst_r;
-            cdb_rob_idx[3]       = div_rob_idx_r;
-            cdb_data[3]          = div_result;
+            cdb_valid[3]         = div_eff_valid;
+            cdb_tag[3]           = div_eff_pdst;
+            cdb_rob_idx[3]       = div_eff_rob_idx;
+            cdb_data[3]          = div_eff_data;
             cdb_csr_we[3]        = 1'b0;
             cdb_csr_addr[3]      = 12'd0;
             cdb_csr_wdata[3]     = 64'd0;

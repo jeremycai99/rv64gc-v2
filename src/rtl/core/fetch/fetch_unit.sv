@@ -563,6 +563,7 @@ module fetch_unit
     // For CALL, push return address onto RAS.
     // =========================================================================
     logic        bp_branch_found;
+    logic        bp_slot_matched;
     logic [2:0]  bp_branch_slot;
     logic [63:0] bp_target_addr;
     logic        bp_taken;
@@ -628,12 +629,21 @@ module fetch_unit
                 // This covers the case where the BTB entry is aliased and the
                 // branch isn't actually in this fetch group.
                 bp_truncated_count = extract_count;
+                bp_slot_matched    = 1'b0;
 
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (slot_valid[i] && (slot_pc[i][5:0] == f2_btb_offset_r)) begin
                         bp_branch_slot     = 3'(i);
                         bp_truncated_count = 3'(i + 1);
+                        bp_slot_matched    = 1'b1;
                     end
+                end
+
+                // If the BTB branch offset did not match any extracted slot,
+                // the BTB entry is stale/aliased -- suppress the prediction.
+                if (!bp_slot_matched) begin
+                    bp_branch_found = 1'b0;
+                    bp_taken        = 1'b0;
                 end
             end
         end
@@ -697,7 +707,7 @@ module fetch_unit
         ras_push_addr  = '0;
         ras_pop_valid  = 1'b0;
 
-        if (f2_valid_r && ic_resp_valid && f2_btb_hit_r && !backend_stall
+        if (bp_branch_found && bp_taken && !backend_stall
             && !redirect_valid) begin
             if (f2_btb_type_r == BT_CALL) begin
                 ras_push_valid = 1'b1;
@@ -719,7 +729,7 @@ module fetch_unit
         tage_spec_update_valid = 1'b0;
         tage_spec_taken        = 1'b0;
 
-        if (f2_valid_r && ic_resp_valid && f2_btb_hit_r && !backend_stall
+        if (bp_branch_found && !backend_stall
             && !redirect_valid) begin
             if (f2_btb_type_r == BT_COND) begin
                 tage_spec_update_valid = 1'b1;

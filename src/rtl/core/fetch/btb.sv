@@ -29,7 +29,7 @@ module btb
     // =========================================================================
     // BTB_SETS = 256, BTB_WAYS = 4  (from rv64gc_pkg)
     localparam int IDX_BITS = $clog2(BTB_SETS);  // 8
-    localparam int TAG_BITS = 64 - IDX_BITS - 2; // 54  (skip [1:0] alignment bits)
+    localparam int TAG_BITS = 64 - IDX_BITS - LINE_BITS; // 50  (index within cache line)
 
     // =========================================================================
     // Storage arrays
@@ -50,8 +50,11 @@ module btb
     logic [IDX_BITS-1:0] lkp_idx;
     logic [TAG_BITS-1:0] lkp_tag;
 
-    assign lkp_idx = lookup_pc[IDX_BITS+1:2];   // bits [9:2]
-    assign lkp_tag = lookup_pc[63:IDX_BITS+2];  // bits [63:10]
+    assign lkp_idx = lookup_pc[IDX_BITS+LINE_BITS-1:LINE_BITS];   // bits [13:6]
+    assign lkp_tag = lookup_pc[63:IDX_BITS+LINE_BITS];           // bits [63:14]
+
+    logic [5:0] lkp_start;
+    assign lkp_start = lookup_pc[5:0];
 
     always_comb begin
         hit           = 1'b0;
@@ -59,11 +62,14 @@ module btb
         branch_type   = 3'd0;
         branch_offset = 6'd0;
         for (int w = 0; w < BTB_WAYS; w++) begin
-            if (valid[lkp_idx][w] && (tags[lkp_idx][w] == lkp_tag)) begin
-                hit           = 1'b1;
-                target        = targets[lkp_idx][w];
-                branch_type   = btypes[lkp_idx][w];
-                branch_offset = boffs[lkp_idx][w];
+            if (valid[lkp_idx][w] && (tags[lkp_idx][w] == lkp_tag)
+                && (boffs[lkp_idx][w] >= lkp_start)) begin
+                if (!hit || (boffs[lkp_idx][w] < branch_offset)) begin
+                    hit           = 1'b1;
+                    target        = targets[lkp_idx][w];
+                    branch_type   = btypes[lkp_idx][w];
+                    branch_offset = boffs[lkp_idx][w];
+                end
             end
         end
     end
@@ -87,15 +93,16 @@ module btb
     logic                upd_hit;
     logic [1:0]          upd_hit_way;
 
-    assign upd_idx = update_pc[IDX_BITS+1:2];
-    assign upd_tag = update_pc[63:IDX_BITS+2];
+    assign upd_idx = update_pc[IDX_BITS+LINE_BITS-1:LINE_BITS];
+    assign upd_tag = update_pc[63:IDX_BITS+LINE_BITS];
 
     always_comb begin
         // Check for hit in existing entries
         upd_hit     = 1'b0;
         upd_hit_way = 2'd0;
         for (int w = 0; w < BTB_WAYS; w++) begin
-            if (valid[upd_idx][w] && (tags[upd_idx][w] == upd_tag)) begin
+            if (valid[upd_idx][w] && (tags[upd_idx][w] == upd_tag)
+                && (boffs[upd_idx][w] == update_pc[5:0])) begin
                 upd_hit     = 1'b1;
                 upd_hit_way = 2'(w);
             end
