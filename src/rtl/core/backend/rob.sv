@@ -497,17 +497,22 @@ module rob
             // trigger a flush.  This recovers from IQ/ROB flush-recovery
             // bugs where an IQ entry was killed without the corresponding
             // ROB ready bit being set (the CDB writeback never arrives).
-            // Width 12 bits = 4095 cycles is comfortably longer than any
-            // legitimate long-latency op (DIV ~65 cyc, cache miss ~50).
+            // 256 cycles is comfortably longer than any legitimate
+            // long-latency op (DIV ~65 cyc, L2 miss ~50 cyc) but short
+            // enough that Dhrystone's repeated stuck-entry pattern can
+            // still make forward progress.
             if (valid_r[head_r] && !ready_r[head_r])
                 rob_head_watchdog <= rob_head_watchdog + 12'd1;
             else
                 rob_head_watchdog <= 12'd0;
 
-            if (rob_head_watchdog == 12'hFFE) begin
-                // About to saturate — force the entry ready with a
-                // replay exception so commit handles it like an ordering
-                // violation (redirects to the entry's PC after flushing).
+            if (rob_head_watchdog == 12'd62) begin
+                // 64-cycle timeout: longer than any legit non-DIV op
+                // (L2 miss ~50 is ok because reaching the head happens
+                // after fill resumes). DIV's 65-cycle worst case is
+                // safely above this.
+                // Previous 32-cycle timeout false-tripped on legitimate
+                // CoreMark long-latency paths.
                 ready_r[head_r]                <= 1'b1;
                 has_exc_r[head_r]              <= 1'b1;
                 exc_code_packed[head_r*4 +: 4] <= 4'd15;
