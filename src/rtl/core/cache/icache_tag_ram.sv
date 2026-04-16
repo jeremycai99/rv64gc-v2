@@ -8,6 +8,7 @@ module icache_tag_ram
     import rv64gc_pkg::*;
 (
     input  logic                        clk,
+    input  logic                        rst_n,
     // Read port
     input  logic [L1I_SET_BITS-1:0]     raddr,
     output logic [L1I_WAYS-1:0]         valid_out,
@@ -30,9 +31,17 @@ module icache_tag_ram
 
     // =========================================================================
     // Write / invalidate (synchronous)
+    // Reset clears valid bits so the cache behaves as empty on power-up;
+    // tag_arr is left uninitialized (only read when valid=1).
     // =========================================================================
-    always_ff @(posedge clk) begin
-        if (invalidate_all) begin
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int s = 0; s < L1I_SETS; s++) begin
+                for (int w = 0; w < L1I_WAYS; w++) begin
+                    valid_arr[s][w] <= 1'b0;
+                end
+            end
+        end else if (invalidate_all) begin
             for (int s = 0; s < L1I_SETS; s++) begin
                 for (int w = 0; w < L1I_WAYS; w++) begin
                     valid_arr[s][w] <= 1'b0;

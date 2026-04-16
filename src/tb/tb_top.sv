@@ -137,6 +137,47 @@ module tb_top
                     u_core.flush_out.redirect_pc,
                     u_core.flush_out.full_flush);
             end
+            // Store drain to D-cache tracing (tohost detection path)
+            if (trace_commit_en && u_core.dc_store_req_valid) begin
+                $display("[STORE] cyc=%0d addr=%016h data=%016h ack=%b tohost=%b",
+                    trace_cycle,
+                    u_core.dc_store_req_addr,
+                    u_core.dc_store_req_data,
+                    u_core.dc_store_ack,
+                    u_core.tohost_wr_valid);
+            end
+            // DC L2 traffic trace (to diagnose MSHR/fill stalls)
+            if (trace_commit_en && u_core.u_dcache.l2_req_valid) begin
+                $display("[DC_L2REQ] cyc=%0d addr=%016h we=%b l2_ready=%b state=%0d",
+                    trace_cycle,
+                    u_core.u_dcache.l2_req_addr,
+                    u_core.u_dcache.l2_req_we,
+                    u_core.u_dcache.l2_req_ready,
+                    u_core.u_dcache.l2_state_q);
+            end
+            if (trace_commit_en && u_core.u_dcache.l2_resp_valid) begin
+                $display("[DC_L2RESP] cyc=%0d addr=%016h",
+                    trace_cycle, u_core.u_dcache.l2_resp_addr);
+            end
+            // Dump MSHR + waiting_for_fill state when store is stuck
+            if (trace_commit_en && u_core.dc_store_req_valid && !u_core.dc_store_ack) begin
+                $display("[DC_STATE] cyc=%0d s1_st_v=%b wait_fill=%b fill_done=%b hit=%b allo_mshr=%b mshr_mat=%b is_tohost=%b l2_state=%0d mshr0_v=%b mshr0_fp=%b mshr0_wp=%b mshr0_fd=%b fill_avail=%b wb_avail=%b",
+                    trace_cycle,
+                    u_core.u_dcache.s1_st_valid,
+                    u_core.u_dcache.s1_st_waiting_for_fill,
+                    u_core.u_dcache.fill_done_avail,
+                    u_core.u_dcache.st_cache_hit,
+                    u_core.u_dcache.s1_st_can_allocate_mshr,
+                    u_core.u_dcache.mshr_st_match_hit,
+                    u_core.u_dcache.s1_st_is_tohost,
+                    u_core.u_dcache.l2_state_q,
+                    u_core.u_dcache.mshr[0].valid,
+                    u_core.u_dcache.mshr[0].fill_pend,
+                    u_core.u_dcache.mshr[0].writeback_pend,
+                    u_core.u_dcache.mshr[0].fill_done,
+                    u_core.u_dcache.fill_mshr_avail,
+                    u_core.u_dcache.wb_mshr_avail);
+            end
             // BRU JALR trace: print operands and target every cycle BRU executes a JALR
             if (trace_commit_en) begin
                 if ((u_core.iq0_issue_valid[0]) &&

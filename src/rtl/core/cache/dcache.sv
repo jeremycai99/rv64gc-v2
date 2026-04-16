@@ -83,6 +83,7 @@ module dcache
 
     dcache_tag_ram u_tag_ram (
         .clk          (clk),
+        .rst_n        (rst_n),
         .raddr        (tr_raddr),
         .valid_out    (tr_valid_out),
         .dirty_out    (tr_dirty_out),

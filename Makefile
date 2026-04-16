@@ -182,6 +182,54 @@ run: build
 	$(SIM_BIN) +MEMFILE=$(MEMFILE)
 
 # =============================================================================
+# Vivado xsim flow (second simulator for cross-validation)
+#
+# Usage:
+#   make xsim_build                             # compile + elaborate
+#   make xsim_run MEMFILE=tests/hex/coremark.hex MAX_CYCLES=500000
+#   make xsim_regression                        # run full regression suite
+# =============================================================================
+XSIM_ROOT    := D:/Xilinx/Vivado/2024.1
+XVLOG        := $(XSIM_ROOT)/bin/xvlog.bat
+XELAB        := $(XSIM_ROOT)/bin/xelab.bat
+XSIM         := $(XSIM_ROOT)/bin/xsim.bat
+XSIM_TB      := tb_iverilog
+XSIM_SNAP    := tb_iverilog_sim
+XSIM_TB_FILE := $(TB_DIR)/tb_iverilog.sv
+XSIM_ALL_SV  := $(PKG_FILES) $(RTL_FILES) $(TB_TOP) $(XSIM_TB_FILE)
+
+.PHONY: xsim_build xsim_run xsim_regression xsim_clean
+
+xsim_build:
+	rm -rf xsim.dir
+	$(XVLOG) --sv --relax $(XSIM_ALL_SV)
+	$(XELAB) --relax -s $(XSIM_SNAP) $(XSIM_TB)
+
+MAX_CYCLES ?= 500000
+
+xsim_run: xsim_build
+	@echo @echo off > run_xsim_tmp.bat
+	@echo cd /d $(shell pwd -W 2>/dev/null || pwd) >> run_xsim_tmp.bat
+	@echo call $(XSIM) $(XSIM_SNAP) --runall --testplusarg "MEMFILE=$(MEMFILE)" --testplusarg "MAX_CYCLES=$(MAX_CYCLES)" --testplusarg "NOVCD" >> run_xsim_tmp.bat
+	./run_xsim_tmp.bat
+	@rm -f run_xsim_tmp.bat
+
+xsim_regression:
+	@for t in tests/hex/rv64ui_*.hex tests/hex/test_*.hex; do \
+		name=$$(basename $$t .hex); \
+		echo @echo off > run_xsim_tmp.bat; \
+		echo cd /d $(shell pwd -W 2>/dev/null || pwd) >> run_xsim_tmp.bat; \
+		echo call $(XSIM) $(XSIM_SNAP) --runall --testplusarg "MEMFILE=$$t" --testplusarg "MAX_CYCLES=50000" --testplusarg "NOVCD" >> run_xsim_tmp.bat; \
+		result=$$(./run_xsim_tmp.bat 2>&1 | grep -E "PASS|FAIL|TIMEOUT" | tail -1); \
+		echo "$$name: $$result"; \
+	done
+	@rm -f run_xsim_tmp.bat
+
+xsim_clean:
+	rm -rf xsim.dir xvlog.log xelab.log xsim.log xvlog.pb xelab.pb xsim.jou
+	rm -f run_xsim_tmp.bat xsim_run.tcl
+
+# =============================================================================
 # Clean
 # =============================================================================
 .PHONY: clean
