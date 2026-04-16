@@ -1,0 +1,8 @@
+... cycle 1000  tohost_valid=0 tohost_value=0x0 mcycle=1000 minstret=145
+... cycle 2000  tohost_valid=0 tohost_value=0x0 mcycle=2000 minstret=145
+... cycle 3000  tohost_valid=0 tohost_value=0x0 mcycle=3000 minstret=145
+... cycle 4000  tohost_valid=0 tohost_value=0x0 mcycle=4000 minstret=145
+... cycle 5000  tohost_valid=0 tohost_value=0x0 mcycle=5000 minstret=145
+TIMEOUT after 5000 cycles, tohost_valid=0 tohost_value=0x0
+PERF: mcycle=5008 minstret=145
+PERF: IPC=0.0290 (145 instr / 5008 cycles)

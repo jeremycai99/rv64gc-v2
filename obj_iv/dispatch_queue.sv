@@ -126,13 +126,6 @@ module dispatch_queue
     logic [2:0] actual_deq_mem;
     logic       all_int_iq_full;
 
-    // Per-slot mem FIFO read address for mem_cap loop (formerly automatic)
-    logic [MEM_IDX_BITS-1:0] mem_cap_rd_a [0:PIPE_WIDTH-1];
-
-    // Enqueue sorting counters (formerly automatic)
-    int enq_i_int;
-    int enq_i_mem;
-
     always_comb begin : deq_count_comb
         logic [2:0] max_int, max_mem, rem_slots;
         logic [2:0] candidate_mem;
@@ -168,9 +161,10 @@ module dispatch_queue
             load_cnt   = 3'd0;
             stopped_m  = 1'b0;
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                mem_cap_rd_a[i] = mem_head + MEM_IDX_BITS'(i);
+                logic [MEM_IDX_BITS-1:0] rd_a;
+                rd_a = mem_head + MEM_IDX_BITS'(i);
                 if (!stopped_m && 3'(i) < candidate_mem) begin
-                    if (mem_fifo[mem_cap_rd_a[i]].base.is_store) begin
+                    if (mem_fifo[rd_a].base.is_store) begin
                         if (store_cnt < 3'd2) begin
                             max_mem   = 3'(i) + 3'd1;
                             store_cnt = store_cnt + 3'd1;
@@ -358,16 +352,16 @@ module dispatch_queue
             // Enqueue: sort uops into int or mem FIFO using precomputed addresses
             // -------------------------------------------------------------------
             begin
-                enq_i_int = 0;
-                enq_i_mem = 0;
+                int i_int = 0;
+                int i_mem = 0;
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (i < int'(enq_count)) begin
                         if (is_mem[i]) begin
-                            mem_fifo_flat[mem_wr_addr[enq_i_mem]] <= RI_W'(enq_data[i]);
-                            enq_i_mem = enq_i_mem + 1;
+                            mem_fifo_flat[mem_wr_addr[i_mem]] <= RI_W'(enq_data[i]);
+                            i_mem = i_mem + 1;
                         end else begin
-                            int_fifo_flat[int_wr_addr[enq_i_int]] <= RI_W'(enq_data[i]);
-                            enq_i_int = enq_i_int + 1;
+                            int_fifo_flat[int_wr_addr[i_int]] <= RI_W'(enq_data[i]);
+                            i_int = i_int + 1;
                         end
                     end
                 end
