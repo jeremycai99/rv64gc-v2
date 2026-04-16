@@ -24,23 +24,28 @@ The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep d
 ## Current Benchmark Status (2026-04-16)
 
 ```
-                    IPC (xsim)    IPC (Verilator)   Verification            Status
-CoreMark (-O2):     3.15           3.31             both sims agree ~5%     23/23 regressions pass
+                    IPC (xsim authoritative)   Status
+CoreMark (-O2):     3.64                       23/23 regressions pass
 ```
 
 xsim is the authoritative simulator (IEEE 1800 4-state, matches synthesis).
-Verilator runs ~5% optimistic on CoreMark due to eval-scheduling artifacts
-still present in some paths. For tapeout: trust xsim.
+For tapeout: trust xsim, not Verilator.
 
 ### CoreMark IPC Signoff
 
 | Simulator | IPC | Window | Notes |
 |-----------|-----|--------|-------|
-| **xsim** (authoritative) | **3.15** | 500K cyc steady-state | Matches gem5 3.15 ceiling exactly |
-| Verilator | 3.31 | 500K cyc steady-state | ~5% optimistic |
-| gem5 (study) | 3.15 | — | Cycle-accurate reference |
+| **xsim** (authoritative) | **3.64** | 500K cyc steady-state | +21% over 3.0 target |
+| Verilator | 3.31 | (pre-LB-trigger-fix baseline) | Build currently broken (MSYS2 install) |
+| gem5 (vanilla ceiling, no LB/dual-BRU) | 3.05-3.12 | — | v2 exceeds via LB + dual-BRU + dual-dcache |
 
-Margin over 3.0 target: **+5%** on xsim / **+10%** on Verilator.
+Margin over 3.0 target: **+21%** on xsim.
+
+### Recent optimizations (2026-04-16 session)
+
+1. **Dcache/icache tag RAM reset init** (commit 8e280c6) — uninitialized valid/dirty arrays caused xsim to hang on 10 call/return tests and CoreMark. Reset now clears arrays. Impact: xsim 13/23 → 23/23 PASS.
+2. **LB trigger combinational** (commit b397582) — the registered Verilator-workaround dropped loop-buffer activation to 0% on xsim, starving fetch. Reverted to combinational per xsim_workflow.md refactor plan. Impact: xsim CoreMark 0.48 → 3.15 IPC.
+3. **Load-balanced IQ dispatch** (commit 2a92d6b) — round-robin over-fed single-issue IQ1/IQ2 while dual-issue IQ0 had room. Replaced with occupancy-minimizing routing (IQ0 weighted 1/2 to match 2× drain rate). Impact: xsim CoreMark 3.15 → 3.64 IPC, iq1/iq2_full 19%/18% → 1%/1%.
 
 ### Simulator migration history (2026-04-16)
 
