@@ -585,6 +585,12 @@ module rv64gc_core_top
     logic [1:0]    dq_deq_iq_target [0:PIPE_WIDTH-1];
     logic [NUM_INT_IQS-1:0] iq_full_vec;
 
+    // Pack per-IQ occupancy into an array for dispatch routing.
+    logic [5:0] iq_occ_vec [0:NUM_INT_IQS-1];
+    assign iq_occ_vec[0] = 6'(iq0_occ);
+    assign iq_occ_vec[1] = 6'(iq1_occ);
+    assign iq_occ_vec[2] = 6'(iq2_occ);
+
     dispatch_queue u_dispatch_queue (
         .clk         (clk),
         .rst_n       (rst_n),
@@ -595,6 +601,7 @@ module rv64gc_core_top
         .deq_data    (dq_deq_data),
         .deq_iq_target(dq_deq_iq_target),
         .iq_full     (iq_full_vec),
+        .iq_occ      (iq_occ_vec),
         .flush_valid (flush_out.valid),
         .flush_full  (flush_out.full_flush)
     );
@@ -608,6 +615,7 @@ module rv64gc_core_top
     logic [1:0]  iq0_enq_valid;
     iq_entry_t   iq0_enq_data [0:1];
     logic        iq0_full;
+    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq0_occ;
     logic [1:0]  iq0_issue_valid;
     iq_entry_t   iq0_issue_data [0:1];
 
@@ -615,6 +623,7 @@ module rv64gc_core_top
     logic [1:0]  iq1_enq_valid;
     iq_entry_t   iq1_enq_data [0:1];
     logic        iq1_full;
+    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq1_occ;
     logic [1:0]  iq1_issue_valid;
     iq_entry_t   iq1_issue_data [0:1];
     // Single-issue wrapper signals for IQ1 (NUM_SELECT=1)
@@ -625,6 +634,7 @@ module rv64gc_core_top
     logic [1:0]  iq2_enq_valid;
     iq_entry_t   iq2_enq_data [0:1];
     logic        iq2_full;
+    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq2_occ;
     logic [1:0]  iq2_issue_valid;
     iq_entry_t   iq2_issue_data [0:1];
     // Single-issue wrapper signals for IQ2 (NUM_SELECT=1)
@@ -804,7 +814,8 @@ module rv64gc_core_top
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (1'b0)
+        .port0_suppress  (1'b0),
+        .occupancy       (iq0_occ)
     );
 
     // IQ1 and IQ2 are single-issue: only port 0 is wired to ALU2/MUL and
@@ -831,7 +842,8 @@ module rv64gc_core_top
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (1'b0)
+        .port0_suppress  (1'b0),
+        .occupancy       (iq1_occ)
     );
     assign iq1_issue_valid[0] = iq1_issue_valid_s[0];
     assign iq1_issue_valid[1] = 1'b0;
@@ -858,7 +870,8 @@ module rv64gc_core_top
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (1'b0)
+        .port0_suppress  (1'b0),
+        .occupancy       (iq2_occ)
     );
     assign iq2_issue_valid[0] = iq2_issue_valid_s[0];
     assign iq2_issue_valid[1] = 1'b0;
@@ -886,7 +899,8 @@ module rv64gc_core_top
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (lsu_port0_suppress)
+        .port0_suppress  (lsu_port0_suppress),
+        .occupancy       (/* unused */)
     );
 
     // Store IQ is single-issue (NUM_SELECT=1): each store is a SINGLE entry
@@ -912,7 +926,8 @@ module rv64gc_core_top
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (1'b0)
+        .port0_suppress  (1'b0),
+        .occupancy       (/* unused */)
     );
     assign iq_store_issue_valid[0] = iq_store_issue_valid_s[0];
     assign iq_store_issue_valid[1] = 1'b0;

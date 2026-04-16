@@ -137,6 +137,8 @@ module tb_top
     integer sq_full_cyc;
     integer iq0_full_cyc;
     integer iq1_full_cyc;
+    integer iq2_full_cyc;
+    integer iq0_cnt_sum, iq1_cnt_sum, iq2_cnt_sum;
     integer backend_stall_cyc;
     integer flush_cyc;
     integer perf_total_cyc;
@@ -155,6 +157,10 @@ module tb_top
             sq_full_cyc        <= 0;
             iq0_full_cyc       <= 0;
             iq1_full_cyc       <= 0;
+            iq2_full_cyc       <= 0;
+            iq0_cnt_sum        <= 0;
+            iq1_cnt_sum        <= 0;
+            iq2_cnt_sum        <= 0;
             backend_stall_cyc  <= 0;
             flush_cyc          <= 0;
             perf_total_cyc     <= 0;
@@ -170,6 +176,10 @@ module tb_top
             if (u_core.sq_full)         sq_full_cyc       <= sq_full_cyc + 1;
             if (u_core.iq0_full)        iq0_full_cyc      <= iq0_full_cyc + 1;
             if (u_core.iq1_full)        iq1_full_cyc      <= iq1_full_cyc + 1;
+            if (u_core.iq2_full)        iq2_full_cyc      <= iq2_full_cyc + 1;
+            iq0_cnt_sum <= iq0_cnt_sum + u_core.u_iq0.count_r;
+            iq1_cnt_sum <= iq1_cnt_sum + u_core.u_iq1.count_r;
+            iq2_cnt_sum <= iq2_cnt_sum + u_core.u_iq2.count_r;
             if (u_core.backend_stall)   backend_stall_cyc <= backend_stall_cyc + 1;
             if (u_core.flush_out.valid) flush_cyc         <= flush_cyc + 1;
         end
@@ -199,6 +209,14 @@ module tb_top
             $display("  sq_full      : %0d", sq_full_cyc);
             $display("  iq0_full     : %0d", iq0_full_cyc);
             $display("  iq1_full     : %0d", iq1_full_cyc);
+            $display("  iq2_full     : %0d", iq2_full_cyc);
+            $display("Average IQ occupancy (of 32):");
+            $display("  iq0_avg: %0d.%02d", iq0_cnt_sum / perf_total_cyc,
+                     ((iq0_cnt_sum * 100) / perf_total_cyc) % 100);
+            $display("  iq1_avg: %0d.%02d", iq1_cnt_sum / perf_total_cyc,
+                     ((iq1_cnt_sum * 100) / perf_total_cyc) % 100);
+            $display("  iq2_avg: %0d.%02d", iq2_cnt_sum / perf_total_cyc,
+                     ((iq2_cnt_sum * 100) / perf_total_cyc) % 100);
             $display("Flushes: %0d", flush_cyc);
         end
     end

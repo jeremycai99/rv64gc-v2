@@ -24,6 +24,7 @@ module dispatch_queue
     output renamed_insn_t deq_data [0:PIPE_WIDTH-1],
     output logic [1:0]    deq_iq_target [0:PIPE_WIDTH-1],  // 0,1,2 = int IQ; 3 = mem IQ
     input  logic [NUM_INT_IQS-1:0] iq_full,                // per-IQ backpressure
+    input  logic [5:0]    iq_occ [0:NUM_INT_IQS-1],        // per-IQ occupancy (for load-balanced routing)
 
     // Flush
     input  logic          flush_valid,
@@ -257,19 +258,40 @@ module dispatch_queue
                         ok = (iq_used[2] < 2'd2) && !iq_full[2];
                     end
                     default: begin
-                        // ALU: round-robin, skip full or capacity-exhausted IQs
+                        // ALU: pick the least-loaded IQ that can accept this op.
+                        // Effective occupancy = current count + in-flight enqueues
+                        // this cycle (iq_used[]).  IQ0 is dual-issue (drains 2/cycle);
+                        // IQ1/IQ2 are single-issue (drain 1/cycle).  We bias toward
+                        // IQ0 by weighting its effective count by 1/2 (shift right 1).
+                        // Ties are broken by IQ index (lower wins for deterministic
+                        // behavior and slight bias toward IQ0).
+                        logic [6:0] eff [0:NUM_INT_IQS-1];
+                        logic [1:0] best_q;
                         ok = 1'b0;
-                        for (int k = 0; k < NUM_INT_IQS; k++) begin
-                            if (!ok && !iq_full[rr_cur] && (iq_used[rr_cur] < 2'd2)) begin
-                                tgt = rr_cur;
+                        for (int q = 0; q < NUM_INT_IQS; q++) begin
+                            eff[q] = 7'(iq_occ[q]) + 7'(iq_used[q]);
+                        end
+                        // Weight IQ0 as half occupancy (2x drain rate)
+                        eff[0] = eff[0] >> 1;
+                        best_q = 2'd0;
+                        // Pick the minimum eff[] among non-full IQs
+                        for (int q = 0; q < NUM_INT_IQS; q++) begin
+                            if (!iq_full[q] && (iq_used[q] < 2'd2) && !ok) begin
+                                best_q = 2'(q);
                                 ok = 1'b1;
                             end
-                            if (!ok)
-                                rr_cur = (rr_cur == 2'(NUM_INT_IQS-1)) ? 2'd0 : rr_cur + 2'd1;
                         end
-                        // Advance past the one we picked
-                        if (ok)
-                            rr_cur = (rr_cur == 2'(NUM_INT_IQS-1)) ? 2'd0 : rr_cur + 2'd1;
+                        if (ok) begin
+                            for (int q = 0; q < NUM_INT_IQS; q++) begin
+                                if (!iq_full[q] && (iq_used[q] < 2'd2)
+                                    && (eff[q] < eff[best_q])) begin
+                                    best_q = 2'(q);
+                                end
+                            end
+                            tgt = best_q;
+                        end
+                        // rr_cur kept for backward compat; no longer dominant.
+                        rr_cur = (rr_cur == 2'(NUM_INT_IQS-1)) ? 2'd0 : rr_cur + 2'd1;
                     end
                 endcase
 

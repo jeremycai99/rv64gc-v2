@@ -52,7 +52,10 @@ module issue_queue
     // Flush
     input  logic                    flush_valid,
     input  logic [ROB_IDX_BITS-1:0] flush_rob_tail,  // invalidate entries younger than this
-    input  logic                    flush_full         // invalidate everything
+    input  logic                    flush_full,        // invalidate everything
+
+    // Current occupancy (for dispatch load-balancing)
+    output logic [$clog2(DEPTH+1)-1:0] occupancy
 );
 
     // =====================================================================
@@ -84,6 +87,7 @@ module issue_queue
     // =====================================================================
     logic [IDX_BITS:0] count_r;
     assign full = (count_r >= (DEPTH[IDX_BITS:0] - NUM_ENQUEUE[IDX_BITS:0]));
+    assign occupancy = count_r[$clog2(DEPTH+1)-1:0];
 
     // =====================================================================
     // Age calculation helper function
