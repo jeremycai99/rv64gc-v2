@@ -968,6 +968,7 @@ module rv64gc_core_top
 
     int_prf u_int_prf (
         .clk   (clk),
+        .rst_n (rst_n),
         .raddr (prf_raddr),
         .rdata (prf_rdata),
         .wen   (prf_wen),

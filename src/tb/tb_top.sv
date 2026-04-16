@@ -244,6 +244,13 @@ module tb_top
                     u_core.flush_out.redirect_pc,
                     u_core.flush_out.full_flush);
             end
+            // ROB head snapshot when pipeline appears stalled
+            // (fires every 1000 cycles so we can see progress vs stuck)
+            if (trace_commit_en && (trace_cycle % 1000 == 0)) begin
+                $display("[ROB] cyc=%0d head_idx=%0d head_pc=%016h head_ready=%b",
+                    trace_cycle, u_core.rob_head_idx,
+                    u_core.rob_head_pc[0], u_core.rob_head_ready[0]);
+            end
             // Store drain to D-cache tracing (tohost detection path)
             if (trace_commit_en && u_core.dc_store_req_valid) begin
                 $display("[STORE] cyc=%0d addr=%016h data=%016h ack=%b tohost=%b",

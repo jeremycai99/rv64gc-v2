@@ -11,6 +11,7 @@ module int_prf
     import rv64gc_pkg::*;
 (
     input  logic                      clk,
+    input  logic                      rst_n,
     // 12 read ports (6 pairs)
     input  logic [PHYS_REG_BITS-1:0] raddr [0:11],
     output logic [63:0]              rdata [0:11],
@@ -32,16 +33,30 @@ module int_prf
 
     // -------------------------------------------------------------------------
     // Synchronous writes – all 6 write ports broadcast to all 6 copies
+    // Reset clears all entries so reads from un-renamed physical registers
+    // return 0 rather than X (which would propagate through misspeculated
+    // pipeline activity on 4-state simulators like xsim).
     // -------------------------------------------------------------------------
-    always_ff @(posedge clk) begin
-        for (int wp = 0; wp < 6; wp++) begin
-            if (wen[wp]) begin
-                regfile_copy0[waddr[wp]] <= wdata[wp];
-                regfile_copy1[waddr[wp]] <= wdata[wp];
-                regfile_copy2[waddr[wp]] <= wdata[wp];
-                regfile_copy3[waddr[wp]] <= wdata[wp];
-                regfile_copy4[waddr[wp]] <= wdata[wp];
-                regfile_copy5[waddr[wp]] <= wdata[wp];
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int i = 0; i < INT_PRF_DEPTH; i++) begin
+                regfile_copy0[i] <= 64'd0;
+                regfile_copy1[i] <= 64'd0;
+                regfile_copy2[i] <= 64'd0;
+                regfile_copy3[i] <= 64'd0;
+                regfile_copy4[i] <= 64'd0;
+                regfile_copy5[i] <= 64'd0;
+            end
+        end else begin
+            for (int wp = 0; wp < 6; wp++) begin
+                if (wen[wp]) begin
+                    regfile_copy0[waddr[wp]] <= wdata[wp];
+                    regfile_copy1[waddr[wp]] <= wdata[wp];
+                    regfile_copy2[waddr[wp]] <= wdata[wp];
+                    regfile_copy3[waddr[wp]] <= wdata[wp];
+                    regfile_copy4[waddr[wp]] <= wdata[wp];
+                    regfile_copy5[waddr[wp]] <= wdata[wp];
+                end
             end
         end
     end
