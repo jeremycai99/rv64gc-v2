@@ -25,8 +25,8 @@ The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep d
 
 ```
                     IPC (xsim authoritative)   Status
-CoreMark (-O2):     3.64                       23/23 regressions pass
-Dhrystone (-O2):    0.055 (watchdog recovery)  rename/flush bug, root-cause TBD
+CoreMark (-O2):     3.91                       23/23 regressions pass
+Dhrystone (-O2):    0.99 (watchdog recovery)   rename/flush bug, root-cause TBD
 ```
 
 xsim is the authoritative simulator (IEEE 1800 4-state, matches synthesis).
@@ -44,11 +44,11 @@ debugging — see `doc/xsim_lessons_learned.md` for full analysis.
 
 | Simulator | IPC | Window | Notes |
 |-----------|-----|--------|-------|
-| **xsim** (authoritative) | **3.64** | 500K cyc steady-state | +21% over 3.0 target |
+| **xsim** (authoritative) | **3.91** | 500K cyc steady-state | +30% over 3.0 target |
 | Verilator | 3.31 | (pre-LB-trigger-fix baseline) | Build currently broken (MSYS2 install) |
 | gem5 (vanilla ceiling, no LB/dual-BRU) | 3.05-3.12 | — | v2 exceeds via LB + dual-BRU + dual-dcache |
 
-Margin over 3.0 target: **+21%** on xsim.
+Margin over 3.0 target: **+30%** on xsim.
 
 ### Recent optimizations (2026-04-16 session)
 
@@ -56,7 +56,8 @@ Margin over 3.0 target: **+21%** on xsim.
 2. **LB trigger combinational** (commit b397582) — the registered Verilator-workaround dropped loop-buffer activation to 0% on xsim, starving fetch. Reverted to combinational per xsim_workflow.md refactor plan. Impact: xsim CoreMark 0.48 → 3.15 IPC.
 3. **Load-balanced IQ dispatch** (commit 2a92d6b) — round-robin over-fed single-issue IQ1/IQ2 while dual-issue IQ0 had room. Replaced with occupancy-minimizing routing (IQ0 weighted 1/2 to match 2× drain rate). Impact: xsim CoreMark 3.15 → 3.64 IPC, iq1/iq2_full 19%/18% → 1%/1%.
 4. **int_prf reset init** (commit 99b2199) — defensive same-class fix for regfile_copy arrays. Impact: no IPC change, prevents X propagation on un-renamed pdst reads.
-5. **ROB head watchdog** (commit 197ea09) — 12-bit stuck-entry detector that fires a replay exception for deadlock recovery. Impact: Dhrystone 0.005 → 0.055 IPC (10x); CoreMark unchanged.
+5. **ROB head watchdog** (commits 197ea09 → 6c32178) — stuck-entry detector that fires a replay exception for deadlock recovery. Final threshold is 64 cycles (longer than DIV, shorter than any legit stall path). Impact: Dhrystone 0.005 → 0.99 IPC (180x); CoreMark unchanged.
+6. **Checkpoints 4 → 16** (commit 0ebc657) — rename-stall source breakdown showed 99.5% of stalls were checkpoint exhaustion. Increasing capacity eliminates the stall. Impact: CoreMark 3.64 → 3.91 IPC (+8%).
 
 ### Simulator migration history (2026-04-16)
 
