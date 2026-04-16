@@ -218,24 +218,20 @@ module rv64gc_core_top
     logic          lb_active;
 
     // Detect backward taken branch for loop buffer trigger.
-    // REGISTERED computation to avoid changing Verilator's combinational
-    // eval scheduling (reading fused_insn[1+] in a combinational block
-    // creates new dependencies that corrupt load-writeback timing).
-    // The 1-cycle delay is acceptable — it just means the loop buffer
-    // starts capturing 1 cycle later.
+    // Combinational: must fire same cycle as the branch is decoded so the
+    // loop buffer captures the loop body starting from the correct PC.
+    // (A prior registered version was a Verilator eval-scheduling workaround;
+    //  on xsim that workaround dropped loop-buffer activation to ~0% and
+    //  starved fetch 52% of cycles on CoreMark.)
     logic backward_branch_taken;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            backward_branch_taken <= 1'b0;
-        end else begin
-            backward_branch_taken <= 1'b0;
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (3'(i) < fused_count &&
-                    fused_insn[i].bp_taken &&
-                    fused_insn[i].is_branch &&
-                    (fused_insn[i].bp_target < fused_insn[i].pc))
-                    backward_branch_taken <= 1'b1;
-            end
+    always_comb begin
+        backward_branch_taken = 1'b0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if (3'(i) < fused_count &&
+                fused_insn[i].bp_taken &&
+                fused_insn[i].is_branch &&
+                (fused_insn[i].bp_target < fused_insn[i].pc))
+                backward_branch_taken = 1'b1;
         end
     end
 

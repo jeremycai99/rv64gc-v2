@@ -114,6 +114,95 @@ module tb_top
         if ($test$plusargs("TRACE_COMMIT")) trace_commit_en = 1;
     end
 
+    // =========================================================================
+    // Per-stage pipeline counters (enabled with +PERF_PROFILE)
+    // =========================================================================
+    logic pp_en;
+    initial begin
+        pp_en = 0;
+        if ($test$plusargs("PERF_PROFILE")) pp_en = 1;
+    end
+
+    // Fetch histogram: cycles where fetch_count = N
+    integer fetch_hist [0:6];
+    // Commit histogram: cycles where commit_count = N
+    integer commit_hist [0:6];
+    // Loop buffer active cycles
+    integer lb_active_cycles;
+    // Stall counters
+    integer rename_stall_cyc;
+    integer rob_full_cyc;
+    integer dq_full_cyc;
+    integer lq_full_cyc;
+    integer sq_full_cyc;
+    integer iq0_full_cyc;
+    integer iq1_full_cyc;
+    integer backend_stall_cyc;
+    integer flush_cyc;
+    integer perf_total_cyc;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int i = 0; i < 7; i++) begin
+                fetch_hist[i]  <= 0;
+                commit_hist[i] <= 0;
+            end
+            lb_active_cycles   <= 0;
+            rename_stall_cyc   <= 0;
+            rob_full_cyc       <= 0;
+            dq_full_cyc        <= 0;
+            lq_full_cyc        <= 0;
+            sq_full_cyc        <= 0;
+            iq0_full_cyc       <= 0;
+            iq1_full_cyc       <= 0;
+            backend_stall_cyc  <= 0;
+            flush_cyc          <= 0;
+            perf_total_cyc     <= 0;
+        end else if (pp_en) begin
+            perf_total_cyc    <= perf_total_cyc + 1;
+            fetch_hist[u_core.fetch_count]   <= fetch_hist[u_core.fetch_count] + 1;
+            commit_hist[u_core.commit_count] <= commit_hist[u_core.commit_count] + 1;
+            if (u_core.lb_active)       lb_active_cycles  <= lb_active_cycles + 1;
+            if (u_core.rename_stall)    rename_stall_cyc  <= rename_stall_cyc + 1;
+            if (u_core.rob_full)        rob_full_cyc      <= rob_full_cyc + 1;
+            if (u_core.dq_full)         dq_full_cyc       <= dq_full_cyc + 1;
+            if (u_core.lq_full)         lq_full_cyc       <= lq_full_cyc + 1;
+            if (u_core.sq_full)         sq_full_cyc       <= sq_full_cyc + 1;
+            if (u_core.iq0_full)        iq0_full_cyc      <= iq0_full_cyc + 1;
+            if (u_core.iq1_full)        iq1_full_cyc      <= iq1_full_cyc + 1;
+            if (u_core.backend_stall)   backend_stall_cyc <= backend_stall_cyc + 1;
+            if (u_core.flush_out.valid) flush_cyc         <= flush_cyc + 1;
+        end
+    end
+
+    final begin
+        if (pp_en) begin
+            $display("==== PERF PROFILE ====");
+            $display("Total cycles: %0d", perf_total_cyc);
+            $display("Fetch histogram (cycles with N instr fetched):");
+            for (int i = 0; i <= 6; i++)
+                $display("  fetch=%0d : %0d (%0d%%)", i, fetch_hist[i],
+                         (perf_total_cyc > 0) ? (fetch_hist[i] * 100 / perf_total_cyc) : 0);
+            $display("Commit histogram (cycles with N instr committed):");
+            for (int i = 0; i <= 6; i++)
+                $display("  commit=%0d: %0d (%0d%%)", i, commit_hist[i],
+                         (perf_total_cyc > 0) ? (commit_hist[i] * 100 / perf_total_cyc) : 0);
+            $display("Loop buffer active: %0d cycles (%0d%%)",
+                     lb_active_cycles,
+                     (perf_total_cyc > 0) ? (lb_active_cycles * 100 / perf_total_cyc) : 0);
+            $display("Stall breakdown (cycle-based):");
+            $display("  rename_stall : %0d", rename_stall_cyc);
+            $display("  backend_stall: %0d", backend_stall_cyc);
+            $display("  rob_full     : %0d", rob_full_cyc);
+            $display("  dq_full      : %0d", dq_full_cyc);
+            $display("  lq_full      : %0d", lq_full_cyc);
+            $display("  sq_full      : %0d", sq_full_cyc);
+            $display("  iq0_full     : %0d", iq0_full_cyc);
+            $display("  iq1_full     : %0d", iq1_full_cyc);
+            $display("Flushes: %0d", flush_cyc);
+        end
+    end
+
     integer trace_cycle;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
