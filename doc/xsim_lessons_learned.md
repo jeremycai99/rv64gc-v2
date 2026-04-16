@@ -118,7 +118,15 @@ The specific bug is: the ROB entry for a store at this PC is valid but its `read
 
 64 is the knee — DIV worst-case is 65 cycles, L2 miss is ~50, so 64 is the smallest safe bound. Any false trigger on CoreMark would crash IPC (a spurious flush costs 5-10 cycles plus warmup).
 
-**Root-cause fix deferred** — needs VCD of the store-IQ state for the stuck rob_idx right before the watchdog fires, to see whether rs1 is ready or not. The [WDOG] diagnostic commit `31ea5c7` gives the starting point.
+**Root-cause investigation** (commit `5b5fdf2`) narrowed the bug further:
+- `[WDOG-SQ]` trace: at the moment the watchdog fires, the store IQ has **NO entry** for the stuck rob_idx — the entry had already issued or been killed.
+- `[STA_WB]` trace: for stores that deadlock, `sta_wb_valid` eventually fires (cyc=1445 for rob_idx=54), AFTER the entry was enqueued (cyc=1427).
+- `[SQ_ENQ]` trace: the store enqueues with **`s1_rdy=1`, `s2_rdy=0`**. It waits for x10 (the loop counter) written two instructions prior by `c.addw`.
+- `[DQ_DEQ_ST]` trace: dispatch correctly routes every store to the store IQ (no DQ/IQ routing bug).
+
+So the deadlock is specifically: **the store's rs2 (x10) never becomes ready**. The producer c.addw exists but either (a) the CDB broadcast of its result never reached the store's IQ entry's src2_ready, (b) the producer itself was killed by a flush without its IQ entry completing, leaving the store waiting on a pdst whose writer no longer exists, or (c) a spec-cancel incorrectly fired.
+
+**Next VCD step**: capture signals `u_iq_store.src2_ready[<entry>]`, `u_iq_store.rs2_phys_r[<entry>]`, `cdb_valid[*]`, `cdb_tag[*]`, `lsu_spec_cancel_valid[*]` for the ~60 cycles after the stuck store's SQ_ENQ event.  Cross-reference `cdb_tag[*]` against `rs2_phys_r` to see whether the writeback ever arrives.
 
 **Rejected root-cause fixes**:
 - **Cache-line BTB indexing (32-byte granule)** reduced mispredicts and brought Dhrystone to 0.51 IPC, but caused CoreMark to drop to 1.93 (vs 3.91) due to BTB way-collisions and broke 5 regression tests.
