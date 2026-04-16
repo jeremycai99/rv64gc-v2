@@ -151,6 +151,11 @@ module rob
     // =========================================================================
     reg [ROB_DEPTH-1:0]          valid_r;
     reg [ROB_DEPTH-1:0]          ready_r;
+    // Watchdog: counts cycles the ROB head has been valid-but-not-ready.
+    // Fires an exception at saturation to recover from stuck-entry deadlocks
+    // (e.g. an IQ entry flushed without the corresponding ROB entry being
+    // invalidated — the CDB writeback never arrives).
+    reg [11:0]                   rob_head_watchdog;
     reg [64*ROB_DEPTH-1:0]       pc_packed;
     reg [ROB_DEPTH-1:0]          has_exc_r;
     reg [4*ROB_DEPTH-1:0]        exc_code_packed;
@@ -276,6 +281,7 @@ module rob
             count_r  <= '0;
             valid_r  <= '0;
             ready_r  <= '0;
+            rob_head_watchdog <= 12'd0;
             has_exc_r        <= '0;
             is_branch_r      <= '0;
             is_store_r       <= '0;
@@ -302,6 +308,7 @@ module rob
         end else if (flush_valid && flush_full) begin
             head_r   <= '0;
             tail_r   <= '0;
+            rob_head_watchdog <= 12'd0;
             count_r  <= '0;
             valid_r  <= '0;
             ready_r  <= '0;
@@ -482,6 +489,28 @@ module rob
                 ready_r[ordering_violation_rob_idx]             <= 1'b1;
                 has_exc_r[ordering_violation_rob_idx]           <= 1'b1;
                 exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+            end
+
+            // ROB head watchdog: counts cycles the head has been valid
+            // but not ready.  If it saturates, force-ready with a replay
+            // exception so commit can drain past the stuck entry and
+            // trigger a flush.  This recovers from IQ/ROB flush-recovery
+            // bugs where an IQ entry was killed without the corresponding
+            // ROB ready bit being set (the CDB writeback never arrives).
+            // Width 12 bits = 4095 cycles is comfortably longer than any
+            // legitimate long-latency op (DIV ~65 cyc, cache miss ~50).
+            if (valid_r[head_r] && !ready_r[head_r])
+                rob_head_watchdog <= rob_head_watchdog + 12'd1;
+            else
+                rob_head_watchdog <= 12'd0;
+
+            if (rob_head_watchdog == 12'hFFE) begin
+                // About to saturate — force the entry ready with a
+                // replay exception so commit handles it like an ordering
+                // violation (redirects to the entry's PC after flushing).
+                ready_r[head_r]                <= 1'b1;
+                has_exc_r[head_r]              <= 1'b1;
+                exc_code_packed[head_r*4 +: 4] <= 4'd15;
             end
 
             // Commit: advance head, clear valid and instruction-type flags
