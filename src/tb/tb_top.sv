@@ -266,15 +266,61 @@ module tb_top
                     u_core.flush_out.redirect_pc,
                     u_core.flush_out.full_flush);
             end
+            // STA issue trace: when an STA completes, log its rob_idx
+            if (trace_commit_en && u_core.u_lsu.sta_wb_valid) begin
+                $display("[STA_WB] cyc=%0d rob_idx=%0d pc=%016h",
+                    trace_cycle,
+                    u_core.u_lsu.sta_wb_rob_idx,
+                    u_core.u_lsu.sta_issue_data.pc);
+            end
+            // Store IQ enqueue trace: when a store enters IQ (BOTH ports)
+            for (int p = 0; p < 2; p++) begin
+                if (trace_commit_en && u_core.iq_store_enq_valid[p]) begin
+                    $display("[SQ_ENQ] cyc=%0d port=%0d rob_idx=%0d pc=%016h s1_rdy=%b s2_rdy=%b",
+                        trace_cycle, p,
+                        u_core.iq_store_enq_data[p].rob_idx,
+                        u_core.iq_store_enq_data[p].pc,
+                        u_core.iq_store_enq_data[p].rs1_ready,
+                        u_core.iq_store_enq_data[p].rs2_ready);
+                end
+            end
+            // Also trace when a store is dispatched but NOT enqueued to store IQ
+            // (indicates the "dropped" path we're hunting)
+            for (int s = 0; s < 6; s++) begin
+                if (trace_commit_en && (s < int'(u_core.dq_deq_count))
+                    && u_core.dq_deq_data[s].base.valid
+                    && u_core.dq_deq_data[s].base.is_store
+                    && !u_core.dq_deq_data[s].base.is_load) begin
+                    $display("[DQ_DEQ_ST] cyc=%0d slot=%0d rob_idx=%0d pc=%016h target=%0d",
+                        trace_cycle, s,
+                        u_core.dq_deq_data[s].rob_idx,
+                        u_core.dq_deq_data[s].base.pc,
+                        u_core.dq_deq_iq_target[s]);
+                end
+            end
             // Watchdog fire detection: log what ROB entry was stuck and type.
             if (trace_commit_en && (u_core.u_rob.rob_head_watchdog == 12'd61)) begin
-                $display("[WDOG] cyc=%0d head_idx=%0d pc=%016h is_store=%b is_load=%b is_branch=%b",
+                automatic int sta_match_found = 0;
+                automatic int sta_match_idx = -1;
+                automatic int sta_s1_rdy = 0;
+                automatic int sta_s2_rdy = 0;
+                $display("[WDOG] cyc=%0d head_idx=%0d pc=%016h is_store=%b",
                     trace_cycle,
                     u_core.u_rob.head_r,
                     u_core.rob_head_pc[0],
-                    u_core.u_rob.is_store_r[u_core.u_rob.head_r],
-                    u_core.u_rob.is_load_r[u_core.u_rob.head_r],
-                    u_core.u_rob.is_branch_r[u_core.u_rob.head_r]);
+                    u_core.u_rob.is_store_r[u_core.u_rob.head_r]);
+                // Scan store IQ for matching rob_idx
+                for (int e = 0; e < 32; e++) begin
+                    if (u_core.u_iq_store.entry_valid[e]
+                        && (u_core.u_iq_store.rob_idx_r[e] == u_core.u_rob.head_r)) begin
+                        sta_match_found = 1;
+                        sta_match_idx = e;
+                        sta_s1_rdy = u_core.u_iq_store.src1_ready[e];
+                        sta_s2_rdy = u_core.u_iq_store.src2_ready[e];
+                    end
+                end
+                $display("[WDOG-SQ] sta_match_found=%0d idx=%0d s1_rdy=%0d s2_rdy=%0d",
+                    sta_match_found, sta_match_idx, sta_s1_rdy, sta_s2_rdy);
             end
             // ROB head snapshot when pipeline appears stalled
             // (fires every 1000 cycles so we can see progress vs stuck)
