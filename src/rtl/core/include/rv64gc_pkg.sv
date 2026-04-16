@@ -49,8 +49,8 @@ package rv64gc_pkg;
     // =========================================================================
     // Checkpoints (branch snapshots)
     // =========================================================================
-    localparam int NUM_CHECKPOINTS = 4;
-    localparam int CHECKPOINT_BITS = 2;  // $clog2(4) = 2
+    localparam int NUM_CHECKPOINTS = 16;
+    localparam int CHECKPOINT_BITS = 4;  // $clog2(16) = 4
 
     // =========================================================================
     // Issue queues

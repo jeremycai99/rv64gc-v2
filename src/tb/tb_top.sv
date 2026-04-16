@@ -142,6 +142,9 @@ module tb_top
     integer backend_stall_cyc;
     integer flush_cyc;
     integer perf_total_cyc;
+    // Rename stall source breakdown: fires when rename stalls, tags the
+    // first missing resource on slot 0 (other slots typically cascade).
+    integer stall_preg_cyc, stall_ckpt_cyc, stall_rob_cyc, stall_dq_cyc, stall_other_cyc;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -164,6 +167,11 @@ module tb_top
             backend_stall_cyc  <= 0;
             flush_cyc          <= 0;
             perf_total_cyc     <= 0;
+            stall_preg_cyc     <= 0;
+            stall_ckpt_cyc     <= 0;
+            stall_rob_cyc      <= 0;
+            stall_dq_cyc       <= 0;
+            stall_other_cyc    <= 0;
         end else if (pp_en) begin
             perf_total_cyc    <= perf_total_cyc + 1;
             fetch_hist[u_core.fetch_count]   <= fetch_hist[u_core.fetch_count] + 1;
@@ -182,6 +190,14 @@ module tb_top
             iq2_cnt_sum <= iq2_cnt_sum + u_core.u_iq2.count_r;
             if (u_core.backend_stall)   backend_stall_cyc <= backend_stall_cyc + 1;
             if (u_core.flush_out.valid) flush_cyc         <= flush_cyc + 1;
+            // Rename stall source classification (slot 0 sufficient to attribute)
+            if (u_core.rename_stall) begin
+                if      (!u_core.u_rename.has_preg[0])  stall_preg_cyc  <= stall_preg_cyc + 1;
+                else if (!u_core.u_rename.has_ckpt[0])  stall_ckpt_cyc  <= stall_ckpt_cyc + 1;
+                else if (!u_core.u_rename.has_rob[0])   stall_rob_cyc   <= stall_rob_cyc + 1;
+                else if (!u_core.u_rename.has_dq[0])    stall_dq_cyc    <= stall_dq_cyc + 1;
+                else                                     stall_other_cyc <= stall_other_cyc + 1;
+            end
         end
     end
 
@@ -210,6 +226,12 @@ module tb_top
             $display("  iq0_full     : %0d", iq0_full_cyc);
             $display("  iq1_full     : %0d", iq1_full_cyc);
             $display("  iq2_full     : %0d", iq2_full_cyc);
+            $display("Rename stall attribution (slot-0 resource):");
+            $display("  stall_preg   : %0d", stall_preg_cyc);
+            $display("  stall_ckpt   : %0d", stall_ckpt_cyc);
+            $display("  stall_rob    : %0d", stall_rob_cyc);
+            $display("  stall_dq     : %0d", stall_dq_cyc);
+            $display("  stall_other  : %0d", stall_other_cyc);
             $display("Average IQ occupancy (of 32):");
             $display("  iq0_avg: %0d.%02d", iq0_cnt_sum / perf_total_cyc,
                      ((iq0_cnt_sum * 100) / perf_total_cyc) % 100);
