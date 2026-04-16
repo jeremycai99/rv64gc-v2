@@ -315,6 +315,11 @@ module fetch_unit
     logic        f2_tage_taken_r;
     logic        f2_tage_confident_r;
 
+    // Forward declarations (used by consume_remainder_c before full definition)
+    logic [2:0]  extract_count;
+    logic [5:0]  start_offset;
+    logic        remainder_valid_r;
+
     // On the cycle where f2 consumes a straddle remainder (start_offset=0,
     // remainder_valid_r=1 and one or more instructions were emitted), the
     // usual f1->f2 pipeline would leave f2_pc_r at the same cache-line base
@@ -421,18 +426,11 @@ module fetch_unit
     logic        slot_is_rvc [0:PIPE_WIDTH-1];
     logic        slot_valid [0:PIPE_WIDTH-1];
     logic [63:0] slot_pc [0:PIPE_WIDTH-1];
-    logic [2:0]  extract_count;
+    // extract_count, start_offset, remainder_valid_r declared earlier
 
-    // Byte offset within the 64-byte line
-    logic [5:0] start_offset;
     assign start_offset = f2_pc_r[5:0];
 
     // ---- Cross-line remainder buffer ----
-    // When a 32-bit instruction straddles a cache-line boundary, the first
-    // 2 bytes are saved here. On the next cache-line fetch the remainder is
-    // combined with the first 2 bytes of the new line to form the complete
-    // instruction. This prevents the fetch unit from stalling forever.
-    logic        remainder_valid_r;
     logic [15:0] remainder_hw_r;       // first 2 bytes (lower half)
     logic [63:0] remainder_pc_r;       // PC of the straddling instruction
 

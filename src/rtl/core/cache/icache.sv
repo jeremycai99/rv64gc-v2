@@ -109,6 +109,9 @@ module icache
     // =========================================================================
     logic [511:0] dr_rdata [0:L1I_WAYS-1];
 
+    // Data RAM write data mux (combinational; assigned after sc_install_valid)
+    logic [511:0] dr_wdata_mux;
+
     // Generate one data RAM per way
     genvar gw;
     generate
@@ -125,8 +128,7 @@ module icache
                 .we    (dr_we_w),
                 .waddr (tr_waddr),
                 .wway  (2'd0),          // dummy
-                .wdata (sc_install_valid   ? fill_resp_data :
-                        ic_mshr_install_avail ? ic_mshr_fill_data[ic_mshr_install_idx] : '0)
+                .wdata (dr_wdata_mux)
             );
         end
     endgenerate
@@ -290,6 +292,10 @@ module icache
             end
         end
     end
+
+    // Data RAM write data mux (combinational, uses signals declared earlier)
+    assign dr_wdata_mux = sc_install_valid   ? fill_resp_data :
+                           ic_mshr_install_avail ? ic_mshr_fill_data[ic_mshr_install_idx] : '0;
 
     // Tag/data RAM write: same-cycle install (priority) or deferred install
     always_comb begin

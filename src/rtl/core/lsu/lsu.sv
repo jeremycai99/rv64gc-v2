@@ -93,6 +93,18 @@ module lsu
     input flush_t flush_in
 );
 
+    // Forward declarations (used by spec_wakeup before full definition)
+    logic [1:0] load_issue_valid_r;
+    logic [1:0] load_issue_valid_rr;
+    logic [1:0] load_nocache_r;
+    logic [1:0] load_nocache_rr;
+    logic            p1_eff_valid;
+    logic            p1_eff_misalign;
+    logic [63:0]     p1_eff_addr;
+    iq_entry_t       p1_eff_data;
+    logic            p1_eff_nocache;
+    logic            p0_fwd_hit;
+
     // =========================================================================
     // Load AGU: effective address computation (x2)
     // =========================================================================
@@ -448,14 +460,10 @@ module lsu
     // =========================================================================
     iq_entry_t load_issue_data_r  [0:1];
     iq_entry_t load_issue_data_rr [0:1];
-    logic [1:0] load_issue_valid_r;
-    logic [1:0] load_issue_valid_rr;
+    // load_issue_valid_r/rr declared earlier (forward decl)
     logic [63:0] load_eff_addr_r  [0:1];
     logic [63:0] load_eff_addr_rr [0:1];
-    // Whether the load bypassed the D-cache (misalign or forwarding hit)
-    // — if so, no cache response is expected, so we must NOT count it as a miss.
-    logic [1:0] load_nocache_r;
-    logic [1:0] load_nocache_rr;
+    // load_nocache_r/rr declared earlier (forward decl)
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -609,7 +617,7 @@ module lsu
     // SQ CAM (older stores in the SQ), and the CSB CAM (committed but not
     // yet drained stores).  Any of these hitting means we do NOT send the
     // load to the D-cache (avoids polluting the cache and wasting an MSHR).
-    logic p0_fwd_hit;
+    // p0_fwd_hit declared earlier (forward decl)
     assign p0_fwd_hit = same_cycle_fwd_hit | sq_fwd_hit | csb_fwd_hit;
 
     // -------------------------------------------------------------------------
@@ -643,11 +651,7 @@ module lsu
 
     // Effective port 1 sources: prefer the retry register if valid;
     // otherwise the new issue (suppressed on conflict).
-    logic            p1_eff_valid;
-    iq_entry_t       p1_eff_data;
-    logic [63:0]     p1_eff_addr;
-    logic            p1_eff_misalign;
-    logic            p1_eff_nocache;
+    // p1_eff_valid/misalign/addr/data/nocache declared earlier (forward decl)
 
     always_comb begin
         if (p1_retry_valid_r) begin

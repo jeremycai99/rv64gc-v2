@@ -133,6 +133,10 @@ module dispatch_queue
     int enq_i_int;
     int enq_i_mem;
 
+    // Forward declarations (used before full definition)
+    logic [INT_IDX_BITS-1:0] int_rd_addr [0:PIPE_WIDTH-1];
+    logic [MEM_IDX_BITS-1:0] mem_rd_addr [0:PIPE_WIDTH-1];
+
     always_comb begin : deq_count_comb
         logic [2:0] max_int, max_mem, rem_slots;
         logic [2:0] candidate_mem;
@@ -287,9 +291,7 @@ module dispatch_queue
     // Dequeue output assembly (combinational)
     // Use local index variables typed to the right width to avoid WIDTHEXPAND
     // =========================================================================
-    // Precompute FIFO read addresses for int (up to PIPE_WIDTH entries)
-    logic [INT_IDX_BITS-1:0] int_rd_addr [0:PIPE_WIDTH-1];
-    logic [MEM_IDX_BITS-1:0] mem_rd_addr [0:PIPE_WIDTH-1];
+    // int_rd_addr, mem_rd_addr declared earlier (forward decl)
 
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin

@@ -365,6 +365,8 @@ module rv64gc_core_top
     // Commit-to-rename signals
     logic [PHYS_REG_BITS-1:0] commit_old_pdst [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]    commit_rd_valid;
+    logic [4:0]               commit_rd_arch_w  [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] commit_pdst_w     [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]    commit_release_cp;
     logic [CHECKPOINT_BITS-1:0] commit_cp_id [0:PIPE_WIDTH-1];
 
@@ -431,8 +433,6 @@ module rv64gc_core_top
     end
 
     // Extract commit data
-    logic [4:0]               commit_rd_arch_w  [0:PIPE_WIDTH-1];
-    logic [PHYS_REG_BITS-1:0] commit_pdst_w     [0:PIPE_WIDTH-1];
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             commit_old_pdst[i] = commit_out[i].old_pdst;
@@ -507,6 +507,10 @@ module rv64gc_core_top
             rob_alloc_is_wfi[i]      = ren_insn[i].base.is_wfi;
         end
     end
+
+    // STA writeback register declarations (used in ROB port connections below)
+    logic                     lsu_sta_wb_valid_r;
+    logic [ROB_IDX_BITS-1:0]  lsu_sta_wb_rob_idx_r;
 
     rob u_rob (
         .clk                    (clk),
@@ -1449,9 +1453,6 @@ module rv64gc_core_top
     // =========================================================================
     // STA writeback register (1-cycle delay, matches CDB register stage)
     // =========================================================================
-    logic                     lsu_sta_wb_valid_r;
-    logic [ROB_IDX_BITS-1:0]  lsu_sta_wb_rob_idx_r;
-
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             lsu_sta_wb_valid_r   <= 1'b0;
