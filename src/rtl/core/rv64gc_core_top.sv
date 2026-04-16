@@ -1572,10 +1572,24 @@ module rv64gc_core_top
             // writers exist, so every physical register is ready.
             preg_ready_table <= {INT_PRF_DEPTH{1'b1}};
         end else begin
-            // Clear on new rename allocation
+            // Clear on new rename allocation.
+            //
+            // Skip move-eliminated and zero-eliminated instructions: those
+            // share their pdst with the source (move-elim: pdst = rs1_phys;
+            // zero-elim: pdst = 0). Clearing preg_ready_table for them would
+            // invalidate a register whose DATA IS ALREADY VALID (the source's
+            // data never changes under move-elim; zero is a constant). With
+            // no new CDB writeback scheduled for these pdsts, the ready bit
+            // would never get re-asserted, and any consumer depending on
+            // that pdst would wait forever. (This was the Dhrystone
+            // store-deadlock root cause: stores in the hot loop have rs2
+            // mapped to pdst=16/etc, whose prior writer was move-eliminated;
+            // the clear here invalidated the ready bit and the store's
+            // src2_ready never fired.)
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (3'(i) < ren_count_w && ren_insn[i].base.rd_valid &&
-                    ren_insn[i].pdst != '0) begin
+                    ren_insn[i].pdst != '0 &&
+                    !ren_move_eliminated[i] && !ren_zero_eliminated[i]) begin
                     preg_ready_table[ren_insn[i].pdst] <= 1'b0;
                 end
             end
@@ -1594,11 +1608,14 @@ module rv64gc_core_top
     end
 
     // Combinational ready table: includes THIS cycle's rename clears.
+    // Same move/zero-elim exclusion as the registered update below — a
+    // move-eliminated pdst aliases the source, whose data is already valid.
     always_comb begin
         preg_ready_table_comb = preg_ready_table;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             if (3'(i) < ren_count_w && ren_insn[i].base.rd_valid &&
-                ren_insn[i].pdst != '0) begin
+                ren_insn[i].pdst != '0 &&
+                !ren_move_eliminated[i] && !ren_zero_eliminated[i]) begin
                 preg_ready_table_comb[ren_insn[i].pdst] = 1'b0;
             end
         end

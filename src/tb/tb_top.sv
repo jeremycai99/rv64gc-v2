@@ -299,6 +299,8 @@ module tb_top
                 end
             end
             // Watchdog fire detection: log what ROB entry was stuck and type.
+            // Earlier 12'd61 corresponds to watchdog value 1 cycle before it fires
+            // (we sample before the final increment).
             if (trace_commit_en && (u_core.u_rob.rob_head_watchdog == 12'd61)) begin
                 automatic int sta_match_found = 0;
                 automatic int sta_match_idx = -1;
@@ -321,6 +323,51 @@ module tb_top
                 end
                 $display("[WDOG-SQ] sta_match_found=%0d idx=%0d s1_rdy=%0d s2_rdy=%0d",
                     sta_match_found, sta_match_idx, sta_s1_rdy, sta_s2_rdy);
+                // DUMP ALL valid store IQ entries — the stuck store's rob_idx
+                // may not match the current head if the head watchdog is
+                // firing on a different (non-store) entry, but the store
+                // entry might still be stuck in IQ with its pdst
+                $display("[WDOG-SQDUMP] cyc=%0d valid_bitmap=%08x", trace_cycle,
+                    u_core.u_iq_store.entry_valid);
+                for (int e = 0; e < 32; e++) begin
+                    if (u_core.u_iq_store.entry_valid[e]) begin
+                        $display("  [SQ[%0d]] rob=%0d rs1_phys=%0d rs2_phys=%0d s1_rdy=%b s2_rdy=%b s2_spec=%b",
+                            e,
+                            u_core.u_iq_store.rob_idx_r[e],
+                            u_core.u_iq_store.rs1_phys_r[e],
+                            u_core.u_iq_store.rs2_phys_r[e],
+                            u_core.u_iq_store.src1_ready[e],
+                            u_core.u_iq_store.src2_ready[e],
+                            u_core.u_iq_store.src2_spec[e]);
+                    end
+                end
+                // Also dump preg_ready_table for the pdsts we see
+                for (int e = 0; e < 32; e++) begin
+                    if (u_core.u_iq_store.entry_valid[e]
+                        && !u_core.u_iq_store.src2_ready[e]) begin
+                        $display("  [SQ[%0d]_WAIT] rs2_phys=%0d preg_ready=%b",
+                            e, u_core.u_iq_store.rs2_phys_r[e],
+                            u_core.preg_ready_table[u_core.u_iq_store.rs2_phys_r[e]]);
+                    end
+                end
+            end
+            // Persistent CDB broadcast log for pdsts matching any store IQ
+            // entry that's waiting on rs2 — captures the moment wakeup should
+            // have happened (if it happens at all)
+            if (trace_commit_en) begin
+                for (int c = 0; c < 6; c++) begin
+                    if (u_core.cdb_valid[c]) begin
+                        for (int e = 0; e < 32; e++) begin
+                            if (u_core.u_iq_store.entry_valid[e]
+                                && !u_core.u_iq_store.src2_ready[e]
+                                && (u_core.cdb_tag[c] == u_core.u_iq_store.rs2_phys_r[e])) begin
+                                $display("[SQ_WAKE] cyc=%0d cdb[%0d] tag=%0d hits sq[%0d] rob=%0d",
+                                    trace_cycle, c, u_core.cdb_tag[c], e,
+                                    u_core.u_iq_store.rob_idx_r[e]);
+                            end
+                        end
+                    end
+                end
             end
             // ROB head snapshot when pipeline appears stalled
             // (fires every 1000 cycles so we can see progress vs stuck)
