@@ -408,7 +408,13 @@ module rv64gc_core_top
     // Write rename buffer at allocation time
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
+        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
+            // Clear on reset AND on full flush.  Stale entries in rename_buf
+            // would survive a full flush (ROB clears valid_r to 0 but leaves
+            // the metadata untouched).  On commit-wrap-around after a flush,
+            // a stale entry's rd_valid=1 plus its leftover pdst/rd_arch from
+            // a prior life would cause commit to write committed_rat with the
+            // wrong (stale) mapping — the observed RAT aliasing bug.
             for (int i = 0; i < ROB_DEPTH; i++) begin
                 rename_buf[i]          <= '0;
                 rob_uses_checkpoint[i] <= 1'b0;
