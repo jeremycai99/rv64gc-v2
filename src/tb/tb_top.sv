@@ -273,6 +273,37 @@ module tb_top
                     u_core.u_lsu.sta_wb_rob_idx,
                     u_core.u_lsu.sta_issue_data.pc);
             end
+            // Dump free_bitmap[0:31] at each cycle until first alloc bug to
+            // see when/if pdst 0-31 bits flip
+            if (trace_commit_en && trace_cycle < 20) begin
+                $display("[FL] cyc=%0d free[31:0]=%08h cmt[31:0]=%08h",
+                    trace_cycle,
+                    u_core.u_rename.u_free_list.free_bitmap[31:0],
+                    u_core.u_rename.u_free_list.committed_bitmap[31:0]);
+            end
+            // Alloc/release conflict detector: if rename allocates a pdst
+            // that is currently in committed_rat for some arch, log it
+            // as that's the bug signature.
+            if (trace_commit_en) begin
+                for (int s = 0; s < 6; s++) begin
+                    if ((3'(s) < u_core.ren_count_w)
+                        && u_core.ren_insn[s].base.rd_valid
+                        && u_core.ren_insn[s].pdst != 8'd0) begin
+                        automatic logic [7:0] pd = u_core.ren_insn[s].pdst;
+                        for (int a = 1; a < 32; a++) begin
+                            if (u_core.u_rename.u_rat.committed_rat[a] == pd
+                                && a != u_core.ren_insn[s].base.rd_arch) begin
+                                $display("[ALLOC_BUG] cyc=%0d slot=%0d rob=%0d writes pdst=%0d rd_arch=%0d but cra[%0d]=%0d",
+                                    trace_cycle, s,
+                                    u_core.ren_insn[s].rob_idx,
+                                    pd,
+                                    u_core.ren_insn[s].base.rd_arch,
+                                    a, pd);
+                            end
+                        end
+                    end
+                end
+            end
             // Store IQ enqueue trace: when a store enters IQ (BOTH ports)
             for (int p = 0; p < 2; p++) begin
                 if (trace_commit_en && u_core.iq_store_enq_valid[p]) begin
