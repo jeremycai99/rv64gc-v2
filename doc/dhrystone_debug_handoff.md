@@ -1,7 +1,85 @@
 # Dhrystone Debug Handoff
 
-**Date**: 2026-04-16
-**Status**: Root cause identified, not fixed — fixing requires additional work on a coupled second bug.
+**Date**: 2026-04-16 (updated after 2nd debug session)
+**Status**: TWO coupled root causes identified.  Naive single-fix attempts regress CoreMark.  A THIRD pre-existing issue (BTB cache-line-indexing) also blocks Dhrystone even with the first two fixes.  None of the three fixes were committed — all revert to baseline.
+
+## Session 2 findings summary (2026-04-16 PM)
+
+| Fix applied (all xsim, 23/23 regression PASS) | CoreMark IPC | Dhrystone IPC | Notes |
+|---|---|---|---|
+| Baseline (no fix) | **3.91** | 0.98 (watchdog) | Reference |
+| decode_slice: rd_arch=0 when !rd_valid | 3.25 (-17%) | 0.03 (worse) | Eliminates aliasing; exposes pdst leak |
+| rename: gate fl_release_preg on commit_rd_valid | 3.25 (-17%) | 0.03 | Equivalent to decode fix |
+| decode fix + free_list alloc_used_mask | 3.25 | 0.03 | alloc_used_mask caught ONE leak source (rename-stall), insufficient |
+| BTB cache-line-indexed + in-window offset filter | 0.003 (crash) | 1.45 | BTB fix ALONE breaks CoreMark (bad target prediction from aliased BPU updates) |
+| decode + BTB + fetch-redirect-cancel (gate redirect to in-window branches) | 3.50 | 0.03 | CM recovers partially; DH still stuck |
+
+**Conclusion**: CoreMark's 3.91 IPC depends on the phantom releases masking a *secondary* pdst leak (possibly from rename stall, possibly from a different path).  Fixing the store-encoding bug exposes that leak.  Additionally, the BTB index mismatch is real but fixing it alone corrupts BPU updates for CoreMark's hot JALRs (aliased rs1 data leads to wrong BTB-stored targets).  All three issues are coupled and must be fixed together.
+
+## Key new diagnostics added (then reverted)
+
+1. `[P15_ALLOC]` / `[P15_RELEASE]` / `[P15_FLUSH]` — full lifecycle trace for pdst=15 (chosen because it's the first orphan observed in fix runs).
+2. `[FLUSH]` — logs flush cause (mispredict slot, exception slot, replay slot) and head PC at flush.
+3. `[LEAK_PROBE]` — counts total free pdsts at snapshot cycles; shows inflation under baseline (due to phantom releases) and depletion under fix.
+4. `[UNUSED_ALLOC]` — fires when rename requests a preg allocation but the requesting slot cannot advance (leak path caught by the alloc_used_mask fix).
+
+The diagnostics proved:
+- Dhrystone's strcpy inner loop mispredicts EVERY iteration.  BTB lookup at `f1_pc=0x80002002` misses the bnez at `0x8000200E` because indexing uses `PC[9:2]` on both lookup and update — the fetch-group start and branch PC have different indices (0x00 vs 0x03).
+- With fix, watchdog first fires at cyc=1504 at PC=0x800022f2 (`ld a5, 0(a0)` inside Proc_1).  The load's rs1 pdst is in limbo: specifically allocated but never written because its producer never runs.  The producer is stuck behind an earlier flushed-then-reborn instruction whose pdst chain is broken.
+
+## The BTB index mismatch (new root cause)
+
+`src/rtl/core/fetch/btb.sv:53,90`:
+```systemverilog
+assign lkp_idx = lookup_pc[IDX_BITS+1:2];  // bits [9:2] of f1_pc
+assign upd_idx = update_pc[IDX_BITS+1:2];  // bits [9:2] of branch PC
+```
+
+`f1_pc` is the fetch-group start.  The fetch unit advances `f1_pc` by the number of bytes consumed per cycle (typically 12-24).  For a branch at offset 0x0E within a cache line starting at 0x80002000:
+
+- Fetch starts at `f1_pc=0x80002002` → `lkp_idx = 0x00`.
+- BTB update at commit uses branch PC `0x8000200E` → `upd_idx = 0x03`.
+
+The entry goes to set 0x03 but lookups hit set 0x00.  BTB is effectively dead for any branch at a non-zero offset within the fetch window.
+
+### Attempted fix (reverted)
+
+- Re-indexed both lookup and update by cache-line PC (`PC[13:6]`) with 50-bit tag from `PC[63:14]`.
+- Lookup returns the matching way with smallest `boffs >= f1_pc[5:0]` (earliest branch reachable in the fetch window).
+- Fetch unit gated `bp_branch_found` on "the predicted branch offset must match an extracted slot's PC[5:0]" — otherwise cancel the redirect so we don't jump to the predicted target while also emitting past the unseen branch.
+
+**Result with BTB fix only (no decode fix):** CoreMark crashed to 0.001 IPC.  Hypothesis: aliased store data corrupts committed JALR rs1 → BTB stores wrong target → predictions redirect to garbage.  Decode fix must accompany BTB fix.
+
+**Result with decode + BTB + redirect-cancel:** CoreMark = 3.50 IPC (-10% vs baseline 3.91), Dhrystone = 0.03 IPC (still stuck).  CoreMark regression comes from the pdst leak that phantom releases used to compensate for.  Dhrystone still gets stuck at PC=0x800022f2 (load deep in Proc_1 dep chain) even when strcpy's bnez predicts correctly.
+
+## Outstanding pdst leak source (not found)
+
+With `alloc_used_mask` catching rename-stall orphans (verified: `[UNUSED_ALLOC]` count = 0 during Dhrystone run with the fix), the remaining leak must come from one of:
+
+1. **Flush-vs-alloc race**: If rename allocates a pdst the same cycle as `flush_out.valid=1`, the flush branch in free_list clears the bit via `free_bitmap <= committed_bitmap` but the alloc was never propagated downstream (rename_buf is cleared on flush).  Net: bit stays cleared (looks allocated), no owner.  But core_top.sv lines 410-435 already clear rename_buf on flush, and free_list flush branch doesn't apply allocs — need to re-verify this more carefully with a cycle-accurate probe.
+2. **Watchdog replay flush edge case**: On watchdog fire, commit outputs exception code 15 and full_flush.  Same-cycle commits (if any) ARE applied.  But does the replay slot's own old_pdst get released correctly?  Its `commit_rd_valid` would be forced to 0 by `slot_can_commit[0]=0`, so no release path fires.  If the replay slot had an allocated pdst, it should be reclaimed via `free_bitmap <= committed_bitmap` — need to verify `committed_bitmap` has the correct state for it.
+3. **Checkpoint-save side effect**: Even though `ckpt_restore` never fires (commit always does full_flush), the `ckpt_save` path snapshots `free_bitmap` into `ckpt_bitmap[id]`.  Unused, but not a leak either.
+4. **fl_req_count vs fl_avail_count mismatch**: When rename requests more pregs than available, `slot_can_advance[i] = has_preg[i] && ...`.  Slots beyond available count have `has_preg=0`, so they don't advance.  `fl_alloc_used_mask[i]` excludes them.  But does `fl_avail_count` correctly limit `alloc_preg` outputs?  Need to verify the boundary.
+
+## Hard constraints unchanged
+
+1. **CoreMark IPC must stay ≥ 3.9.**  No fix accepted if CM drops below.
+2. **All 23 regression tests must pass.**
+3. **xsim is authoritative.**
+
+## For next session: recommended sequence
+
+1. Add CYCLE-ACCURATE probes on free_bitmap bit transitions (`[FL_TRANSITION]` listing bit, old, new, reason) in free_list.sv.  Run Dhrystone with decode fix applied and trace the first pdst that becomes orphaned.  Identify the exact leak edge.
+2. Fix the identified leak.  Verify with decode fix applied: CM should recover to ≥ 3.9 IPC, Dh should unstick (at minimum past strcpy bottleneck).
+3. Apply BTB cache-line indexing + fetch-unit redirect-cancel.  Verify CM stays at 3.9+ and DH climbs to ≥ 3.2.
+4. Do NOT attempt these in isolation — each alone regresses one of the benchmarks.
+
+## Hard-won lessons (this session)
+
+- The handoff's "single coupled fix" hypothesis was incomplete.  There are actually THREE independent issues (store encoding, pdst leak, BTB dead) that must all be addressed.
+- Phantom releases inflated `free_bitmap` to +9 pdsts above the theoretical maximum of 224 (visible in `[LEAK_PROBE]` baseline: `total_free=233` at cyc=500).  This inflation was compensating for leaks elsewhere.
+- The `[ALLOC_BUG]` probe fires 886 times in Dhrystone baseline but 0 times with decode fix — confirms decode fix eliminates aliasing.  Not sufficient alone.
+- BTB cache-line re-indexing MUST be paired with fetch-unit redirect-cancel, otherwise the pipeline redirects to the predicted target while simultaneously emitting the current fetch group's post-branch instructions — silent execution past unseen branches.
 
 ## One-paragraph summary
 
