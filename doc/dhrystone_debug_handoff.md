@@ -81,6 +81,24 @@ With `alloc_used_mask` catching rename-stall orphans (verified: `[UNUSED_ALLOC]`
 - The `[ALLOC_BUG]` probe fires 886 times in Dhrystone baseline but 0 times with decode fix — confirms decode fix eliminates aliasing.  Not sufficient alone.
 - BTB cache-line re-indexing MUST be paired with fetch-unit redirect-cancel, otherwise the pipeline redirects to the predicted target while simultaneously emitting the current fetch group's post-branch instructions — silent execution past unseen branches.
 
+## Watchdog-threshold hypothesis: REJECTED
+
+Tested the hypothesis that the 64-cycle ROB watchdog prematurely cuts off legitimate long dependency chains.  Applied decode fix + raised watchdog to 4096 cycles.
+
+Result: **Dhrystone `minstret` still capped at 897** over a 10000-cycle run (same as with 64-cycle watchdog).  With 4K cycles the watchdog can fire at most twice in that window, yet no additional commits happen after reaching 897.  The load at PC=0x800022f2 never completes, regardless of how long we wait.
+
+This proves the dep chain is not merely slow — it is DETERMINISTICALLY BROKEN.  The producer of the load's rs1 chain (a0/x10) never broadcasts on CDB.  Extending the watchdog is not a fix.
+
+## Architectural question surfaced
+
+While tracing rename's `slot_can_advance` logic, noticed that per-slot advance decisions are INDEPENDENT — if slot 2 cannot advance (e.g., SQ full) but slot 3 can, slot 3 is dispatched to `rob_alloc_idx[2]` via `out_dest` compaction.  This appears to reorder instructions relative to program order within a rename batch.  Needs verification — if confirmed, this is a distinct correctness bug that the in-flight pdsts / aliasing symptoms may be masking.  File for next session.
+
+## Verification that baseline is functionally sound
+
+- All 23 rv64ui regression tests PASS on xsim (short deterministic tests don't exercise the aliasing bug pattern).
+- CoreMark's final checksum matches expected — despite theoretical aliasing, the bug does not manifest in CoreMark's output.
+- Dhrystone completes via watchdog mitigation at 0.98 IPC; the watchdog guarantees eventual progress by flushing stuck ROB heads and re-fetching.
+
 ## One-paragraph summary
 
 The Dhrystone IPC is stuck at 0.99 on xsim (mitigated by a 64-cycle ROB-head watchdog; without it, it deadlocks at 0.005). The root cause is that RISC-V store/branch instructions reuse encoding bits[11:7] for the immediate, but `decode_slice.sv` unconditionally sets `decoded.rd_arch = rd_f = insn[11:7]`. Rename then computes `old_pdst = RAT[rd_arch]` for stores, pointing at a pdst that's currently architecturally committed to a DIFFERENT arch reg. On commit, free_list releases this pdst — desynchronizing `free_list.committed_bitmap` from `rat.committed_rat`. This produces the observed RAT aliasing (`RAT[8]=RAT[9]=RAT[12]=pdst=8`), leading to consumers reading wrong-data pdsts and waiting forever. **The fix is not simply to null out `rd_arch` for non-rd instructions** — doing so breaks CoreMark's IPC (3.91 → 3.23) because the phantom releases were *compensating* for a different pdst-leak path elsewhere. Both bugs need to be fixed together.
