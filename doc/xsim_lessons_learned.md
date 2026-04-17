@@ -132,6 +132,43 @@ So the deadlock is specifically: **the store's rs2 (x10) never becomes ready**. 
 - **Cache-line BTB indexing (32-byte granule)** reduced mispredicts and brought Dhrystone to 0.51 IPC, but caused CoreMark to drop to 1.93 (vs 3.91) due to BTB way-collisions and broke 5 regression tests.
 - **Int PRF reset init** — useful defensive fix but didn't resolve Dhrystone.
 
+### Bug 5 root cause (identified in iteration 1 of ralph-loop, commits `533a445`, `35e64db`)
+
+Deeper investigation with the `[WDOG-RAT]`, `[WDOG-FL]`, and `[ALLOC_BUG]` diagnostics traced the store-path deadlock to the decode stage:
+
+1. Stuck store's `src2_ready=0` → store waits on pdst that's never broadcast.
+2. RAT dump shows **multiple arch regs share the same pdst**:
+   `RAT[8]=RAT[9]=RAT[12]=pdst=8` (all committed, not speculative).
+3. `free_list.committed_bitmap[8]=1` (FREE) while `rat.committed_rat[8]=8` (IN-USE). **Out of sync.**
+4. The `[ALLOC_BUG]` detector fires at cycle 17: rename allocates pdst=12 to an x10-writer while `committed_rat[12]=12` is still the initial x12 mapping. 886 events in 1700 cycles.
+5. For pdst=12 to be in the free list when no x12 write has happened, a prior commit released it — meaning a committing instruction had `old_pdst=12`.
+6. Trace-back: that release came from a STORE whose `rd_arch` was extracted from bits[11:7] of the encoding. For stores, those bits are `imm[4:0]`, not a register number.
+
+Root cause file/line: **`src/rtl/core/decode/decode_slice.sv:50`**
+
+```systemverilog
+decoded.rd_arch = rd_f;   // UNCONDITIONAL, bogus for stores/branches/fences
+```
+
+Rename then does `old_pdst = RAT[rd_arch] = RAT[bogus]`, which points at some legitimately-committed pdst. Commit releases that pdst. Subsequent allocations overwrite the architecturally-visible data → RAT aliasing → deadlock.
+
+**Attempted fixes (all reverted)** — every naive fix that stopped the phantom release *regressed* CoreMark below the 3.9 target:
+
+| Fix | CoreMark | Dhrystone | Verdict |
+|---|---|---|---|
+| Gate `fl_release_preg` on `commit_rd_valid` (rename.sv) | 3.23 | 0.002 | Breaks both |
+| Set `rd_arch=0` for non-rd at decode tail | 3.23 | 0.002 | Breaks both |
+| Set `rd_arch=0` for OP_STORE only | 3.86 | 0.002 | 1.2% CoreMark loss, Dhrystone worse |
+
+Each fix revealed a **secondary bug**: the phantom releases from stores' bogus `rd_arch` were *compensating* for a separate legitimate pdst-leak path. With the phantom releases gone, the leak depletes the free list, rename stalls, and both benchmarks tank.
+
+**Both bugs must be fixed together.** The secondary leak is not yet identified. Candidates:
+- Speculative allocations that survive a flush due to `committed_bitmap` already being corrupted when `free_bitmap <= committed_bitmap` fires.
+- Checkpoint save/restore asymmetry.
+- ROB entries where rd_valid=1 at rename but slot_can_commit=0 never reaching the commit-release path.
+
+**The full investigation, with reproducer commands and the exact failed-fix sequence, is in `doc/dhrystone_debug_handoff.md`. Read that first before the next attempt.**
+
 ### Bug 6: Checkpoint exhaustion on CoreMark (commit `0ebc657`)
 
 Per-resource rename-stall breakdown (added to `+PERF_PROFILE` in commit `0ebc657`) attributed **99.5%** of CoreMark's rename stalls to checkpoint exhaustion. `NUM_CHECKPOINTS` was 4; CoreMark's hot loop regularly had more than 4 in-flight unresolved branches.

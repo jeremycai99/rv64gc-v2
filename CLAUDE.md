@@ -32,13 +32,25 @@ Dhrystone (-O2):    0.99 (watchdog recovery)   rename/flush bug, root-cause TBD
 xsim is the authoritative simulator (IEEE 1800 4-state, matches synthesis).
 For tapeout: trust xsim, not Verilator.
 
-Dhrystone's rename/flush-recovery bug: ROB head gets permanently stuck
-at PC=0x80002398 — a store commits with register x12 corrupted to 0xcd
-(a bogus sub-1MB address).  Mitigated by ROB head watchdog (commit
-197ea09): 12-bit counter fires replay exception at saturation, recovers
-the pipeline.  Dhrystone IPC improves 10x (0.005 → 0.055) but still
-~50x below target.  Underlying rename race requires dedicated VCD-first
-debugging — see `doc/xsim_lessons_learned.md` for full analysis.
+Dhrystone's root cause has been identified but not fixed.  ROB head
+stalls on a store at PC=0x80002398; the store's `src2_ready` never
+fires because consumer pdsts have been aliased across multiple arch
+regs (`RAT[8]=RAT[9]=RAT[12]=pdst=8` observed).  Root cause:
+`decode_slice.sv:50` unconditionally sets `decoded.rd_arch = rd_f`
+(bits[11:7]), but for stores those bits are `imm[4:0]`, not a reg
+number — rename then computes `old_pdst = RAT[bogus]` and commit
+releases a pdst that's still architecturally in use, desynchronizing
+`free_list.committed_bitmap` from `rat.committed_rat`.
+
+Naive fixes (clear rd_arch for non-rd instructions) break CoreMark
+because the phantom releases were compensating for a separate pdst
+leak.  BOTH bugs must be fixed together.  Watchdog mitigates from
+0.005 → 0.99 IPC (180x) but the 3.2 target is unmet.
+
+**For the next debug session, read `doc/dhrystone_debug_handoff.md`.**
+It has the full reproducer, diagnostic traces, and the exact sequence
+of attempts that failed, so nobody has to re-discover the coupled
+bug-leak equilibrium.
 
 ### CoreMark IPC Signoff
 
@@ -58,6 +70,8 @@ Margin over 3.0 target: **+30%** on xsim.
 4. **int_prf reset init** (commit 99b2199) — defensive same-class fix for regfile_copy arrays. Impact: no IPC change, prevents X propagation on un-renamed pdst reads.
 5. **ROB head watchdog** (commits 197ea09 → 6c32178) — stuck-entry detector that fires a replay exception for deadlock recovery. Final threshold is 64 cycles (longer than DIV, shorter than any legit stall path). Impact: Dhrystone 0.005 → 0.99 IPC (180x); CoreMark unchanged.
 6. **Checkpoints 4 → 16** (commit 0ebc657) — rename-stall source breakdown showed 99.5% of stalls were checkpoint exhaustion. Increasing capacity eliminates the stall. Impact: CoreMark 3.64 → 3.91 IPC (+8%).
+7. **Dhrystone debug diagnostics** (commits 31ea5c7, 5b5fdf2, 9949708, df28746, 533a445, 35e64db) — extensive `+TRACE_COMMIT`-gated instrumentation that pinpointed the root cause to `decode_slice.sv:50` setting `rd_arch = rd_f` unconditionally. See `doc/dhrystone_debug_handoff.md` for the full reproducer, diagnostic traces, and the sequence of failed fix attempts.
+8. **rename_buf clear on full_flush** (commit ecbb064) — defensive clear of per-ROB-entry metadata on flush. No IPC change; closes a latent race.
 
 ### Simulator migration history (2026-04-16)
 
