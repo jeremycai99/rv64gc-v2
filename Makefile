@@ -193,9 +193,9 @@ XSIM_ROOT    := D:/Xilinx/Vivado/2024.1
 XVLOG        := $(XSIM_ROOT)/bin/xvlog.bat
 XELAB        := $(XSIM_ROOT)/bin/xelab.bat
 XSIM         := $(XSIM_ROOT)/bin/xsim.bat
-XSIM_TB      := tb_iverilog
-XSIM_SNAP    := tb_iverilog_sim
-XSIM_TB_FILE := $(TB_DIR)/tb_iverilog.sv
+XSIM_TB      := tb_xsim
+XSIM_SNAP    := tb_xsim_sim
+XSIM_TB_FILE := $(TB_DIR)/tb_xsim.sv
 XSIM_ALL_SV  := $(PKG_FILES) $(RTL_FILES) $(TB_TOP) $(XSIM_TB_FILE)
 
 .PHONY: xsim_build xsim_run xsim_regression xsim_clean

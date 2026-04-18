@@ -1,13 +1,16 @@
-/* file: tb_iverilog.sv
- Description: Self-contained top for Icarus Verilog simulation.
+/* file: tb_xsim.sv
+ Description: Self-contained top for Vivado xsim simulation (xvlog/xelab/xsim).
               Generates clk/rst, loads hex, monitors tohost, reports IPC.
+              Renamed 2026-04-17 from tb_iverilog.sv — iverilog was abandoned
+              due to SystemVerilog struct-array support gaps; xsim is the
+              authoritative simulator.
  Author: Jeremy Cai
  Date: Apr. 13, 2026
- Version: 1.0
+ Version: 1.1
 */
 `timescale 1ns/1ps
 
-module tb_iverilog;
+module tb_xsim;
     import rv64gc_pkg::*;
 
     logic        clk;
@@ -38,11 +41,36 @@ module tb_iverilog;
         .perf_minstret  (perf_minstret)
     );
 
-    // VCD dump (optional, controlled by +VCD)
+    // VCD dump (optional, controlled by +VCD_FOCUSED or +VCD_FULL)
+    // NOTE: $test$plusargs does PREFIX matching, so "VCD_FOCUSED" must be
+    // checked before "VCD_FULL" (and neither can be "VCD" alone, which
+    // would shadow both).
+    // +VCD_FULL    — full hierarchy (large; use only for short runs)
+    // +VCD_FOCUSED — only the partial-replay-relevant signals (smaller)
     initial begin
-        if ($test$plusargs("VCD")) begin
-            $dumpfile("iv_sim.vcd");
-            $dumpvars(0, tb_iverilog);
+        if ($test$plusargs("VCD_FOCUSED")) begin
+            $dumpfile("iv_sim_focused.vcd");
+            // Core-level signals (partial-replay bus, flush, commit)
+            $dumpvars(0, u_tb.u_core.replay_valid);
+            $dumpvars(0, u_tb.u_core.replay_rob_idx_from);
+            $dumpvars(0, u_tb.u_core.lsu_ordering_violation);
+            $dumpvars(0, u_tb.u_core.lsu_violation_rob_idx);
+            $dumpvars(0, u_tb.u_core.flush_out);
+            $dumpvars(0, u_tb.u_core.commit_count);
+            $dumpvars(0, u_tb.u_core.cdb_valid);
+            $dumpvars(0, u_tb.u_core.cdb_tag);
+            // ROB head/tail
+            $dumpvars(0, u_tb.u_core.u_rob.head_r);
+            $dumpvars(0, u_tb.u_core.u_rob.tail_r);
+            $dumpvars(0, u_tb.u_core.u_rob.count_r);
+            $dumpvars(0, u_tb.u_core.u_rob.rob_head_watchdog);
+            // LSU issue + ordering_violation source
+            $dumpvars(0, u_tb.u_core.u_lsu.load_issue_valid);
+            $dumpvars(0, u_tb.u_core.u_lsu.ordering_violation);
+            $dumpvars(0, u_tb.u_core.u_lsu.violation_rob_idx);
+        end else if ($test$plusargs("VCD_FULL")) begin
+            $dumpfile("iv_sim_full.vcd");
+            $dumpvars(0, tb_xsim);
         end
     end
 

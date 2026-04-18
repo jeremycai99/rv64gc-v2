@@ -46,6 +46,6 @@ call D:\Xilinx\Vivado\2024.1\bin\xvlog.bat --sv --relax -d SIMULATION ^
   src\rtl\sim\sim_memory.sv ^
   src\rtl\core\rv64gc_core_top.sv ^
   src\tb\tb_top.sv ^
-  src\tb\tb_iverilog.sv
+  src\tb\tb_xsim.sv
 if errorlevel 1 exit /b 1
-call D:\Xilinx\Vivado\2024.1\bin\xelab.bat --relax -s tb_iverilog_sim tb_iverilog
+call D:\Xilinx\Vivado\2024.1\bin\xelab.bat --relax -s tb_xsim_sim tb_xsim
