@@ -1649,6 +1649,64 @@ module rv64gc_core_top
     logic [ROB_IDX_BITS-1:0]  lsu_violation_rob_idx;
     logic                     lsu_port0_suppress;
 
+    // =========================================================================
+    // PARTIAL REPLAY BUS (partial_replay_spec.md — Phase 2 signal plumbing)
+    //
+    // Separate from the full_flush path used for branch mispredicts and
+    // architectural exceptions.  A 1-cycle pulse fires from the LSU on a
+    // memory-ordering violation; the handlers (IQ / ROB / PRF-ready) perform
+    // SELECTIVE invalidation — fetch/decode/rename stay intact.
+    //
+    // Phase 2 step 1:  signals declared and registered here; handlers are
+    // added by Phase 3 edits in issue_queue.sv / rob.sv / the PRF-ready-table
+    // block in this file.  Until then the bus is a no-op: the existing
+    // commit.found_replay path still turns the ordering violation into a
+    // full_flush, which remains the safety fallback.
+    // =========================================================================
+    logic                     replay_valid;
+    logic [ROB_IDX_BITS-1:0]  replay_rob_idx_from;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            replay_valid         <= 1'b0;
+            replay_rob_idx_from  <= '0;
+        end else begin
+            // 1-cycle pulse registered from the LSU's combinational
+            // ordering_violation signal.  Gated off during branch/exception
+            // flush to avoid double-processing when full_flush has already
+            // squashed the pipeline.
+            replay_valid <= lsu_ordering_violation &&
+                            !(flush_out.valid && flush_out.full_flush);
+            replay_rob_idx_from <= lsu_violation_rob_idx;
+        end
+    end
+
+    // =========================================================================
+    // pdst_producer_rob[] — per-pdst metadata (Phase 2 step 2)
+    //
+    // Records, for every physical register, the rob_idx of the in-flight
+    // instruction that allocated it at rename.  Phase 3's replay handlers
+    // read this to decide which consumers' src_ready bits must be cleared
+    // ("is producer in replay range?").  Written on every rename; flushed
+    // to 0 on full_flush (mirrors rename_buf).
+    // =========================================================================
+    logic [ROB_IDX_BITS-1:0] pdst_producer_rob [0:INT_PRF_DEPTH-1];
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
+            for (int p = 0; p < INT_PRF_DEPTH; p++)
+                pdst_producer_rob[p] <= '0;
+        end else begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if ((3'(i) < ren_count_w) &&
+                    ren_insn[i].base.rd_valid &&
+                    (ren_insn[i].pdst != '0)) begin
+                    pdst_producer_rob[ren_insn[i].pdst] <= ren_insn[i].rob_idx;
+                end
+            end
+        end
+    end
+
     // LQ/SQ alloc counts from rename
     logic [2:0] lq_alloc_count;
     logic [2:0] sq_alloc_count;
