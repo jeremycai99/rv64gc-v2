@@ -124,6 +124,19 @@ module rv64gc_core_top
     logic [63:0] icache_fill_resp_addr;
     logic [511:0] icache_fill_resp_data;
 
+    // Prefetch L2 signals (from fetch_unit NLPB to L2 prefetch port).
+    // Declared here because fetch_unit instantiation below uses them as
+    // port connections; an explicit declaration must precede first use
+    // under IEEE 1800 strict semantics (DSim rejects implicit-net
+    // declarations; xsim was lenient).  L2 cache instantiation consumes
+    // them later at the L2 block.
+    logic        pf_l2_req_valid;
+    logic [63:0] pf_l2_req_addr;
+    logic        pf_l2_req_ready;
+    logic        pf_l2_resp_valid;
+    logic [63:0] pf_l2_resp_addr;
+    logic [511:0] pf_l2_resp_data;
+
     // BPU update signals (from commit)
     logic        bpu_update_valid;
     logic [63:0] bpu_update_pc;
@@ -514,6 +527,23 @@ module rv64gc_core_top
     logic                     lsu_sta_wb_valid_r;
     logic [ROB_IDX_BITS-1:0]  lsu_sta_wb_rob_idx_r;
 
+    // LSU → ROB forwarded signals used in the ROB port list below.
+    // Declared up here (not next to the LSU instantiation) so that the
+    // ROB port connections at lines ~563-566 have an explicit declaration
+    // in scope — IEEE 1800 strict (DSim) rejects implicit-net declarations;
+    // xsim was lenient.
+    logic                     lsu_ordering_violation;
+    logic [ROB_IDX_BITS-1:0]  lsu_violation_rob_idx;
+    logic                     replay_valid;
+    logic [ROB_IDX_BITS-1:0]  replay_rob_idx_from;
+    // lsu_port0_suppress: consumed by an IQ before the LSU declaration.
+    logic                     lsu_port0_suppress;
+    // D-cache fill snoop (produced by dcache, consumed by LSU instantiated
+    // earlier in the file).
+    logic        dc_fill_snoop_valid;
+    logic [63:0] dc_fill_snoop_addr;
+    logic [511:0] dc_fill_snoop_data;
+
     rob u_rob (
         .clk                    (clk),
         .rst_n                  (rst_n),
@@ -593,6 +623,12 @@ module rv64gc_core_top
     logic [1:0]    dq_deq_iq_target [0:PIPE_WIDTH-1];
     logic [NUM_INT_IQS-1:0] iq_full_vec;
 
+    // Per-IQ occupancy forward-declared here (IQ modules are instantiated
+    // further below; dispatch routing needs the values earlier).
+    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq0_occ;
+    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq1_occ;
+    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq2_occ;
+
     // Pack per-IQ occupancy into an array for dispatch routing.
     logic [5:0] iq_occ_vec [0:NUM_INT_IQS-1];
     assign iq_occ_vec[0] = 6'(iq0_occ);
@@ -623,7 +659,7 @@ module rv64gc_core_top
     logic [1:0]  iq0_enq_valid;
     iq_entry_t   iq0_enq_data [0:1];
     logic        iq0_full;
-    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq0_occ;
+    // iq0_occ declared earlier (before dispatch_queue)
     logic [1:0]  iq0_issue_valid;
     iq_entry_t   iq0_issue_data [0:1];
 
@@ -631,7 +667,7 @@ module rv64gc_core_top
     logic [1:0]  iq1_enq_valid;
     iq_entry_t   iq1_enq_data [0:1];
     logic        iq1_full;
-    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq1_occ;
+    // iq1_occ declared earlier (before dispatch_queue)
     logic [1:0]  iq1_issue_valid;
     iq_entry_t   iq1_issue_data [0:1];
     // Single-issue wrapper signals for IQ1 (NUM_SELECT=1)
@@ -642,7 +678,7 @@ module rv64gc_core_top
     logic [1:0]  iq2_enq_valid;
     iq_entry_t   iq2_enq_data [0:1];
     logic        iq2_full;
-    logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq2_occ;
+    // iq2_occ declared earlier (before dispatch_queue)
     logic [1:0]  iq2_issue_valid;
     iq_entry_t   iq2_issue_data [0:1];
     // Single-issue wrapper signals for IQ2 (NUM_SELECT=1)
@@ -1647,9 +1683,8 @@ module rv64gc_core_top
     logic        dc_store_ack;
 
     // LSU ordering violation
-    logic                     lsu_ordering_violation;
-    logic [ROB_IDX_BITS-1:0]  lsu_violation_rob_idx;
-    logic                     lsu_port0_suppress;
+    // (lsu_ordering_violation / lsu_violation_rob_idx / lsu_port0_suppress
+    //  hoisted to near the ROB instantiation above for declaration-before-use.)
 
     // =========================================================================
     // PARTIAL REPLAY BUS (partial_replay_spec.md — Phase 2 signal plumbing)
@@ -1665,8 +1700,9 @@ module rv64gc_core_top
     // commit.found_replay path still turns the ordering violation into a
     // full_flush, which remains the safety fallback.
     // =========================================================================
-    logic                     replay_valid;
-    logic [ROB_IDX_BITS-1:0]  replay_rob_idx_from;
+    // (replay_valid / replay_rob_idx_from hoisted near the ROB instantiation
+    //  above for declaration-before-use — see the LSU-forwarded signals
+    //  section there.)
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -2031,10 +2067,9 @@ module rv64gc_core_top
     logic [511:0] dc_l2_resp_data;
     logic        dc_invalidate_busy;
 
-    // D-cache fill snoop (to LSU for missed-load late response)
-    logic        dc_fill_snoop_valid;
-    logic [63:0] dc_fill_snoop_addr;
-    logic [511:0] dc_fill_snoop_data;
+    // D-cache fill snoop (to LSU for missed-load late response) —
+    // (dc_fill_snoop_* signals hoisted to before the LSU instantiation
+    //  above for declaration-before-use under DSim strict semantics.)
 
     dcache u_dcache (
         .clk                (clk),
@@ -2075,13 +2110,7 @@ module rv64gc_core_top
     logic [511:0] l2_icache_resp_data;
     logic l2_invalidate_busy;
 
-    // Prefetch L2 signals (from fetch_unit NLPB)
-    logic        pf_l2_req_valid;
-    logic [63:0] pf_l2_req_addr;
-    logic        pf_l2_req_ready;
-    logic        pf_l2_resp_valid;
-    logic [63:0] pf_l2_resp_addr;
-    logic [511:0] pf_l2_resp_data;
+    // (pf_l2_* signals are forward-declared near the fetch_unit section above.)
 
     // The L2 hit pipeline does not invalidate stages after delivery, so a
     // response for an earlier icache fetch reappears L2_HIT_LATENCY cycles

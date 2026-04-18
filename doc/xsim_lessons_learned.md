@@ -263,3 +263,108 @@ Dhrystone 0.005 (deadlock) → **0.99 IPC** (180× improvement).
 - `+TRACE_COMMIT` gives per-commit PC/mispredict/branch trace.
 - The ROB head trace (every 1000 cycles in tb_top.sv) is the first signal to check on any hang.
 - For the Dhrystone deadlock specifically: VCD the rename pipeline for cycles 1400-1600 and look at which `pdst` the stuck ROB head's source register is waiting on, then trace that pdst back to its (flushed) writer.
+
+---
+
+## Addendum 2026-04-17: Dual-simulator signoff policy (xsim + DSim Studio)
+
+### Why a second simulator
+
+The 2026-04-17 partial-replay SVA debugging session hit three xsim 2024.1 SVA
+gaps that forced ugly workarounds:
+
+| Construct we wanted | xsim 2024.1 behavior | Workaround we shipped |
+|---|---|---|
+| `cover property` | silently dropped (warning only) | integer counter + `final begin $display` |
+| `$past(sig)` inside an assert action block | "Unable to infer clocking event" error | pipelined prev-value flops (`sva_prev_viol_rob`) |
+| Local variables inside sequences | partial support | avoided the idiom |
+
+These workarounds bloat the SVA block and obscure intent. Altair DSim
+(formerly Metrics DSim) supports all three natively, plus assertion coverage
+reports that tell us which assertion points were *reached* — a cleaner answer
+than "the counter didn't increment, so maybe it didn't fire."
+
+### The policy
+
+**xsim remains authoritative for signoff.** Vivado 2024.1's xsim shares the
+synthesis toolchain's semantics — same vendor, same elaboration engine, same
+4-state handling. Every CoreMark / Dhrystone IPC number, every regression
+pass/fail, every ASIC-tapeout correctness claim must be verifiable under
+xsim. Run of record.
+
+**DSim is the productivity simulator** for SVA-guided iteration, coverage
+reports, and the MXD wave viewer. It is not yet trusted as signoff grade —
+DSim's IEEE 1800 conformance profile, while comprehensive, has not been
+through the same decade of tapeout validation as xsim / VCS / Xcelium. We
+should assume DSim-unique behaviors are possible and guard against them with
+cross-sim diff.
+
+### Rules
+
+1. **Both sims must agree** on any IPC or correctness claim before it goes
+   into a commit message, CLAUDE.md, or a results table. If they disagree,
+   it is a bug — investigate, do not pick the favorable number (this is the
+   same discipline rule #4 added to CLAUDE.md last session, generalized).
+2. **DSim-native SVA constructs** (`cover property`, `$past` in action, local
+   seq vars, `strong`/`weak` qualifiers) may be used, but if they don't
+   compile under xsim they must live inside `ifdef DSIM` with an xsim
+   fallback inside `else` or skipped cleanly. Never ship SVA that builds on
+   only one simulator.
+3. **Pre-tapeout RTL cleanup** (e.g. removing `ifdef SIMULATION` defensive
+   resets per the reset-net discipline rule in CLAUDE.md) is anchored on
+   xsim, not DSim. DSim may tolerate a loose control-flow invariant that
+   xsim correctly catches, or vice versa — trust the signoff sim.
+4. **Regression acceptance gate:** the `make regress` target must pass on
+   both sims before any RTL change lands. This is how we catch the class of
+   bug that made this addendum necessary in the first place — the Verilator
+   UNOPTFLAT / eval-scheduling workarounds that silently changed behavior on
+   xsim.
+
+### Tool installation
+
+DSim Studio is installed as a VS Code extension
+(`altairengineering.dsim-studio-2025.0.26`). The simulator binary itself is
+fetched on-demand by the extension after Altair One sign-in (free individual
+license). Install flow:
+
+1. Sign in: Command Palette → `DSim Studio: Sign In`.
+2. Install: Command Palette → `DSim Studio: Install DSim` (or open the DSim
+   Studio activity-bar icon → Installations panel → "+").
+3. Note the reported install path — needed for `build_dsim.bat`.
+
+### Expected build flow
+
+Mirror of `build_xsim.bat`:
+
+| Stage | xsim | DSim |
+|---|---|---|
+| SV/V compile | `xvlog --sv --relax -d SIMULATION` | `dvlcom -sv +define+SIMULATION` |
+| Elaborate | `xelab --relax -s tb_xsim_sim tb_xsim` | `dsim -genimage tb_image tb_xsim` |
+| Run | `xsim tb_xsim_sim -R +MEMFILE=...` | `dsim -image tb_image +MEMFILE=... -sva -waves run.mxd` |
+
+Key DSim flags relevant to this project:
+- `-sva` — enable SVA elaboration and reporting.
+- `-waves run.mxd` — write MXD waveform for the assertion-aware viewer.
+- `+acc` / `-access +rw` — make signals visible to SVA and wave (analog of
+  xsim `-debug typical`).
+- `-check-overflow` — catch counter overflow bugs (off by default).
+- `-cov` / `-coverage` — coverage + assertion report.
+
+### Migration path for current SVA
+
+Existing assertions in `src/rtl/core/rv64gc_core_top.sv` A1–A7 are already
+xsim-compatible. On DSim we can additionally:
+
+- Replace the `sva_prev_viol_rob` pipelined flop with native
+  `$past(u_lsu.ordering_violation)` in the assertion action.
+- Convert the A-summary integer counters (`sva_cnt_ord_violation` etc.) to
+  `cover property (...)` — keep the integer-counter version inside an
+  `ifdef XSIM` fallback so the xsim run still reports the same data.
+- Add the previously-reverted A8 (global progress) and A9 (IQ lifecycle)
+  back as `cover property` + `covergroup` — these were the observations
+  that actually diagnosed the IQ commit-free path being wrong, and they
+  belong in the permanent assertion set.
+
+The dual-build `make regress` target then runs both sims and diffs the
+assertion report + final IPC.
+
