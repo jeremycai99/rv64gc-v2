@@ -28,8 +28,11 @@ module sim_memory
     // =========================================================================
     // Parameters
     // =========================================================================
-    localparam int MEM_SIZE  = 256 * 1024 * 1024;  // 256 MB
-    localparam int ADDR_BITS = $clog2(MEM_SIZE);    // 28
+    // Reduced from 256 MB -> 2 MB: Dhrystone + CoreMark fit in ~1 MB.  Smaller
+    // array makes zero-init (done below to eliminate X propagation on uninit
+    // reads) feasible at elaboration time.
+    localparam int MEM_SIZE  = 2 * 1024 * 1024;    // 2 MB
+    localparam int ADDR_BITS = $clog2(MEM_SIZE);    // 21
 
     // =========================================================================
     // Byte-addressed storage
@@ -38,9 +41,20 @@ module sim_memory
 
     // =========================================================================
     // Hex file loading via plusarg
+    //
+    // Zero-initialize the entire memory BEFORE $readmemh so that any load
+    // to an address outside the hex file's initialized range returns 0
+    // rather than X.  xsim uses 4-state logic; without explicit init the
+    // untouched array entries are X, and any read propagates X through the
+    // pipeline (dcache compares short-circuit silently, ROB head stalls
+    // because load_wb_valid never fires).  Verilator's 2-state logic
+    // default-initializes to 0, which is why this issue is xsim-specific.
     // =========================================================================
     string memfile;
     initial begin
+        // Zero-init before $readmemh.  Use blocking assignment (initial is not
+        // an always_ff, so no multi-driver conflict with the write path).
+        for (int i = 0; i < MEM_SIZE; i++) mem[i] = 8'h00;
         if ($value$plusargs("MEMFILE=%s", memfile)) begin
             $readmemh(memfile, mem);
         end

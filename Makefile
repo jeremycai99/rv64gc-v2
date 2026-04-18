@@ -202,7 +202,7 @@ XSIM_ALL_SV  := $(PKG_FILES) $(RTL_FILES) $(TB_TOP) $(XSIM_TB_FILE)
 
 xsim_build:
 	rm -rf xsim.dir
-	$(XVLOG) --sv --relax $(XSIM_ALL_SV)
+	$(XVLOG) --sv --relax -d SIMULATION $(XSIM_ALL_SV)
 	$(XELAB) --relax -s $(XSIM_SNAP) $(XSIM_TB)
 
 MAX_CYCLES ?= 500000

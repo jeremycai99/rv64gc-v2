@@ -218,18 +218,15 @@ module fetch_unit
     assign merged_resp_data_comb  = ic_resp_valid_comb ? ic_resp_data_comb
                                                        : nlpb_data_comb;
 
-    // Register merged response to align with F2 stage (1-cycle SRAM latency)
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            ic_resp_valid <= 1'b0;
-            ic_resp_data  <= '0;
-            ic_resp_hit   <= 1'b0;
-        end else begin
-            ic_resp_valid <= merged_resp_valid_comb;
-            ic_resp_data  <= merged_resp_data_comb;
-            ic_resp_hit   <= ic_resp_hit_comb;
-        end
-    end
+    // Pipeline alignment with sync-read icache:
+    // The icache's internal s1 stage already provides 1-cycle SRAM latency,
+    // so at cycle T the *_comb outputs correspond to the request presented
+    // at T-1 (= f1_pc at T-1 = f2_pc_r at T).  Adding a second register
+    // here would cause f2_pc_r to lead icache response by one cycle and F2
+    // would consume stale-PC data.
+    assign ic_resp_valid = merged_resp_valid_comb;
+    assign ic_resp_data  = merged_resp_data_comb;
+    assign ic_resp_hit   = ic_resp_hit_comb;
 
     // =========================================================================
     // BTB instance (combinational lookup in F1)

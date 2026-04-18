@@ -707,6 +707,12 @@ module decode_slice
         // ---------------------------------------------------------------
         if (rd_f == 5'd0)
             decoded.rd_valid = 1'b0;
+
+        // Phantom-release fix: stores/branches have bits[11:7]=imm[4:0];
+        // null out rd_arch when !rd_valid so rename doesn't read bogus
+        // RAT[imm] and feed garbage old_pdst into the release path.
+        if (!decoded.rd_valid)
+            decoded.rd_arch = 5'd0;
     end
 
 endmodule

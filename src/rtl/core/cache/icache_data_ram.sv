@@ -34,8 +34,13 @@ module icache_data_ram
     end
 
     // =========================================================================
-    // Read (combinational / asynchronous for single-cycle cache hit)
+    // Read (synchronous, 1-cycle latency — SRAM-macro semantics).
+    // Address is latched at posedge clk; data appears at the next edge.
     // =========================================================================
-    assign rdata = data_arr[raddr];
+    logic [LINE_SIZE*8-1:0] rdata_r;
+    always_ff @(posedge clk) begin
+        rdata_r <= data_arr[raddr];
+    end
+    assign rdata = rdata_r;
 
 endmodule

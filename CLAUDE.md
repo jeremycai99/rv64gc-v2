@@ -278,6 +278,47 @@ These are the bottlenecks that caused v1's 0.47 IPC. Every v2 module must elimin
 - Testbench files use `tb_` prefix
 - Top module: `rv64gc_core_top.sv`
 
+## 4-State Variables and ASIC-Correct Reset Discipline
+
+Simulation uses 4-state logic (`0/1/X/Z`); synthesis is 2-state. Hardware comes
+up in an undefined state at power-on and control-flow discipline (not blanket
+reset) is what keeps the design correct. This has implications for every RTL
+review.
+
+**Reset MANDATORY for:** valid bits, ready bits, state-machine registers,
+head/tail/count pointers, small control vectors.
+
+**Reset FORBIDDEN for (ASIC-tapeout path):** register files (`int_prf`,
+`fp_prf`), cache/SRAM data arrays, FIFO/queue payload fields, ROB payload
+fields, BTB/TAGE data entries, any wide data-path flop array (>~64 flops).
+Reason: reset-net max fanout at modern nodes is ~20-30; a 256×64 PRF under
+reset is ~16 K flops of fanout — unbuildable without a reset-buffer tree
+that costs area and CTS.
+
+**Correct ways to eliminate X-propagation in simulation without adding
+synthesis reset load:**
+
+1. `ifdef SIMULATION` / `initial` blocks — zero at time 0, never drive
+   synthesis.
+2. `$readmemh` / ROM init — sim + FPGA, not ASIC; benign for simulation X.
+3. Boot ROM / boot firmware (e.g. BSS clear, page-table init for Linux) —
+   the ASIC-correct path for software-visible memory regions.
+4. Tighten the control-flow invariant — the data flop is read only when its
+   guarding valid bit is 1, so its reset value is irrelevant at synthesis.
+
+**Workflow rule for new RTL and reviews:**
+- Classify every flop array as *control* (reset) or *data* (no-reset, guarded
+  by control).
+- Reject review findings of the form "data field not cleared on flush — add
+  defensive clear" unless an un-reset valid bit AND a demonstrated X-prop
+  escape path are both shown.
+- For Linux boot: memory zero-init lives in boot software, not hardware
+  reset. The design must support uninitialized memory coming out of reset.
+- The recent commits `8e280c6` (tag-RAM reset), `99b2199` (int_prf reset),
+  and similar defensive clears are **sim-only workarounds**; before tapeout
+  each should be gated behind `ifdef SIMULATION` (or converted to
+  `initial` blocks) to keep the synthesis reset net sane.
+
 ## Compiler Flags for Benchmark Software
 
 ```bash

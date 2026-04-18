@@ -347,4 +347,57 @@ module commit
     end
 `endif
 
+`ifdef SIMULATION
+    // STAT_DUMP: categorize flushes by cause (sim-only, +STAT_DUMP runtime).
+    integer cmt_leak_cyc;
+    logic   cmt_stat_en;
+    integer flush_replay_cnt, flush_exception_cnt, flush_mispredict_cnt;
+    integer flush_ret_cnt,    flush_interrupt_cnt;
+    integer total_commits;
+    integer total_store_commits, total_load_commits, total_branch_commits;
+    initial cmt_stat_en = ($test$plusargs("STAT_DUMP") ? 1'b1 : 1'b0);
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cmt_leak_cyc         <= 0;
+            flush_replay_cnt     <= 0;
+            flush_exception_cnt  <= 0;
+            flush_mispredict_cnt <= 0;
+            flush_ret_cnt        <= 0;
+            flush_interrupt_cnt  <= 0;
+            total_commits        <= 0;
+            total_store_commits  <= 0;
+            total_load_commits   <= 0;
+            total_branch_commits <= 0;
+        end else begin
+            cmt_leak_cyc <= cmt_leak_cyc + 1;
+            total_commits <= total_commits + scan_count;
+            total_store_commits  <= total_store_commits  + store_cnt;
+            total_load_commits   <= total_load_commits   + load_cnt;
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (slot_can_commit[i] && head_is_branch[i])
+                    total_branch_commits <= total_branch_commits + 1;
+            end
+            if (found_replay)     flush_replay_cnt     <= flush_replay_cnt     + 1;
+            if (found_exception)  flush_exception_cnt  <= flush_exception_cnt  + 1;
+            if (found_mispredict) flush_mispredict_cnt <= flush_mispredict_cnt + 1;
+            if (found_ret)        flush_ret_cnt        <= flush_ret_cnt        + 1;
+            if (take_interrupt)   flush_interrupt_cnt  <= flush_interrupt_cnt  + 1;
+        end
+    end
+    final begin
+        $display("");
+        $display("=== COMMIT FLUSH-CAUSE BREAKDOWN (cyc=%0d) ===", cmt_leak_cyc);
+        $display("Total commits:        %0d", total_commits);
+        $display("  branches committed: %0d", total_branch_commits);
+        $display("  stores committed:   %0d", total_store_commits);
+        $display("  loads committed:    %0d", total_load_commits);
+        $display("Flush causes:");
+        $display("  replay (ld order):  %0d", flush_replay_cnt);
+        $display("  exception:          %0d", flush_exception_cnt);
+        $display("  mispredict:         %0d", flush_mispredict_cnt);
+        $display("  ret (mret/sret):    %0d", flush_ret_cnt);
+        $display("  interrupt:          %0d", flush_interrupt_cnt);
+    end
+`endif
+
 endmodule

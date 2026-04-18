@@ -180,6 +180,14 @@ module rename
     logic [PIPE_WIDTH-1:0] has_rob;
     logic [PIPE_WIDTH-1:0] has_dq;
 
+    // slot_can_advance_sp: "sans preg" — all non-preg resources available.
+    // Breaks the preg/has_preg/fl_avail circular dependency so fl_req_count
+    // and fl_slot_idx can be gated by an advance decision that's computed
+    // BEFORE the free-list returns fl_avail_count.  Prevents alloc-but-
+    // no-advance orphans that leak pregs into the free pool and deplete it.
+    logic [PIPE_WIDTH-1:0] slot_can_advance_sp;
+    logic [2:0] sp_ckpt_consumed_before [0:PIPE_WIDTH];
+
     // =========================================================================
     // Work slot compaction indices: map held/decode insns to work positions
     // Held insns compact to bottom, decode fills rest.
@@ -263,12 +271,13 @@ module rename
     );
 
     // =========================================================================
-    // Commit release: build release vector for free list
+    // Commit release: per-slot gated release (defense in depth)
     // =========================================================================
     always_comb begin
         fl_release_count = '0;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            fl_release_preg[i] = commit_old_pdst[i];
+            fl_release_preg[i] = (commit_rd_valid[i] && (3'(i) < commit_count))
+                                 ? commit_old_pdst[i] : '0;
         end
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             if (commit_rd_valid[i] && (3'(i) < commit_count)) begin
@@ -365,46 +374,87 @@ module rename
     end
 
     // =========================================================================
-    // Free list allocation request count
+    // Pass 1: slot_can_advance_sp (sans preg).
+    //
+    // We need a pre-fl-avail decision on whether each slot CAN advance
+    // based on non-preg resources, so that fl_req_count only requests
+    // pregs for slots that will actually use them.  This eliminates the
+    // "alloc-but-no-advance orphan" leak where free_list clears a bit for
+    // a slot that ultimately can't advance due to LQ/SQ/CKPT/ROB/DQ
+    // limits.  preg shortage is handled afterwards by has_preg below.
+    // =========================================================================
+    always_comb begin
+        sp_ckpt_consumed_before[0] = 1'b0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            slot_can_advance_sp[i] = 1'b0;
+            has_lq[i]   = 1'b1;
+            has_sq[i]   = 1'b1;
+            has_ckpt[i] = 1'b1;
+            has_rob[i]  = 1'b1;
+            has_dq[i]   = 1'b1;
+
+            if (work_valid[i]) begin
+                if (slot_needs_lq[i])   has_lq[i]   = !lq_full;
+                if (slot_needs_sq[i])   has_sq[i]   = !sq_full;
+                if (slot_needs_ckpt[i]) begin
+                    has_ckpt[i] = !sp_ckpt_consumed_before[i] && ckpt_save_avail;
+                end
+                has_rob[i] = rob_alloc_ready;
+                has_dq[i]  = !dq_full;
+                slot_can_advance_sp[i] = has_lq[i] && has_sq[i] &&
+                                         has_ckpt[i] && has_rob[i] && has_dq[i];
+            end
+
+            sp_ckpt_consumed_before[i+1] = sp_ckpt_consumed_before[i];
+            if (slot_can_advance_sp[i] && slot_needs_ckpt[i]) begin
+                sp_ckpt_consumed_before[i+1] = 1'b1;
+            end
+        end
+    end
+
+    // =========================================================================
+    // Free list allocation request count (gated by slot_can_advance_sp).
+    // Only slots that will actually advance (modulo preg availability) are
+    // counted — avoids orphan allocations.
     // =========================================================================
     always_comb begin
         fl_req_count = '0;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if (slot_needs_preg[i]) begin
+            if (slot_needs_preg[i] && slot_can_advance_sp[i]) begin
                 fl_req_count = fl_req_count + 3'd1;
             end
         end
     end
 
     // =========================================================================
-    // Map each preg-needing slot to its index in fl_alloc_preg[]
-    // Uses a running counter across the loop.
+    // Map each advancing preg-needing slot to its index in fl_alloc_preg[].
+    // Same sp gating as fl_req_count so the mapping is contiguous from 0.
     // =========================================================================
     always_comb begin
-        // Initialize with a prefix-sum approach using fl_slot_idx directly
-        // We track the count so far in a separate signal array
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             fl_slot_idx[i] = '0;
         end
-
-        // Sequential scan to assign indices
-        fl_slot_idx[0] = '0; // first needing slot always gets index 0
+        fl_slot_idx[0] = '0;
         for (int i = 1; i < PIPE_WIDTH; i++) begin
             fl_slot_idx[i] = fl_slot_idx[i-1];
-            if (slot_needs_preg[i-1]) begin
+            if (slot_needs_preg[i-1] && slot_can_advance_sp[i-1]) begin
                 fl_slot_idx[i] = fl_slot_idx[i-1] + 3'd1;
             end
         end
     end
 
     // =========================================================================
-    // Per-slot advance logic (combinational)
+    // Pass 2: final slot_can_advance with preg availability.
     //
-    // A slot can advance if all required resources are available.
-    // Resource counters accumulate across slots to prevent double-allocation.
+    // has_lq/has_sq/has_ckpt/has_rob/has_dq were set by Pass 1 along with
+    // slot_can_advance_sp.  Here we add the preg gate: fl_slot_idx[i] (the
+    // sp-gated prefix count of preg-needing slots before i) must be less
+    // than fl_avail_count returned by the free list.  If a slot needed a
+    // preg but pool exhausted, it doesn't advance and its preg position
+    // won't be consumed by free_list (fl_req_count is sp-gated too, so
+    // free_list only clears bits that will actually be used).
     // =========================================================================
     always_comb begin
-        // Initialize prefix counters
         preg_consumed_before[0] = '0;
         rob_consumed_before[0]  = '0;
         ckpt_consumed_before[0] = 1'b0;
@@ -413,51 +463,13 @@ module rename
         ckpt_branch_slot  = '0;
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            slot_can_advance[i] = 1'b0;
             has_preg[i] = 1'b1;
-            has_lq[i]   = 1'b1;
-            has_sq[i]   = 1'b1;
-            has_ckpt[i] = 1'b1;
-            has_rob[i]  = 1'b1;
-            has_dq[i]   = 1'b1;
-
-            if (work_valid[i]) begin
-                // Physical register check
-                if (slot_needs_preg[i]) begin
-                    has_preg[i] = ((preg_consumed_before[i] + 3'd1) <= fl_avail_count);
-                end
-
-                // LQ check
-                if (slot_needs_lq[i]) begin
-                    has_lq[i] = !lq_full;
-                end
-
-                // SQ check
-                if (slot_needs_sq[i]) begin
-                    has_sq[i] = !sq_full;
-                end
-
-                // Checkpoint check (only first branch per cycle)
-                if (slot_needs_ckpt[i]) begin
-                    if (!ckpt_consumed_before[i]) begin
-                        has_ckpt[i] = ckpt_save_avail;
-                    end else begin
-                        has_ckpt[i] = 1'b0;
-                    end
-                end
-
-                // ROB entry check
-                has_rob[i] = rob_alloc_ready;
-
-                // Dispatch queue check
-                has_dq[i] = !dq_full;
-
-                // Slot can advance if all resources available
-                slot_can_advance[i] = has_preg[i] && has_lq[i] && has_sq[i] &&
-                                      has_ckpt[i] && has_rob[i] && has_dq[i];
+            if (work_valid[i] && slot_needs_preg[i]) begin
+                has_preg[i] = (fl_slot_idx[i] < fl_avail_count);
             end
 
-            // Update prefix counters for next slot
+            slot_can_advance[i] = slot_can_advance_sp[i] && has_preg[i];
+
             preg_consumed_before[i+1] = preg_consumed_before[i];
             rob_consumed_before[i+1]  = rob_consumed_before[i];
             ckpt_consumed_before[i+1] = ckpt_consumed_before[i];
@@ -727,5 +739,95 @@ module rename
             end
         end
     end
+
+    // =========================================================================
+    // STAT_DUMP: per-cycle rename stall accounting (sim-only, +STAT_DUMP gate)
+    //
+    // Counts for every work_valid slot across the run:
+    //   - total slot-cycles observed
+    //   - slot-cycles that successfully advanced
+    //   - per-reason stall attribution (has_preg=0, has_rob=0, etc.)
+    //   - cycle-level aggregates: any/all slots stalled
+    //
+    // Final report printed via `final` block.  Goal: distinguish the primary
+    // stall cause between CoreMark and Dhrystone when the same RTL is run.
+    // =========================================================================
+`ifdef SIMULATION
+    integer rn_leak_cyc;
+    logic   rn_stat_en;
+    integer stall_preg_cnt, stall_rob_cnt, stall_ckpt_cnt;
+    integer stall_lq_cnt,   stall_sq_cnt,  stall_dq_cnt;
+    integer total_work_slot_cycles;
+    integer total_advanced_slot_cycles;
+    integer cycle_any_stall;
+    integer cycle_full_stall;
+    integer cycle_any_valid;
+    integer cycle_rename_stall_out;
+
+    initial rn_stat_en = ($test$plusargs("STAT_DUMP") ? 1'b1 : 1'b0);
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rn_leak_cyc                <= 0;
+            stall_preg_cnt             <= 0;
+            stall_rob_cnt              <= 0;
+            stall_ckpt_cnt             <= 0;
+            stall_lq_cnt               <= 0;
+            stall_sq_cnt               <= 0;
+            stall_dq_cnt               <= 0;
+            total_work_slot_cycles     <= 0;
+            total_advanced_slot_cycles <= 0;
+            cycle_any_stall            <= 0;
+            cycle_full_stall           <= 0;
+            cycle_any_valid            <= 0;
+            cycle_rename_stall_out     <= 0;
+        end else begin
+            rn_leak_cyc <= rn_leak_cyc + 1;
+
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (work_valid[i]) begin
+                    total_work_slot_cycles <= total_work_slot_cycles + 1;
+                    if (slot_can_advance[i]) begin
+                        total_advanced_slot_cycles <= total_advanced_slot_cycles + 1;
+                    end else begin
+                        if (slot_needs_preg[i] && !has_preg[i]) stall_preg_cnt <= stall_preg_cnt + 1;
+                        if (!has_rob[i])                        stall_rob_cnt  <= stall_rob_cnt + 1;
+                        if (slot_needs_ckpt[i] && !has_ckpt[i]) stall_ckpt_cnt <= stall_ckpt_cnt + 1;
+                        if (slot_needs_lq[i] && !has_lq[i])     stall_lq_cnt   <= stall_lq_cnt + 1;
+                        if (slot_needs_sq[i] && !has_sq[i])     stall_sq_cnt   <= stall_sq_cnt + 1;
+                        if (!has_dq[i])                         stall_dq_cnt   <= stall_dq_cnt + 1;
+                    end
+                end
+            end
+
+            if (|work_valid)                            cycle_any_valid        <= cycle_any_valid + 1;
+            if (|(work_valid & ~slot_can_advance))      cycle_any_stall        <= cycle_any_stall + 1;
+            if ((|work_valid) && ~(|slot_can_advance))  cycle_full_stall       <= cycle_full_stall + 1;
+            if (stall)                                  cycle_rename_stall_out <= cycle_rename_stall_out + 1;
+        end
+    end
+
+    final begin
+        $display("");
+        $display("=== RENAME STALL SUMMARY (cyc=%0d) ===", rn_leak_cyc);
+        $display("Total work-slot cycles:     %0d", total_work_slot_cycles);
+        $display("Total advanced slot cycles: %0d", total_advanced_slot_cycles);
+        if (total_work_slot_cycles > 0) begin
+            $display("Slot advance rate:          %0d%%",
+                (total_advanced_slot_cycles * 100) / total_work_slot_cycles);
+        end
+        $display("Cycles with any valid slot:   %0d", cycle_any_valid);
+        $display("Cycles any slot stalled:      %0d", cycle_any_stall);
+        $display("Cycles ALL slots stalled:     %0d", cycle_full_stall);
+        $display("Cycles rename.stall asserted: %0d", cycle_rename_stall_out);
+        $display("Stall reason (slot-cycles, non-exclusive):");
+        $display("  has_preg=0: %0d", stall_preg_cnt);
+        $display("  has_rob=0:  %0d", stall_rob_cnt);
+        $display("  has_ckpt=0: %0d", stall_ckpt_cnt);
+        $display("  has_lq=0:   %0d", stall_lq_cnt);
+        $display("  has_sq=0:   %0d", stall_sq_cnt);
+        $display("  has_dq=0:   %0d", stall_dq_cnt);
+    end
+`endif
 
 endmodule

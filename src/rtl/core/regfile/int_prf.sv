@@ -32,31 +32,43 @@ module int_prf
     logic [63:0] regfile_copy5 [0:INT_PRF_DEPTH-1];
 
     // -------------------------------------------------------------------------
-    // Synchronous writes – all 6 write ports broadcast to all 6 copies
-    // Reset clears all entries so reads from un-renamed physical registers
-    // return 0 rather than X (which would propagate through misspeculated
-    // pipeline activity on 4-state simulators like xsim).
+    // Synchronous writes – all 6 write ports broadcast to all 6 copies.
+    //
+    // ASIC-CORRECT RESET DISCIPLINE:
+    // In silicon, PRF entries must NOT be reset.  256 entries x 6 copies x
+    // 64 bits = 98,304 flops sharing one reset net — vastly exceeds the
+    // ~20-30 fanout budget at modern nodes.  The PRF's contents are
+    // irrelevant at power-on because the rename logic's committed_rat and
+    // free-list bitmap control which entries are architecturally live; any
+    // un-renamed read returns an architecturally-meaningless value that is
+    // never committed.
+    //
+    // For simulation only (4-state xsim), we zero the arrays via an
+    // `initial` block so X values don't propagate through misspeculation.
+    // synthesis tools ignore `initial` blocks.
     // -------------------------------------------------------------------------
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (int i = 0; i < INT_PRF_DEPTH; i++) begin
-                regfile_copy0[i] <= 64'd0;
-                regfile_copy1[i] <= 64'd0;
-                regfile_copy2[i] <= 64'd0;
-                regfile_copy3[i] <= 64'd0;
-                regfile_copy4[i] <= 64'd0;
-                regfile_copy5[i] <= 64'd0;
-            end
-        end else begin
-            for (int wp = 0; wp < 6; wp++) begin
-                if (wen[wp]) begin
-                    regfile_copy0[waddr[wp]] <= wdata[wp];
-                    regfile_copy1[waddr[wp]] <= wdata[wp];
-                    regfile_copy2[waddr[wp]] <= wdata[wp];
-                    regfile_copy3[waddr[wp]] <= wdata[wp];
-                    regfile_copy4[waddr[wp]] <= wdata[wp];
-                    regfile_copy5[waddr[wp]] <= wdata[wp];
-                end
+`ifdef SIMULATION
+    initial begin
+        for (int i = 0; i < INT_PRF_DEPTH; i++) begin
+            regfile_copy0[i] = 64'd0;
+            regfile_copy1[i] = 64'd0;
+            regfile_copy2[i] = 64'd0;
+            regfile_copy3[i] = 64'd0;
+            regfile_copy4[i] = 64'd0;
+            regfile_copy5[i] = 64'd0;
+        end
+    end
+`endif
+
+    always_ff @(posedge clk) begin
+        for (int wp = 0; wp < 6; wp++) begin
+            if (wen[wp]) begin
+                regfile_copy0[waddr[wp]] <= wdata[wp];
+                regfile_copy1[waddr[wp]] <= wdata[wp];
+                regfile_copy2[waddr[wp]] <= wdata[wp];
+                regfile_copy3[waddr[wp]] <= wdata[wp];
+                regfile_copy4[waddr[wp]] <= wdata[wp];
+                regfile_copy5[waddr[wp]] <= wdata[wp];
             end
         end
     end

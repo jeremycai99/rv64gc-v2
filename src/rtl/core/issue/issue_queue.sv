@@ -48,6 +48,11 @@ module issue_queue
 
     // ROB head for age comparison
     input  logic [ROB_IDX_BITS-1:0] rob_head,
+    // Commit broadcast: entries with rob_idx in [rob_head, rob_head+commit_count)
+    // are retiring this cycle and must be freed from the IQ.  With keep-
+    // until-commit lifecycle, issued entries remain valid until this
+    // signal matches (enables selective replay without full_flush).
+    input  logic [2:0]              commit_count,
 
     // Flush
     input  logic                    flush_valid,
@@ -70,6 +75,13 @@ module issue_queue
     // Storage arrays -- flat, separate CAM fields for fast wakeup
     // =====================================================================
     logic [DEPTH-1:0]              entry_valid;
+    // Per-entry "issued" flag (keep-until-commit lifecycle).  Set when the
+    // entry is selected by issue logic; cleared when the ROB commits the
+    // entry (or on flush/replay).  Issued entries are ineligible for
+    // re-selection but still occupy the IQ slot.  Enables selective replay
+    // of speculatively-executed instructions when a memory-ordering
+    // violation requires re-execution without full pipeline flush.
+    logic [DEPTH-1:0]              entry_issued;
     logic [PHYS_REG_BITS-1:0]     rs1_phys_r   [0:DEPTH-1];
     logic [PHYS_REG_BITS-1:0]     rs2_phys_r   [0:DEPTH-1];
     logic [ROB_IDX_BITS-1:0]      rob_idx_r    [0:DEPTH-1];
@@ -218,7 +230,11 @@ module issue_queue
 
     always_comb begin
         for (int e = 0; e < DEPTH; e++) begin
-            eligible[e] = entry_valid[e] & next_src1_ready[e] & next_src2_ready[e];
+            // Issued entries (keep-until-commit) stay occupied but are not
+            // eligible for re-selection — prevents double issue of the
+            // same instruction.  Cleared on ROB commit broadcast or flush.
+            eligible[e] = entry_valid[e] & ~entry_issued[e]
+                          & next_src1_ready[e] & next_src2_ready[e];
             if (PORT0_ONLY_FU != 0 && fu_type_r[e] == PORT0_ONLY_FU[2:0])
                 eligible_port1[e] = 1'b0;
             else
@@ -295,6 +311,31 @@ module issue_queue
     end
 
     // =====================================================================
+    // Commit-broadcast matching: entries whose rob_idx is within
+    // [rob_head, rob_head + commit_count) are being retired this cycle
+    // and must free their IQ slot.  With keep-until-commit lifecycle this
+    // is the primary slot-free path (used to be the issue path).
+    // =====================================================================
+    logic [DEPTH-1:0] commit_free_mask;
+    always_comb begin
+        commit_free_mask = '0;
+        if (commit_count != 3'd0) begin
+            for (int e = 0; e < DEPTH; e++) begin
+                if (entry_valid[e]) begin
+                    // rob_dist = (rob_idx_r[e] - rob_head) mod 2^ROB_IDX_BITS.
+                    // Entry is committing if rob_dist < commit_count.
+                    logic [ROB_IDX_BITS-1:0] rob_dist;
+                    logic [ROB_IDX_BITS-1:0] cnt_ext;
+                    rob_dist = rob_idx_r[e] - rob_head;
+                    cnt_ext  = {{(ROB_IDX_BITS-3){1'b0}}, commit_count};
+                    if (rob_dist < cnt_ext)
+                        commit_free_mask[e] = 1'b1;
+                end
+            end
+        end
+    end
+
+    // =====================================================================
     // Free-slot finder: find up to NUM_ENQUEUE free slots for enqueue
     // =====================================================================
     logic [IDX_BITS-1:0] free_idx  [0:NUM_ENQUEUE-1];
@@ -304,16 +345,10 @@ module issue_queue
     int               slots_found;
 
     always_comb begin
-        // Slots that are occupied after considering this-cycle issue
-        // invalidations (not yet committed to flops, so we compute
-        // effective validity for the free-slot scan).
-        fs_occupied = entry_valid;
-        // Entries about to be issued will be freed -- exclude them from
-        // occupied so that back-to-back dispatch is not stalled.
-        for (int p = 0; p < NUM_SELECT; p++) begin
-            if (sel_found[p])
-                fs_occupied[sel_idx[p]] = 1'b0;
-        end
+        // Effective occupancy after this-cycle commit frees.  (Issue no
+        // longer frees — keep-until-commit — so issue_sel does NOT
+        // contribute to fs_occupied mask.)
+        fs_occupied = entry_valid & ~commit_free_mask;
 
         for (int q = 0; q < NUM_ENQUEUE; q++) begin
             free_found[q] = 1'b0;
@@ -355,15 +390,16 @@ module issue_queue
     end
 
     // =====================================================================
-    // Count update
+    // Count update (keep-until-commit lifecycle).
+    // Occupancy now drops on commit-broadcast match, not on issue.
     // =====================================================================
     logic [IDX_BITS:0] count_next;
 
     always_comb begin
         count_next = count_r;
-        // Subtract issued entries
-        for (int p = 0; p < NUM_SELECT; p++) begin
-            if (sel_found[p])
+        // Subtract committed entries (entries freed this cycle by commit)
+        for (int e = 0; e < DEPTH; e++) begin
+            if (commit_free_mask[e])
                 count_next = count_next - 1'b1;
         end
         // Add enqueued entries
@@ -374,7 +410,9 @@ module issue_queue
     end
 
     // =====================================================================
-    // Partial-flush recount (combinational, for ff count update)
+    // Partial-flush recount (combinational, for ff count update).
+    // Entries that survive the flush AND are not being committed this
+    // cycle remain occupied.  Enqueues add to the survivor count.
     // =====================================================================
     logic [IDX_BITS:0]  flush_valid_count;
     logic [DEPTH-1:0]   flush_survives;
@@ -382,11 +420,8 @@ module issue_queue
     always_comb begin
         flush_valid_count = '0;
         for (int e = 0; e < DEPTH; e++) begin
-            flush_survives[e] = entry_valid[e] && !flush_remove[e];
-            for (int p = 0; p < NUM_SELECT; p++) begin
-                if (sel_found[p] && (e[IDX_BITS-1:0] == sel_idx[p]))
-                    flush_survives[e] = 1'b0;
-            end
+            flush_survives[e] = entry_valid[e] && !flush_remove[e]
+                                && !commit_free_mask[e];
             if (flush_survives[e])
                 flush_valid_count = flush_valid_count + 1'b1;
         end
@@ -441,22 +476,15 @@ module issue_queue
     // =====================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || (flush_valid && flush_full)) begin
-            entry_valid <= '0;
-            src1_ready  <= '0;
-            src2_ready  <= '0;
-            src1_spec   <= '0;
-            src2_spec   <= '0;
-            count_r     <= '0;
+            entry_valid  <= '0;
+            entry_issued <= '0;
+            src1_ready   <= '0;
+            src2_ready   <= '0;
+            src1_spec    <= '0;
+            src2_spec    <= '0;
+            count_r      <= '0;
         end else begin
             // ---- Wakeup: update ready / spec bits for all entries ----
-            // Start from the combinational wakeup result (CDB + cancel),
-            // then OR in the latched spec wakeup so it appears as "ready"
-            // on the *next* cycle (matching the load result on combinational
-            // CDB / bypass network).  Spec-set bits also light the spec flag
-            // so a cache miss can later cancel them.
-            //
-            // If a spec-cancel already fired this cycle for an entry, do
-            // NOT spec-set it (cancel wins over a same-cycle re-wake).
             for (int e = 0; e < DEPTH; e++) begin
                 src1_ready[e] <= next_src1_ready[e] | do_spec1[e];
                 src2_ready[e] <= next_src2_ready[e] | do_spec2[e];
@@ -464,40 +492,44 @@ module issue_queue
                 src2_spec[e]  <= next_src2_spec[e]  | do_spec2[e];
             end
 
-            // ---- Issue: invalidate selected entries ----
-            // Skip invalidation when port 0 is suppressed (entry re-issues)
+            // ---- Issue: set entry_issued (keep-until-commit).
+            // Entry stays in IQ; issued flag disables re-selection.
+            // port0_suppress: entry was NOT actually issued (dcache
+            // conflict retry), so don't set issued -- leave as ready.
             for (int p = 0; p < NUM_SELECT; p++) begin
                 if (sel_found[p] && !(p == 0 && port0_suppress)) begin
-                    entry_valid[sel_idx[p]] <= 1'b0;
-                    src1_ready[sel_idx[p]]  <= 1'b0;
-                    src2_ready[sel_idx[p]]  <= 1'b0;
-                    src1_spec[sel_idx[p]]   <= 1'b0;
-                    src2_spec[sel_idx[p]]   <= 1'b0;
+                    entry_issued[sel_idx[p]] <= 1'b1;
+                end
+            end
+
+            // ---- Commit: free entries whose rob_idx matches this
+            //      cycle's commit broadcast.  Clears entry_valid AND
+            //      entry_issued; readies/specs cleared for cleanliness.
+            for (int e = 0; e < DEPTH; e++) begin
+                if (commit_free_mask[e]) begin
+                    entry_valid[e]  <= 1'b0;
+                    entry_issued[e] <= 1'b0;
+                    src1_ready[e]   <= 1'b0;
+                    src2_ready[e]   <= 1'b0;
+                    src1_spec[e]    <= 1'b0;
+                    src2_spec[e]    <= 1'b0;
                 end
             end
 
             // ---- Enqueue: write new entries into free slots ----
-            // Snoop the current CDB broadcast at enqueue time to avoid
-            // the classic simultaneous-enqueue-plus-wakeup race: a new
-            // entry arrives the same cycle its producer broadcasts, but
-            // the wakeup logic only sees entries that are already valid.
-            //
-            // Additionally snoop preg_ready_table to catch producers that
-            // broadcast BEFORE this enqueue cycle (e.g., the dispatch queue
-            // held the consumer in the FIFO while the producer already
-            // wrote back through the CDB).
             for (int q = 0; q < NUM_ENQUEUE; q++) begin
                 if (enq_valid[q] && free_found[q]) begin
-                    entry_valid[free_idx[q]] <= 1'b1;
-                    payload_r[free_idx[q]]   <= PW'(enq_data[q]);
-                    rs1_phys_r[free_idx[q]]  <= enq_data[q].rs1_phys;
-                    rs2_phys_r[free_idx[q]]  <= enq_data[q].rs2_phys;
-                    rob_idx_r[free_idx[q]]   <= enq_data[q].rob_idx;
-                    fu_type_r[free_idx[q]]   <= enq_data[q].fu_type;
-                    src1_ready[free_idx[q]]  <= enq_s1_rdy[q];
-                    src2_ready[free_idx[q]]  <= enq_s2_rdy[q];
-                    src1_spec[free_idx[q]]   <= 1'b0;
-                    src2_spec[free_idx[q]]   <= 1'b0;
+                    entry_valid[free_idx[q]]  <= 1'b1;
+                    entry_issued[free_idx[q]] <= 1'b0;
+                    payload_r[free_idx[q]]    <= PW'(enq_data[q]);
+                    rs1_phys_r[free_idx[q]]   <= enq_data[q].rs1_phys;
+                    rs2_phys_r[free_idx[q]]   <= enq_data[q].rs2_phys;
+                    rob_idx_r[free_idx[q]]    <= enq_data[q].rob_idx;
+                    fu_type_r[free_idx[q]]    <= enq_data[q].fu_type;
+                    src1_ready[free_idx[q]]   <= enq_s1_rdy[q];
+                    src2_ready[free_idx[q]]   <= enq_s2_rdy[q];
+                    src1_spec[free_idx[q]]    <= 1'b0;
+                    src2_spec[free_idx[q]]    <= 1'b0;
                 end
             end
 
@@ -505,18 +537,18 @@ module issue_queue
             if (flush_valid && !flush_full) begin
                 for (int e = 0; e < DEPTH; e++) begin
                     if (flush_remove[e]) begin
-                        entry_valid[e] <= 1'b0;
-                        src1_ready[e]  <= 1'b0;
-                        src2_ready[e]  <= 1'b0;
-                        src1_spec[e]   <= 1'b0;
-                        src2_spec[e]   <= 1'b0;
+                        entry_valid[e]  <= 1'b0;
+                        entry_issued[e] <= 1'b0;
+                        src1_ready[e]   <= 1'b0;
+                        src2_ready[e]   <= 1'b0;
+                        src1_spec[e]    <= 1'b0;
+                        src2_spec[e]    <= 1'b0;
                     end
                 end
             end
 
             // ---- Update count ----
             if (flush_valid && !flush_full) begin
-                // On partial flush use pre-computed recount
                 count_r <= flush_valid_count;
             end else begin
                 count_r <= count_next;

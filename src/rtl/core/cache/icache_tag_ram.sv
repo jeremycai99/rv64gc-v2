@@ -31,17 +31,27 @@ module icache_tag_ram
 
     // =========================================================================
     // Write / invalidate (synchronous)
-    // Reset clears valid bits so the cache behaves as empty on power-up;
-    // tag_arr is left uninitialized (only read when valid=1).
+    //
+    // ASIC-CORRECT RESET DISCIPLINE:
+    // valid_arr is L1I_SETS x L1I_WAYS = 512 flops; resetting them all on
+    // hardware reset exceeds the reset-net fanout budget of modern nodes.
+    // Boot-ROM firmware must issue a FENCE.I (invalidate_all pulse) to
+    // clear the cache at startup; this is the normal ISA mechanism and
+    // is already wired through the icache controller.  Simulation-only
+    // `initial` handles 4-state X-propagation without synthesis reset load.
     // =========================================================================
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (int s = 0; s < L1I_SETS; s++) begin
-                for (int w = 0; w < L1I_WAYS; w++) begin
-                    valid_arr[s][w] <= 1'b0;
-                end
+`ifdef SIMULATION
+    initial begin
+        for (int s = 0; s < L1I_SETS; s++) begin
+            for (int w = 0; w < L1I_WAYS; w++) begin
+                valid_arr[s][w] = 1'b0;
             end
-        end else if (invalidate_all) begin
+        end
+    end
+`endif
+
+    always_ff @(posedge clk) begin
+        if (invalidate_all) begin
             for (int s = 0; s < L1I_SETS; s++) begin
                 for (int w = 0; w < L1I_WAYS; w++) begin
                     valid_arr[s][w] <= 1'b0;
@@ -54,12 +64,15 @@ module icache_tag_ram
     end
 
     // =========================================================================
-    // Read (combinational / asynchronous for single-cycle cache hit)
+    // Read (synchronous, 1-cycle latency — SRAM-macro semantics).
+    // Address is latched at posedge clk; data appears at the next edge.
+    // No write-first bypass: the icache controller arbitrates writes
+    // (fill installs) with reads via invalidate_busy / install bubbles.
     // =========================================================================
-    always_comb begin
+    always_ff @(posedge clk) begin
         for (int w = 0; w < L1I_WAYS; w++) begin
-            valid_out[w]  = valid_arr[raddr][w];
-            tag_out[w]    = tag_arr  [raddr][w];
+            valid_out[w]  <= valid_arr[raddr][w];
+            tag_out[w]    <= tag_arr  [raddr][w];
         end
     end
 

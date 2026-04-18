@@ -43,18 +43,31 @@ module dcache_tag_ram
 
     // =========================================================================
     // Write / invalidate (synchronous)
-    // Reset clears valid and dirty bits so the cache behaves as empty on
-    // power-up; tag_arr is left uninitialized (only read when valid=1).
+    //
+    // ASIC-CORRECT RESET DISCIPLINE:
+    // valid_arr and dirty_arr are 256 sets x 4 ways = 1024 flops each.
+    // Clearing them on hardware reset blows the reset-net fanout budget
+    // (~20-30 at modern nodes).  In silicon these arrays come up in an
+    // undefined state; the dcache controller must not read them before
+    // they have been written via the normal invalidate_all path or a
+    // cache-line fill.  An invalidate_all pulse at boot is the intended
+    // mechanism (1 cycle at the boot ROM); the control logic already
+    // honours this.  We keep invalidate_all as the synthesizable clear
+    // path and isolate reset-time zeroing to simulation via `initial`.
     // =========================================================================
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (int s = 0; s < L1D_SETS; s++) begin
-                for (int w = 0; w < L1D_WAYS; w++) begin
-                    valid_arr[s][w] <= 1'b0;
-                    dirty_arr[s][w] <= 1'b0;
-                end
+`ifdef SIMULATION
+    initial begin
+        for (int s = 0; s < L1D_SETS; s++) begin
+            for (int w = 0; w < L1D_WAYS; w++) begin
+                valid_arr[s][w] = 1'b0;
+                dirty_arr[s][w] = 1'b0;
             end
-        end else if (invalidate_all) begin
+        end
+    end
+`endif
+
+    always_ff @(posedge clk) begin
+        if (invalidate_all) begin
             for (int s = 0; s < L1D_SETS; s++) begin
                 for (int w = 0; w < L1D_WAYS; w++) begin
                     valid_arr[s][w] <= 1'b0;

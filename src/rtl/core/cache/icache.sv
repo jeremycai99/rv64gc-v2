@@ -135,13 +135,11 @@ module icache
     endgenerate
 
     // =========================================================================
-    // Hit detection (combinational from stage-0 request address)
-    // With async tag/data RAMs, the tag outputs are for req_addr (stage-0).
-    // Hit comparison therefore uses req_addr tag, not s1 registered tag.
+    // Hit detection (combinational from registered stage-1 address).
+    // SRAMs are now sync-read: tr_valid_out / tr_tag_out / dr_rdata at cycle
+    // T+1 correspond to the address presented at cycle T (= s1_addr at T+1).
+    // Hit comparison therefore uses s1_tag (already declared above).
     // =========================================================================
-    logic [L1I_TAG_BITS-1:0] s0_tag;
-    assign s0_tag = req_addr[TAG_HI:TAG_LO];
-
     logic [L1I_WAYS-1:0] way_hit;
     logic                cache_hit;
     logic [1:0]          hit_way;
@@ -151,7 +149,7 @@ module icache
         cache_hit = 1'b0;
         hit_way   = 2'd0;
         for (int w = 0; w < L1I_WAYS; w++) begin
-            if (tr_valid_out[w] && (tr_tag_out[w] == s0_tag)) begin
+            if (tr_valid_out[w] && (tr_tag_out[w] == s1_tag)) begin
                 way_hit[w] = 1'b1;
                 cache_hit  = 1'b1;
                 hit_way    = 2'(w);
@@ -173,14 +171,11 @@ module icache
     // =========================================================================
     logic [2:0] plru_state [L1I_SETS];
 
-    // Victim way derived combinationally from PLRU state of current request set
-    logic [L1I_SET_BITS-1:0] s0_index;
-    assign s0_index = req_addr[INDEX_HI:INDEX_LO];
-
+    // Victim way derived from PLRU state of the set being processed at s1.
     logic [1:0] victim_way;
     logic [2:0] plru_victim_ps;
     always_comb begin
-        plru_victim_ps = plru_state[s0_index];
+        plru_victim_ps = plru_state[s1_index];
         if (!plru_victim_ps[2]) begin
             victim_way = plru_victim_ps[1] ? 2'd0 : 2'd1;
         end else begin
@@ -222,13 +217,14 @@ module icache
         end
     end
 
-    // Check if the current request already has an MSHR allocated
+    // Check if the s1-stage request already has an MSHR allocated.
+    // (Miss detection happens at s1 with sync-read SRAMs.)
     logic ic_mshr_addr_match;
     always_comb begin
         ic_mshr_addr_match = 1'b0;
         for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
             if (ic_mshr_valid[m] &&
-                ic_mshr_addr[m][63:LINE_BITS] == req_addr[63:LINE_BITS])
+                ic_mshr_addr[m][63:LINE_BITS] == s1_addr[63:LINE_BITS])
                 ic_mshr_addr_match = 1'b1;
         end
     end
@@ -332,11 +328,12 @@ module icache
                 ic_mshr_fill_done[m] <= 1'b0;
             end
         end else begin
-            // 1. Allocate: on miss, grab a free MSHR
-            if (req_valid && !cache_hit && !invalidate_all &&
+            // 1. Allocate: on miss at s1, grab a free MSHR.
+            //    Miss detection is at s1 (after the sync SRAM read).
+            if (s1_valid && !cache_hit && !invalidate_all &&
                 ic_mshr_free_avail && !ic_mshr_addr_match) begin
                 ic_mshr_valid[ic_mshr_free_idx]     <= 1'b1;
-                ic_mshr_addr[ic_mshr_free_idx]      <= req_addr;
+                ic_mshr_addr[ic_mshr_free_idx]      <= s1_addr;
                 ic_mshr_victim[ic_mshr_free_idx]    <= victim_way;
                 ic_mshr_req_sent[ic_mshr_free_idx]  <= 1'b0;
                 ic_mshr_fill_done[ic_mshr_free_idx] <= 1'b0;
@@ -383,12 +380,12 @@ module icache
             end
         end else if (invalidate_all) begin
             // No PLRU update during invalidation
-        end else if (req_valid && cache_hit) begin
+        end else if (s1_valid && cache_hit) begin
             case (hit_way)
-                2'd0: plru_state[s0_index] <= {1'b1, 1'b1, plru_state[s0_index][0]};
-                2'd1: plru_state[s0_index] <= {1'b1, 1'b0, plru_state[s0_index][0]};
-                2'd2: plru_state[s0_index] <= {1'b0, plru_state[s0_index][1], 1'b1};
-                2'd3: plru_state[s0_index] <= {1'b0, plru_state[s0_index][1], 1'b0};
+                2'd0: plru_state[s1_index] <= {1'b1, 1'b1, plru_state[s1_index][0]};
+                2'd1: plru_state[s1_index] <= {1'b1, 1'b0, plru_state[s1_index][0]};
+                2'd2: plru_state[s1_index] <= {1'b0, plru_state[s1_index][1], 1'b1};
+                2'd3: plru_state[s1_index] <= {1'b0, plru_state[s1_index][1], 1'b0};
                 default: ;
             endcase
         end else if (sc_install_valid || ic_mshr_install_avail) begin
@@ -420,26 +417,28 @@ module icache
     // Fill-forward from MSHR: when a fill response arrives this cycle AND
     // the current req_addr matches the MSHR being filled, forward the data
     // directly.  Also check MSHRs with fill_done (already received).
+    // MSHR fill-forward is evaluated against the s1-stage request (the one
+    // whose SRAM read just completed), not the incoming req_addr.
     logic mshr_fwd_valid;
     logic [511:0] mshr_fwd_data;
     always_comb begin
         mshr_fwd_valid = 1'b0;
         mshr_fwd_data  = '0;
-        // Check for just-arriving fill response matching current request
-        if (fill_resp_valid && req_valid) begin
+        // Just-arriving fill response matching the s1 request
+        if (fill_resp_valid && s1_valid) begin
             for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
                 if (ic_mshr_valid[m] && ic_mshr_req_sent[m] &&
-                    fill_resp_addr[63:LINE_BITS] == req_addr[63:LINE_BITS]) begin
+                    fill_resp_addr[63:LINE_BITS] == s1_addr[63:LINE_BITS]) begin
                     mshr_fwd_valid = 1'b1;
                     mshr_fwd_data  = fill_resp_data;
                 end
             end
         end
-        // Check for already-completed MSHR matching current request
-        if (!mshr_fwd_valid && req_valid) begin
+        // Already-completed MSHR matching the s1 request
+        if (!mshr_fwd_valid && s1_valid) begin
             for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
                 if (ic_mshr_valid[m] && ic_mshr_fill_done[m] &&
-                    ic_mshr_addr[m][63:LINE_BITS] == req_addr[63:LINE_BITS]) begin
+                    ic_mshr_addr[m][63:LINE_BITS] == s1_addr[63:LINE_BITS]) begin
                     mshr_fwd_valid = 1'b1;
                     mshr_fwd_data  = ic_mshr_fill_data[m];
                 end
@@ -452,7 +451,7 @@ module icache
         resp_hit   = 1'b0;
         resp_data  = '0;
 
-        if (req_valid && cache_hit && !invalidate_all) begin
+        if (s1_valid && cache_hit && !invalidate_all) begin
             resp_valid = 1'b1;
             resp_hit   = 1'b1;
             resp_data  = hit_data;
