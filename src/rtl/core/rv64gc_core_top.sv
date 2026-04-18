@@ -1957,12 +1957,102 @@ module rv64gc_core_top
         end
     end
 
+    // -----------------------------------------------------------------------
+    // A10..A16 — classification counters for CoreMark's ordering_violations.
+    // Monitoring-only (no DUT effect).  Distinguishes legitimate RAW hazards
+    // from artifacts (stale-executed, post-flush, burst retries) and
+    // measures how often the ROB watchdog converts a replay to a full_flush.
+    // -----------------------------------------------------------------------
+    integer sva_cnt_viol_any_flush;
+    integer sva_cnt_viol_post_flush;
+    integer sva_cnt_viol_burst;
+    integer sva_cnt_viol_same_rob;
+    integer sva_cnt_viol_then_mispred;
+    integer sva_cnt_watchdog_fire;
+    integer sva_cnt_watchdog_post_replay;
+
+    logic [4:0] sva_post_flush_cnt;
+    logic [4:0] sva_post_viol_cnt;
+    logic [7:0] sva_post_replay_cnt;
+    logic [ROB_IDX_BITS-1:0] sva_last_viol_rob_idx_r;
+    logic                    sva_last_viol_valid_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sva_cnt_viol_any_flush       <= 0;
+            sva_cnt_viol_post_flush      <= 0;
+            sva_cnt_viol_burst           <= 0;
+            sva_cnt_viol_same_rob        <= 0;
+            sva_cnt_viol_then_mispred    <= 0;
+            sva_cnt_watchdog_fire        <= 0;
+            sva_cnt_watchdog_post_replay <= 0;
+            sva_post_flush_cnt           <= 5'd31;
+            sva_post_viol_cnt            <= 5'd31;
+            sva_post_replay_cnt          <= 8'd255;
+            sva_last_viol_rob_idx_r      <= '0;
+            sva_last_viol_valid_r        <= 1'b0;
+        end else begin
+            if (flush_out.valid)
+                sva_post_flush_cnt <= 5'd0;
+            else if (sva_post_flush_cnt != 5'd31)
+                sva_post_flush_cnt <= sva_post_flush_cnt + 5'd1;
+
+            if (lsu_ordering_violation)
+                sva_post_viol_cnt <= 5'd0;
+            else if (sva_post_viol_cnt != 5'd31)
+                sva_post_viol_cnt <= sva_post_viol_cnt + 5'd1;
+
+            if (replay_valid)
+                sva_post_replay_cnt <= 8'd0;
+            else if (sva_post_replay_cnt != 8'd255)
+                sva_post_replay_cnt <= sva_post_replay_cnt + 8'd1;
+
+            if (lsu_ordering_violation) begin
+                if (flush_out.valid)
+                    sva_cnt_viol_any_flush <= sva_cnt_viol_any_flush + 1;
+                if (sva_post_flush_cnt < 5'd5)
+                    sva_cnt_viol_post_flush <= sva_cnt_viol_post_flush + 1;
+                if (sva_post_viol_cnt < 5'd5)
+                    sva_cnt_viol_burst <= sva_cnt_viol_burst + 1;
+                if (sva_last_viol_valid_r
+                    && (lsu_violation_rob_idx == sva_last_viol_rob_idx_r)
+                    && (sva_post_viol_cnt < 5'd20))
+                    sva_cnt_viol_same_rob <= sva_cnt_viol_same_rob + 1;
+                sva_last_viol_rob_idx_r <= lsu_violation_rob_idx;
+                sva_last_viol_valid_r   <= 1'b1;
+            end
+
+            if (flush_out.valid && !flush_out.full_flush && sva_post_viol_cnt < 5'd20)
+                sva_cnt_viol_then_mispred <= sva_cnt_viol_then_mispred + 1;
+
+            if (u_rob.rob_head_watchdog == 12'd62) begin
+                sva_cnt_watchdog_fire <= sva_cnt_watchdog_fire + 1;
+                if (sva_post_replay_cnt < 8'd100)
+                    sva_cnt_watchdog_post_replay <= sva_cnt_watchdog_post_replay + 1;
+            end
+        end
+    end
+
+    a_cover_viol_then_flush:
+        cover property (@(posedge clk) disable iff (!rst_n)
+                        lsu_ordering_violation |=> flush_out.valid);
+    a_cover_replay_then_flush:
+        cover property (@(posedge clk) disable iff (!rst_n)
+                        replay_valid |=> flush_out.valid);
+
     final begin
         $display("[SVA SUMMARY]");
         $display("  ordering_violations fired:        %0d", sva_cnt_ord_violation);
         $display("  replay_valid fired:               %0d", sva_cnt_replay_valid);
         $display("  violations gated by full_flush:   %0d", sva_cnt_violation_gated_by_flush);
         $display("  adjacent-cycle violations:        %0d", sva_cnt_adjacent_violations);
+        $display("  [A10] violations w/ flush in flight:   %0d", sva_cnt_viol_any_flush);
+        $display("  [A11] violations within 5 cyc of flush:%0d", sva_cnt_viol_post_flush);
+        $display("  [A12] violations in burst (<5 cyc):    %0d", sva_cnt_viol_burst);
+        $display("  [A13] same rob_idx repeated (<20 cyc): %0d", sva_cnt_viol_same_rob);
+        $display("  [A14] viol followed by mispred(<20cyc):%0d", sva_cnt_viol_then_mispred);
+        $display("  [A15] watchdog fires (force-exc 15):   %0d", sva_cnt_watchdog_fire);
+        $display("  [A16] watchdog fires post-replay(<100):%0d", sva_cnt_watchdog_post_replay);
     end
     // =========================================================================
     // End of partial-replay SVA
