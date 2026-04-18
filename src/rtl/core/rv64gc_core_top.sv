@@ -549,6 +549,8 @@ module rv64gc_core_top
         .sta_wb_rob_idx         (lsu_sta_wb_rob_idx_r),
         .ordering_violation_valid   (lsu_ordering_violation),
         .ordering_violation_rob_idx (lsu_violation_rob_idx),
+        .replay_valid               (replay_valid),
+        .replay_rob_idx_from        (replay_rob_idx_from),
         .head_idx               (rob_head_idx),
         .head_valid             (rob_head_valid),
         .head_ready             (rob_head_ready),

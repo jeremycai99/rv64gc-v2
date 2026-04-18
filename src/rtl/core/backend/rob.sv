@@ -51,11 +51,23 @@ module rob
     input  logic [ROB_IDX_BITS-1:0]           sta_wb_rob_idx,
 
     // Memory ordering violation: a younger load executed before an older
-    // store with overlapping bytes was visible.  Force the violating load
-    // to be marked ready + mispredicted so the commit unit replays it (and
-    // every younger entry) by flushing to its own PC.
+    // store with overlapping bytes was visible.  Under partial replay the
+    // exc_code=15 write is REMOVED (commit.found_replay would else force
+    // full_flush).  The LSU drives replay_valid on the same event; the
+    // replay handler below clears ready_r for the violating load and
+    // younger entries so they must re-execute before commit.  The
+    // watchdog path still writes exc_code=15 as a last-resort escape.
     input  logic                              ordering_violation_valid,
     input  logic [ROB_IDX_BITS-1:0]           ordering_violation_rob_idx,
+
+    // Partial-replay bus (doc/partial_replay_spec.md).  replay_valid
+    // pulses for 1 cycle; replay_rob_idx_from marks the first ROB entry
+    // that must be re-executed.  Every valid entry in
+    // [replay_rob_idx_from, tail_r) has its ready_r cleared; any
+    // exc_code=15 residue from the legacy path is cleared too so commit
+    // does not fire found_replay.
+    input  logic                              replay_valid,
+    input  logic [ROB_IDX_BITS-1:0]           replay_rob_idx_from,
 
     // Commit: read head entries for commit unit
     output logic [ROB_IDX_BITS-1:0]           head_idx,
@@ -411,10 +423,24 @@ module rob
                 ready_r[sta_wb_rob_idx] <= 1'b1;
 
             // Ordering violation: see comment in normal-path block below.
-            if (ordering_violation_valid) begin
-                ready_r[ordering_violation_rob_idx]             <= 1'b1;
-                has_exc_r[ordering_violation_rob_idx]           <= 1'b1;
-                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+            // Legacy exc_code=15 write REMOVED — replay_valid handler
+            // below is now the primary path.
+
+            // Partial-replay handler (partial-flush cycle).
+            if (replay_valid) begin
+                automatic logic [ROB_IDX_BITS-1:0] td;
+                td = tail_r - replay_rob_idx_from;
+                for (int j = 0; j < ROB_DEPTH; j++) begin
+                    automatic logic [ROB_IDX_BITS-1:0] rd;
+                    rd = 8'(j) - replay_rob_idx_from;
+                    if (valid_r[j] && (rd < td)) begin
+                        ready_r[j] <= 1'b0;
+                        if (exc_code_packed[j*4 +: 4] == 4'd15) begin
+                            has_exc_r[j]              <= 1'b0;
+                            exc_code_packed[j*4 +: 4] <= 4'd0;
+                        end
+                    end
+                end
             end
         end else begin
             // Normal operation
@@ -480,15 +506,25 @@ module rob
             if (sta_wb_valid)
                 ready_r[sta_wb_rob_idx] <= 1'b1;
 
-            // Ordering violation: mark the violating load as ready, flag it
-            // with the EXC_LOAD_REPLAY (4'd15) special exception code so the
-            // commit unit can recognise it and redirect to the load's own
-            // PC without committing the load (its data is wrong; it must
-            // re-execute against the now-visible store).
-            if (ordering_violation_valid) begin
-                ready_r[ordering_violation_rob_idx]             <= 1'b1;
-                has_exc_r[ordering_violation_rob_idx]           <= 1'b1;
-                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+            // Ordering violation: legacy exc_code=15 write REMOVED under
+            // partial replay.  replay_valid (registered 1 cyc from
+            // lsu_ordering_violation) drives the replay handler below.
+
+            // Partial-replay handler (normal-path cycle).
+            if (replay_valid) begin
+                automatic logic [ROB_IDX_BITS-1:0] td;
+                td = tail_r - replay_rob_idx_from;
+                for (int j = 0; j < ROB_DEPTH; j++) begin
+                    automatic logic [ROB_IDX_BITS-1:0] rd;
+                    rd = 8'(j) - replay_rob_idx_from;
+                    if (valid_r[j] && (rd < td)) begin
+                        ready_r[j] <= 1'b0;
+                        if (exc_code_packed[j*4 +: 4] == 4'd15) begin
+                            has_exc_r[j]              <= 1'b0;
+                            exc_code_packed[j*4 +: 4] <= 4'd0;
+                        end
+                    end
+                end
             end
 
             // ROB head watchdog: counts cycles the head has been valid
