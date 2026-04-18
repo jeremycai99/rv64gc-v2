@@ -4,3 +4,31 @@ obj_dir/
 *.hex
 *.vcd
 *.stackdump
+
+# DSim simulator artefacts
+dsim_work/
+dsim_image/
+dsim.env
+dsim*.log
+dsim*.jou
+metrics.db
+*.mxd
+
+# xsim simulator artefacts
+xsim.dir/
+xsim*.jou
+xsim*.log
+xsim*.backup.*
+xsim_*.tcl
+xelab.log
+xelab.pb
+xvlog.log
+xvlog.pb
+tb_*.wdb
+
+# cocotb + Python venv
+venv_cocotb/
+verif/**/sim_build/
+verif/**/results.xml
+**/__pycache__/
+*.pyc
