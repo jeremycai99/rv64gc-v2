@@ -1707,6 +1707,230 @@ module rv64gc_core_top
         end
     end
 
+`ifdef SIMULATION
+    // =========================================================================
+    // SVA — Partial-replay mechanism (observational + safety invariants)
+    //
+    // Guarded by +ifdef SIMULATION so synthesis never sees these.  They
+    // verify the Phase-2 plumbing today and will flag Phase-3 handler bugs
+    // instantly (fail at the exact cycle + signal) once handlers are added.
+    //
+    // Note: xsim 2024.1 does not support SV `cover property`.  Instead of
+    // cover statements we use lightweight counter flops that tally each
+    // interesting event; a final $display at simulation end reports them.
+    // Note: xsim action blocks do not infer the property's clocking for
+    // $past, so the assertion properties carry their own auxiliary
+    // signals (captured via pipelined flops) which are safe to read from
+    // $error without needing $past.
+    // =========================================================================
+
+    // Pipelined 1-cycle-delayed copies of violation signals, used in A1/A2/A4.
+    logic                    sva_prev_violation;
+    logic [ROB_IDX_BITS-1:0] sva_prev_viol_rob;
+    logic                    sva_prev_flush_full;
+    logic                    sva_prev_ren0_rdvalid;
+    logic [PHYS_REG_BITS-1:0] sva_prev_ren0_pdst;
+    logic [ROB_IDX_BITS-1:0] sva_prev_ren0_robidx;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sva_prev_violation    <= 1'b0;
+            sva_prev_viol_rob     <= '0;
+            sva_prev_flush_full   <= 1'b0;
+            sva_prev_ren0_rdvalid <= 1'b0;
+            sva_prev_ren0_pdst    <= '0;
+            sva_prev_ren0_robidx  <= '0;
+        end else begin
+            sva_prev_violation    <= lsu_ordering_violation;
+            sva_prev_viol_rob     <= lsu_violation_rob_idx;
+            sva_prev_flush_full   <= flush_out.valid && flush_out.full_flush;
+            sva_prev_ren0_rdvalid <= (ren_count_w != 0) &&
+                                      ren_insn[0].base.rd_valid &&
+                                      (ren_insn[0].pdst != '0);
+            sva_prev_ren0_pdst    <= ren_insn[0].pdst;
+            sva_prev_ren0_robidx  <= ren_insn[0].rob_idx;
+        end
+    end
+
+    // Cycle counter for $error location messages.
+    integer sva_cycle;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) sva_cycle <= 0;
+        else        sva_cycle <= sva_cycle + 1;
+    end
+
+    // A1 — PLUMBING: replay_valid must be a registered copy of the gated
+    //                lsu_ordering_violation signal from the previous cycle.
+    //                If the gate (!full_flush) is open in cycle N, then
+    //                replay_valid must be high in cycle N+1.
+    property p_replay_valid_registered_from_violation;
+        @(posedge clk) disable iff (!rst_n)
+        (lsu_ordering_violation && !(flush_out.valid && flush_out.full_flush))
+            |=> replay_valid;
+    endproperty
+    a_replay_valid_registered_from_violation:
+        assert property (p_replay_valid_registered_from_violation)
+        else $error("[SVA A1] cyc=%0d replay_valid did NOT follow ordering_violation (prev_viol_rob=%0d)",
+                    sva_cycle, sva_prev_viol_rob);
+
+    // A2 — PLUMBING: replay_rob_idx_from must latch the violation rob_idx.
+    property p_replay_rob_idx_follows_violation;
+        @(posedge clk) disable iff (!rst_n)
+        (lsu_ordering_violation && !(flush_out.valid && flush_out.full_flush))
+            |=> (replay_rob_idx_from == sva_prev_viol_rob);
+    endproperty
+    a_replay_rob_idx_follows_violation:
+        assert property (p_replay_rob_idx_follows_violation)
+        else $error("[SVA A2] cyc=%0d replay_rob_idx_from mismatch got=%0d expected=%0d",
+                    sva_cycle, replay_rob_idx_from, sva_prev_viol_rob);
+
+    // A4 — METADATA: whenever rename produces an advancing rd_valid slot
+    //                with a non-zero pdst, pdst_producer_rob[pdst] must hold
+    //                that rob_idx on the following cycle.
+    property p_pdst_producer_rob_tracks_rename;
+        @(posedge clk) disable iff (!rst_n)
+        ((ren_count_w != 0) &&
+         ren_insn[0].base.rd_valid &&
+         (ren_insn[0].pdst != '0) &&
+         !(flush_out.valid && flush_out.full_flush))
+            |=> (pdst_producer_rob[sva_prev_ren0_pdst] == sva_prev_ren0_robidx);
+    endproperty
+    a_pdst_producer_rob_tracks_rename_slot0:
+        assert property (p_pdst_producer_rob_tracks_rename)
+        else $error("[SVA A4] cyc=%0d pdst_producer_rob[%0d] mismatch got=%0d expected=%0d",
+                    sva_cycle, sva_prev_ren0_pdst,
+                    pdst_producer_rob[sva_prev_ren0_pdst],
+                    sva_prev_ren0_robidx);
+
+    // A5 — CORRECTNESS: replay_rob_idx_from should always point at a
+    //                   currently-valid ROB entry (otherwise the replay
+    //                   range is meaningless).  Fires only on replay_valid.
+    property p_replay_target_is_valid_rob_entry;
+        @(posedge clk) disable iff (!rst_n)
+        replay_valid |-> u_rob.valid_r[replay_rob_idx_from];
+    endproperty
+    a_replay_target_is_valid_rob_entry:
+        assert property (p_replay_target_is_valid_rob_entry)
+        else $error("[SVA A5] cyc=%0d replay target rob=%0d is not a valid ROB entry",
+                    sva_cycle, replay_rob_idx_from);
+
+    // A6 — PHASE-3 CORRECTNESS: on replay_valid, NO instruction whose
+    //                            rob_idx is in the replay range may commit
+    //                            in that cycle.  If any slot_can_commit
+    //                            hits the replay range while replay_valid
+    //                            pulses, the partial-replay handler has
+    //                            let a wrong-data load through.
+    // Helper function: is commit_slot s's rob_idx in the replay range?
+    // Range: [replay_rob_idx_from, u_rob.tail_r) in wrap-safe modular order.
+    function automatic logic rob_in_replay_range
+        (input logic [ROB_IDX_BITS-1:0] idx,
+         input logic [ROB_IDX_BITS-1:0] from,
+         input logic [ROB_IDX_BITS-1:0] tail);
+        logic [ROB_IDX_BITS-1:0] rd, td;
+        rd = idx  - from;
+        td = tail - from;
+        return (rd < td);
+    endfunction
+
+    // Per-slot commit-in-replay-range probe.
+    logic [PIPE_WIDTH-1:0] sva_commit_in_replay;
+    always_comb begin
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            sva_commit_in_replay[i] =
+                replay_valid
+                && commit_out[i].valid
+                && rob_in_replay_range(
+                     {{(ROB_IDX_BITS-3){1'b0}}, 3'(i)} + u_rob.head_r,
+                     replay_rob_idx_from, u_rob.tail_r);
+        end
+    end
+
+    property p_no_commit_in_replay_range;
+        @(posedge clk) disable iff (!rst_n)
+        replay_valid |-> (sva_commit_in_replay == '0);
+    endproperty
+    a_no_commit_in_replay_range:
+        assert property (p_no_commit_in_replay_range)
+        else $error("[SVA A6] cyc=%0d commit tried to retire rob in replay range: mask=%b replay_from=%0d head=%0d tail=%0d",
+                    sva_cycle, sva_commit_in_replay, replay_rob_idx_from,
+                    u_rob.head_r, u_rob.tail_r);
+
+    // A7 — PHASE-3 PROGRESS: after a replay_valid pulse, the ROB head
+    //                         must either advance (commits happen) or a
+    //                         full_flush fires, within REPLAY_DEADLOCK_CYC
+    //                         cycles.  If neither happens, the replay
+    //                         mechanism deadlocked the pipeline.
+    localparam int REPLAY_DEADLOCK_CYC = 256;
+    integer sva_replay_stuck_cnt;
+    logic [ROB_IDX_BITS-1:0] sva_head_at_replay;
+    logic sva_replay_armed;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sva_replay_stuck_cnt <= 0;
+            sva_head_at_replay   <= '0;
+            sva_replay_armed     <= 1'b0;
+        end else if (replay_valid && !sva_replay_armed) begin
+            // Arm the deadlock watchdog on the first replay.
+            sva_replay_stuck_cnt <= 0;
+            sva_head_at_replay   <= u_rob.head_r;
+            sva_replay_armed     <= 1'b1;
+        end else if (sva_replay_armed) begin
+            if (flush_out.valid && flush_out.full_flush) begin
+                // full_flush counts as "progress"; re-arm on next replay.
+                sva_replay_armed <= 1'b0;
+            end else if (u_rob.head_r != sva_head_at_replay) begin
+                // Head advanced; good, disarm.
+                sva_replay_armed <= 1'b0;
+            end else begin
+                sva_replay_stuck_cnt <= sva_replay_stuck_cnt + 1;
+            end
+        end
+    end
+    a_replay_progress_bound:
+        assert property (
+            @(posedge clk) disable iff (!rst_n)
+            (sva_replay_armed |-> (sva_replay_stuck_cnt < REPLAY_DEADLOCK_CYC))
+        ) else $error("[SVA A7] cyc=%0d replay stuck %0d cycles without commit or flush (head stayed at %0d)",
+                      sva_cycle, sva_replay_stuck_cnt, sva_head_at_replay);
+
+    // -- Event counters (substitute for unsupported cover property) --
+    integer sva_cnt_ord_violation;
+    integer sva_cnt_replay_valid;
+    integer sva_cnt_violation_gated_by_flush;
+    integer sva_cnt_adjacent_violations;
+    logic   sva_violation_prev_r;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sva_cnt_ord_violation           <= 0;
+            sva_cnt_replay_valid            <= 0;
+            sva_cnt_violation_gated_by_flush <= 0;
+            sva_cnt_adjacent_violations     <= 0;
+            sva_violation_prev_r            <= 1'b0;
+        end else begin
+            if (lsu_ordering_violation) begin
+                sva_cnt_ord_violation <= sva_cnt_ord_violation + 1;
+                if (flush_out.valid && flush_out.full_flush)
+                    sva_cnt_violation_gated_by_flush <= sva_cnt_violation_gated_by_flush + 1;
+                if (sva_violation_prev_r)
+                    sva_cnt_adjacent_violations <= sva_cnt_adjacent_violations + 1;
+            end
+            if (replay_valid)
+                sva_cnt_replay_valid <= sva_cnt_replay_valid + 1;
+            sva_violation_prev_r <= lsu_ordering_violation;
+        end
+    end
+
+    final begin
+        $display("[SVA SUMMARY]");
+        $display("  ordering_violations fired:        %0d", sva_cnt_ord_violation);
+        $display("  replay_valid fired:               %0d", sva_cnt_replay_valid);
+        $display("  violations gated by full_flush:   %0d", sva_cnt_violation_gated_by_flush);
+        $display("  adjacent-cycle violations:        %0d", sva_cnt_adjacent_violations);
+    end
+    // =========================================================================
+    // End of partial-replay SVA
+    // =========================================================================
+`endif
+
     // LQ/SQ alloc counts from rename
     logic [2:0] lq_alloc_count;
     logic [2:0] sq_alloc_count;
