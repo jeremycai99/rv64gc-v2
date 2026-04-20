@@ -373,6 +373,35 @@ module rv64gc_core_top
     // Rename buffer: parallel to ROB, stores pdst/old_pdst/rd_arch
     // =========================================================================
     rename_buf_entry_t rename_buf [0:ROB_DEPTH-1];
+
+    // Checkpoint storage parallel to ROB (declarations hoisted from later
+    // so the ifdef SIMULATION init block below can reach them)
+    logic                       rob_uses_checkpoint [0:ROB_DEPTH-1];
+    logic [CHECKPOINT_BITS-1:0] rob_checkpoint_id   [0:ROB_DEPTH-1];
+
+`ifdef SIMULATION
+    // Zero-initialize these unpacked arrays at t=0.  The commit-read
+    // combinational block below indexes rename_buf / rob_*_checkpoint*
+    // with (rob_head_idx + i) mod ROB_DEPTH.  rob_head_idx is a reset-
+    // initialized flop, but at Time 0 Iteration 0 — before the first
+    // negedge rst_n has propagated — it is still X in a 4-state
+    // simulator like xsim.  An X index into an unpacked array is
+    // out-of-range, and xsim treats that as a FATAL kernel error.
+    // DSim silently returns X for the same read.  Initializing the
+    // data array so every element is 0 means any X-indexed read at
+    // t=0 still returns 0 and combinational evaluation converges.
+    // See doc/xsim_lessons_learned.md for the general rule (array
+    // control flops get reset; wide data arrays get ifdef-SIM zero
+    // init to avoid X propagation without loading the synthesis
+    // reset net).
+    initial begin
+        for (int i = 0; i < ROB_DEPTH; i++) begin
+            rename_buf[i]          = '{default: '0};
+            rob_uses_checkpoint[i] = 1'b0;
+            rob_checkpoint_id[i]   = '0;
+        end
+    end
+`endif
     logic [2:0] ren_count_raw;
     // Suppress rename output on a commit-driven flush so stale pre-flush
     // instructions cannot enter the ROB, DQ, or ready table.
@@ -393,9 +422,9 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]    rb_head_uses_checkpoint;
     logic [CHECKPOINT_BITS-1:0] rb_head_checkpoint_id [0:PIPE_WIDTH-1];
 
-    // Checkpoint storage parallel to ROB
-    logic                       rob_uses_checkpoint [0:ROB_DEPTH-1];
-    logic [CHECKPOINT_BITS-1:0] rob_checkpoint_id   [0:ROB_DEPTH-1];
+    // Checkpoint storage parallel to ROB — declarations hoisted above
+    // alongside rename_buf so the ifdef SIMULATION init block can reach
+    // them.
 
     // Read at head for commit
     always_comb begin

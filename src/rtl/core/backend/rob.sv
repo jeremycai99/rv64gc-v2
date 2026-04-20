@@ -119,10 +119,16 @@ module rob
 
     // =========================================================================
     // Head and tail pointers, entry count
+    //
+    // Declaration-site init to 0 so xsim (4-state) does not read these as
+    // X at Time 0 Iteration 0.  Core top reads head_r via hierarchical
+    // port and indexes unpacked arrays with it combinationally; an X
+    // index is FATAL in xsim.  The reset path below still drives '0 on
+    // rst_n deassertion, so synthesis sees only the reset-write path.
     // =========================================================================
-    reg [7:0] head_r;
-    reg [7:0] tail_r;
-    reg [7:0] count_r;
+    reg [7:0] head_r  = 8'd0;
+    reg [7:0] tail_r  = 8'd0;
+    reg [7:0] count_r = 8'd0;
 
     assign head_idx = head_r;
     assign tail_idx = tail_r;
