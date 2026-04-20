@@ -20,7 +20,8 @@ module bru
     input  logic        is_rvc,        // compressed instruction (PC+2 for link)
     output logic [63:0] result,        // link address (PC+4 for JAL/JALR, unused for branches)
     output logic        taken,         // actual branch outcome
-    output logic [63:0] target,        // actual branch target
+    output logic [63:0] target,        // actual redirect target
+    output logic [63:0] taken_target,  // static taken target (pc+imm / jalr dest)
     output logic        mispredict     // taken != bp_taken || target != bp_target
 );
 
@@ -88,6 +89,8 @@ module bru
             default: branch_target = pc + imm;
         endcase
     end
+
+    assign taken_target = branch_target;
 
     assign fallthrough = pc + (is_rvc ? 64'd2 : 64'd4);
 

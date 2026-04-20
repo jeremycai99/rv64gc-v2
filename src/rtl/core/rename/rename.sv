@@ -187,6 +187,8 @@ module rename
     // no-advance orphans that leak pregs into the free pool and deplete it.
     logic [PIPE_WIDTH-1:0] slot_can_advance_sp;
     logic [2:0] sp_ckpt_consumed_before [0:PIPE_WIDTH];
+    logic       in_order_open_sp [0:PIPE_WIDTH];
+    logic       in_order_open    [0:PIPE_WIDTH];
 
     // =========================================================================
     // Work slot compaction indices: map held/decode insns to work positions
@@ -385,6 +387,7 @@ module rename
     // =========================================================================
     always_comb begin
         sp_ckpt_consumed_before[0] = 1'b0;
+        in_order_open_sp[0]        = 1'b1;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             slot_can_advance_sp[i] = 1'b0;
             has_lq[i]   = 1'b1;
@@ -401,11 +404,16 @@ module rename
                 end
                 has_rob[i] = rob_alloc_ready;
                 has_dq[i]  = !dq_full;
-                slot_can_advance_sp[i] = has_lq[i] && has_sq[i] &&
+                slot_can_advance_sp[i] = in_order_open_sp[i] &&
+                                         has_lq[i] && has_sq[i] &&
                                          has_ckpt[i] && has_rob[i] && has_dq[i];
             end
 
             sp_ckpt_consumed_before[i+1] = sp_ckpt_consumed_before[i];
+            in_order_open_sp[i+1]        = in_order_open_sp[i];
+            if (work_valid[i] && !slot_can_advance_sp[i]) begin
+                in_order_open_sp[i+1] = 1'b0;
+            end
             if (slot_can_advance_sp[i] && slot_needs_ckpt[i]) begin
                 sp_ckpt_consumed_before[i+1] = 1'b1;
             end
@@ -458,6 +466,7 @@ module rename
         preg_consumed_before[0] = '0;
         rob_consumed_before[0]  = '0;
         ckpt_consumed_before[0] = 1'b0;
+        in_order_open[0]        = 1'b1;
 
         found_ckpt_branch = 1'b0;
         ckpt_branch_slot  = '0;
@@ -468,11 +477,18 @@ module rename
                 has_preg[i] = (fl_slot_idx[i] < fl_avail_count);
             end
 
-            slot_can_advance[i] = slot_can_advance_sp[i] && has_preg[i];
+            slot_can_advance[i] = slot_can_advance_sp[i] &&
+                                  in_order_open[i] &&
+                                  has_preg[i];
 
             preg_consumed_before[i+1] = preg_consumed_before[i];
             rob_consumed_before[i+1]  = rob_consumed_before[i];
             ckpt_consumed_before[i+1] = ckpt_consumed_before[i];
+            in_order_open[i+1]        = in_order_open[i];
+
+            if (work_valid[i] && !slot_can_advance[i]) begin
+                in_order_open[i+1] = 1'b0;
+            end
 
             if (slot_can_advance[i]) begin
                 if (slot_needs_preg[i]) begin
@@ -728,7 +744,7 @@ module rename
             // Clear all slots first
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 hold_valid[i] <= 1'b0;
-                hold_insn[i]  <= '0;
+                hold_insn_flat[i] <= '0;
             end
             // Pack non-advanced work slots into bottom of holding register
             for (int i = 0; i < PIPE_WIDTH; i++) begin

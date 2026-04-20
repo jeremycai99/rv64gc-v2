@@ -37,6 +37,7 @@ module load_queue
     input logic [63:0] st_addr,
     input logic [1:0] st_size,
     input logic [ROB_IDX_BITS-1:0] st_rob_idx,
+    input logic [ROB_IDX_BITS-1:0] rob_head,
     output logic ordering_violation,
     output logic [ROB_IDX_BITS-1:0] violation_rob_idx,
 
@@ -93,90 +94,116 @@ module load_queue
     //   2. Its address overlaps the incoming store address.
     //   3. Its ROB index is younger than the store's ROB index.
     //
-    // Younger-than in circular ROB space: distance = (ld_rob - st_rob) mod ROB_DEPTH.
-    // If 0 < distance < ROB_DEPTH/2, the load is younger.
+    localparam int ROB_AGE_BITS = ROB_IDX_BITS + 1;
 
-    localparam int ROB_HALF = ROB_DEPTH / 2;
-
-    logic [LQ_DEPTH-1:0]  viol_mask;
-    logic [7:0]           ld_bmask [0:LQ_DEPTH-1];
-
-    genvar vi;
-    generate
-        for (vi = 0; vi < LQ_DEPTH; vi++) begin : gen_viol
-            logic [2:0] ld_off;
-            assign ld_off = queue[vi].addr[2:0];
-
-            always_comb begin
-                case (queue[vi].size)
-                    2'd0:    ld_bmask[vi] = 8'h01 << ld_off;
-                    2'd1:    ld_bmask[vi] = 8'h03 << ld_off;
-                    2'd2:    ld_bmask[vi] = 8'h0F << ld_off;
-                    default: ld_bmask[vi] = 8'hFF;
-                endcase
-            end
-
-            logic addr_overlap;
-            assign addr_overlap = (queue[vi].addr[63:3] == st_addr[63:3])
-                                & ((ld_bmask[vi] & st_bmask) != 8'h00);
-
-            logic [ROB_IDX_BITS-1:0] rob_dist;
-            assign rob_dist = queue[vi].rob_idx - st_rob_idx;
-
-            logic is_younger;
-            assign is_younger = (rob_dist != '0) & (rob_dist < ROB_IDX_BITS'(ROB_HALF));
-
-            assign viol_mask[vi] = st_addr_valid
-                                 & queue[vi].valid
-                                 & queue[vi].executed
-                                 & addr_overlap
-                                 & is_younger;
-        end
-    endgenerate
-
-    // =========================================================================
-    // Violation reduction: pick youngest violating load
-    // =========================================================================
-    // We want the entry with the largest (queue[v].rob_idx - st_rob_idx) mod ROB_DEPTH
-    // among all entries where viol_mask[v] is set.
-    // Use per-entry rob_dist from gen_viol and reduce in always_comb without
-    // declaring variables inside conditional branches (avoids latch inference).
-
-    logic [ROB_IDX_BITS-1:0] viol_rob_dist [0:LQ_DEPTH-1];
-    logic [ROB_IDX_BITS-1:0] viol_rob_idx_arr [0:LQ_DEPTH-1];
-
-    genvar ri;
-    generate
-        for (ri = 0; ri < LQ_DEPTH; ri++) begin : gen_viol_rob
-            assign viol_rob_dist[ri]    = queue[ri].rob_idx - st_rob_idx;
-            assign viol_rob_idx_arr[ri] = queue[ri].rob_idx;
-        end
-    endgenerate
-
-    logic                    any_viol;
-    logic [ROB_IDX_BITS-1:0] best_rob_idx;
-    logic [ROB_IDX_BITS-1:0] best_dist;
+    logic [LQ_DEPTH-1:0]        viol_mask;
+    logic [7:0]                 ld_bmask [0:LQ_DEPTH-1];
+    logic [ROB_AGE_BITS-1:0]    st_age;
+    logic [ROB_AGE_BITS-1:0]    viol_rob_age [0:LQ_DEPTH-1];
+    logic [ROB_IDX_BITS-1:0]    viol_rob_idx_arr [0:LQ_DEPTH-1];
+    logic                       any_viol;
+    logic [ROB_IDX_BITS-1:0]    best_rob_idx;
+    logic [ROB_AGE_BITS-1:0]    best_age;
 
     always_comb begin
-        logic update_best;
+        logic [2:0] ld_off;
+        logic [ROB_AGE_BITS-1:0] ld_age;
+        logic addr_overlap;
+        logic is_younger;
+
+        if (st_rob_idx >= rob_head)
+            st_age = {1'b0, st_rob_idx} - {1'b0, rob_head};
+        else
+            st_age = ROB_DEPTH[ROB_AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, st_rob_idx};
+
+        viol_mask    = '0;
         any_viol     = 1'b0;
         best_rob_idx = '0;
-        best_dist    = '0;
-        update_best  = 1'b0;
+        best_age     = '0;
+
         for (int v = 0; v < LQ_DEPTH; v++) begin
-            // Pick the youngest (largest rob_dist) violating load.  Use ">=" so
-            // the first violating entry overrides the initial best_dist=0.
-            any_viol    = any_viol | viol_mask[v];
-            update_best = viol_mask[v] & (viol_rob_dist[v] >= best_dist);
-            if (update_best) begin
-                best_dist    = viol_rob_dist[v];
-                best_rob_idx = viol_rob_idx_arr[v];
+            ld_off = queue[v].addr[2:0];
+            case (queue[v].size)
+                2'd0:    ld_bmask[v] = 8'h01 << ld_off;
+                2'd1:    ld_bmask[v] = 8'h03 << ld_off;
+                2'd2:    ld_bmask[v] = 8'h0F << ld_off;
+                default: ld_bmask[v] = 8'hFF;
+            endcase
+
+            if (queue[v].rob_idx >= rob_head)
+                ld_age = {1'b0, queue[v].rob_idx} - {1'b0, rob_head};
+            else
+                ld_age = ROB_DEPTH[ROB_AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, queue[v].rob_idx};
+
+            viol_rob_age[v]     = ld_age;
+            viol_rob_idx_arr[v] = queue[v].rob_idx;
+
+            addr_overlap = (queue[v].addr[63:3] == st_addr[63:3]) &&
+                           ((ld_bmask[v] & st_bmask) != 8'h00);
+            is_younger = (ld_age > st_age);
+
+            if (st_addr_valid &&
+                queue[v].valid &&
+                queue[v].executed &&
+                addr_overlap &&
+                is_younger) begin
+                viol_mask[v] = 1'b1;
+                if (!any_viol || (ld_age < best_age)) begin
+                    best_age     = ld_age;
+                    best_rob_idx = queue[v].rob_idx;
+                end
+                any_viol = 1'b1;
             end
         end
     end
 
     assign ordering_violation = any_viol;
     assign violation_rob_idx  = best_rob_idx;
+
+`ifndef SYNTHESIS
+    logic trace_ordv_int_en;
+    initial begin
+        trace_ordv_int_en = 1'b0;
+        if ($test$plusargs("TRACE_ORDV_INT"))
+            trace_ordv_int_en = 1'b1;
+    end
+
+    always_ff @(posedge clk) begin
+        if (trace_ordv_int_en && ordering_violation) begin
+            logic selected_match;
+            selected_match = 1'b0;
+            $display("[LQ_ORDV] head=%0d st_rob=%0d st_age=%0d viol_rob=%0d st_addr=%016h st_bmask=%02h",
+                rob_head, st_rob_idx, st_age, violation_rob_idx, st_addr, st_bmask);
+            for (int d = 0; d < LQ_DEPTH; d++) begin
+                if (queue[d].valid && queue[d].executed &&
+                    (queue[d].addr[63:3] == st_addr[63:3])) begin
+                    logic [ROB_AGE_BITS-1:0] dbg_manual_age;
+                    if (queue[d].rob_idx >= rob_head)
+                        dbg_manual_age = {1'b0, queue[d].rob_idx} - {1'b0, rob_head};
+                    else
+                        dbg_manual_age = ROB_DEPTH[ROB_AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, queue[d].rob_idx};
+                    $display("[LQ_ORDV_ENT] idx=%0d rob=%0d addr=%016h ld_age=%0d manual_age=%0d overlap=%02h younger=%b manual_younger=%b viol=%b has_result=%b",
+                        d,
+                        queue[d].rob_idx,
+                        queue[d].addr,
+                        viol_rob_age[d],
+                        dbg_manual_age,
+                        (ld_bmask[d] & st_bmask),
+                        (viol_rob_age[d] > st_age),
+                        (dbg_manual_age > st_age),
+                        viol_mask[d],
+                        queue[d].has_result);
+                end
+                if (viol_mask[d] && (queue[d].rob_idx == violation_rob_idx))
+                    selected_match = 1'b1;
+            end
+            if (!selected_match) begin
+                $display("[LQ_ORDV_SEL_MISMATCH] viol_rob=%0d had no matching viol_mask entry",
+                    violation_rob_idx);
+            end
+        end
+    end
+`endif
 
     // =========================================================================
     // Sequential logic

@@ -325,8 +325,12 @@ module dispatch_queue
     always_comb begin : deq_output_comb
         int mem_slot;
 
-        // Use accepted_int_count (which stops at the first unroutable entry)
-        deq_count = accepted_int_count + actual_deq_mem;
+        // Suppress dequeue on the flush cycle; otherwise stale pre-flush
+        // entries can enter the IQs after the ROB metadata has been reset.
+        if (flush_valid)
+            deq_count = 3'd0;
+        else
+            deq_count = accepted_int_count + actual_deq_mem;
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             deq_data[i]      = '0;

@@ -39,6 +39,7 @@ module rob
     input  logic [CDB_WIDTH-1:0]              wb_is_branch,
     input  logic [CDB_WIDTH-1:0]              wb_branch_taken,
     input  logic [63:0]                       wb_branch_target [0:CDB_WIDTH-1],
+    input  logic [63:0]                       wb_branch_taken_target [0:CDB_WIDTH-1],
     input  logic [CDB_WIDTH-1:0]              wb_branch_mispredict,
     // CSR writeback fields
     input  logic [CDB_WIDTH-1:0]              wb_csr_we,
@@ -49,23 +50,23 @@ module rob
     // STA sideband writeback (marks store ROB entry as ready, no data)
     input  logic                              sta_wb_valid,
     input  logic [ROB_IDX_BITS-1:0]           sta_wb_rob_idx,
+    input  logic                              std_wb_valid,
+    input  logic [ROB_IDX_BITS-1:0]           std_wb_rob_idx,
 
     // Memory ordering violation: a younger load executed before an older
-    // store with overlapping bytes was visible.  Under partial replay the
-    // exc_code=15 write is REMOVED (commit.found_replay would else force
-    // full_flush).  The LSU drives replay_valid on the same event; the
-    // replay handler below clears ready_r for the violating load and
-    // younger entries so they must re-execute before commit.  The
-    // watchdog path still writes exc_code=15 as a last-resort escape.
+    // store with overlapping bytes was visible.  Mark the violating load
+    // ready with the special replay exception (exc_code=15) so commit
+    // flushes to the load's own PC and re-executes it against the
+    // now-visible store.  replay_valid stays on the port list for the
+    // future partial-replay design, but is intentionally unused here.
     input  logic                              ordering_violation_valid,
     input  logic [ROB_IDX_BITS-1:0]           ordering_violation_rob_idx,
 
-    // Partial-replay bus (doc/partial_replay_spec.md).  replay_valid
-    // pulses for 1 cycle; replay_rob_idx_from marks the first ROB entry
-    // that must be re-executed.  Every valid entry in
-    // [replay_rob_idx_from, tail_r) has its ready_r cleared; any
-    // exc_code=15 residue from the legacy path is cleared too so commit
-    // does not fire found_replay.
+    // Partial-replay bus reserved for the future Phase-3 design
+    // (doc/partial_replay_spec.md).  The ports remain in place so the
+    // LSU/commit interfaces do not churn, but the current ROB fix does
+    // not consume them; ordering violations use the legacy exc_code=15
+    // path above.
     input  logic                              replay_valid,
     input  logic [ROB_IDX_BITS-1:0]           replay_rob_idx_from,
 
@@ -90,6 +91,7 @@ module rob
     output logic [PIPE_WIDTH-1:0]             head_is_wfi,
     output logic [PIPE_WIDTH-1:0]             head_branch_taken,
     output logic [63:0]                       head_branch_target [0:PIPE_WIDTH-1],
+    output logic [63:0]                       head_branch_taken_target [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_branch_mispredict,
     output logic [11:0]                       head_csr_addr [0:PIPE_WIDTH-1],
     output logic [63:0]                       head_csr_wdata [0:PIPE_WIDTH-1],
@@ -163,6 +165,8 @@ module rob
     // =========================================================================
     reg [ROB_DEPTH-1:0]          valid_r;
     reg [ROB_DEPTH-1:0]          ready_r;
+    reg [ROB_DEPTH-1:0]          store_addr_done_r;
+    reg [ROB_DEPTH-1:0]          store_data_done_r;
     // Watchdog: counts cycles the ROB head has been valid-but-not-ready.
     // Fires an exception at saturation to recover from stuck-entry deadlocks
     // (e.g. an IQ entry flushed without the corresponding ROB entry being
@@ -185,6 +189,7 @@ module rob
     reg [ROB_DEPTH-1:0]          is_wfi_r;
     reg [ROB_DEPTH-1:0]          branch_taken_r;
     reg [64*ROB_DEPTH-1:0]       branch_target_packed;
+    reg [64*ROB_DEPTH-1:0]       branch_taken_target_packed;
     reg [ROB_DEPTH-1:0]          branch_mispredict_r;
     reg [12*ROB_DEPTH-1:0]       csr_addr_packed;
     reg [64*ROB_DEPTH-1:0]       csr_wdata_packed;
@@ -218,6 +223,8 @@ module rob
             head_is_wfi[i]           = is_wfi_r[head_idx_w[i]];
             head_branch_taken[i]     = branch_taken_r[head_idx_w[i]];
             head_branch_target[i]    = branch_target_packed[head_idx_w[i]*64 +: 64];
+            head_branch_taken_target[i] =
+                branch_taken_target_packed[head_idx_w[i]*64 +: 64];
             head_branch_mispredict[i]= branch_mispredict_r[head_idx_w[i]];
             head_csr_addr[i]         = csr_addr_packed[head_idx_w[i]*12 +: 12];
             head_csr_wdata[i]        = csr_wdata_packed[head_idx_w[i]*64 +: 64];
@@ -293,6 +300,8 @@ module rob
             count_r  <= '0;
             valid_r  <= '0;
             ready_r  <= '0;
+            store_addr_done_r <= '0;
+            store_data_done_r <= '0;
             rob_head_watchdog <= 12'd0;
             has_exc_r        <= '0;
             is_branch_r      <= '0;
@@ -314,6 +323,7 @@ module rob
             pc_packed            <= '0;
             exc_code_packed      <= '0;
             branch_target_packed <= '0;
+            branch_taken_target_packed <= '0;
             csr_addr_packed      <= '0;
             csr_wdata_packed     <= '0;
             /* verilator lint_on WIDTHCONCAT */
@@ -324,6 +334,8 @@ module rob
             count_r  <= '0;
             valid_r  <= '0;
             ready_r  <= '0;
+            store_addr_done_r <= '0;
+            store_data_done_r <= '0;
             has_exc_r        <= '0;
             is_branch_r      <= '0;
             is_store_r       <= '0;
@@ -346,6 +358,8 @@ module rob
                 if (rob_in_range[i]) begin
                     valid_r[i]  <= 1'b0;
                     ready_r[i]  <= 1'b0;
+                    store_addr_done_r[i] <= 1'b0;
+                    store_data_done_r[i] <= 1'b0;
                     is_branch_r[i]     <= 1'b0;
                     is_store_r[i]      <= 1'b0;
                     is_load_r[i]       <= 1'b0;
@@ -371,6 +385,9 @@ module rob
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (commit_count > i[2:0]) begin
                     valid_r[head_idx_w[i]]      <= 1'b0;
+                    ready_r[head_idx_w[i]]      <= 1'b0;
+                    store_addr_done_r[head_idx_w[i]] <= 1'b0;
+                    store_data_done_r[head_idx_w[i]] <= 1'b0;
                     is_branch_r[head_idx_w[i]]  <= 1'b0;
                     is_store_r[head_idx_w[i]]   <= 1'b0;
                     is_load_r[head_idx_w[i]]    <= 1'b0;
@@ -409,6 +426,8 @@ module rob
                     if (!branch_mispredict_r[wb_idx[i]]) begin
                         branch_taken_r[wb_idx[i]]                <= wb_branch_taken[i];
                         branch_target_packed[wb_idx[i]*64 +: 64] <= wb_branch_target[i];
+                        branch_taken_target_packed[wb_idx[i]*64 +: 64] <=
+                            wb_branch_taken_target[i];
                         branch_mispredict_r[wb_idx[i]]           <= wb_branch_mispredict[i];
                     end
                     csr_we_r[wb_idx[i]]                     <= wb_csr_we[i];
@@ -418,29 +437,24 @@ module rob
                 end
             end
 
-            // STA sideband: mark store entry as ready
-            if (sta_wb_valid)
-                ready_r[sta_wb_rob_idx] <= 1'b1;
+            if (sta_wb_valid) begin
+                store_addr_done_r[sta_wb_rob_idx] <= 1'b1;
+                if (store_data_done_r[sta_wb_rob_idx] ||
+                    (std_wb_valid && (std_wb_rob_idx == sta_wb_rob_idx)))
+                    ready_r[sta_wb_rob_idx] <= 1'b1;
+            end
+            if (std_wb_valid) begin
+                store_data_done_r[std_wb_rob_idx] <= 1'b1;
+                if (store_addr_done_r[std_wb_rob_idx] ||
+                    (sta_wb_valid && (sta_wb_rob_idx == std_wb_rob_idx)))
+                    ready_r[std_wb_rob_idx] <= 1'b1;
+            end
 
             // Ordering violation: see comment in normal-path block below.
-            // Legacy exc_code=15 write REMOVED — replay_valid handler
-            // below is now the primary path.
-
-            // Partial-replay handler (partial-flush cycle).
-            if (replay_valid) begin
-                automatic logic [ROB_IDX_BITS-1:0] td;
-                td = tail_r - replay_rob_idx_from;
-                for (int j = 0; j < ROB_DEPTH; j++) begin
-                    automatic logic [ROB_IDX_BITS-1:0] rd;
-                    rd = 8'(j) - replay_rob_idx_from;
-                    if (valid_r[j] && (rd < td)) begin
-                        ready_r[j] <= 1'b0;
-                        if (exc_code_packed[j*4 +: 4] == 4'd15) begin
-                            has_exc_r[j]              <= 1'b0;
-                            exc_code_packed[j*4 +: 4] <= 4'd0;
-                        end
-                    end
-                end
+            if (ordering_violation_valid) begin
+                ready_r[ordering_violation_rob_idx]                <= 1'b1;
+                has_exc_r[ordering_violation_rob_idx]              <= 1'b1;
+                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
             end
         end else begin
             // Normal operation
@@ -450,6 +464,8 @@ module rob
                 if (alloc_count > i[2:0]) begin
                     valid_r[ai_w[i]]  <= 1'b1;
                     ready_r[ai_w[i]]  <= 1'b0;
+                    store_addr_done_r[ai_w[i]] <= 1'b0;
+                    store_data_done_r[ai_w[i]] <= 1'b0;
                     pc_packed[ai_w[i]*64 +: 64]       <= alloc_pc[i];
                     has_exc_r[ai_w[i]]                <= 1'b0;
                     exc_code_packed[ai_w[i]*4 +: 4]   <= 4'd0;
@@ -467,6 +483,7 @@ module rob
                     is_wfi_r[ai_w[i]]         <= alloc_is_wfi[i];
                     branch_taken_r[ai_w[i]]       <= 1'b0;
                     branch_target_packed[ai_w[i]*64 +: 64] <= 64'd0;
+                    branch_taken_target_packed[ai_w[i]*64 +: 64] <= 64'd0;
                     branch_mispredict_r[ai_w[i]]  <= 1'b0;
                     csr_we_r[ai_w[i]]             <= 1'b0;
                     csr_addr_packed[ai_w[i]*12 +: 12]   <= 12'd0;
@@ -493,6 +510,8 @@ module rob
                     if (!branch_mispredict_r[wb_idx[i]]) begin
                         branch_taken_r[wb_idx[i]]                <= wb_branch_taken[i];
                         branch_target_packed[wb_idx[i]*64 +: 64] <= wb_branch_target[i];
+                        branch_taken_target_packed[wb_idx[i]*64 +: 64] <=
+                            wb_branch_taken_target[i];
                         branch_mispredict_r[wb_idx[i]]           <= wb_branch_mispredict[i];
                     end
                     csr_we_r[wb_idx[i]]                     <= wb_csr_we[i];
@@ -502,29 +521,28 @@ module rob
                 end
             end
 
-            // STA sideband: mark store entry as ready
-            if (sta_wb_valid)
-                ready_r[sta_wb_rob_idx] <= 1'b1;
+            if (sta_wb_valid) begin
+                store_addr_done_r[sta_wb_rob_idx] <= 1'b1;
+                if (store_data_done_r[sta_wb_rob_idx] ||
+                    (std_wb_valid && (std_wb_rob_idx == sta_wb_rob_idx)))
+                    ready_r[sta_wb_rob_idx] <= 1'b1;
+            end
+            if (std_wb_valid) begin
+                store_data_done_r[std_wb_rob_idx] <= 1'b1;
+                if (store_addr_done_r[std_wb_rob_idx] ||
+                    (sta_wb_valid && (sta_wb_rob_idx == std_wb_rob_idx)))
+                    ready_r[std_wb_rob_idx] <= 1'b1;
+            end
 
-            // Ordering violation: legacy exc_code=15 write REMOVED under
-            // partial replay.  replay_valid (registered 1 cyc from
-            // lsu_ordering_violation) drives the replay handler below.
-
-            // Partial-replay handler (normal-path cycle).
-            if (replay_valid) begin
-                automatic logic [ROB_IDX_BITS-1:0] td;
-                td = tail_r - replay_rob_idx_from;
-                for (int j = 0; j < ROB_DEPTH; j++) begin
-                    automatic logic [ROB_IDX_BITS-1:0] rd;
-                    rd = 8'(j) - replay_rob_idx_from;
-                    if (valid_r[j] && (rd < td)) begin
-                        ready_r[j] <= 1'b0;
-                        if (exc_code_packed[j*4 +: 4] == 4'd15) begin
-                            has_exc_r[j]              <= 1'b0;
-                            exc_code_packed[j*4 +: 4] <= 4'd0;
-                        end
-                    end
-                end
+            // Ordering violation: mark the violating load as ready, flag it
+            // with the EXC_LOAD_REPLAY (4'd15) special exception code so the
+            // commit unit can recognise it and redirect to the load's own
+            // PC without committing the load (its data is wrong; it must
+            // re-execute against the now-visible store).
+            if (ordering_violation_valid) begin
+                ready_r[ordering_violation_rob_idx]                <= 1'b1;
+                has_exc_r[ordering_violation_rob_idx]              <= 1'b1;
+                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
             end
 
             // ROB head watchdog: counts cycles the head has been valid
@@ -558,6 +576,9 @@ module rob
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (commit_count > i[2:0]) begin
                     valid_r[head_idx_w[i]]      <= 1'b0;
+                    ready_r[head_idx_w[i]]      <= 1'b0;
+                    store_addr_done_r[head_idx_w[i]] <= 1'b0;
+                    store_data_done_r[head_idx_w[i]] <= 1'b0;
                     is_branch_r[head_idx_w[i]]  <= 1'b0;
                     is_store_r[head_idx_w[i]]   <= 1'b0;
                     is_load_r[head_idx_w[i]]    <= 1'b0;

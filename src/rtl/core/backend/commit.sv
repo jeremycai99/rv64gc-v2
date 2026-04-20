@@ -12,12 +12,14 @@ module commit
     input  logic rst_n,
 
     // ROB head entries (from ROB)
+    input  logic [ROB_IDX_BITS-1:0] head_idx,
     input  logic [PIPE_WIDTH-1:0]   head_valid,
     input  logic [PIPE_WIDTH-1:0]   head_ready,
     input  logic [63:0]             head_pc [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   head_has_exception,
     input  logic [3:0]              head_exc_code [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   head_is_branch,
+    input  logic [2:0]              head_bpu_type [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   head_is_store,
     input  logic [PIPE_WIDTH-1:0]   head_is_load,
     input  logic [PIPE_WIDTH-1:0]   head_is_csr,
@@ -45,6 +47,10 @@ module commit
     // Checkpoint release info
     input  logic [PIPE_WIDTH-1:0]              head_uses_checkpoint,
     input  logic [CHECKPOINT_BITS-1:0]         head_checkpoint_id [0:PIPE_WIDTH-1],
+    input  logic [4:0]                         head_bp_ras_tos [0:PIPE_WIDTH-1],
+    input  logic [63:0]                        head_bp_ras_top [0:PIPE_WIDTH-1],
+    input  logic [1:0]                         head_bp_ras_op [0:PIPE_WIDTH-1],
+    input  logic [GHR_BITS-1:0]                head_bp_ghr [0:PIPE_WIDTH-1],
 
     // Outputs
     output logic [2:0]              commit_count,       // how many entries retired this cycle
@@ -228,16 +234,59 @@ module commit
                           !found_replay &&
                           !serializing_at_head;
 
+    localparam logic [1:0] RAS_NONE = 2'd0;
+    localparam logic [1:0] RAS_PUSH = 2'd1;
+    localparam logic [1:0] RAS_POP  = 2'd2;
+
+    function automatic logic [4:0] ras_tos_after_branch(
+        input logic [4:0] pre_tos,
+        input logic [1:0] ras_op
+    );
+        logic [4:0] next_tos;
+        begin
+            next_tos = pre_tos;
+            case (ras_op)
+                RAS_PUSH: next_tos = (pre_tos == 5'(RAS_DEPTH - 1)) ? 5'd0
+                                                                   : (pre_tos + 5'd1);
+                RAS_POP:  next_tos = (pre_tos == 5'd0) ? 5'd0
+                                                      : (pre_tos - 5'd1);
+                default: next_tos = pre_tos;
+            endcase
+            ras_tos_after_branch = next_tos;
+        end
+    endfunction
+
+    // Boundary between committed older work and younger flushed work.
+    // This is consumed by queueing structures that need to preserve older
+    // committed side effects across a full redirect flush (for example,
+    // pending store-data issue for a store whose STA half already committed).
+    logic [ROB_IDX_BITS:0] flush_tail_sum;
+    logic [ROB_IDX_BITS-1:0] flush_tail_idx;
+    always_comb begin
+        flush_tail_sum =
+            {1'b0, head_idx} +
+            {{(ROB_IDX_BITS-2){1'b0}}, scan_count};
+        if (flush_tail_sum >= (ROB_IDX_BITS+1)'(ROB_DEPTH))
+            flush_tail_idx =
+                ROB_IDX_BITS'(flush_tail_sum - (ROB_IDX_BITS+1)'(ROB_DEPTH));
+        else
+            flush_tail_idx = flush_tail_sum[ROB_IDX_BITS-1:0];
+    end
+
     // =========================================================================
     // Flush output generation
     // =========================================================================
     always_comb begin
         flush_out.valid         = 1'b0;
-        flush_out.rob_idx       = '0;
+        flush_out.rob_idx       = flush_tail_idx;
         flush_out.redirect_pc   = 64'd0;
         flush_out.checkpoint_id = '0;
         flush_out.full_flush    = 1'b0;
         flush_out.ras_tos       = 5'd0;
+        flush_out.ras_top_restore_valid = 1'b0;
+        flush_out.ras_top_restore_addr  = 64'd0;
+        flush_out.ghr_restore_valid = 1'b0;
+        flush_out.ghr_restore_val   = '0;
 
         if (found_replay) begin
             // Memory ordering replay: full flush, redirect to the load's PC.
@@ -257,6 +306,17 @@ module commit
             flush_out.valid         = 1'b1;
             flush_out.full_flush    = 1'b1;
             flush_out.redirect_pc   = head_branch_target[misp_slot];
+            flush_out.ras_tos       = ras_tos_after_branch(
+                head_bp_ras_tos[misp_slot],
+                head_bp_ras_op[misp_slot]
+            );
+            if ((head_bp_ras_op[misp_slot] == RAS_NONE) &&
+                (head_bp_ras_tos[misp_slot] != 5'd0)) begin
+                flush_out.ras_top_restore_valid = 1'b1;
+                flush_out.ras_top_restore_addr  = head_bp_ras_top[misp_slot];
+            end
+            flush_out.ghr_restore_valid = 1'b1;
+            flush_out.ghr_restore_val   = head_bp_ghr[misp_slot];
         end else if (found_ret) begin
             // MRET/SRET: full flush, redirect to mepc/sepc
             flush_out.valid       = 1'b1;
@@ -348,6 +408,8 @@ module commit
 `endif
 
 `ifdef SIMULATION
+    logic   trace_commit_en;
+    integer trace_commit_cycle;
     // STAT_DUMP: categorize flushes by cause (sim-only, +STAT_DUMP runtime).
     integer cmt_leak_cyc;
     logic   cmt_stat_en;
@@ -355,9 +417,11 @@ module commit
     integer flush_ret_cnt,    flush_interrupt_cnt;
     integer total_commits;
     integer total_store_commits, total_load_commits, total_branch_commits;
+    initial trace_commit_en = ($test$plusargs("TRACE_COMMIT") ? 1'b1 : 1'b0);
     initial cmt_stat_en = ($test$plusargs("STAT_DUMP") ? 1'b1 : 1'b0);
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            trace_commit_cycle    <= 0;
             cmt_leak_cyc         <= 0;
             flush_replay_cnt     <= 0;
             flush_exception_cnt  <= 0;
@@ -369,6 +433,7 @@ module commit
             total_load_commits   <= 0;
             total_branch_commits <= 0;
         end else begin
+            trace_commit_cycle <= trace_commit_cycle + 1;
             cmt_leak_cyc <= cmt_leak_cyc + 1;
             total_commits <= total_commits + scan_count;
             total_store_commits  <= total_store_commits  + store_cnt;
@@ -376,6 +441,34 @@ module commit
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (slot_can_commit[i] && head_is_branch[i])
                     total_branch_commits <= total_branch_commits + 1;
+            end
+            if (trace_commit_en && flush_out.valid) begin
+                $display(
+                    "[CMT_FLUSH] cyc=%0d replay=%b replay_slot=%0d exc=%b exc_slot=%0d exc_code=%0d misp=%b misp_slot=%0d ret=%b irq=%b redirect=%016h full=%b trap=%016h irq_vec=%016h mepc=%016h sepc=%016h ras_tos=%0d ghr_v=%b",
+                    trace_commit_cycle,
+                    found_replay, replay_slot,
+                    found_exception, exc_slot,
+                    found_exception ? head_exc_code[exc_slot] : 4'd0,
+                    found_mispredict, misp_slot,
+                    found_ret, take_interrupt,
+                    flush_out.redirect_pc, flush_out.full_flush,
+                    trap_vector, irq_vector, mepc, sepc,
+                    flush_out.ras_tos, flush_out.ghr_restore_valid
+                );
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    $display(
+                        "[CMT_SLOT] cyc=%0d slot=%0d v=%b rdy=%b can=%b pc=%016h exc=%b exc_code=%0d br=%b bpu=%0d taken=%b tgt=%016h misp=%b mret=%b sret=%b bp_ras_tos=%0d bp_ras_op=%0d bp_ras_top=%016h",
+                        trace_commit_cycle, i,
+                        head_valid[i], head_ready[i], slot_can_commit[i],
+                        head_pc[i],
+                        head_has_exception[i], head_exc_code[i],
+                        head_is_branch[i], head_bpu_type[i],
+                        head_branch_taken[i], head_branch_target[i],
+                        head_branch_mispredict[i],
+                        head_is_mret[i], head_is_sret[i],
+                        head_bp_ras_tos[i], head_bp_ras_op[i], head_bp_ras_top[i]
+                    );
+                end
             end
             if (found_replay)     flush_replay_cnt     <= flush_replay_cnt     + 1;
             if (found_exception)  flush_exception_cnt  <= flush_exception_cnt  + 1;

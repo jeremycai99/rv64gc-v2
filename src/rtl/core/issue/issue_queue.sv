@@ -40,11 +40,18 @@ module issue_queue
     input  logic [INT_PRF_DEPTH-1:0] preg_ready_table,
 
     // Issue output (NUM_SELECT ports)
+    // issue_candidate_valid is the oldest-ready selection before suppression.
+    // issue_valid is the final fire signal after per-port suppress/hold.
+    output logic [NUM_SELECT-1:0]  issue_candidate_valid,
     output logic [NUM_SELECT-1:0]  issue_valid,
     output iq_entry_t              issue_data [0:NUM_SELECT-1],
 
-    // Backpressure: suppress port 0 issue and preserve entry for re-issue
-    input  logic                    port0_suppress,
+    // Backpressure: suppress issue on selected ports and preserve the
+    // corresponding entry for re-issue on a later cycle.
+    input  logic [NUM_SELECT-1:0]  issue_suppress,
+    input  logic [1:0]             older_probe_valid,
+    input  logic [ROB_IDX_BITS-1:0] older_probe_rob_idx [0:1],
+    output logic [1:0]             has_older_entry,
 
     // ROB head for age comparison
     input  logic [ROB_IDX_BITS-1:0] rob_head,
@@ -243,6 +250,33 @@ module issue_queue
         end
     end
 
+    logic [AGE_BITS-1:0] older_probe_age [0:1];
+
+    always_comb begin
+        for (int p = 0; p < 2; p++) begin
+            older_probe_age[p] = ((older_probe_rob_idx[p] >= rob_head) ? ({1'b0, older_probe_rob_idx[p]} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, older_probe_rob_idx[p]}));
+            has_older_entry[p] = 1'b0;
+            if (older_probe_valid[p]) begin
+                for (int e = 0; e < DEPTH; e++) begin
+                    logic entry_issues_now;
+
+                    entry_issues_now = 1'b0;
+                    for (int s = 0; s < NUM_SELECT; s++) begin
+                        if (sel_found[s] && !issue_suppress[s] &&
+                            (e[IDX_BITS-1:0] == sel_idx[s])) begin
+                            entry_issues_now = 1'b1;
+                        end
+                    end
+
+                    if (entry_valid[e] &&
+                        !entry_issues_now &&
+                        (entry_age[e] < older_probe_age[p]))
+                        has_older_entry[p] = 1'b1;
+                end
+            end
+        end
+    end
+
     // Port 0 selection: oldest eligible entry
     always_comb begin
         sel_found[0] = 1'b0;
@@ -284,8 +318,8 @@ module issue_queue
     // Drive issue outputs
     always_comb begin
         for (int p = 0; p < NUM_SELECT; p++) begin
-            // port0_suppress: don't issue on port 0 (dcache conflict retry)
-            issue_valid[p] = sel_found[p] & ~(p == 0 && port0_suppress);
+            issue_candidate_valid[p] = sel_found[p];
+            issue_valid[p] = sel_found[p] & ~issue_suppress[p];
             issue_data[p]  = iq_entry_t'(payload_r[sel_idx[p]]);
             // Override ready flags with wakeup results so downstream sees
             // correct readiness even on the issue cycle.
@@ -308,10 +342,10 @@ module issue_queue
         // invalidations (not yet committed to flops, so we compute
         // effective validity for the free-slot scan).
         fs_occupied = entry_valid;
-        // Entries about to be issued will be freed -- exclude them from
-        // occupied so that back-to-back dispatch is not stalled.
+        // Entries that actually fire this cycle will be freed -- suppressed
+        // selections stay resident and must not be overwritten by enqueue.
         for (int p = 0; p < NUM_SELECT; p++) begin
-            if (sel_found[p])
+            if (sel_found[p] && !issue_suppress[p])
                 fs_occupied[sel_idx[p]] = 1'b0;
         end
 
@@ -363,7 +397,7 @@ module issue_queue
         count_next = count_r;
         // Subtract issued entries
         for (int p = 0; p < NUM_SELECT; p++) begin
-            if (sel_found[p])
+            if (sel_found[p] && !issue_suppress[p])
                 count_next = count_next - 1'b1;
         end
         // Add enqueued entries
@@ -465,9 +499,10 @@ module issue_queue
             end
 
             // ---- Issue: invalidate selected entries ----
-            // Skip invalidation when port 0 is suppressed (entry re-issues)
+            // Skip invalidation when the selected port is suppressed
+            // (entry re-issues on a later cycle).
             for (int p = 0; p < NUM_SELECT; p++) begin
-                if (sel_found[p] && !(p == 0 && port0_suppress)) begin
+                if (sel_found[p] && !issue_suppress[p]) begin
                     entry_valid[sel_idx[p]] <= 1'b0;
                     src1_ready[sel_idx[p]]  <= 1'b0;
                     src2_ready[sel_idx[p]]  <= 1'b0;

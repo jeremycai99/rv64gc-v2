@@ -73,6 +73,7 @@ module rv64gc_core_top
     logic [CDB_WIDTH-1:0]     cdb_is_branch;
     logic [CDB_WIDTH-1:0]     cdb_branch_taken;
     logic [63:0]              cdb_branch_target [0:CDB_WIDTH-1];
+    logic [63:0]              cdb_branch_taken_target [0:CDB_WIDTH-1];
     logic [CDB_WIDTH-1:0]     cdb_branch_mispredict;
     logic [CDB_WIDTH-1:0]     cdb_csr_we;
     logic [11:0]              cdb_csr_addr     [0:CDB_WIDTH-1];
@@ -95,6 +96,7 @@ module rv64gc_core_top
     logic [CDB_WIDTH-1:0]     cdb_is_branch_r;
     logic [CDB_WIDTH-1:0]     cdb_branch_taken_r;
     logic [63:0]              cdb_branch_target_r [0:CDB_WIDTH-1];
+    logic [63:0]              cdb_branch_taken_target_r [0:CDB_WIDTH-1];
     logic [CDB_WIDTH-1:0]     cdb_branch_mispredict_r;
     logic [CDB_WIDTH-1:0]     cdb_csr_we_r;
     logic [11:0]              cdb_csr_addr_r     [0:CDB_WIDTH-1];
@@ -117,7 +119,21 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0] fetch_is_rvc;
     logic [PIPE_WIDTH-1:0] fetch_bp_taken;
     logic [63:0] fetch_bp_target [0:PIPE_WIDTH-1];
+    logic        fetch_bp_owner_valid;
+    logic [2:0]  fetch_bp_owner_slot;
+    logic        fetch_bp_owner_from_subgroup;
+    logic [63:0] fetch_bp_lookup_pc;
+    logic [4:0]  fetch_bp_ras_tos;
+    logic [63:0] fetch_bp_ras_top;
+    logic [GHR_BITS-1:0] fetch_bp_ghr;
+    logic          lb_active;
     logic [GHR_BITS-1:0] ghr_out;
+    logic                ghr_restore_valid_fe;
+    logic [GHR_BITS-1:0] ghr_restore_val_fe;
+    logic                ras_restore_valid_fe;
+    logic [4:0]          ras_restore_tos_fe;
+    logic                ras_restore_top_valid_fe;
+    logic [63:0]         ras_restore_top_addr_fe;
     logic        icache_fill_req_valid;
     logic [63:0] icache_fill_req_addr;
     logic        icache_fill_resp_valid;
@@ -140,10 +156,13 @@ module rv64gc_core_top
     // BPU update signals (from commit)
     logic        bpu_update_valid;
     logic [63:0] bpu_update_pc;
+    logic        bpu_tage_update_valid;
+    logic [63:0] bpu_tage_update_pc;
     logic        bpu_update_taken;
     logic        bpu_update_mispredict;
     logic [63:0] bpu_update_target;
     logic [2:0]  bpu_update_type;
+    logic [GHR_BITS-1:0] bpu_update_ghr;
 
     // Stall from decode/rename
     logic        backend_stall;
@@ -160,21 +179,36 @@ module rv64gc_core_top
         .fetch_is_rvc           (fetch_is_rvc),
         .fetch_bp_taken         (fetch_bp_taken),
         .fetch_bp_target        (fetch_bp_target),
+        .fetch_bp_owner_valid   (fetch_bp_owner_valid),
+        .fetch_bp_owner_slot    (fetch_bp_owner_slot),
+        .fetch_bp_owner_from_subgroup(fetch_bp_owner_from_subgroup),
+        .fetch_bp_lookup_pc     (fetch_bp_lookup_pc),
+        .fetch_bp_ras_tos       (fetch_bp_ras_tos),
+        .fetch_bp_ras_top       (fetch_bp_ras_top),
+        .fetch_bp_ghr           (fetch_bp_ghr),
         .backend_stall          (backend_stall),
+        // Phase-5 convergence: when loop-buffer playback owns rename input,
+        // quiesce fetch traffic and let redirect/flush restart the frontend.
+        .frontend_hold          (lb_active),
         // Redirect from commit flush OR BRU early redirect (commit wins).
         .redirect_valid         (flush_out.valid || bru_early_redirect),
         .redirect_pc            (flush_out.valid ? flush_out.redirect_pc : bru_target),
         .bpu_update_valid       (bpu_update_valid),
         .bpu_update_pc          (bpu_update_pc),
+        .bpu_tage_update_valid  (bpu_tage_update_valid),
+        .bpu_tage_update_pc     (bpu_tage_update_pc),
         .bpu_update_taken       (bpu_update_taken),
         .bpu_update_mispredict  (bpu_update_mispredict),
         .bpu_update_target      (bpu_update_target),
         .bpu_update_type        (bpu_update_type),
-        .ghr_restore_valid      (flush_out.valid),
-        .ghr_restore_val        ({GHR_BITS{1'b0}}),
+        .bpu_update_ghr         (bpu_update_ghr),
+        .ghr_restore_valid      (ghr_restore_valid_fe),
+        .ghr_restore_val        (ghr_restore_val_fe),
         .ghr_out                (ghr_out),
-        .ras_restore_valid      (flush_out.valid),
-        .ras_restore_tos        (flush_out.ras_tos),
+        .ras_restore_valid      (ras_restore_valid_fe),
+        .ras_restore_tos        (ras_restore_tos_fe),
+        .ras_restore_top_valid  (ras_restore_top_valid_fe),
+        .ras_restore_top_addr   (ras_restore_top_addr_fe),
         .icache_fill_req_valid  (icache_fill_req_valid),
         .icache_fill_req_addr   (icache_fill_req_addr),
         .icache_fill_resp_valid (icache_fill_resp_valid),
@@ -204,6 +238,13 @@ module rv64gc_core_top
         .fetch_is_rvc   (fetch_is_rvc),
         .fetch_bp_taken (fetch_bp_taken),
         .fetch_bp_target(fetch_bp_target),
+        .fetch_bp_owner_valid(fetch_bp_owner_valid),
+        .fetch_bp_owner_slot(fetch_bp_owner_slot),
+        .fetch_bp_owner_from_subgroup(fetch_bp_owner_from_subgroup),
+        .fetch_bp_lookup_pc(fetch_bp_lookup_pc),
+        .fetch_bp_ras_tos(fetch_bp_ras_tos),
+        .fetch_bp_ras_top(fetch_bp_ras_top),
+        .fetch_bp_ghr   (fetch_bp_ghr),
         .dec_insn       (dec_insn_out),
         .dec_count      (dec_count_out),
         .stall          (backend_stall),
@@ -228,7 +269,6 @@ module rv64gc_core_top
     // =========================================================================
     decoded_insn_t lb_insn [0:PIPE_WIDTH-1];
     logic [2:0]    lb_count;
-    logic          lb_active;
 
     // Detect backward taken branch for loop buffer trigger.
     // Combinational: must fire same cycle as the branch is decoded so the
@@ -243,8 +283,10 @@ module rv64gc_core_top
             if (3'(i) < fused_count &&
                 fused_insn[i].bp_taken &&
                 fused_insn[i].is_branch &&
-                (fused_insn[i].bp_target < fused_insn[i].pc))
+                !fused_insn[i].bp_from_subgroup &&
+                (fused_insn[i].bp_target < fused_insn[i].pc)) begin
                 backward_branch_taken = 1'b1;
+            end
         end
     end
 
@@ -260,7 +302,10 @@ module rv64gc_core_top
         .lb_insn                (lb_insn),
         .lb_count               (lb_count),
         .active                 (lb_active),
-        .invalidate             (flush_out.valid),
+        // Phase-5 convergence: loop-buffer playback must obey the same
+        // frontend redirect epoch as fetch. Commit flushes and BRU early
+        // redirects both terminate the current playback/capture state.
+        .invalidate             (flush_out.valid || bru_early_redirect),
         .stall                  (rename_stall)
     );
 
@@ -310,6 +355,7 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]   rob_head_is_wfi;
     logic [PIPE_WIDTH-1:0]   rob_head_branch_taken;
     logic [63:0]             rob_head_branch_target [0:PIPE_WIDTH-1];
+    logic [63:0]             rob_head_branch_taken_target [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_branch_mispredict;
     logic [11:0]             rob_head_csr_addr    [0:PIPE_WIDTH-1];
     logic [63:0]             rob_head_csr_wdata   [0:PIPE_WIDTH-1];
@@ -327,13 +373,23 @@ module rv64gc_core_top
     // Rename buffer: parallel to ROB, stores pdst/old_pdst/rd_arch
     // =========================================================================
     rename_buf_entry_t rename_buf [0:ROB_DEPTH-1];
+    logic [2:0] ren_count_raw;
+    // Suppress rename output on a commit-driven flush so stale pre-flush
+    // instructions cannot enter the ROB, DQ, or ready table.
     logic [2:0] ren_count_w;
+    assign ren_count_w = flush_out.valid ? 3'd0 : ren_count_raw;
 
     // Read rename buffer at head for commit
     logic [PHYS_REG_BITS-1:0] rb_head_pdst      [0:PIPE_WIDTH-1];
     logic [PHYS_REG_BITS-1:0] rb_head_old_pdst   [0:PIPE_WIDTH-1];
     logic [4:0]               rb_head_rd_arch    [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]    rb_head_rd_valid;
+    logic [4:0]               rb_head_bp_ras_tos [0:PIPE_WIDTH-1];
+    logic [63:0]              rb_head_bp_ras_top [0:PIPE_WIDTH-1];
+    logic [1:0]               rb_head_bp_ras_op  [0:PIPE_WIDTH-1];
+    logic [PIPE_WIDTH-1:0]    rb_head_bp_owner;
+    logic [63:0]              rb_head_bp_lookup_pc [0:PIPE_WIDTH-1];
+    logic [GHR_BITS-1:0]      rb_head_bp_ghr [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]    rb_head_uses_checkpoint;
     logic [CHECKPOINT_BITS-1:0] rb_head_checkpoint_id [0:PIPE_WIDTH-1];
 
@@ -354,6 +410,12 @@ module rv64gc_core_top
             rb_head_old_pdst[i]      = rename_buf[idx].old_pdst;
             rb_head_rd_arch[i]       = rename_buf[idx].rd_arch;
             rb_head_rd_valid[i]      = rename_buf[idx].rd_valid;
+            rb_head_bp_owner[i]      = rename_buf[idx].bp_owner;
+            rb_head_bp_lookup_pc[i]  = rename_buf[idx].bp_lookup_pc;
+            rb_head_bp_ras_tos[i]    = rename_buf[idx].bp_ras_tos;
+            rb_head_bp_ras_top[i]    = rename_buf[idx].bp_ras_top;
+            rb_head_bp_ras_op[i]     = rename_buf[idx].bp_ras_op;
+            rb_head_bp_ghr[i]        = rename_buf[idx].bp_ghr;
             rb_head_uses_checkpoint[i] = rob_uses_checkpoint[idx];
             rb_head_checkpoint_id[i]   = rob_checkpoint_id[idx];
         end
@@ -392,7 +454,7 @@ module rv64gc_core_top
         .dec_insn         (rename_dec_in),
         .dec_count        (rename_dec_count),
         .ren_insn         (ren_insn),
-        .ren_count        (ren_count_w),
+        .ren_count        (ren_count_raw),
         .ren_move_eliminated (ren_move_eliminated),
         .ren_zero_eliminated (ren_zero_eliminated),
         .rob_alloc_idx    (rob_alloc_idx),
@@ -420,6 +482,28 @@ module rv64gc_core_top
     // =========================================================================
     // Write rename buffer at allocation time
     // =========================================================================
+    localparam logic [1:0] RAS_NONE = 2'd0;
+    localparam logic [1:0] RAS_PUSH = 2'd1;
+    localparam logic [1:0] RAS_POP  = 2'd2;
+
+    function automatic logic [4:0] ras_tos_after_redirect(
+        input logic [4:0] pre_tos,
+        input logic [1:0] ras_op
+    );
+        logic [4:0] next_tos;
+        begin
+            next_tos = pre_tos;
+            case (ras_op)
+                RAS_PUSH: next_tos = (pre_tos == 5'(RAS_DEPTH - 1)) ? 5'd0
+                                                                   : (pre_tos + 5'd1);
+                RAS_POP:  next_tos = (pre_tos == 5'd0) ? 5'd0
+                                                      : (pre_tos - 5'd1);
+                default: next_tos = pre_tos;
+            endcase
+            ras_tos_after_redirect = next_tos;
+        end
+    endfunction
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
             // Clear on reset AND on full flush.  Stale entries in rename_buf
@@ -440,6 +524,25 @@ module rv64gc_core_top
                     rename_buf[ren_insn[i].rob_idx].old_pdst <= ren_insn[i].old_pdst;
                     rename_buf[ren_insn[i].rob_idx].rd_arch  <= ren_insn[i].base.rd_arch;
                     rename_buf[ren_insn[i].rob_idx].rd_valid <= ren_insn[i].base.rd_valid;
+                    rename_buf[ren_insn[i].rob_idx].bp_owner <= ren_insn[i].base.bp_owner;
+                    rename_buf[ren_insn[i].rob_idx].bp_lookup_pc <= ren_insn[i].base.bp_lookup_pc;
+                    rename_buf[ren_insn[i].rob_idx].bp_ras_tos <= ren_insn[i].base.bp_ras_tos;
+                    rename_buf[ren_insn[i].rob_idx].bp_ras_top <= ren_insn[i].base.bp_ras_top;
+                    rename_buf[ren_insn[i].rob_idx].bp_ghr <= ren_insn[i].base.bp_ghr;
+                    rename_buf[ren_insn[i].rob_idx].bp_ras_op <=
+                        ((ren_insn[i].base.is_jal &&
+                          ((ren_insn[i].base.rd_arch == 5'd1) ||
+                           (ren_insn[i].base.rd_arch == 5'd5))) ||
+                         (ren_insn[i].base.is_jalr &&
+                          ((ren_insn[i].base.rd_arch == 5'd1) ||
+                           (ren_insn[i].base.rd_arch == 5'd5))))
+                            ? RAS_PUSH
+                            : ((ren_insn[i].base.is_jalr &&
+                                (ren_insn[i].base.rd_arch == 5'd0) &&
+                                ((ren_insn[i].base.rs1_arch == 5'd1) ||
+                                 (ren_insn[i].base.rs1_arch == 5'd5)))
+                                   ? RAS_POP
+                                   : RAS_NONE);
                     rob_uses_checkpoint[ren_insn[i].rob_idx] <= ren_insn[i].uses_checkpoint;
                     rob_checkpoint_id[ren_insn[i].rob_idx]   <= ren_insn[i].checkpoint_id;
                 end
@@ -484,7 +587,6 @@ module rv64gc_core_top
             if (ren_insn[i].base.fu_type == FU_BRU) begin
                 case (ren_insn[i].base.br_op)
                     BR_JAL: begin
-                        // CALL if rd = x1 or x5 (link registers)
                         if (ren_insn[i].base.rd_arch == 5'd1 ||
                             ren_insn[i].base.rd_arch == 5'd5)
                             rob_alloc_bpu_type[i] = 3'd3; // BT_CALL
@@ -526,6 +628,8 @@ module rv64gc_core_top
     // STA writeback register declarations (used in ROB port connections below)
     logic                     lsu_sta_wb_valid_r;
     logic [ROB_IDX_BITS-1:0]  lsu_sta_wb_rob_idx_r;
+    logic                     lsu_std_wb_valid_r;
+    logic [ROB_IDX_BITS-1:0]  lsu_std_wb_rob_idx_r;
 
     // LSU → ROB forwarded signals used in the ROB port list below.
     // Declared up here (not next to the LSU instantiation) so that the
@@ -536,8 +640,10 @@ module rv64gc_core_top
     logic [ROB_IDX_BITS-1:0]  lsu_violation_rob_idx;
     logic                     replay_valid;
     logic [ROB_IDX_BITS-1:0]  replay_rob_idx_from;
-    // lsu_port0_suppress: consumed by an IQ before the LSU declaration.
-    logic                     lsu_port0_suppress;
+    // LSU-driven per-port load issue suppression (consumed by the load IQ
+    // before the LSU instantiation below).
+    logic [1:0]               lsu_load_issue_suppress_raw;
+    logic [1:0]               lsu_load_issue_suppress;
     // D-cache fill snoop (produced by dcache, consumed by LSU instantiated
     // earlier in the file).
     logic        dc_fill_snoop_valid;
@@ -570,6 +676,7 @@ module rv64gc_core_top
         .wb_is_branch           (cdb_is_branch_r),
         .wb_branch_taken        (cdb_branch_taken_r),
         .wb_branch_target       (cdb_branch_target_r),
+        .wb_branch_taken_target (cdb_branch_taken_target_r),
         .wb_branch_mispredict   (cdb_branch_mispredict_r),
         .wb_csr_we              (cdb_csr_we_r),
         .wb_csr_addr            (cdb_csr_addr_r),
@@ -577,6 +684,8 @@ module rv64gc_core_top
         .wb_csr_op              (cdb_csr_op_r),
         .sta_wb_valid           (lsu_sta_wb_valid_r),
         .sta_wb_rob_idx         (lsu_sta_wb_rob_idx_r),
+        .std_wb_valid           (lsu_std_wb_valid_r),
+        .std_wb_rob_idx         (lsu_std_wb_rob_idx_r),
         .ordering_violation_valid   (lsu_ordering_violation),
         .ordering_violation_rob_idx (lsu_violation_rob_idx),
         .replay_valid               (replay_valid),
@@ -601,6 +710,7 @@ module rv64gc_core_top
         .head_is_wfi            (rob_head_is_wfi),
         .head_branch_taken      (rob_head_branch_taken),
         .head_branch_target     (rob_head_branch_target),
+        .head_branch_taken_target (rob_head_branch_taken_target),
         .head_branch_mispredict (rob_head_branch_mispredict),
         .head_csr_addr          (rob_head_csr_addr),
         .head_csr_wdata         (rob_head_csr_wdata),
@@ -689,13 +799,15 @@ module rv64gc_core_top
     logic [1:0]  iq_load_enq_valid;
     iq_entry_t   iq_load_enq_data [0:1];
     logic        iq_load_full;
+    logic [1:0]  iq_load_issue_candidate_valid;
     logic [1:0]  iq_load_issue_valid;
     iq_entry_t   iq_load_issue_data [0:1];
-    // Single-select wrapper for load IQ
-    logic [0:0]  iq_load_issue_valid_s;
-    iq_entry_t   iq_load_issue_data_s [0:0];
+    logic [1:0]  store_iq_older_than_load;
+    logic [1:0]  issueq_probe_none_valid;
+    logic [ROB_IDX_BITS-1:0] issueq_probe_none_rob_idx [0:1];
+    logic [ROB_IDX_BITS-1:0] store_iq_load_probe_rob_idx [0:1];
 
-    // --- Store IQ ---
+    // --- Store address IQ (STA) ---
     logic [1:0]  iq_store_enq_valid;
     iq_entry_t   iq_store_enq_data [0:1];
     logic        iq_store_full;
@@ -705,6 +817,13 @@ module rv64gc_core_top
     logic [0:0]  iq_store_issue_valid_s;
     iq_entry_t   iq_store_issue_data_s [0:0];
 
+    // --- Store data IQ (STD) ---
+    logic [1:0]  iq_std_enq_valid;
+    iq_entry_t   iq_std_enq_data [0:1];
+    logic        iq_std_full;
+    logic [0:0]  iq_std_issue_valid_s;
+    iq_entry_t   iq_std_issue_data_s [0:0];
+
     assign iq_full_vec = {iq2_full, iq1_full, iq0_full};
 
     // Speculative wakeup / cancel signals (from LSU)
@@ -712,6 +831,14 @@ module rv64gc_core_top
     logic [PHYS_REG_BITS-1:0] lsu_spec_wakeup_tag [0:1];
     logic [1:0]               lsu_spec_cancel_valid;
     logic [PHYS_REG_BITS-1:0] lsu_spec_cancel_tag [0:1];
+
+    assign issueq_probe_none_valid = 2'b00;
+    assign issueq_probe_none_rob_idx[0] = '0;
+    assign issueq_probe_none_rob_idx[1] = '0;
+    assign store_iq_load_probe_rob_idx[0] = iq_load_issue_data[0].rob_idx;
+    assign store_iq_load_probe_rob_idx[1] = iq_load_issue_data[1].rob_idx;
+    assign lsu_load_issue_suppress = lsu_load_issue_suppress_raw |
+                                     store_iq_older_than_load;
 
     // =========================================================================
     // Dispatch routing: precompute renamed_insn_t to iq_entry_t conversion
@@ -743,6 +870,22 @@ module rv64gc_core_top
             dq_iq_entry[s].pc           = dq_deq_data[s].base.pc;
             dq_iq_entry[s].bp_taken     = dq_deq_data[s].base.bp_taken;
             dq_iq_entry[s].bp_target    = dq_deq_data[s].base.bp_target;
+            dq_iq_entry[s].bp_ras_tos   = dq_deq_data[s].base.bp_ras_tos;
+            dq_iq_entry[s].bp_ras_op    =
+                ((dq_deq_data[s].base.is_jal &&
+                  ((dq_deq_data[s].base.rd_arch == 5'd1) ||
+                   (dq_deq_data[s].base.rd_arch == 5'd5))) ||
+                 (dq_deq_data[s].base.is_jalr &&
+                  ((dq_deq_data[s].base.rd_arch == 5'd1) ||
+                   (dq_deq_data[s].base.rd_arch == 5'd5))))
+                    ? RAS_PUSH
+                    : ((dq_deq_data[s].base.is_jalr &&
+                        (dq_deq_data[s].base.rd_arch == 5'd0) &&
+                        ((dq_deq_data[s].base.rs1_arch == 5'd1) ||
+                         (dq_deq_data[s].base.rs1_arch == 5'd5)))
+                           ? RAS_POP
+                           : RAS_NONE);
+            dq_iq_entry[s].bp_ghr       = dq_deq_data[s].base.bp_ghr;
             dq_iq_entry[s].is_fused     = dq_deq_data[s].base.is_fused;
             dq_iq_entry[s].fusion_type  = dq_deq_data[s].base.fusion_type;
             dq_iq_entry[s].fused_imm    = dq_deq_data[s].base.fused_imm;
@@ -769,12 +912,14 @@ module rv64gc_core_top
         iq2_enq_valid = 2'b00;
         iq_load_enq_valid  = 2'b00;
         iq_store_enq_valid = 2'b00;
+        iq_std_enq_valid   = 2'b00;
         for (int i = 0; i < 2; i++) begin
             iq0_enq_data[i] = '0;
             iq1_enq_data[i] = '0;
             iq2_enq_data[i] = '0;
             iq_load_enq_data[i]  = '0;
             iq_store_enq_data[i] = '0;
+            iq_std_enq_data[i]   = '0;
         end
         iq0_enq_cnt = 3'd0;
         iq1_enq_cnt = 3'd0;
@@ -814,17 +959,24 @@ module rv64gc_core_top
                                 iq_ld_enq_cnt = iq_ld_enq_cnt + 3'd1;
                             end
                         end else begin
-                            // Stores are stored as a SINGLE store IQ entry that
-                            // requires both rs1 (base addr) and rs2 (store data)
-                            // ready. Issuing the entry fires the STA AND STD
-                            // pipelines together.  The store IQ has
-                            // NUM_ENQUEUE=2, so up to two stores per cycle can
-                            // be enqueued; the LSU's 1-STA/1-STD pipeline then
-                            // drains them one per cycle.
+                            // Split stores into independent STA and STD issue
+                            // queues.  Both halves carry the same sq_idx/rob_idx
+                            // payload, but each queue ignores the non-local
+                            // source dependency so address publication can run
+                            // ahead of late store-data wakeup.
                             if (iq_st_enq_cnt < 3'd2) begin
                                 iq_store_enq_data[iq_st_enq_cnt[0]]          = dq_iq_entry[i];
                                 iq_store_enq_data[iq_st_enq_cnt[0]].fu_type  = FU_STA;
+                                iq_store_enq_data[iq_st_enq_cnt[0]].rs2_phys = '0;
+                                iq_store_enq_data[iq_st_enq_cnt[0]].rs2_ready = 1'b1;
                                 iq_store_enq_valid[iq_st_enq_cnt[0]]         = 1'b1;
+
+                                iq_std_enq_data[iq_st_enq_cnt[0]]            = dq_iq_entry[i];
+                                iq_std_enq_data[iq_st_enq_cnt[0]].fu_type    = FU_STD;
+                                iq_std_enq_data[iq_st_enq_cnt[0]].pdst       = '0;
+                                iq_std_enq_data[iq_st_enq_cnt[0]].rs1_phys   = '0;
+                                iq_std_enq_data[iq_st_enq_cnt[0]].rs1_ready  = 1'b1;
+                                iq_std_enq_valid[iq_st_enq_cnt[0]]           = 1'b1;
                                 iq_st_enq_cnt = iq_st_enq_cnt + 3'd1;
                             end
                         end
@@ -852,13 +1004,17 @@ module rv64gc_core_top
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .preg_ready_table(preg_ready_table_comb),
+        .issue_candidate_valid(),
         .issue_valid     (iq0_issue_valid),
         .issue_data      (iq0_issue_data),
+        .older_probe_valid(issueq_probe_none_valid),
+        .older_probe_rob_idx(issueq_probe_none_rob_idx),
+        .has_older_entry (),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (1'b0),
+        .issue_suppress  ('0),
         .occupancy       (iq0_occ)
     );
 
@@ -880,13 +1036,17 @@ module rv64gc_core_top
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .preg_ready_table(preg_ready_table_comb),
+        .issue_candidate_valid(),
         .issue_valid     (iq1_issue_valid_s),
         .issue_data      (iq1_issue_data_s),
+        .older_probe_valid(issueq_probe_none_valid),
+        .older_probe_rob_idx(issueq_probe_none_rob_idx),
+        .has_older_entry (),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (1'b0),
+        .issue_suppress  ('0),
         .occupancy       (iq1_occ)
     );
     assign iq1_issue_valid[0] = iq1_issue_valid_s[0];
@@ -908,13 +1068,17 @@ module rv64gc_core_top
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .preg_ready_table(preg_ready_table_comb),
+        .issue_candidate_valid(),
         .issue_valid     (iq2_issue_valid_s),
         .issue_data      (iq2_issue_data_s),
+        .older_probe_valid(issueq_probe_none_valid),
+        .older_probe_rob_idx(issueq_probe_none_rob_idx),
+        .has_older_entry (),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (1'b0),
+        .issue_suppress  ('0),
         .occupancy       (iq2_occ)
     );
     assign iq2_issue_valid[0] = iq2_issue_valid_s[0];
@@ -937,19 +1101,21 @@ module rv64gc_core_top
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .preg_ready_table(preg_ready_table_comb),
+        .issue_candidate_valid(iq_load_issue_candidate_valid),
         .issue_valid     (iq_load_issue_valid),
         .issue_data      (iq_load_issue_data),
+        .older_probe_valid(issueq_probe_none_valid),
+        .older_probe_rob_idx(issueq_probe_none_rob_idx),
+        .has_older_entry (),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (lsu_port0_suppress),
+        .issue_suppress  (lsu_load_issue_suppress),
         .occupancy       (/* unused */)
     );
 
-    // Store IQ is single-issue (NUM_SELECT=1): each store is a SINGLE entry
-    // needing both rs1 and rs2 ready, and issuing fires BOTH the STA and STD
-    // pipelines with the same entry (matches the LSU's 1 STA + 1 STD capacity).
+    // Store address IQ (STA): address publish depends only on rs1 readiness.
     issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
     u_iq_store (
         .clk             (clk),
@@ -964,13 +1130,17 @@ module rv64gc_core_top
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .preg_ready_table(preg_ready_table_comb),
+        .issue_candidate_valid(),
         .issue_valid     (iq_store_issue_valid_s),
         .issue_data      (iq_store_issue_data_s),
+        .older_probe_valid(iq_load_issue_candidate_valid),
+        .older_probe_rob_idx(store_iq_load_probe_rob_idx),
+        .has_older_entry (store_iq_older_than_load),
         .rob_head        (rob_head_idx),
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .port0_suppress  (1'b0),
+        .issue_suppress  ('0),
         .occupancy       (/* unused */)
     );
     assign iq_store_issue_valid[0] = iq_store_issue_valid_s[0];
@@ -978,13 +1148,40 @@ module rv64gc_core_top
     assign iq_store_issue_data[0]  = iq_store_issue_data_s[0];
     assign iq_store_issue_data[1]  = '0;
 
+    // Store data IQ (STD): full flushes can now discard the queue because the
+    // ROB no longer retires stores until both STA and STD have completed.
+    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
+    u_iq_store_data (
+        .clk             (clk),
+        .rst_n           (rst_n),
+        .enq_valid       (iq_std_enq_valid),
+        .enq_data        (iq_std_enq_data),
+        .full            (iq_std_full),
+        .cdb_valid       (cdb_valid_r),
+        .cdb_tag         (cdb_tag_r),
+        .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
+        .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
+        .spec_cancel_valid(lsu_spec_cancel_valid[0]),
+        .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .preg_ready_table(preg_ready_table_comb),
+        .issue_candidate_valid(),
+        .issue_valid     (iq_std_issue_valid_s),
+        .issue_data      (iq_std_issue_data_s),
+        .older_probe_valid(issueq_probe_none_valid),
+        .older_probe_rob_idx(issueq_probe_none_rob_idx),
+        .has_older_entry (),
+        .rob_head        (rob_head_idx),
+        .flush_valid     (flush_out.valid),
+        .flush_rob_tail  (flush_out.rob_idx),
+        .flush_full      (flush_out.full_flush),
+        .issue_suppress  ('0),
+        .occupancy       (/* unused */)
+    );
+
     // =========================================================================
     // Store IQ issue → STA/STD routing
     //
-    // The store IQ stores each store as a SINGLE entry (NUM_SELECT=1) that
-    // requires both rs1 (base address) and rs2 (store data) to be ready.
-    // When the entry issues, fire the STA AND STD pipelines together using
-    // the same data so the SQ gets both halves and the ROB ready bit is set.
+    // STA and STD now issue independently.  SQ state is joined through sq_idx.
     // =========================================================================
     logic       routed_sta_valid;
     iq_entry_t  routed_sta_data;
@@ -995,8 +1192,8 @@ module rv64gc_core_top
         routed_sta_valid = iq_store_issue_valid[0];
         routed_sta_data  = iq_store_issue_data[0];
         routed_sta_data.fu_type = FU_STA;
-        routed_std_valid = iq_store_issue_valid[0];
-        routed_std_data  = iq_store_issue_data[0];
+        routed_std_valid = iq_std_issue_valid_s[0];
+        routed_std_data  = iq_std_issue_data_s[0];
         routed_std_data.fu_type = FU_STD;
         routed_std_data.pdst    = '0;
     end
@@ -1138,6 +1335,7 @@ module rv64gc_core_top
     logic [63:0] bru_result;
     logic        bru_taken;
     // bru_target declared earlier (forward decl for fetch_unit port)
+    logic [63:0] bru_taken_target;
     logic        bru_mispredict;
 
     logic        bru_issue;
@@ -1157,6 +1355,7 @@ module rv64gc_core_top
         .result      (bru_result),
         .taken       (bru_taken),
         .target      (bru_target),
+        .taken_target(bru_taken_target),
         .mispredict  (bru_mispredict)
     );
 
@@ -1164,6 +1363,7 @@ module rv64gc_core_top
     logic [63:0] bru1_result;
     logic        bru1_taken;
     logic [63:0] bru1_target;
+    logic [63:0] bru1_taken_target;
     logic        bru1_mispredict;
 
     logic        bru1_issue;
@@ -1183,6 +1383,7 @@ module rv64gc_core_top
         .result      (bru1_result),
         .taken       (bru1_taken),
         .target      (bru1_target),
+        .taken_target(bru1_taken_target),
         .mispredict  (bru1_mispredict)
     );
 
@@ -1194,6 +1395,83 @@ module rv64gc_core_top
     // This prevents early-redirect storms from wrong-path branches on port 1.
     // bru_early_redirect declared earlier (forward decl for fetch_unit port)
     assign bru_early_redirect = bru_issue && bru_mispredict;
+    assign ghr_restore_valid_fe =
+        bru_early_redirect ||
+        (flush_out.valid && flush_out.ghr_restore_valid);
+    assign ghr_restore_val_fe =
+        bru_early_redirect ? iq0_issue_data[0].bp_ghr
+                           : flush_out.ghr_restore_val;
+    assign ras_restore_valid_fe = bru_early_redirect || flush_out.valid;
+    assign ras_restore_tos_fe =
+        flush_out.valid ? flush_out.ras_tos
+                        : ras_tos_after_redirect(
+                              iq0_issue_data[0].bp_ras_tos,
+                              iq0_issue_data[0].bp_ras_op
+                          );
+    assign ras_restore_top_valid_fe =
+        flush_out.valid && flush_out.ras_top_restore_valid;
+    assign ras_restore_top_addr_fe = flush_out.ras_top_restore_addr;
+
+`ifdef SIMULATION
+    logic trace_bru_en;
+    integer trace_bru_cycle;
+    always_comb begin
+        trace_bru_en = 1'b0;
+        if ($test$plusargs("TRACE_BRU")) trace_bru_en = 1'b1;
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            trace_bru_cycle <= 0;
+        end else if (trace_bru_en) begin
+            trace_bru_cycle <= trace_bru_cycle + 1;
+            if (bru_issue &&
+                ((trace_bru_cycle < 1600) ||
+                 ((iq0_issue_data[0].pc >= 64'h0000_0000_8000_2000) &&
+                  (iq0_issue_data[0].pc <  64'h0000_0000_8000_2440)))) begin
+                $display("[BRU0] cyc=%0d pc=%016h op=%0d rvc=%b rs1=%016h rs2=%016h imm=%016h bp_taken=%b bp_tgt=%016h taken=%b tgt=%016h taken_tgt=%016h link=%016h misp=%b pdst=%0d rob=%0d",
+                    trace_bru_cycle,
+                    iq0_issue_data[0].pc,
+                    iq0_issue_data[0].br_op,
+                    iq0_issue_data[0].is_rvc,
+                    bypassed_data[0],
+                    bypassed_data[1],
+                    iq0_issue_data[0].imm,
+                    iq0_issue_data[0].bp_taken,
+                    iq0_issue_data[0].bp_target,
+                    bru_taken,
+                    bru_target,
+                    bru_taken_target,
+                    bru_result,
+                    bru_mispredict,
+                    iq0_issue_data[0].pdst,
+                    iq0_issue_data[0].rob_idx);
+            end
+            if (bru1_issue &&
+                ((trace_bru_cycle < 1600) ||
+                 ((iq0_issue_data[1].pc >= 64'h0000_0000_8000_2000) &&
+                  (iq0_issue_data[1].pc <  64'h0000_0000_8000_2440)))) begin
+                $display("[BRU1] cyc=%0d pc=%016h op=%0d rvc=%b rs1=%016h rs2=%016h imm=%016h bp_taken=%b bp_tgt=%016h taken=%b tgt=%016h taken_tgt=%016h link=%016h misp=%b pdst=%0d rob=%0d",
+                    trace_bru_cycle,
+                    iq0_issue_data[1].pc,
+                    iq0_issue_data[1].br_op,
+                    iq0_issue_data[1].is_rvc,
+                    bypassed_data[2],
+                    bypassed_data[3],
+                    iq0_issue_data[1].imm,
+                    iq0_issue_data[1].bp_taken,
+                    iq0_issue_data[1].bp_target,
+                    bru1_taken,
+                    bru1_target,
+                    bru1_taken_target,
+                    bru1_result,
+                    bru1_mispredict,
+                    iq0_issue_data[1].pdst,
+                    iq0_issue_data[1].rob_idx);
+            end
+        end
+    end
+`endif
 
     // Merge: commit flush takes priority.  BRU redirect only applies to
     // the fetch unit's redirect_valid / redirect_pc.
@@ -1301,6 +1579,8 @@ module rv64gc_core_top
     logic [3:0]               lsu_load_wb_exc_code [0:1];
     logic                     lsu_sta_wb_valid;
     logic [ROB_IDX_BITS-1:0]  lsu_sta_wb_rob_idx;
+    logic                     lsu_std_wb_valid;
+    logic [ROB_IDX_BITS-1:0]  lsu_std_wb_rob_idx;
 
     // Build the LSU's load_rs1 unpacked-array port using explicit indexing
     // (a packed concat would be silently re-ordered by Verilator).
@@ -1331,6 +1611,8 @@ module rv64gc_core_top
         cdb_is_branch[0]        = bru_issue;
         cdb_branch_taken[0]     = bru_issue ? bru_taken : 1'b0;
         cdb_branch_target[0]    = bru_issue ? bru_target : 64'd0;
+        cdb_branch_taken_target[0] =
+            bru_issue ? bru_taken_target : 64'd0;
         cdb_branch_mispredict[0] = bru_issue ? bru_mispredict : 1'b0;
         cdb_csr_we[0]           = 1'b0;
         cdb_csr_addr[0]         = 12'd0;
@@ -1353,6 +1635,8 @@ module rv64gc_core_top
         cdb_is_branch[1]        = bru1_issue;
         cdb_branch_taken[1]     = bru1_issue ? bru1_taken : 1'b0;
         cdb_branch_target[1]    = bru1_issue ? bru1_target : 64'd0;
+        cdb_branch_taken_target[1] =
+            bru1_issue ? bru1_taken_target : 64'd0;
         cdb_branch_mispredict[1] = bru1_issue ? bru1_mispredict : 1'b0;
         cdb_csr_we[1]           = 1'b0;
         cdb_csr_addr[1]         = 12'd0;
@@ -1364,7 +1648,42 @@ module rv64gc_core_top
             cdb_data[1] = alu1_result;
     end
 
-    // CDB[2]: ALU2 (same cycle) or MUL (3-cycle latency)
+    // MUL output hold register: when MUL completes but ALU2 takes the CDB,
+    // latch the MUL result and replay next cycle. Without this, the MUL
+    // result is silently dropped and the ROB entry never becomes ready.
+    logic        mul_hold_valid_r;
+    logic [ROB_IDX_BITS-1:0]  mul_hold_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] mul_hold_pdst_r;
+    logic [63:0] mul_hold_data_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_out.valid) begin
+            mul_hold_valid_r <= 1'b0;
+        end else if (mul_valid_out && alu2_issue) begin
+            // MUL ready but ALU2 wins - hold until drain
+            mul_hold_valid_r   <= 1'b1;
+            mul_hold_rob_idx_r <= mul_rob_idx_s3;
+            mul_hold_pdst_r    <= mul_pdst_s3;
+            mul_hold_data_r    <= mul_result;
+        end else if (mul_hold_valid_r && !alu2_issue) begin
+            // Drain: held MUL result goes to CDB this cycle
+            mul_hold_valid_r <= 1'b0;
+        end
+        // else: keep holding while ALU2 continues to occupy the port
+    end
+
+    // Effective MUL output: fresh MUL result OR held result from last cycle
+    logic        mul_eff_valid;
+    logic [ROB_IDX_BITS-1:0]  mul_eff_rob_idx;
+    logic [PHYS_REG_BITS-1:0] mul_eff_pdst;
+    logic [63:0] mul_eff_data;
+
+    assign mul_eff_valid   = mul_valid_out || mul_hold_valid_r;
+    assign mul_eff_rob_idx = mul_valid_out ? mul_rob_idx_s3 : mul_hold_rob_idx_r;
+    assign mul_eff_pdst    = mul_valid_out ? mul_pdst_s3    : mul_hold_pdst_r;
+    assign mul_eff_data    = mul_valid_out ? mul_result     : mul_hold_data_r;
+
+    // CDB[2]: ALU2 (same cycle) or MUL (3-cycle latency, with hold)
     always_comb begin
         if (alu2_issue) begin
             cdb_valid[2]         = 1'b1;
@@ -1372,16 +1691,17 @@ module rv64gc_core_top
             cdb_rob_idx[2]       = iq1_issue_data[0].rob_idx;
             cdb_data[2]          = alu2_result;
         end else begin
-            cdb_valid[2]         = mul_valid_out;
-            cdb_tag[2]           = mul_pdst_s3;
-            cdb_rob_idx[2]       = mul_rob_idx_s3;
-            cdb_data[2]          = mul_result;
+            cdb_valid[2]         = mul_eff_valid;
+            cdb_tag[2]           = mul_eff_pdst;
+            cdb_rob_idx[2]       = mul_eff_rob_idx;
+            cdb_data[2]          = mul_eff_data;
         end
         cdb_has_exception[2]     = 1'b0;
         cdb_exc_code[2]          = 4'd0;
         cdb_is_branch[2]        = 1'b0;
         cdb_branch_taken[2]     = 1'b0;
         cdb_branch_target[2]    = 64'd0;
+        cdb_branch_taken_target[2] = 64'd0;
         cdb_branch_mispredict[2] = 1'b0;
         cdb_csr_we[2]           = 1'b0;
         cdb_csr_addr[2]         = 12'd0;
@@ -1389,7 +1709,36 @@ module rv64gc_core_top
         cdb_csr_op[2]           = 2'd0;
     end
 
-    // CDB[3]: ALU3 (same cycle) or DIV (multi-cycle)
+    // DIV output hold register (same pattern as MUL hold)
+    logic        div_hold_valid_r;
+    logic [ROB_IDX_BITS-1:0]  div_hold_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] div_hold_pdst_r;
+    logic [63:0] div_hold_data_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_out.valid) begin
+            div_hold_valid_r <= 1'b0;
+        end else if (div_valid_out && alu3_issue) begin
+            div_hold_valid_r   <= 1'b1;
+            div_hold_rob_idx_r <= div_rob_idx_r;
+            div_hold_pdst_r    <= div_pdst_r;
+            div_hold_data_r    <= div_result;
+        end else if (div_hold_valid_r && !alu3_issue) begin
+            div_hold_valid_r <= 1'b0;
+        end
+    end
+
+    logic        div_eff_valid;
+    logic [ROB_IDX_BITS-1:0]  div_eff_rob_idx;
+    logic [PHYS_REG_BITS-1:0] div_eff_pdst;
+    logic [63:0] div_eff_data;
+
+    assign div_eff_valid   = div_valid_out || div_hold_valid_r;
+    assign div_eff_rob_idx = div_valid_out ? div_rob_idx_r : div_hold_rob_idx_r;
+    assign div_eff_pdst    = div_valid_out ? div_pdst_r    : div_hold_pdst_r;
+    assign div_eff_data    = div_valid_out ? div_result    : div_hold_data_r;
+
+    // CDB[3]: ALU3 (same cycle) or DIV (multi-cycle, with hold)
     always_comb begin
         if (alu3_issue) begin
             cdb_valid[3]         = 1'b1;
@@ -1409,10 +1758,10 @@ module rv64gc_core_top
             cdb_csr_wdata[3]     = bypassed_data[6];  // rs1 value (the write mask)
             cdb_csr_op[3]        = iq2_issue_data[0].csr_op;
         end else begin
-            cdb_valid[3]         = div_valid_out;
-            cdb_tag[3]           = div_pdst_r;
-            cdb_rob_idx[3]       = div_rob_idx_r;
-            cdb_data[3]          = div_result;
+            cdb_valid[3]         = div_eff_valid;
+            cdb_tag[3]           = div_eff_pdst;
+            cdb_rob_idx[3]       = div_eff_rob_idx;
+            cdb_data[3]          = div_eff_data;
             cdb_csr_we[3]        = 1'b0;
             cdb_csr_addr[3]      = 12'd0;
             cdb_csr_wdata[3]     = 64'd0;
@@ -1423,6 +1772,7 @@ module rv64gc_core_top
         cdb_is_branch[3]        = 1'b0;
         cdb_branch_taken[3]     = 1'b0;
         cdb_branch_target[3]    = 64'd0;
+        cdb_branch_taken_target[3] = 64'd0;
         cdb_branch_mispredict[3] = 1'b0;
     end
 
@@ -1437,6 +1787,7 @@ module rv64gc_core_top
         cdb_is_branch[4]       = 1'b0;
         cdb_branch_taken[4]    = 1'b0;
         cdb_branch_target[4]   = 64'd0;
+        cdb_branch_taken_target[4] = 64'd0;
         cdb_branch_mispredict[4] = 1'b0;
         cdb_csr_we[4]          = 1'b0;
         cdb_csr_addr[4]        = 12'd0;
@@ -1455,6 +1806,7 @@ module rv64gc_core_top
         cdb_is_branch[5]       = 1'b0;
         cdb_branch_taken[5]    = 1'b0;
         cdb_branch_target[5]   = 64'd0;
+        cdb_branch_taken_target[5] = 64'd0;
         cdb_branch_mispredict[5] = 1'b0;
         cdb_csr_we[5]          = 1'b0;
         cdb_csr_addr[5]        = 12'd0;
@@ -1482,6 +1834,7 @@ module rv64gc_core_top
                 cdb_rob_idx_r[i]        <= '0;
                 cdb_exc_code_r[i]       <= '0;
                 cdb_branch_target_r[i]  <= '0;
+                cdb_branch_taken_target_r[i] <= '0;
                 cdb_csr_addr_r[i]       <= '0;
                 cdb_csr_wdata_r[i]      <= '0;
                 cdb_csr_op_r[i]         <= '0;
@@ -1499,6 +1852,7 @@ module rv64gc_core_top
                 cdb_rob_idx_r[i]        <= cdb_rob_idx[i];
                 cdb_exc_code_r[i]       <= cdb_exc_code[i];
                 cdb_branch_target_r[i]  <= cdb_branch_target[i];
+                cdb_branch_taken_target_r[i] <= cdb_branch_taken_target[i];
                 cdb_csr_addr_r[i]       <= cdb_csr_addr[i];
                 cdb_csr_wdata_r[i]      <= cdb_csr_wdata[i];
                 cdb_csr_op_r[i]         <= cdb_csr_op[i];
@@ -1507,17 +1861,22 @@ module rv64gc_core_top
     end
 
     // =========================================================================
-    // STA writeback register (1-cycle delay, matches CDB register stage)
+    // Store sideband writeback register (1-cycle delay, matches CDB register stage)
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             lsu_sta_wb_valid_r   <= 1'b0;
             lsu_sta_wb_rob_idx_r <= '0;
+            lsu_std_wb_valid_r   <= 1'b0;
+            lsu_std_wb_rob_idx_r <= '0;
         end else if (flush_out.valid) begin
             lsu_sta_wb_valid_r   <= 1'b0;
+            lsu_std_wb_valid_r   <= 1'b0;
         end else begin
             lsu_sta_wb_valid_r   <= lsu_sta_wb_valid;
             lsu_sta_wb_rob_idx_r <= lsu_sta_wb_rob_idx;
+            lsu_std_wb_valid_r   <= lsu_std_wb_valid;
+            lsu_std_wb_rob_idx_r <= lsu_std_wb_rob_idx;
         end
     end
 
@@ -2078,6 +2437,7 @@ module rv64gc_core_top
         .clk                    (clk),
         .rst_n                  (rst_n),
         // Issue inputs
+        .load_issue_candidate_valid(iq_load_issue_candidate_valid),
         .load_issue_valid       (iq_load_issue_valid),
         .load_issue_data        (iq_load_issue_data),
         .sta_issue_valid        (routed_sta_valid),
@@ -2104,6 +2464,8 @@ module rv64gc_core_top
         .load_wb_exc_code       (lsu_load_wb_exc_code),
         .sta_wb_valid           (lsu_sta_wb_valid),
         .sta_wb_rob_idx         (lsu_sta_wb_rob_idx),
+        .std_wb_valid           (lsu_std_wb_valid),
+        .std_wb_rob_idx         (lsu_std_wb_rob_idx),
         // Commit counts
         .store_commit_count     (store_commit_count),
         .load_commit_count      (load_commit_count),
@@ -2119,9 +2481,10 @@ module rv64gc_core_top
         .sq_alloc_idx           (sq_alloc_idx),
         .lq_full                (lq_full),
         .sq_full                (sq_full),
+        .rob_head               (rob_head_idx),
         // Ordering violation
         .ordering_violation     (lsu_ordering_violation),
-        .load_port0_suppress   (lsu_port0_suppress),
+        .load_issue_suppress    (lsu_load_issue_suppress_raw),
         .violation_rob_idx      (lsu_violation_rob_idx),
         // D-cache interface
         .dcache_load_req_valid  (dc_load_req_valid),
@@ -2268,12 +2631,14 @@ module rv64gc_core_top
         .clk                    (clk),
         .rst_n                  (rst_n),
         // ROB head
+        .head_idx               (rob_head_idx),
         .head_valid             (rob_head_valid),
         .head_ready             (rob_head_ready),
         .head_pc                (rob_head_pc),
         .head_has_exception     (rob_head_has_exception),
         .head_exc_code          (rob_head_exc_code),
         .head_is_branch         (rob_head_is_branch),
+        .head_bpu_type          (rob_head_bpu_type),
         .head_is_store          (rob_head_is_store),
         .head_is_load           (rob_head_is_load),
         .head_is_csr            (rob_head_is_csr),
@@ -2298,6 +2663,10 @@ module rv64gc_core_top
         .head_rd_valid          (rb_head_rd_valid),
         .head_uses_checkpoint   (rb_head_uses_checkpoint),
         .head_checkpoint_id     (rb_head_checkpoint_id),
+        .head_bp_ras_tos        (rb_head_bp_ras_tos),
+        .head_bp_ras_top        (rb_head_bp_ras_top),
+        .head_bp_ras_op         (rb_head_bp_ras_op),
+        .head_bp_ghr            (rb_head_bp_ghr),
         // Outputs
         .commit_count           (commit_count),
         .commit_out             (commit_out),
@@ -2332,27 +2701,69 @@ module rv64gc_core_top
     // BPU update from commit (branch resolution)
     // =========================================================================
     always_comb begin
+        logic found_update;
+        logic is_control;
+
         bpu_update_valid     = 1'b0;
         bpu_update_pc        = 64'd0;
+        bpu_tage_update_valid = 1'b0;
+        bpu_tage_update_pc   = 64'd0;
         bpu_update_taken     = 1'b0;
         bpu_update_mispredict = 1'b0;
         bpu_update_target    = 64'd0;
         bpu_update_type      = 3'd0;
+        bpu_update_ghr       = '0;
+        found_update         = 1'b0;
 
-        // Scan committed entries for branches and mispredicted jumps.
-        // Update the BTB for:
-        //   - Conditional branches (rob_head_is_branch)
-        //   - Any instruction with branch_mispredict set (catches JAL/JALR)
+        // A block-based frontend must train the oldest qualifying control in
+        // the commit batch: later control transfers in the same fetch block
+        // otherwise starve the earliest branch/jump that actually owns the
+        // next-block decision.
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if (commit_out[i].valid && !bpu_update_valid &&
-                (rob_head_is_branch[i] || rob_head_branch_mispredict[i])) begin
+            is_control = rob_head_is_branch[i] || (rob_head_bpu_type[i] != 3'd0);
+            if (!found_update &&
+                commit_out[i].valid &&
+                is_control &&
+                rob_head_branch_mispredict[i]) begin
                 bpu_update_valid     = 1'b1;
                 bpu_update_pc        = rob_head_pc[i];
+                bpu_tage_update_valid = rb_head_bp_owner[i] &&
+                                        rob_head_is_branch[i];
+                bpu_tage_update_pc   = rb_head_bp_lookup_pc[i];
                 bpu_update_taken     = rob_head_branch_taken[i];
                 bpu_update_mispredict = rob_head_branch_mispredict[i];
-                bpu_update_target    = rob_head_branch_target[i];
-                // Type: 0=cond, 1=jal for non-branch mispredicts
+                bpu_update_target    = rob_head_is_branch[i]
+                                       ? rob_head_branch_taken_target[i]
+                                       : rob_head_branch_target[i];
                 bpu_update_type      = rob_head_bpu_type[i];
+                bpu_update_ghr       = rb_head_bp_ghr[i];
+                found_update         = 1'b1;
+            end
+        end
+
+        // If nothing mispredicted this cycle, still train the oldest
+        // committed control transfer so BTB state stays aligned with the
+        // earliest CFI in each fetch block.
+        if (!bpu_update_valid) begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                is_control = rob_head_is_branch[i] || (rob_head_bpu_type[i] != 3'd0);
+                if (!found_update &&
+                    commit_out[i].valid &&
+                    is_control) begin
+                    bpu_update_valid      = 1'b1;
+                    bpu_update_pc         = rob_head_pc[i];
+                    bpu_tage_update_valid = rb_head_bp_owner[i] &&
+                                            rob_head_is_branch[i];
+                    bpu_tage_update_pc    = rb_head_bp_lookup_pc[i];
+                    bpu_update_taken      = rob_head_branch_taken[i];
+                    bpu_update_mispredict = rob_head_branch_mispredict[i];
+                    bpu_update_target     = rob_head_is_branch[i]
+                                            ? rob_head_branch_taken_target[i]
+                                            : rob_head_branch_target[i];
+                    bpu_update_type       = rob_head_bpu_type[i];
+                    bpu_update_ghr        = rb_head_bp_ghr[i];
+                    found_update          = 1'b1;
+                end
             end
         end
     end

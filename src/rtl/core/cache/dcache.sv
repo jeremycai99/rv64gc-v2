@@ -168,24 +168,43 @@ module dcache
     logic [63:0]             s1_st_addr;
     logic [63:0]             s1_st_data;
     logic [7:0]              s1_st_byte_mask;
+    logic                    s1_st_use_port_b;
+    logic                    s0_store_lookup_grant_a;
+    logic                    s0_store_lookup_grant_b;
+
+    // Store lookup can use either shared read port:
+    //   - port A when load0 is idle
+    //   - port B when load0 is active but load1 is idle
+    // Advance a store into s1 only when it actually won one of the ports;
+    // otherwise the tag/data outputs still belong to a load and the store
+    // must remain in the CSB.
+    assign s0_store_lookup_grant_a = store_req_valid && !load_req_valid[0];
+    assign s0_store_lookup_grant_b = store_req_valid && load_req_valid[0]
+                                   && !load_req_valid[1];
 
     // Tag RAM port A: load port 0 (priority), then store
     always_comb begin
         if (load_req_valid[0])
             tr_raddr = load_req_addr[0][INDEX_HI:INDEX_LO];
-        else if (store_req_valid)
+        else if (s0_store_lookup_grant_a)
             tr_raddr = store_req_addr[INDEX_HI:INDEX_LO];
         else
             tr_raddr = '0;
     end
 
-    // Tag RAM port B: always load port 1
-    assign tr_raddr2 = load_req_addr[1][INDEX_HI:INDEX_LO];
+    // Tag RAM port B: load port 1, or store when load1 is idle.
+    assign tr_raddr2 = load_req_valid[1] ? load_req_addr[1][INDEX_HI:INDEX_LO]
+                                         : (s0_store_lookup_grant_b
+                                            ? store_req_addr[INDEX_HI:INDEX_LO]
+                                            : '0);
 
-    // Data RAM port A: load port 0
+    // Data RAM port A: load port 0, or store when load0 is idle.
     always_comb begin
         if (load_req_valid[0]) begin
             dr_raddr = load_req_addr[0][INDEX_HI:INDEX_LO];
+            dr_rway  = 2'd0;
+        end else if (s0_store_lookup_grant_a) begin
+            dr_raddr = store_req_addr[INDEX_HI:INDEX_LO];
             dr_rway  = 2'd0;
         end else begin
             dr_raddr = '0;
@@ -193,8 +212,11 @@ module dcache
         end
     end
 
-    // Data RAM port B: load port 1
-    assign dr_raddr2 = load_req_addr[1][INDEX_HI:INDEX_LO];
+    // Data RAM port B: load port 1, or store when load1 is idle.
+    assign dr_raddr2 = load_req_valid[1] ? load_req_addr[1][INDEX_HI:INDEX_LO]
+                                         : (s0_store_lookup_grant_b
+                                            ? store_req_addr[INDEX_HI:INDEX_LO]
+                                            : '0);
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -210,6 +232,7 @@ module dcache
             s1_st_addr      <= '0;
             s1_st_data      <= '0;
             s1_st_byte_mask <= '0;
+            s1_st_use_port_b <= 1'b0;
         end else begin
             s1_ld0_valid    <= load_req_valid[0];
             s1_ld0_addr     <= load_req_addr[0];
@@ -222,10 +245,11 @@ module dcache
             s1_ld1_size     <= load_req_size[1];
             s1_ld1_unsigned <= load_req_is_unsigned[1];
 
-            s1_st_valid     <= store_req_valid;
+            s1_st_valid     <= s0_store_lookup_grant_a || s0_store_lookup_grant_b;
             s1_st_addr      <= store_req_addr;
             s1_st_data      <= store_req_data;
             s1_st_byte_mask <= store_req_byte_mask;
+            s1_st_use_port_b <= s0_store_lookup_grant_b;
         end
     end
 
@@ -286,13 +310,23 @@ module dcache
     logic [L1D_WAYS-1:0] st_way_hit;
     logic                st_cache_hit;
     logic [1:0]          st_hit_way;
+    logic                st_dirty_way [0:L1D_WAYS-1];
+    logic [L1D_TAG_BITS-1:0] st_tag_way [0:L1D_WAYS-1];
+    logic [LINE_SIZE*8-1:0] st_data_way [0:L1D_WAYS-1];
 
     always_comb begin
         st_way_hit   = '0;
         st_cache_hit = 1'b0;
         st_hit_way   = 2'd0;
         for (int w = 0; w < L1D_WAYS; w++) begin
-            if (tr_valid_out[w] && (tr_tag_out[w] == s1_st_tag)) begin
+            st_dirty_way[w] = s1_st_use_port_b ? tr_dirty_out2[w]
+                                               : tr_dirty_out[w];
+            st_tag_way[w]   = s1_st_use_port_b ? tr_tag_out2[w]
+                                               : tr_tag_out[w];
+            st_data_way[w]  = s1_st_use_port_b ? dr_rdata_all2[w]
+                                               : dr_rdata_all[w];
+            if ((s1_st_use_port_b ? tr_valid_out2[w] : tr_valid_out[w]) &&
+                (st_tag_way[w] == s1_st_tag)) begin
                 st_way_hit[w] = 1'b1;
                 st_cache_hit  = 1'b1;
                 st_hit_way    = 2'(w);
@@ -320,6 +354,15 @@ module dcache
             victim_way_s1 = plru_state[s1_ld0_index][1] ? 2'd0 : 2'd1;
         else
             victim_way_s1 = plru_state[s1_ld0_index][0] ? 2'd2 : 2'd3;
+    end
+
+    // Load-port-1 miss victim selection uses the secondary load's own set.
+    logic [1:0] victim_way_ld1;
+    always_comb begin
+        if (!plru_state[s1_ld1_index][2])
+            victim_way_ld1 = plru_state[s1_ld1_index][1] ? 2'd0 : 2'd1;
+        else
+            victim_way_ld1 = plru_state[s1_ld1_index][0] ? 2'd2 : 2'd3;
     end
 
     // Store-miss victim selection uses the store's own set index.
@@ -380,6 +423,10 @@ module dcache
         logic                    fill_pend;      // waiting for fill from L2
         logic                    fill_done;      // fill received, ready to install
         logic [511:0]            fill_data;      // data received from L2
+        logic                    store_pending;  // store miss waiting on fill
+        logic [5:0]              store_byte_off; // byte offset within the line
+        logic [63:0]             store_data;     // LSB-aligned store data
+        logic [7:0]              store_byte_mask;// valid bytes in store_data
         logic [1:0]              victim;         // victim way for fill
         logic                    dirty_evict;    // victim was dirty
         logic [511:0]            evict_data;     // dirty line data for writeback
@@ -388,14 +435,35 @@ module dcache
 
     mshr_entry_t mshr [0:MSHR_DEPTH-1];
 
+    function automatic logic [511:0] merge_store_into_line(
+        input logic [511:0] line_data,
+        input logic [5:0]   byte_off,
+        input logic [63:0]  store_data,
+        input logic [7:0]   byte_mask
+    );
+        logic [511:0] merged;
+        int line_byte;
+        begin
+            merged = line_data;
+            for (int b = 0; b < 8; b++) begin
+                line_byte = int'(byte_off) + b;
+                if (byte_mask[b] && (line_byte < LINE_SIZE))
+                    merged[line_byte*8 +: 8] = store_data[b*8 +: 8];
+            end
+            merge_store_into_line = merged;
+        end
+    endfunction
+
     // =========================================================================
     // MSHR lookup: find a matching pending entry
     // =========================================================================
     logic [MSHR_IDX_BITS-1:0] mshr_match_idx;
     logic                     mshr_match_hit;
     logic [63:0]              ld0_line_addr;
+    logic [63:0]              ld1_line_addr;
     logic [63:0]              st_line_addr;
     assign ld0_line_addr = {s1_ld0_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
+    assign ld1_line_addr = {s1_ld1_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
     assign st_line_addr  = {s1_st_addr[63:LINE_BITS],  {LINE_BITS{1'b0}}};
 
     always_comb begin
@@ -405,6 +473,20 @@ module dcache
             if (mshr[m].valid && (mshr[m].addr == ld0_line_addr)) begin
                 mshr_match_hit = 1'b1;
                 mshr_match_idx = MSHR_IDX_BITS'(m);
+            end
+        end
+    end
+
+    // MSHR match check for load1 miss.
+    logic [MSHR_IDX_BITS-1:0] mshr_ld1_match_idx;
+    logic                     mshr_ld1_match_hit;
+    always_comb begin
+        mshr_ld1_match_idx = '0;
+        mshr_ld1_match_hit = 1'b0;
+        for (int m = 0; m < MSHR_DEPTH; m++) begin
+            if (mshr[m].valid && (mshr[m].addr == ld1_line_addr)) begin
+                mshr_ld1_match_hit = 1'b1;
+                mshr_ld1_match_idx = MSHR_IDX_BITS'(m);
             end
         end
     end
@@ -560,6 +642,7 @@ module dcache
     logic [LINE_SIZE*8-1:0] st_full_data;
     logic [5:0]             st_line_off;
     int                     st_line_byte [0:7];
+    logic [LINE_SIZE*8-1:0] fill_done_line_data;
 
     always_comb begin
         st_full_mask = '0;
@@ -573,6 +656,20 @@ module dcache
                     st_full_data[st_line_byte[b]*8 +: 8] = s1_st_data[b*8 +: 8];
                 end
             end
+        end
+    end
+
+    always_comb begin
+        fill_done_line_data = '0;
+        if (fill_done_avail) begin
+            fill_done_line_data = mshr[fill_done_idx].store_pending
+                ? merge_store_into_line(
+                      mshr[fill_done_idx].fill_data,
+                      mshr[fill_done_idx].store_byte_off,
+                      mshr[fill_done_idx].store_data,
+                      mshr[fill_done_idx].store_byte_mask
+                  )
+                : mshr[fill_done_idx].fill_data;
         end
     end
 
@@ -609,13 +706,13 @@ module dcache
             tr_waddr  = mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO];
             tr_wway   = mshr[fill_done_idx].victim;
             tr_wvalid = 1'b1;
-            tr_wdirty = 1'b0;
+            tr_wdirty = mshr[fill_done_idx].store_pending;
             tr_wtag   = mshr[fill_done_idx].addr[TAG_HI:TAG_LO];
 
             dr_we     = 1'b1;
             dr_waddr  = mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO];
             dr_wway   = mshr[fill_done_idx].victim;
-            dr_wdata  = mshr[fill_done_idx].fill_data;
+            dr_wdata  = fill_done_line_data;
         end else if (s1_st_valid && st_cache_hit) begin
             // Store hit: byte-enable write + dirty bit update
             tr_dirty_we    = 1'b1;
@@ -667,7 +764,15 @@ module dcache
                                     (s1_st_can_allocate_mshr || mshr_st_match_hit) &&
                                     !s1_st_is_tohost;
 
-    assign store_ack = s1_st_valid && !fill_done_avail && !s1_st_waiting_for_fill;
+    logic fill_completes_store;
+    assign fill_completes_store = fill_done_avail &&
+                                  mshr[fill_done_idx].store_pending &&
+                                  store_req_valid &&
+                                  (store_req_addr[63:LINE_BITS] ==
+                                   mshr[fill_done_idx].addr[63:LINE_BITS]);
+
+    assign store_ack = fill_completes_store ||
+                       (s1_st_valid && !fill_done_avail && !s1_st_waiting_for_fill);
 
     // =========================================================================
     // Fill snoop (for LSU load miss buffer)
@@ -679,7 +784,7 @@ module dcache
     // data RAM.
     assign fill_snoop_valid = fill_done_avail;
     assign fill_snoop_addr  = mshr[fill_done_idx].addr;
-    assign fill_snoop_data  = mshr[fill_done_idx].fill_data;
+    assign fill_snoop_data  = fill_done_line_data;
 
     // =========================================================================
     // Load response outputs
@@ -752,14 +857,18 @@ module dcache
     // =========================================================================
     logic [1:0] mshr_ld_vway;
     logic       mshr_ld_dirty_v;
+    logic [1:0] mshr_ld1_vway;
+    logic       mshr_ld1_dirty_v;
     logic [1:0] mshr_st_vway;
     logic       mshr_st_dirty_v;
 
     always_comb begin
         mshr_ld_vway    = victim_way_s1;
         mshr_ld_dirty_v = tr_dirty_out[victim_way_s1];
+        mshr_ld1_vway    = victim_way_ld1;
+        mshr_ld1_dirty_v = tr_dirty_out2[victim_way_ld1];
         mshr_st_vway    = victim_way_st;
-        mshr_st_dirty_v = tr_dirty_out[victim_way_st];
+        mshr_st_dirty_v = st_dirty_way[victim_way_st];
     end
 
     // =========================================================================
@@ -785,6 +894,10 @@ module dcache
                 mshr[mshr_free_idx].dirty_evict    <= mshr_ld_dirty_v;
                 mshr[mshr_free_idx].fill_pend      <= 1'b1;
                 mshr[mshr_free_idx].fill_done      <= 1'b0;
+                mshr[mshr_free_idx].store_pending  <= 1'b0;
+                mshr[mshr_free_idx].store_byte_off <= 6'd0;
+                mshr[mshr_free_idx].store_data     <= 64'd0;
+                mshr[mshr_free_idx].store_byte_mask<= 8'd0;
                 mshr[mshr_free_idx].writeback_pend <= mshr_ld_dirty_v;
                 if (mshr_ld_dirty_v) begin
                     // Need to evict dirty line: save its address and data
@@ -792,6 +905,26 @@ module dcache
                     mshr[mshr_free_idx].evict_data <= dr_rdata_all[mshr_ld_vway];
                     mshr[mshr_free_idx].evict_addr <=
                         {tr_tag_out[mshr_ld_vway], s1_ld0_index, {LINE_BITS{1'b0}}};
+                end
+            end
+            // ---- Allocate new MSHR on load1 miss ----
+            else if (s1_ld1_valid && !ld1_cache_hit && !mshr_ld1_match_hit
+                     && mshr_free_avail && !invalidate_all) begin
+                mshr[mshr_free_idx].valid          <= 1'b1;
+                mshr[mshr_free_idx].addr           <= ld1_line_addr;
+                mshr[mshr_free_idx].victim         <= mshr_ld1_vway;
+                mshr[mshr_free_idx].dirty_evict    <= mshr_ld1_dirty_v;
+                mshr[mshr_free_idx].fill_pend      <= 1'b1;
+                mshr[mshr_free_idx].fill_done      <= 1'b0;
+                mshr[mshr_free_idx].store_pending  <= 1'b0;
+                mshr[mshr_free_idx].store_byte_off <= 6'd0;
+                mshr[mshr_free_idx].store_data     <= 64'd0;
+                mshr[mshr_free_idx].store_byte_mask<= 8'd0;
+                mshr[mshr_free_idx].writeback_pend <= mshr_ld1_dirty_v;
+                if (mshr_ld1_dirty_v) begin
+                    mshr[mshr_free_idx].evict_data <= dr_rdata_all2[mshr_ld1_vway];
+                    mshr[mshr_free_idx].evict_addr <=
+                        {tr_tag_out2[mshr_ld1_vway], s1_ld1_index, {LINE_BITS{1'b0}}};
                 end
             end
             // ---- Allocate new MSHR on store miss (write-allocate) ----
@@ -807,11 +940,15 @@ module dcache
                 mshr[mshr_free_idx].dirty_evict    <= mshr_st_dirty_v;
                 mshr[mshr_free_idx].fill_pend      <= 1'b1;
                 mshr[mshr_free_idx].fill_done      <= 1'b0;
+                mshr[mshr_free_idx].store_pending  <= 1'b1;
+                mshr[mshr_free_idx].store_byte_off <= s1_st_addr[5:0];
+                mshr[mshr_free_idx].store_data     <= s1_st_data;
+                mshr[mshr_free_idx].store_byte_mask<= s1_st_byte_mask;
                 mshr[mshr_free_idx].writeback_pend <= mshr_st_dirty_v;
                 if (mshr_st_dirty_v) begin
-                    mshr[mshr_free_idx].evict_data <= dr_rdata_all[mshr_st_vway];
+                    mshr[mshr_free_idx].evict_data <= st_data_way[mshr_st_vway];
                     mshr[mshr_free_idx].evict_addr <=
-                        {tr_tag_out[mshr_st_vway], s1_st_index, {LINE_BITS{1'b0}}};
+                        {st_tag_way[mshr_st_vway], s1_st_index, {LINE_BITS{1'b0}}};
                 end
             end
 
@@ -820,7 +957,14 @@ module dcache
                 for (int m = 0; m < MSHR_DEPTH; m++) begin
                     if (mshr[m].valid && mshr[m].fill_pend &&
                         (l2_resp_addr[63:LINE_BITS] == mshr[m].addr[63:LINE_BITS])) begin
-                        mshr[m].fill_data  <= l2_resp_data;
+                        mshr[m].fill_data  <= mshr[m].store_pending
+                            ? merge_store_into_line(
+                                  l2_resp_data,
+                                  mshr[m].store_byte_off,
+                                  mshr[m].store_data,
+                                  mshr[m].store_byte_mask
+                              )
+                            : l2_resp_data;
                         mshr[m].fill_pend  <= 1'b0;
                         mshr[m].fill_done  <= 1'b1;
                     end
