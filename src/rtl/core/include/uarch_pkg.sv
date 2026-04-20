@@ -180,6 +180,12 @@ package uarch_pkg;
         // Branch prediction info (filled by fetch)
         logic               bp_taken;
         logic [63:0]        bp_target;
+        logic               bp_owner;
+        logic               bp_from_subgroup;
+        logic [63:0]        bp_lookup_pc;
+        logic [4:0]         bp_ras_tos;
+        logic [63:0]        bp_ras_top;
+        logic [GHR_BITS-1:0] bp_ghr;
         logic               has_exception;
         logic [3:0]         exc_code;
         // NEW v2 fields: instruction fusion
@@ -189,12 +195,76 @@ package uarch_pkg;
     } decoded_insn_t;
 
     // =========================================================================
-    // Renamed instruction (output of rename stage)
-    // Padded to 448 bits (7x64) to avoid Verilator struct-array misalignment.
-    // Unpadded width is 402 bits (345 decoded_insn_t + 57 rename fields).
+    // Frontend fetch packet (fetch buffer payload)
+    // Packed arrays are used here so the whole packet can be queued as a
+    // single packed object through the fetch buffer without unpacked-array
+    // port issues.
     // =========================================================================
     typedef struct packed {
-        logic [45:0]                    _pad;           // 46 bits -> 402+46 = 448
+        logic [63:0]                    block_pc;
+        logic [5:0]                     start_offset;
+        logic [63:0]                    fallthrough_pc;
+        logic                           pred_ctl_valid;
+        logic                           pred_ctl_taken;
+        logic [5:0]                     pred_ctl_offset;
+        logic [2:0]                     pred_ctl_type;
+        logic [63:0]                    pred_ctl_target;
+        logic                           pred_from_subgroup;
+        logic                           btb_hit;
+        logic [5:0]                     btb_offset;
+        logic [2:0]                     btb_type;
+        logic [63:0]                    btb_target;
+        logic                           btb_alt_hit;
+        logic [5:0]                     btb_alt_offset;
+        logic [2:0]                     btb_alt_type;
+        logic [63:0]                    btb_alt_target;
+        logic                           tage_taken;
+        logic                           tage_confident;
+        logic [4:0]                     ras_tos_snapshot;
+        logic [63:0]                    ras_top_snapshot;
+        logic [GHR_BITS-1:0]            ghr_snapshot;
+    } ftq_entry_t;
+
+    typedef struct packed {
+        logic                           valid;
+        logic [FTQ_IDX_BITS-1:0]        ftq_idx;
+        logic [FTQ_EPOCH_BITS-1:0]      ftq_epoch;
+        logic [FTQ_ALLOC_TAG_BITS-1:0]  ftq_alloc_tag;
+        logic                           ftq_owner_complete;
+        logic [63:0]                    ftq_block_pc;
+        logic [5:0]                     ftq_start_offset;
+        logic [63:0]                    ftq_bp_lookup_pc;
+        logic                           ftq_pred_valid;
+        logic                           ftq_pred_taken;
+        logic [5:0]                     ftq_pred_offset;
+        logic [2:0]                     ftq_pred_type;
+        logic [63:0]                    ftq_pred_target;
+        logic                           ftq_pred_from_subgroup;
+        logic                           pd_ctl_valid;
+        logic [2:0]                     pd_ctl_slot;
+        logic [2:0]                     pd_ctl_type;
+        logic [63:0]                    pd_ctl_target;
+        logic [2:0]                     fetch_count;
+        logic [PIPE_WIDTH-1:0][31:0]    fetch_insn;
+        logic [PIPE_WIDTH-1:0][63:0]    fetch_pc;
+        logic [PIPE_WIDTH-1:0]          fetch_is_rvc;
+        logic [PIPE_WIDTH-1:0]          fetch_bp_taken;
+        logic [PIPE_WIDTH-1:0][63:0]    fetch_bp_target;
+        logic [4:0]                     fetch_bp_ras_tos;
+        logic [63:0]                    fetch_bp_ras_top;
+        logic [GHR_BITS-1:0]            fetch_bp_ghr;
+    } fetch_packet_t;
+
+    // =========================================================================
+    // Renamed instruction (output of rename stage)
+    // Padded to 448 bits (7x64) to avoid Verilator struct-array misalignment.
+    // =========================================================================
+    localparam int RENAMED_INSN_PAD_BITS = 448 - ($bits(decoded_insn_t) +
+        ROB_IDX_BITS + (4 * PHYS_REG_BITS) + 2 + CHECKPOINT_BITS + 1 +
+        SQ_IDX_BITS + LQ_IDX_BITS);
+
+    typedef struct packed {
+        logic [RENAMED_INSN_PAD_BITS-1:0] _pad;
         decoded_insn_t                  base;
         logic [ROB_IDX_BITS-1:0]        rob_idx;
         logic [PHYS_REG_BITS-1:0]       rs1_phys;
@@ -246,7 +316,7 @@ package uarch_pkg;
     // when stored in unpacked arrays, corrupting pc/imm in the BRU path.
     // =========================================================================
     typedef struct packed {
-        logic [60:0]                    _pad;           // 61 bits -> 323+61 = 384
+        logic [53:0]                    _pad;           // 54 bits -> 330+54 = 384
         logic                           valid;
         logic [ROB_IDX_BITS-1:0]        rob_idx;
         logic [PHYS_REG_BITS-1:0]       pdst;
@@ -269,6 +339,9 @@ package uarch_pkg;
         logic [63:0]                    pc;
         logic                           bp_taken;
         logic [63:0]                    bp_target;
+        logic [4:0]                     bp_ras_tos;
+        logic [1:0]                     bp_ras_op;
+        logic [GHR_BITS-1:0]            bp_ghr;
         // v2 fusion fields
         logic                           is_fused;
         logic [2:0]                     fusion_type;
@@ -325,6 +398,10 @@ package uarch_pkg;
         logic [CHECKPOINT_BITS-1:0]     checkpoint_id;
         logic                           full_flush;
         logic [4:0]                     ras_tos;
+        logic                           ras_top_restore_valid;
+        logic [63:0]                    ras_top_restore_addr;
+        logic                           ghr_restore_valid;
+        logic [GHR_BITS-1:0]            ghr_restore_val;
     } flush_t;
 
     // =========================================================================
@@ -347,6 +424,12 @@ package uarch_pkg;
         logic [PHYS_REG_BITS-1:0]       old_pdst;
         logic [4:0]                     rd_arch;
         logic                           rd_valid;
+        logic                           bp_owner;
+        logic [63:0]                    bp_lookup_pc;
+        logic [4:0]                     bp_ras_tos;
+        logic [63:0]                    bp_ras_top;
+        logic [1:0]                     bp_ras_op;
+        logic [GHR_BITS-1:0]            bp_ghr;
     } rename_buf_entry_t;
 
     // =========================================================================

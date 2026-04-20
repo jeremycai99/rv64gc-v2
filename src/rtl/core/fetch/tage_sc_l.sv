@@ -14,12 +14,17 @@ module tage_sc_l
     input  logic [63:0] pc,
     output logic        pred_taken,
     output logic        pred_confident,   // high confidence -> no checkpoint needed
+    input  logic [63:0] aux_pc,
+    input  logic [GHR_BITS-1:0] aux_ghr,
+    output logic        aux_pred_taken,
+    output logic        aux_pred_confident,
 
     // Update (from commit — actual branch outcome)
     input  logic        update_valid,
     input  logic [63:0] update_pc,
     input  logic        update_taken,
     input  logic        update_mispredict,
+    input  logic [GHR_BITS-1:0] update_ghr,
 
     // GHR management
     input  logic        spec_update_valid,  // speculatively shift GHR on prediction
@@ -72,10 +77,10 @@ module tage_sc_l
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             ghr_r <= '0;
-        end else if (flush) begin
-            ghr_r <= '0;
         end else if (ghr_restore_valid) begin
             ghr_r <= ghr_restore_val;
+        end else if (flush) begin
+            ghr_r <= '0;
         end else if (spec_update_valid) begin
             ghr_r <= {ghr_r[GHR_BITS-2:0], spec_taken};
         end
@@ -87,6 +92,9 @@ module tage_sc_l
     logic [TAGE_IDX_BITS-1:0] fold_idx [TAGE_NUM_TABLES];
     logic [TAGE_TAG_BITS-1:0] fold_tag1 [TAGE_NUM_TABLES];
     logic [TAGE_TAG_BITS-1:0] fold_tag2 [TAGE_NUM_TABLES];
+    logic [TAGE_IDX_BITS-1:0] aux_fold_idx [TAGE_NUM_TABLES];
+    logic [TAGE_TAG_BITS-1:0] aux_fold_tag1 [TAGE_NUM_TABLES];
+    logic [TAGE_TAG_BITS-1:0] aux_fold_tag2 [TAGE_NUM_TABLES];
     logic [TAGE_IDX_BITS-1:0] upd_fold_idx [TAGE_NUM_TABLES];
     logic [TAGE_TAG_BITS-1:0] upd_fold_tag1 [TAGE_NUM_TABLES];
     logic [TAGE_TAG_BITS-1:0] upd_fold_tag2 [TAGE_NUM_TABLES];
@@ -96,6 +104,9 @@ module tage_sc_l
             fold_idx[t] = '0;
             fold_tag1[t] = '0;
             fold_tag2[t] = '0;
+            aux_fold_idx[t] = '0;
+            aux_fold_tag1[t] = '0;
+            aux_fold_tag2[t] = '0;
             upd_fold_idx[t] = '0;
             upd_fold_tag1[t] = '0;
             upd_fold_tag2[t] = '0;
@@ -103,12 +114,15 @@ module tage_sc_l
                 if (i < GHR_LENGTHS[t]) begin
                     fold_idx[t][i % TAGE_IDX_BITS] = fold_idx[t][i % TAGE_IDX_BITS] ^ ghr_r[i];
                     fold_tag1[t][i % TAGE_TAG_BITS] = fold_tag1[t][i % TAGE_TAG_BITS] ^ ghr_r[i];
-                    upd_fold_idx[t][i % TAGE_IDX_BITS] = upd_fold_idx[t][i % TAGE_IDX_BITS] ^ ghr_r[i];
-                    upd_fold_tag1[t][i % TAGE_TAG_BITS] = upd_fold_tag1[t][i % TAGE_TAG_BITS] ^ ghr_r[i];
+                    aux_fold_idx[t][i % TAGE_IDX_BITS] = aux_fold_idx[t][i % TAGE_IDX_BITS] ^ aux_ghr[i];
+                    aux_fold_tag1[t][i % TAGE_TAG_BITS] = aux_fold_tag1[t][i % TAGE_TAG_BITS] ^ aux_ghr[i];
+                    upd_fold_idx[t][i % TAGE_IDX_BITS] = upd_fold_idx[t][i % TAGE_IDX_BITS] ^ update_ghr[i];
+                    upd_fold_tag1[t][i % TAGE_TAG_BITS] = upd_fold_tag1[t][i % TAGE_TAG_BITS] ^ update_ghr[i];
                 end
                 if (i < (GHR_LENGTHS[t] + 3)) begin
                     fold_tag2[t][i % TAGE_TAG_BITS] = fold_tag2[t][i % TAGE_TAG_BITS] ^ ghr_r[i];
-                    upd_fold_tag2[t][i % TAGE_TAG_BITS] = upd_fold_tag2[t][i % TAGE_TAG_BITS] ^ ghr_r[i];
+                    aux_fold_tag2[t][i % TAGE_TAG_BITS] = aux_fold_tag2[t][i % TAGE_TAG_BITS] ^ aux_ghr[i];
+                    upd_fold_tag2[t][i % TAGE_TAG_BITS] = upd_fold_tag2[t][i % TAGE_TAG_BITS] ^ update_ghr[i];
                 end
             end
         end
@@ -121,9 +135,13 @@ module tage_sc_l
 
     logic [BASE_IDX_BITS-1:0] base_lkp_idx;
     logic                     base_pred;
+    logic [BASE_IDX_BITS-1:0] aux_base_lkp_idx;
+    logic                     aux_base_pred;
 
     assign base_lkp_idx = pc[BASE_IDX_BITS+1:2];
     assign base_pred    = base_table[base_lkp_idx][BASE_CTR_BITS-1]; // >= 2
+    assign aux_base_lkp_idx = aux_pc[BASE_IDX_BITS+1:2];
+    assign aux_base_pred    = base_table[aux_base_lkp_idx][BASE_CTR_BITS-1];
 
     // =========================================================================
     //  2. Tagged tables (4 tables x 256 entries)
@@ -139,12 +157,20 @@ module tage_sc_l
     logic [TAGE_TAG_BITS-1:0]  tage_lkp_tag [TAGE_NUM_TABLES];
     logic                      tage_hit     [TAGE_NUM_TABLES];
     logic [TAGE_CTR_BITS-1:0]  tage_hit_ctr [TAGE_NUM_TABLES];
+    logic [TAGE_IDX_BITS-1:0]  aux_tage_lkp_idx [TAGE_NUM_TABLES];
+    logic [TAGE_TAG_BITS-1:0]  aux_tage_lkp_tag [TAGE_NUM_TABLES];
+    logic                      aux_tage_hit     [TAGE_NUM_TABLES];
+    logic [TAGE_CTR_BITS-1:0]  aux_tage_hit_ctr [TAGE_NUM_TABLES];
 
     // Provider selection: longest-matching table
     logic                      tage_any_hit;
     logic [1:0]                tage_provider;        // table index of provider
     logic                      tage_pred;
     logic                      tage_pred_weak;       // counter near threshold
+    logic                      aux_tage_any_hit;
+    logic [1:0]                aux_tage_provider;
+    logic                      aux_tage_pred;
+    logic                      aux_tage_pred_weak;
 
     always_comb begin
         for (int t = 0; t < TAGE_NUM_TABLES; t++) begin
@@ -153,6 +179,13 @@ module tage_sc_l
             tage_hit[t]     = tage_valid[t][tage_lkp_idx[t]] &&
                               (tage_tags[t][tage_lkp_idx[t]] == tage_lkp_tag[t]);
             tage_hit_ctr[t] = tage_ctrs[t][tage_lkp_idx[t]];
+            aux_tage_lkp_idx[t] = aux_pc[TAGE_IDX_BITS+1:2] ^ aux_fold_idx[t] ^
+                                  TAGE_IDX_BITS'(aux_pc[21:12] >> t);
+            aux_tage_lkp_tag[t] = aux_pc[TAGE_TAG_BITS+1:2] ^ aux_fold_tag1[t] ^
+                                  aux_fold_tag2[t];
+            aux_tage_hit[t]     = tage_valid[t][aux_tage_lkp_idx[t]] &&
+                                  (tage_tags[t][aux_tage_lkp_idx[t]] == aux_tage_lkp_tag[t]);
+            aux_tage_hit_ctr[t] = tage_ctrs[t][aux_tage_lkp_idx[t]];
         end
 
         // Provider = longest-matching (highest-index) table
@@ -160,12 +193,21 @@ module tage_sc_l
         tage_provider = 2'd0;
         tage_pred     = base_pred;
         tage_pred_weak = 1'b0;
+        aux_tage_any_hit  = 1'b0;
+        aux_tage_provider = 2'd0;
+        aux_tage_pred     = aux_base_pred;
+        aux_tage_pred_weak = 1'b0;
 
         for (int t = 0; t < TAGE_NUM_TABLES; t++) begin
             if (tage_hit[t]) begin
                 tage_any_hit  = 1'b1;
                 tage_provider = 2'(t);
                 tage_pred     = tage_hit_ctr[t] >= 3'(TAGE_CTR_BITS'(1) << (TAGE_CTR_BITS - 1));
+            end
+            if (aux_tage_hit[t]) begin
+                aux_tage_any_hit  = 1'b1;
+                aux_tage_provider = 2'(t);
+                aux_tage_pred     = aux_tage_hit_ctr[t] >= 3'(TAGE_CTR_BITS'(1) << (TAGE_CTR_BITS - 1));
             end
         end
 
@@ -177,6 +219,14 @@ module tage_sc_l
             // Base predictor: weak when counter is 1 or 2
             tage_pred_weak = (base_table[base_lkp_idx] == 2'd1) ||
                              (base_table[base_lkp_idx] == 2'd2);
+        end
+
+        if (aux_tage_any_hit) begin
+            aux_tage_pred_weak = (aux_tage_hit_ctr[aux_tage_provider] == 3'd3) ||
+                                 (aux_tage_hit_ctr[aux_tage_provider] == 3'd4);
+        end else begin
+            aux_tage_pred_weak = (base_table[aux_base_lkp_idx] == 2'd1) ||
+                                 (base_table[aux_base_lkp_idx] == 2'd2);
         end
     end
 
@@ -190,9 +240,16 @@ module tage_sc_l
     logic signed [SC_CTR_BITS:0]   sc_sum;        // wider for addition
     logic                          sc_override;
     logic                          sc_pred;
+    logic [SC_IDX_BITS-1:0]        aux_sc_lkp_idx;
+    logic signed [SC_CTR_BITS-1:0] aux_sc_ctr_val;
+    logic signed [SC_CTR_BITS:0]   aux_sc_sum;
+    logic                          aux_sc_override;
+    logic                          aux_sc_pred;
 
     assign sc_lkp_idx = pc[SC_IDX_BITS+1:2] ^ SC_IDX_BITS'(ghr_r[7:0]);
     assign sc_ctr_val = sc_table[sc_lkp_idx];
+    assign aux_sc_lkp_idx = aux_pc[SC_IDX_BITS+1:2] ^ SC_IDX_BITS'(aux_ghr[7:0]);
+    assign aux_sc_ctr_val = sc_table[aux_sc_lkp_idx];
 
     always_comb begin
         // TAGE confidence mapped to signed value: strong taken = +2, weak taken = +1,
@@ -217,6 +274,26 @@ module tage_sc_l
                 sc_pred     = 1'b1;
             end
         end
+
+        if (aux_tage_pred_weak) begin
+            aux_sc_sum = aux_tage_pred ? (aux_sc_ctr_val + 7'(1))
+                                       : (aux_sc_ctr_val - 7'(1));
+        end else begin
+            aux_sc_sum = aux_tage_pred ? (aux_sc_ctr_val + 7'(2))
+                                       : (aux_sc_ctr_val - 7'(2));
+        end
+
+        aux_sc_override = 1'b0;
+        aux_sc_pred     = aux_tage_pred;
+        if (aux_tage_pred_weak) begin
+            if (aux_tage_pred && (aux_sc_sum < 0)) begin
+                aux_sc_override = 1'b1;
+                aux_sc_pred     = 1'b0;
+            end else if (!aux_tage_pred && (aux_sc_sum >= 0)) begin
+                aux_sc_override = 1'b1;
+                aux_sc_pred     = 1'b1;
+            end
+        end
     end
 
     // =========================================================================
@@ -236,9 +313,17 @@ module tage_sc_l
     logic                      loop_pred;
     logic                      loop_confident;
     logic                      loop_override;
+    logic [LOOP_IDX_BITS-1:0]  aux_loop_lkp_idx;
+    logic [LOOP_TAG_BITS-1:0]  aux_loop_lkp_tag;
+    logic                      aux_loop_hit;
+    logic                      aux_loop_pred;
+    logic                      aux_loop_confident;
+    logic                      aux_loop_override;
 
     assign loop_lkp_idx = pc[LOOP_IDX_BITS+1:2];
     assign loop_lkp_tag = pc[LOOP_TAG_BITS+1:2];
+    assign aux_loop_lkp_idx = aux_pc[LOOP_IDX_BITS+1:2];
+    assign aux_loop_lkp_tag = aux_pc[LOOP_TAG_BITS+1:2];
 
     always_comb begin
         loop_hit       = loop_valid[loop_lkp_idx] &&
@@ -257,6 +342,22 @@ module tage_sc_l
             // Override TAGE+SC only with high confidence
             loop_override = loop_confident;
         end
+
+        aux_loop_hit       = loop_valid[aux_loop_lkp_idx] &&
+                             (loop_tags[aux_loop_lkp_idx] == aux_loop_lkp_tag);
+        aux_loop_pred      = 1'b0;
+        aux_loop_confident = 1'b0;
+        aux_loop_override  = 1'b0;
+
+        if (aux_loop_hit) begin
+            aux_loop_confident = (loop_conf[aux_loop_lkp_idx] == {LOOP_CONF_BITS{1'b1}});
+            if (loop_count[aux_loop_lkp_idx] < loop_limit[aux_loop_lkp_idx]) begin
+                aux_loop_pred = 1'b1;
+            end else begin
+                aux_loop_pred = 1'b0;
+            end
+            aux_loop_override = aux_loop_confident;
+        end
     end
 
     // =========================================================================
@@ -271,6 +372,14 @@ module tage_sc_l
 
         // Confidence: high if loop overrides, or if TAGE was strong and SC agreed
         pred_confident = loop_override || (!tage_pred_weak && !sc_override);
+
+        if (aux_loop_override) begin
+            aux_pred_taken = aux_loop_pred;
+        end else begin
+            aux_pred_taken = aux_sc_pred;
+        end
+
+        aux_pred_confident = aux_loop_override || (!aux_tage_pred_weak && !aux_sc_override);
     end
 
     // =========================================================================
@@ -291,7 +400,7 @@ module tage_sc_l
 
     always_comb begin
         upd_base_idx = update_pc[BASE_IDX_BITS+1:2];
-        upd_sc_idx   = update_pc[SC_IDX_BITS+1:2] ^ SC_IDX_BITS'(ghr_r[7:0]);
+        upd_sc_idx   = update_pc[SC_IDX_BITS+1:2] ^ SC_IDX_BITS'(update_ghr[7:0]);
         upd_loop_idx = update_pc[LOOP_IDX_BITS+1:2];
         upd_loop_tag = update_pc[LOOP_TAG_BITS+1:2];
 
@@ -405,6 +514,20 @@ module tage_sc_l
                     end else begin
                         tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] <=
                             ((tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] == '0) ? tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] : tage_ctrs[upd_provider][upd_tage_idx[upd_provider]] - {{(TAGE_CTR_BITS-1){1'b0}}, 1'b1});
+                    end
+                end
+            end else if (update_mispredict) begin
+                // Base-only misses must still seed tagged tables; otherwise
+                // the predictor never graduates beyond the bimodal table.
+                for (int t = 0; t < TAGE_NUM_TABLES; t++) begin
+                    if (!upd_tage_hit[t]) begin
+                        if (tage_useful[t][upd_tage_idx[t]] == '0 ||
+                            !tage_valid[t][upd_tage_idx[t]]) begin
+                            tage_valid[t][upd_tage_idx[t]]  <= 1'b1;
+                            tage_tags[t][upd_tage_idx[t]]   <= upd_tage_tag[t];
+                            tage_ctrs[t][upd_tage_idx[t]]   <= update_taken ? 3'd4 : 3'd3;
+                            tage_useful[t][upd_tage_idx[t]] <= '0;
+                        end
                     end
                 end
             end

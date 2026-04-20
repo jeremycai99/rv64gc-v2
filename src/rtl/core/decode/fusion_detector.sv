@@ -345,6 +345,28 @@ module fusion_detector
                 fused_uop[0].fusion_type = 3'd7;  // SEXT.W+BEQ
             end
         end
+
+        if (fusable[0] && (fused_uop[0].fu_type == FU_BRU)) begin
+            // The fused uop executes the control transfer from slot 1, so it
+            // must inherit that slot's branch metadata and PC-relative base.
+            fused_uop[0].bp_taken  = dec_in[1].bp_taken;
+            fused_uop[0].bp_target = dec_in[1].bp_target;
+            fused_uop[0].bp_owner  = dec_in[1].bp_owner;
+            fused_uop[0].bp_from_subgroup = dec_in[1].bp_from_subgroup;
+            fused_uop[0].bp_lookup_pc = dec_in[1].bp_lookup_pc;
+            fused_uop[0].bp_ras_tos = dec_in[1].bp_ras_tos;
+            fused_uop[0].bp_ras_top = dec_in[1].bp_ras_top;
+            fused_uop[0].bp_ghr   = dec_in[1].bp_ghr;
+            fused_uop[0].pc        = dec_in[1].pc;
+            fused_uop[0].is_rvc    = dec_in[1].is_rvc;
+
+            // AUIPC+JALR folds the producer's PC into the fused immediate
+            // because the BRU's JALR target path computes operand_a + imm.
+            if (w_is_auipc[0] && w_is_jalr[1] &&
+                (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
+                fused_uop[0].imm = dec_in[0].pc + dec_in[0].imm + dec_in[1].imm;
+            end
+        end
     end : pair_0_1
 
     // ---------- pair 1,2 ----------
@@ -560,6 +582,24 @@ module fusion_detector
                 fused_uop[1].imm        = dec_in[2].imm;
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd7;  // SEXT.W+BEQ
+            end
+        end
+
+        if (fusable[1] && (fused_uop[1].fu_type == FU_BRU)) begin
+            fused_uop[1].bp_taken  = dec_in[2].bp_taken;
+            fused_uop[1].bp_target = dec_in[2].bp_target;
+            fused_uop[1].bp_owner  = dec_in[2].bp_owner;
+            fused_uop[1].bp_from_subgroup = dec_in[2].bp_from_subgroup;
+            fused_uop[1].bp_lookup_pc = dec_in[2].bp_lookup_pc;
+            fused_uop[1].bp_ras_tos = dec_in[2].bp_ras_tos;
+            fused_uop[1].bp_ras_top = dec_in[2].bp_ras_top;
+            fused_uop[1].bp_ghr   = dec_in[2].bp_ghr;
+            fused_uop[1].pc        = dec_in[2].pc;
+            fused_uop[1].is_rvc    = dec_in[2].is_rvc;
+
+            if (w_is_auipc[1] && w_is_jalr[2] &&
+                (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
+                fused_uop[1].imm = dec_in[1].pc + dec_in[1].imm + dec_in[2].imm;
             end
         end
     end : pair_1_2
@@ -779,6 +819,24 @@ module fusion_detector
                 fused_uop[2].fusion_type = 3'd7;  // SEXT.W+BEQ
             end
         end
+
+        if (fusable[2] && (fused_uop[2].fu_type == FU_BRU)) begin
+            fused_uop[2].bp_taken  = dec_in[3].bp_taken;
+            fused_uop[2].bp_target = dec_in[3].bp_target;
+            fused_uop[2].bp_owner  = dec_in[3].bp_owner;
+            fused_uop[2].bp_from_subgroup = dec_in[3].bp_from_subgroup;
+            fused_uop[2].bp_lookup_pc = dec_in[3].bp_lookup_pc;
+            fused_uop[2].bp_ras_tos = dec_in[3].bp_ras_tos;
+            fused_uop[2].bp_ras_top = dec_in[3].bp_ras_top;
+            fused_uop[2].bp_ghr   = dec_in[3].bp_ghr;
+            fused_uop[2].pc        = dec_in[3].pc;
+            fused_uop[2].is_rvc    = dec_in[3].is_rvc;
+
+            if (w_is_auipc[2] && w_is_jalr[3] &&
+                (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
+                fused_uop[2].imm = dec_in[2].pc + dec_in[2].imm + dec_in[3].imm;
+            end
+        end
     end : pair_2_3
 
     // ---------- pair 3,4 ----------
@@ -996,6 +1054,24 @@ module fusion_detector
                 fused_uop[3].fusion_type = 3'd7;  // SEXT.W+BEQ
             end
         end
+
+        if (fusable[3] && (fused_uop[3].fu_type == FU_BRU)) begin
+            fused_uop[3].bp_taken  = dec_in[4].bp_taken;
+            fused_uop[3].bp_target = dec_in[4].bp_target;
+            fused_uop[3].bp_owner  = dec_in[4].bp_owner;
+            fused_uop[3].bp_from_subgroup = dec_in[4].bp_from_subgroup;
+            fused_uop[3].bp_lookup_pc = dec_in[4].bp_lookup_pc;
+            fused_uop[3].bp_ras_tos = dec_in[4].bp_ras_tos;
+            fused_uop[3].bp_ras_top = dec_in[4].bp_ras_top;
+            fused_uop[3].bp_ghr   = dec_in[4].bp_ghr;
+            fused_uop[3].pc        = dec_in[4].pc;
+            fused_uop[3].is_rvc    = dec_in[4].is_rvc;
+
+            if (w_is_auipc[3] && w_is_jalr[4] &&
+                (dec_in[3].rd_arch == dec_in[4].rs1_arch)) begin
+                fused_uop[3].imm = dec_in[3].pc + dec_in[3].imm + dec_in[4].imm;
+            end
+        end
     end : pair_3_4
 
     // ---------- pair 4,5 ----------
@@ -1211,6 +1287,24 @@ module fusion_detector
                 fused_uop[4].imm        = dec_in[5].imm;
                 fused_uop[4].is_fused   = 1'b1;
                 fused_uop[4].fusion_type = 3'd7;  // SEXT.W+BEQ
+            end
+        end
+
+        if (fusable[4] && (fused_uop[4].fu_type == FU_BRU)) begin
+            fused_uop[4].bp_taken  = dec_in[5].bp_taken;
+            fused_uop[4].bp_target = dec_in[5].bp_target;
+            fused_uop[4].bp_owner  = dec_in[5].bp_owner;
+            fused_uop[4].bp_from_subgroup = dec_in[5].bp_from_subgroup;
+            fused_uop[4].bp_lookup_pc = dec_in[5].bp_lookup_pc;
+            fused_uop[4].bp_ras_tos = dec_in[5].bp_ras_tos;
+            fused_uop[4].bp_ras_top = dec_in[5].bp_ras_top;
+            fused_uop[4].bp_ghr   = dec_in[5].bp_ghr;
+            fused_uop[4].pc        = dec_in[5].pc;
+            fused_uop[4].is_rvc    = dec_in[5].is_rvc;
+
+            if (w_is_auipc[4] && w_is_jalr[5] &&
+                (dec_in[4].rd_arch == dec_in[5].rs1_arch)) begin
+                fused_uop[4].imm = dec_in[4].pc + dec_in[4].imm + dec_in[5].imm;
             end
         end
     end : pair_4_5

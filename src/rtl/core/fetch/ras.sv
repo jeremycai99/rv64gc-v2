@@ -16,7 +16,9 @@ module ras
     output logic [4:0]  tos,           // top-of-stack pointer (for checkpoint save)
     // Restore on mispredict
     input  logic        restore_valid,
-    input  logic [4:0]  restore_tos    // saved TOS pointer from checkpoint
+    input  logic [4:0]  restore_tos,   // saved TOS pointer from checkpoint
+    input  logic        restore_top_valid,
+    input  logic [63:0] restore_top_addr
 );
 
     // =========================================================================
@@ -36,8 +38,11 @@ module ras
     // =========================================================================
     // tos_r - 1, wrapped modulo RAS_DEPTH
     logic [4:0] top_idx;
+    logic [4:0] restore_top_idx;
     assign top_idx = (tos_r == 5'd0) ? 5'(RAS_DEPTH - 1) : (tos_r - 5'd1);
-    assign pop_addr = stack[top_idx];
+    assign restore_top_idx =
+        (restore_tos == 5'd0) ? 5'(RAS_DEPTH - 1) : (restore_tos - 5'd1);
+    assign pop_addr = (tos_r == 5'd0) ? 64'd0 : stack[top_idx];
 
     // =========================================================================
     // Sequential push / pop / restore
@@ -49,8 +54,11 @@ module ras
                 stack[i] <= 64'd0;
             end
         end else if (restore_valid) begin
-            // Checkpoint restore — only move the pointer; stack data is retained
+            // Restore the pointer and, when available, repair the visible top
+            // entry that may have been overwritten by wrong-path pushes.
             tos_r <= restore_tos;
+            if (restore_top_valid && (restore_tos != 5'd0))
+                stack[restore_top_idx] <= restore_top_addr;
         end else begin
             // Push takes priority over simultaneous pop (CALL within RET)
             if (push_valid) begin
@@ -58,8 +66,9 @@ module ras
                 // Wrap pointer modulo RAS_DEPTH
                 tos_r <= (tos_r == 5'(RAS_DEPTH - 1)) ? 5'd0 : (tos_r + 5'd1);
             end else if (pop_valid) begin
-                // Decrement with wrap; underflow wraps to RAS_DEPTH - 1
-                tos_r <= (tos_r == 5'd0) ? 5'(RAS_DEPTH - 1) : (tos_r - 5'd1);
+                // Ignore empty-stack pops; otherwise decrement one level.
+                if (tos_r != 5'd0)
+                    tos_r <= tos_r - 5'd1;
             end
         end
     end

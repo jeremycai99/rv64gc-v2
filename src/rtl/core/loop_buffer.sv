@@ -70,22 +70,49 @@ module loop_buffer
     // =========================================================================
     logic [IDX_BITS:0]   pb_remaining;  // entries left in this pass
     logic [IDX_BITS:0]   pb_avail;      // entries to emit this cycle
+    logic [IDX_BITS:0]   pb_control_span;
+
+    function automatic logic replay_stop(input decoded_insn_t insn);
+        begin
+            replay_stop = insn.bp_taken && (insn.is_jal || insn.is_jalr);
+        end
+    endfunction
 
     always_comb begin
         pb_remaining = body_len_r - rd_ptr_r;
-        if (pb_remaining > (IDX_BITS+1)'(PIPE_WIDTH))
-            pb_avail = (IDX_BITS+1)'(PIPE_WIDTH);
-        else
-            pb_avail = pb_remaining;
+        pb_control_span = '0;
+
+        // Keep call/return/indirect-jump boundaries intact during replay.
+        // Dhrystone exposed a real correctness bug when a single playback
+        // chunk crossed Proc_5 ret -> Proc_4 call -> Proc_4 ret. Ordinary
+        // conditional branches remain replayable inside the chunk so CoreMark
+        // hot loops do not collapse to 2- or 4-wide fetch slices.
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            logic [IDX_BITS-1:0] rd_idx;
+            if ((IDX_BITS+1)'(i) < pb_remaining &&
+                (pb_control_span == (IDX_BITS+1)'(i))) begin
+                rd_idx = loop_start_r +
+                         IDX_BITS'(rd_ptr_r[IDX_BITS-1:0]) +
+                         IDX_BITS'(i);
+                pb_control_span = (IDX_BITS+1)'(i + 1);
+                if (replay_stop(buf_r[rd_idx]))
+                    break;
+            end
+        end
+
+        pb_avail = pb_control_span;
     end
 
     // Captured body length (combinational, computed at back-edge)
     logic [IDX_BITS:0] cap_len;
+    logic [IDX_BITS:0] cap_close_len;
     always_comb begin
         if (wr_ptr_r >= loop_start_r)
             cap_len = {1'b0, wr_ptr_r} - {1'b0, loop_start_r};
         else
             cap_len = (IDX_BITS+1)'(DEPTH);  // wrapped: treat as overflow
+
+        cap_close_len = cap_len + {{(IDX_BITS-2){1'b0}}, dec_count};
     end
 
     // =========================================================================
@@ -116,8 +143,7 @@ module loop_buffer
                     state_next = IDLE;
                 end else if (backward_branch_taken) begin
                     // Second back-edge: body complete.
-                    // Only play back if it fits within LOOP_BUF_DEPTH.
-                    if (cap_len > '0 && cap_len < (IDX_BITS+1)'(DEPTH))
+                    if (cap_close_len > '0 && cap_close_len < (IDX_BITS+1)'(DEPTH))
                         state_next = PLAYING;
                     else
                         state_next = IDLE;
@@ -151,6 +177,9 @@ module loop_buffer
                     if (invalidate) begin
                         wr_ptr_r   <= '0;
                         body_len_r <= '0;
+                    end else if (cap_len >= (IDX_BITS+1)'(DEPTH)) begin
+                        wr_ptr_r   <= '0;
+                        body_len_r <= '0;
                     end else if (backward_branch_taken) begin
                         // Second back-edge: this decode group starts with the
                         // closing backward branch.  Capture all instructions in
@@ -164,7 +193,7 @@ module loop_buffer
                             end
                         end
                         wr_ptr_r   <= wr_ptr_r + IDX_BITS'(dec_count);
-                        body_len_r <= cap_len + {{(IDX_BITS-2){1'b0}}, dec_count};
+                        body_len_r <= cap_close_len;
                     end else begin
                         // Absorb dec_count instructions this cycle
                         for (int i = 0; i < PIPE_WIDTH; i++) begin

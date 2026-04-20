@@ -126,11 +126,13 @@ RTL_FILES = \
     $(RTL_DIR)/core/fetch/btb.sv \
     $(RTL_DIR)/core/fetch/ras.sv \
     $(RTL_DIR)/core/fetch/tage_sc_l.sv \
-    $(RTL_DIR)/core/cache/icache_tag_ram.sv \
-    $(RTL_DIR)/core/cache/icache_data_ram.sv \
-    $(RTL_DIR)/core/cache/icache.sv \
-    $(RTL_DIR)/core/fetch/next_line_prefetch_buffer.sv \
-    $(RTL_DIR)/core/fetch/fetch_unit.sv \
+	$(RTL_DIR)/core/cache/icache_tag_ram.sv \
+	$(RTL_DIR)/core/cache/icache_data_ram.sv \
+	$(RTL_DIR)/core/cache/icache.sv \
+	$(RTL_DIR)/core/fetch/next_line_prefetch_buffer.sv \
+	$(RTL_DIR)/core/fetch/ftq.sv \
+	$(RTL_DIR)/core/fetch/fetch_packet_buffer.sv \
+	$(RTL_DIR)/core/fetch/fetch_unit.sv \
     $(RTL_DIR)/core/decode/decode_slice.sv \
     $(RTL_DIR)/core/decode/decode.sv \
     $(RTL_DIR)/core/decode/fusion_detector.sv \

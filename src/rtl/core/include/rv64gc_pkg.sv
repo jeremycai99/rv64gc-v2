@@ -97,6 +97,14 @@ package rv64gc_pkg;
     localparam int LOOP_BUF_DEPTH = 64;
 
     // =========================================================================
+    // Frontend queues
+    // =========================================================================
+    localparam int FTQ_DEPTH      = 24;
+    localparam int FTQ_IDX_BITS   = $clog2(FTQ_DEPTH);
+    localparam int FTQ_EPOCH_BITS = 4;
+    localparam int FTQ_ALLOC_TAG_BITS = 16;
+
+    // =========================================================================
     // Cache geometry
     // =========================================================================
     localparam int LINE_SIZE      = 64;                    // bytes per cache line
@@ -144,8 +152,15 @@ package rv64gc_pkg;
     localparam int LOOP_PRED_ENTRIES  = 64;
 
     // BTB
-    localparam int BTB_ENTRIES    = 1024;
-    localparam int BTB_WAYS       = 4;
+    //
+    // The fetch frontend indexes the BTB by cache line and stores a byte
+    // offset for each control-flow site in that line. Dhrystone's hot text
+    // region has several lines with 5-7 distinct control transfers, so the
+    // original 4-way organization cannot represent them without thrashing.
+    // Keep the set count stable for alias behavior and raise only the per-line
+    // associativity.
+    localparam int BTB_ENTRIES    = 2048;
+    localparam int BTB_WAYS       = 8;
     localparam int BTB_SETS       = BTB_ENTRIES / BTB_WAYS; // 256
 
     // RAS and GHR

@@ -86,6 +86,10 @@ module decode_slice
         decoded.is_rvc         = is_rvc;
         decoded.bp_taken       = 1'b0;
         decoded.bp_target      = 64'd0;
+        decoded.bp_from_subgroup = 1'b0;
+        decoded.bp_ras_tos     = 5'd0;
+        decoded.bp_ras_top     = 64'd0;
+        decoded.bp_ghr         = '0;
         decoded.has_exception  = 1'b0;
         decoded.exc_code       = 4'd0;
         // v2 fusion fields (initialized to 0, fusion_detector fills later)

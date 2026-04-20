@@ -19,6 +19,13 @@ module decode
     input  logic [PIPE_WIDTH-1:0]           fetch_is_rvc,
     input  logic [PIPE_WIDTH-1:0]           fetch_bp_taken,
     input  logic [63:0]                     fetch_bp_target [0:PIPE_WIDTH-1],
+    input  logic                            fetch_bp_owner_valid,
+    input  logic [2:0]                      fetch_bp_owner_slot,
+    input  logic                            fetch_bp_owner_from_subgroup,
+    input  logic [63:0]                     fetch_bp_lookup_pc,
+    input  logic [4:0]                      fetch_bp_ras_tos,
+    input  logic [63:0]                     fetch_bp_ras_top,
+    input  logic [GHR_BITS-1:0]             fetch_bp_ghr,
 
     // Output to fusion detector (or directly to rename if no fusion)
     output decoded_insn_t                   dec_insn [0:PIPE_WIDTH-1],
@@ -90,6 +97,22 @@ module decode
                     dec_tmp[j].valid     = 1'b1;
                     dec_tmp[j].bp_taken  = fetch_bp_taken[j];
                     dec_tmp[j].bp_target = fetch_bp_target[j];
+                    dec_tmp[j].bp_owner  =
+                        fetch_bp_owner_valid && (3'(j) == fetch_bp_owner_slot);
+                    dec_tmp[j].bp_from_subgroup =
+                        fetch_bp_owner_from_subgroup &&
+                        fetch_bp_owner_valid &&
+                        (3'(j) == fetch_bp_owner_slot);
+                    // Carry the real owner-branch PC when this slot owns the
+                    // prediction. The legacy packet-start lookup PC is kept
+                    // only for non-owner slots, where commit will ignore it.
+                    if (fetch_bp_owner_valid && (3'(j) == fetch_bp_owner_slot))
+                        dec_tmp[j].bp_lookup_pc = fetch_pc[j];
+                    else
+                        dec_tmp[j].bp_lookup_pc = fetch_bp_lookup_pc;
+                    dec_tmp[j].bp_ras_tos = fetch_bp_ras_tos;
+                    dec_tmp[j].bp_ras_top = fetch_bp_ras_top;
+                    dec_tmp[j].bp_ghr    = fetch_bp_ghr;
                     dec_insn_flat_r[j] <= DI_W'(dec_tmp[j]);
                 end else begin
                     // Clear valid bit only
