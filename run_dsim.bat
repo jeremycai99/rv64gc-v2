@@ -3,10 +3,11 @@ REM ============================================================================
 REM run_dsim.bat -- run a test/benchmark under DSim 2026
 REM
 REM Usage:
-REM   run_dsim.bat path\to\test.hex [MAX_CYCLES]
+REM   run_dsim.bat path\to\test.hex [MAX_CYCLES] [extra_plusargs...]
 REM
 REM Example:
 REM   run_dsim.bat tests\benchmarks\coremark_O2.hex 500000
+REM   run_dsim.bat tests\hex\dhrystone.hex 10000 +PERF_PROFILE +TRACE_FETCH
 REM
 REM Produces:
 REM   dsim_run.log    -- simulation log (IPC, SVA fires, final summary)
@@ -30,6 +31,7 @@ if "%~1"=="" (
 set HEX=%~1
 set MAX_CYC=%~2
 if "%MAX_CYC%"=="" set MAX_CYC=200000
+set EXTRA_PLUSARGS=%~3 %~4 %~5 %~6 %~7 %~8 %~9
 
 call "%DSIM_HOME%\shell_activate.bat"
 
@@ -52,7 +54,8 @@ dsim -image tb_image ^
      -waves run.mxd ^
      -l dsim_run.log ^
      +MEMFILE=%HEX% ^
-     +MAX_CYCLES=%MAX_CYC%
+     +MAX_CYCLES=%MAX_CYC% ^
+     %EXTRA_PLUSARGS%
 set RC=%errorlevel%
 
 if %RC% neq 0 (
