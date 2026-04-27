@@ -103,6 +103,85 @@ module tb_top
     assign tohost_valid = core_tohost_seen_q;
     assign tohost_value = core_tohost_data_q;
 
+    // Benchmark result block snoop. Bare-metal benchmarks write these registers
+    // before tohost so host scripts can calculate CoreMark/MHz, DMIPS/MHz, or
+    // SPEC ratio-per-MHz from the core's own cycle counters.
+    localparam logic [63:0] BENCH_RESULT_BASE = 64'h8000_1080;
+    localparam logic [63:0] BENCH_RESULT_END  = 64'h8000_1140;
+    localparam logic [63:0] BENCH_CTRL_START  = 64'd1;
+    localparam logic [63:0] BENCH_CTRL_STOP   = 64'd2;
+
+    logic        bench_timer_active;
+    logic [63:0] bench_start_mcycle;
+    logic [63:0] bench_start_minstret;
+
+    function automatic string bench_result_field_name(input int index);
+        case (index)
+            0: bench_result_field_name = "magic";
+            1: bench_result_field_name = "bench_id";
+            2: bench_result_field_name = "iterations";
+            3: bench_result_field_name = "cycles";
+            4: bench_result_field_name = "instret";
+            5: bench_result_field_name = "checksum";
+            6: bench_result_field_name = "flags";
+            7: bench_result_field_name = "control";
+            8: bench_result_field_name = "debug_seedcrc";
+            9: bench_result_field_name = "debug_known_id";
+            10: bench_result_field_name = "debug_crclist";
+            11: bench_result_field_name = "debug_crclist_expected";
+            12: bench_result_field_name = "debug_crcmatrix";
+            13: bench_result_field_name = "debug_crcmatrix_expected";
+            14: bench_result_field_name = "debug_crcstate";
+            15: bench_result_field_name = "debug_crcstate_expected";
+            16: bench_result_field_name = "debug_result_err";
+            17: bench_result_field_name = "debug_data_type_err";
+            18: bench_result_field_name = "debug_total_after_crc";
+            19: bench_result_field_name = "debug_total_after_dtype";
+            20: bench_result_field_name = "debug_time_secs";
+            21: bench_result_field_name = "debug_total_final";
+            22: bench_result_field_name = "debug_crcfinal";
+            default: bench_result_field_name = "reserved";
+        endcase
+    endfunction
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            bench_timer_active <= 1'b0;
+            bench_start_mcycle <= 64'd0;
+            bench_start_minstret <= 64'd0;
+        end else if (u_core.dc_store_req_valid && u_core.dc_store_ack &&
+                     (u_core.dc_store_req_addr >= BENCH_RESULT_BASE) &&
+                     (u_core.dc_store_req_addr < BENCH_RESULT_END)) begin
+            automatic int bench_result_index;
+            bench_result_index =
+                int'((u_core.dc_store_req_addr - BENCH_RESULT_BASE) >> 3);
+            $display("[BENCH_RESULT] index=%0d field=%s value=%0d hex=%016h",
+                     bench_result_index,
+                     bench_result_field_name(bench_result_index),
+                     u_core.dc_store_req_data,
+                     u_core.dc_store_req_data);
+            if ((bench_result_index == 7) &&
+                (u_core.dc_store_req_data == BENCH_CTRL_START)) begin
+                bench_timer_active <= 1'b1;
+                bench_start_mcycle <= perf_mcycle;
+                bench_start_minstret <= perf_minstret;
+            end else if ((bench_result_index == 7) &&
+                         (u_core.dc_store_req_data == BENCH_CTRL_STOP)) begin
+                automatic logic [63:0] bench_cycles;
+                automatic logic [63:0] bench_instret;
+                bench_cycles =
+                    bench_timer_active ? (perf_mcycle - bench_start_mcycle) : 64'd0;
+                bench_instret =
+                    bench_timer_active ? (perf_minstret - bench_start_minstret) : 64'd0;
+                bench_timer_active <= 1'b0;
+                $display("[BENCH_RESULT] index=3 field=cycles value=%0d hex=%016h",
+                         bench_cycles, bench_cycles);
+                $display("[BENCH_RESULT] index=4 field=instret value=%0d hex=%016h",
+                         bench_instret, bench_instret);
+            end
+        end
+    end
+
     // =========================================================================
     // Commit PC tracing (enabled with +TRACE_COMMIT)
     // =========================================================================
@@ -111,25 +190,71 @@ module tb_top
     logic trace_commit_en;
     logic trace_bru_en;
     logic trace_a0map_en;
+    logic trace_a5map_en;
+    logic trace_spmap_en;
     logic trace_lb_en;
     logic trace_ordv_en;
+    logic trace_wdog_en;
     logic trace_lsu_fwd_en;
     logic trace_lsu_p1_en;
+    logic trace_listptr_en;
+    logic trace_iqld_watch_en;
+    logic trace_head_stall_en;
+    logic trace_coremark_progress_en;
+    logic trace_coremark_exit_en;
+    logic trace_matrix_branch_en;
+    logic trace_commit_hotspots_en;
+    logic trace_ralink_en;
+    int   trace_iqld_watch_rob;
+    int   trace_listptr_start;
     initial begin
         trace_commit_en = 0;
         trace_bru_en    = 0;
         trace_a0map_en  = 0;
+        trace_a5map_en  = 0;
+        trace_spmap_en  = 0;
         trace_lb_en     = 0;
         trace_ordv_en   = 0;
+        trace_wdog_en   = 0;
         trace_lsu_fwd_en = 0;
         trace_lsu_p1_en = 0;
+        trace_listptr_en = 0;
+        trace_iqld_watch_en = 0;
+        trace_head_stall_en = 0;
+        trace_coremark_progress_en = 0;
+        trace_coremark_exit_en = 0;
+        trace_matrix_branch_en = 0;
+        trace_commit_hotspots_en = 0;
+        trace_ralink_en = 0;
+        trace_iqld_watch_rob = -1;
+        trace_listptr_start = 0;
         if ($test$plusargs("TRACE_COMMIT")) trace_commit_en = 1;
         if ($test$plusargs("TRACE_BRU"))    trace_bru_en    = 1;
         if ($test$plusargs("TRACE_A0MAP"))  trace_a0map_en  = 1;
+        if ($test$plusargs("TRACE_A5MAP"))  trace_a5map_en  = 1;
+        if ($test$plusargs("TRACE_SPMAP"))  trace_spmap_en  = 1;
         if ($test$plusargs("TRACE_LB"))     trace_lb_en     = 1;
         if ($test$plusargs("TRACE_ORDV"))   trace_ordv_en   = 1;
+        if ($test$plusargs("TRACE_WDOG"))   trace_wdog_en   = 1;
         if ($test$plusargs("TRACE_LSU_FWD")) trace_lsu_fwd_en = 1;
         if ($test$plusargs("TRACE_LSU_P1"))  trace_lsu_p1_en  = 1;
+        if ($test$plusargs("TRACE_LISTPTR")) trace_listptr_en = 1;
+        if ($value$plusargs("TRACE_LISTPTR_START=%d", trace_listptr_start))
+            trace_listptr_en = 1;
+        if ($test$plusargs("TRACE_HEAD_STALL")) trace_head_stall_en = 1;
+        if ($test$plusargs("TRACE_COREMARK_PROGRESS")) trace_coremark_progress_en = 1;
+        if ($test$plusargs("TRACE_COREMARK_EXIT")) trace_coremark_exit_en = 1;
+        if ($test$plusargs("TRACE_MATRIX_BRANCH")) trace_matrix_branch_en = 1;
+        if ($test$plusargs("TRACE_COMMIT_HOTSPOTS")) trace_commit_hotspots_en = 1;
+        if ($test$plusargs("TRACE_RALINK")) trace_ralink_en = 1;
+        if ($test$plusargs("TRACE_IQLD")) begin
+            trace_iqld_watch_en = 1;
+            trace_iqld_watch_rob = 113;
+        end
+        if ($value$plusargs("TRACE_IQLD_ROB=%d", trace_iqld_watch_rob))
+            trace_iqld_watch_en = 1;
+        if (trace_iqld_watch_en)
+            $display("[TRACE_CFG] iqld_watch_rob=%0d", trace_iqld_watch_rob);
     end
 
     function automatic logic [7:0] tb_byte_mask(
@@ -162,6 +287,108 @@ module tb_top
         end
     endfunction
 
+    function automatic logic [5:0] tb_pc_div_hash(input logic [63:0] pc);
+        begin
+            tb_pc_div_hash = pc[7:2] ^ pc[13:8] ^ pc[19:14] ^ pc[25:20];
+        end
+    endfunction
+
+    function automatic int tb_count_ones64(input logic [63:0] value);
+        int count;
+        begin
+            count = 0;
+            for (int i = 0; i < 64; i++) begin
+                if (value[i])
+                    count++;
+            end
+            tb_count_ones64 = count;
+        end
+    endfunction
+
+    function automatic int tb_coremark_progress_index(input logic [63:0] pc);
+        begin
+            case (pc)
+                64'h0000_0000_8000_2012: tb_coremark_progress_index = 0;  // rv64gc_bench_stop
+                64'h0000_0000_8000_2070: tb_coremark_progress_index = 1;  // start_time
+                64'h0000_0000_8000_208a: tb_coremark_progress_index = 2;  // stop_time
+                64'h0000_0000_8000_274e: tb_coremark_progress_index = 3;  // iterate
+                64'h0000_0000_8000_29d2: tb_coremark_progress_index = 4;  // calibration start_time
+                64'h0000_0000_8000_29d8: tb_coremark_progress_index = 5;  // calibration iterate
+                64'h0000_0000_8000_29dc: tb_coremark_progress_index = 6;  // calibration stop_time
+                64'h0000_0000_8000_2a0a: tb_coremark_progress_index = 7;  // timed start_time
+                64'h0000_0000_8000_2a22: tb_coremark_progress_index = 8;  // timed iterate call
+                64'h0000_0000_8000_2a26: tb_coremark_progress_index = 9;  // timed stop_time call
+                64'h0000_0000_8000_23d2: tb_coremark_progress_index = 10; // core_bench_list
+                64'h0000_0000_8000_34b4: tb_coremark_progress_index = 11; // core_bench_matrix
+                64'h0000_0000_8000_380a: tb_coremark_progress_index = 12; // core_bench_state
+                64'h0000_0000_8000_31f4: tb_coremark_progress_index = 13; // matrix_test
+                64'h0000_0000_8000_30dc: tb_coremark_progress_index = 14; // matrix_mul_vect
+                64'h0000_0000_8000_311a: tb_coremark_progress_index = 15; // matrix_mul_matrix
+                64'h0000_0000_8000_317e: tb_coremark_progress_index = 16; // matrix_mul_matrix_bitextract
+                64'h0000_0000_8000_31f0: tb_coremark_progress_index = 17; // matrix_mul_matrix_bitextract ret
+                64'h0000_0000_8000_33b6: tb_coremark_progress_index = 18; // after bitextract return
+                64'h0000_0000_8000_343c: tb_coremark_progress_index = 19; // matrix_test epilogue
+                64'h0000_0000_8000_34ca: tb_coremark_progress_index = 20; // after matrix_test return
+                default:                  tb_coremark_progress_index = -1;
+            endcase
+        end
+    endfunction
+
+    function automatic logic tb_coremark_exit_pc(input logic [63:0] pc);
+        begin
+            tb_coremark_exit_pc =
+                ((pc >= 64'h0000_0000_8000_2000) &&
+                 (pc <  64'h0000_0000_8000_2100)) || // bench write/report/time helpers
+                ((pc >= 64'h0000_0000_8000_2a00) &&
+                 (pc <  64'h0000_0000_8000_2f40)) || // main validation and epilogue
+                ((pc >= 64'h0000_0000_8000_029c) &&
+                 (pc <  64'h0000_0000_8000_02c0));   // _start after main returns
+        end
+    endfunction
+
+    function automatic logic tb_coremark_bad_fetch_pc(input logic [63:0] pc);
+        begin
+            tb_coremark_bad_fetch_pc =
+                (pc >= 64'h0000_0000_8000_20e0) &&
+                (pc <  64'h0000_0000_8000_20f8);
+        end
+    endfunction
+
+    function automatic logic tb_coremark_mmio_addr(input logic [63:0] addr);
+        begin
+            tb_coremark_mmio_addr =
+                ((addr >= BENCH_RESULT_BASE) && (addr < BENCH_RESULT_END)) ||
+                (addr[31:3] == TOHOST_ADDR[31:3]);
+        end
+    endfunction
+
+    function automatic logic tb_low_text_pc(input logic [63:0] pc);
+        begin
+            tb_low_text_pc =
+                (pc != 64'd0) &&
+                (pc[63:32] == 32'd0) &&
+                (pc[31:0] < 32'h0010_0000);
+        end
+    endfunction
+
+    function automatic logic tb_coremark_ra_path_pc(input logic [63:0] pc);
+        begin
+            tb_coremark_ra_path_pc =
+                ((pc >= 64'h0000_0000_8000_22d0) &&
+                 (pc <  64'h0000_0000_8000_23d0)) || // calc_func / cmp_complex
+                ((pc >= 64'h0000_0000_8000_2550) &&
+                 (pc <  64'h0000_0000_8000_2580));   // indirect cmp_complex caller
+        end
+    endfunction
+
+    function automatic logic tb_coremark_list_ptr_pc(input logic [63:0] pc);
+        begin
+            tb_coremark_list_ptr_pc =
+                (pc >= 64'h0000_0000_8000_250c) &&
+                (pc <  64'h0000_0000_8000_2580);
+        end
+    endfunction
+
     // =========================================================================
     // Per-stage pipeline counters (enabled with +PERF_PROFILE)
     // =========================================================================
@@ -184,6 +411,15 @@ module tb_top
     integer commit_hist [0:6];
     // Loop buffer active cycles
     integer lb_active_cycles;
+    // µop cache counters
+    integer uoc_lookup_total;
+    integer uoc_hit_total;
+    integer uoc_miss_total;
+    integer uoc_fill_total;
+    integer uoc_fill_evict_total;
+    integer uoc_enter_playing_total;
+    integer uoc_exit_miss_total;
+    integer uoc_invalidate_total;
     // Stall counters
     integer rename_stall_cyc;
     integer rob_full_cyc;
@@ -197,6 +433,9 @@ module tb_top
     integer backend_stall_cyc;
     integer flush_cyc;
     integer perf_total_cyc;
+    integer lb_commit_no_load_cyc;
+    integer lb_commit_no_load_run;
+    integer lb_commit_no_load_run_max;
     integer fetch_zero_total_cyc;
     integer fetch_zero_lb_hold_cyc;
     integer fetch_zero_redirect_cyc;
@@ -207,6 +446,21 @@ module tb_top
     integer fetch_zero_wait_icresp_cyc;
     integer fetch_zero_icreq_live_cyc;
     integer fetch_zero_f2_wait_cyc;
+    integer fetch_zero_pkt_empty_enq_cyc;
+    integer fetch_zero_enq_ctl_cyc;
+    integer fetch_zero_enq_noctl_cyc;
+    integer fetch_zero_enq_ctl_cond_cyc;
+    integer fetch_zero_enq_ctl_cond_nt_cyc;
+    integer fetch_zero_enq_ctl_taken_cyc;
+    integer fetch_zero_enq_ctl_callret_cyc;
+    integer fetch_zero_enq_ctl_other_cyc;
+    integer fetch_zero_enq_owner_done_cyc;
+    integer fetch_zero_enq_ftq_match_cyc;
+    integer fetch_zero_f2_data_cyc;
+    integer fetch_zero_f2_emit_cyc;
+    integer fetch_zero_no_emit_dup_cyc;
+    integer fetch_zero_no_emit_extract0_cyc;
+    integer fetch_zero_no_emit_other_cyc;
     integer fetch_zero_other_cyc;
     integer ld0_candidate_cyc, ld0_issue_cyc, ld0_suppress_cyc;
     integer ld1_candidate_cyc, ld1_issue_cyc, ld1_suppress_cyc;
@@ -222,6 +476,30 @@ module tb_top
     integer p1_sq_wait_only_cyc;
     integer p1_dcache_conflict_cyc;
     integer p1_retry_valid_cyc, p1_retry_capture_cyc;
+    localparam int LOAD_LAT_BUCKETS = 10;
+    localparam int LOAD_LAT_PC_HIST_SLOTS = 24;
+    localparam int LOAD_SRC_DCHIT  = 0;
+    localparam int LOAD_SRC_FWD    = 1;
+    localparam int LOAD_SRC_LMB    = 2;
+    localparam int LOAD_SRC_MISALN = 3;
+    localparam int LOAD_SRC_UNK    = 4;
+    logic   load_lat_track_valid [0:ROB_DEPTH-1];
+    integer load_lat_issue_cycle [0:ROB_DEPTH-1];
+    logic [63:0] load_lat_issue_pc [0:ROB_DEPTH-1];
+    logic        load_lat_issue_port [0:ROB_DEPTH-1];
+    integer load_lat_issue_total, load_lat_reissue_total;
+    integer load_lat_wb_total, load_lat_wb_untracked_total;
+    integer load_lat_hist [0:LOAD_LAT_BUCKETS-1];
+    integer load_lat_src_count [0:LOAD_SRC_UNK];
+    integer load_lat_pending_sum, load_lat_pending_max;
+    logic [63:0] load_lat_pc_hist_pc [0:LOAD_LAT_PC_HIST_SLOTS-1];
+    integer load_lat_pc_hist_count [0:LOAD_LAT_PC_HIST_SLOTS-1];
+    integer load_lat_pc_hist_sum [0:LOAD_LAT_PC_HIST_SLOTS-1];
+    integer load_lat_pc_hist_max [0:LOAD_LAT_PC_HIST_SLOTS-1];
+    integer load_lat_pc_hist_dchit [0:LOAD_LAT_PC_HIST_SLOTS-1];
+    integer load_lat_pc_hist_fwd [0:LOAD_LAT_PC_HIST_SLOTS-1];
+    integer load_lat_pc_hist_lmb [0:LOAD_LAT_PC_HIST_SLOTS-1];
+    integer load_lat_pc_hist_other [0:LOAD_LAT_PC_HIST_SLOTS-1];
     integer spec_wk_p0_cyc, spec_wk_p1_cyc;
     integer std_spec_match_p0_cyc, std_spec_match_p1_cyc;
     integer sta_issue_cyc, std_issue_cyc, dc_store_req_cyc;
@@ -232,8 +510,29 @@ module tb_top
     integer ctl_commit_call_cyc, ctl_commit_ret_cyc;
     integer ctl_misp_cond_cyc, ctl_misp_jal_cyc, ctl_misp_jalr_cyc;
     integer ctl_misp_call_cyc, ctl_misp_ret_cyc;
+    localparam int MISP_PC_HIST_SLOTS = 256;
+    logic [63:0] misp_pc_hist_pc [0:MISP_PC_HIST_SLOTS-1];
+    integer misp_pc_hist_count [0:MISP_PC_HIST_SLOTS-1];
+    integer misp_pc_hist_cond [0:MISP_PC_HIST_SLOTS-1];
+    integer misp_pc_hist_jal [0:MISP_PC_HIST_SLOTS-1];
+    integer misp_pc_hist_jalr [0:MISP_PC_HIST_SLOTS-1];
+    integer misp_pc_hist_call [0:MISP_PC_HIST_SLOTS-1];
+    integer misp_pc_hist_ret [0:MISP_PC_HIST_SLOTS-1];
+    integer misp_pc_hist_taken [0:MISP_PC_HIST_SLOTS-1];
+    integer misp_pc_hist_ntaken [0:MISP_PC_HIST_SLOTS-1];
     integer ghr_restore_cyc, ghr_restore_nonzero_cyc;
     integer ras_restore_cyc;
+    localparam int PC_DIV_WINDOW_CYC = 1024;
+    localparam int PC_DIV_LOW_UNIQUE_THRESH = 8;
+    logic [63:0] pc_div_bitmap;
+    integer pc_div_window_cyc;
+    integer pc_div_windows_total;
+    integer pc_div_low_windows;
+    integer pc_div_min_unique;
+    integer pc_div_max_unique;
+`ifdef SIMULATION
+    integer lb_mixedpath_cyc;
+`endif
     // Rename stall source breakdown: fires when rename stalls, tags the
     // first missing resource on slot 0 (other slots typically cascade).
     integer stall_preg_cyc, stall_ckpt_cyc, stall_rob_cyc, stall_dq_cyc, stall_other_cyc;
@@ -319,7 +618,9 @@ module tb_top
             overlap0 = addr0_match ? (ent_mask & req0_mask) : 8'h00;
             overlap = addr_match ? (ent_mask & req_mask) : 8'h00;
 
-            if (u_core.u_lsu.u_store_queue.queue[sqe].data_valid) begin
+            if (u_core.u_lsu.u_store_queue.queue[sqe].data_valid ||
+                (u_core.routed_std_valid &&
+                 (u_core.routed_std_data.sq_idx == SQ_IDX_BITS'(sqe)))) begin
                 if (overlap0 == req0_mask && req0_mask != 8'h00)
                     dbg_p0_sq_ready_full = 1'b1;
                 else if (overlap0 != 8'h00)
@@ -361,6 +662,14 @@ module tb_top
                 commit_hist[i]    <= 0;
             end
             lb_active_cycles   <= 0;
+            uoc_lookup_total          <= 0;
+            uoc_hit_total             <= 0;
+            uoc_miss_total            <= 0;
+            uoc_fill_total            <= 0;
+            uoc_fill_evict_total      <= 0;
+            uoc_enter_playing_total   <= 0;
+            uoc_exit_miss_total       <= 0;
+            uoc_invalidate_total      <= 0;
             rename_stall_cyc   <= 0;
             rob_full_cyc       <= 0;
             dq_full_cyc        <= 0;
@@ -375,6 +684,9 @@ module tb_top
             backend_stall_cyc  <= 0;
             flush_cyc          <= 0;
             perf_total_cyc     <= 0;
+            lb_commit_no_load_cyc <= 0;
+            lb_commit_no_load_run <= 0;
+            lb_commit_no_load_run_max <= 0;
             fetch_zero_total_cyc <= 0;
             fetch_zero_lb_hold_cyc <= 0;
             fetch_zero_redirect_cyc <= 0;
@@ -385,6 +697,21 @@ module tb_top
             fetch_zero_wait_icresp_cyc <= 0;
             fetch_zero_icreq_live_cyc <= 0;
             fetch_zero_f2_wait_cyc <= 0;
+            fetch_zero_pkt_empty_enq_cyc <= 0;
+            fetch_zero_enq_ctl_cyc <= 0;
+            fetch_zero_enq_noctl_cyc <= 0;
+            fetch_zero_enq_ctl_cond_cyc <= 0;
+            fetch_zero_enq_ctl_cond_nt_cyc <= 0;
+            fetch_zero_enq_ctl_taken_cyc <= 0;
+            fetch_zero_enq_ctl_callret_cyc <= 0;
+            fetch_zero_enq_ctl_other_cyc <= 0;
+            fetch_zero_enq_owner_done_cyc <= 0;
+            fetch_zero_enq_ftq_match_cyc <= 0;
+            fetch_zero_f2_data_cyc <= 0;
+            fetch_zero_f2_emit_cyc <= 0;
+            fetch_zero_no_emit_dup_cyc <= 0;
+            fetch_zero_no_emit_extract0_cyc <= 0;
+            fetch_zero_no_emit_other_cyc <= 0;
             fetch_zero_other_cyc <= 0;
             ld0_candidate_cyc  <= 0;
             ld0_issue_cyc      <= 0;
@@ -411,6 +738,34 @@ module tb_top
             p1_dcache_conflict_cyc <= 0;
             p1_retry_valid_cyc <= 0;
             p1_retry_capture_cyc <= 0;
+            load_lat_issue_total <= 0;
+            load_lat_reissue_total <= 0;
+            load_lat_wb_total <= 0;
+            load_lat_wb_untracked_total <= 0;
+            load_lat_pending_sum <= 0;
+            load_lat_pending_max <= 0;
+            for (int i = 0; i < ROB_DEPTH; i++) begin
+                load_lat_track_valid[i] <= 1'b0;
+                load_lat_issue_cycle[i] <= 0;
+                load_lat_issue_pc[i]    <= 64'd0;
+                load_lat_issue_port[i]  <= 1'b0;
+            end
+            for (int i = 0; i < LOAD_LAT_BUCKETS; i++) begin
+                load_lat_hist[i] <= 0;
+            end
+            for (int i = 0; i <= LOAD_SRC_UNK; i++) begin
+                load_lat_src_count[i] <= 0;
+            end
+            for (int i = 0; i < LOAD_LAT_PC_HIST_SLOTS; i++) begin
+                load_lat_pc_hist_pc[i]    <= 64'd0;
+                load_lat_pc_hist_count[i] <= 0;
+                load_lat_pc_hist_sum[i]   <= 0;
+                load_lat_pc_hist_max[i]   <= 0;
+                load_lat_pc_hist_dchit[i] <= 0;
+                load_lat_pc_hist_fwd[i]   <= 0;
+                load_lat_pc_hist_lmb[i]   <= 0;
+                load_lat_pc_hist_other[i] <= 0;
+            end
             spec_wk_p0_cyc <= 0;
             spec_wk_p1_cyc <= 0;
             std_spec_match_p0_cyc <= 0;
@@ -438,9 +793,29 @@ module tb_top
             ctl_misp_jalr_cyc   <= 0;
             ctl_misp_call_cyc   <= 0;
             ctl_misp_ret_cyc    <= 0;
+            for (int i = 0; i < MISP_PC_HIST_SLOTS; i++) begin
+                misp_pc_hist_pc[i]     <= 64'd0;
+                misp_pc_hist_count[i]  <= 0;
+                misp_pc_hist_cond[i]   <= 0;
+                misp_pc_hist_jal[i]    <= 0;
+                misp_pc_hist_jalr[i]   <= 0;
+                misp_pc_hist_call[i]   <= 0;
+                misp_pc_hist_ret[i]    <= 0;
+                misp_pc_hist_taken[i]  <= 0;
+                misp_pc_hist_ntaken[i] <= 0;
+            end
             ghr_restore_cyc     <= 0;
             ghr_restore_nonzero_cyc <= 0;
             ras_restore_cyc     <= 0;
+            pc_div_bitmap       <= '0;
+            pc_div_window_cyc   <= 0;
+            pc_div_windows_total <= 0;
+            pc_div_low_windows  <= 0;
+            pc_div_min_unique   <= 64;
+            pc_div_max_unique   <= 0;
+`ifdef SIMULATION
+            lb_mixedpath_cyc    <= 0;
+`endif
             stall_preg_cyc     <= 0;
             stall_ckpt_cyc     <= 0;
             stall_rob_cyc      <= 0;
@@ -451,6 +826,14 @@ module tb_top
             automatic int frontend_bin;
             automatic int body_bin;
             automatic int sq_addr_only_pending_now;
+            automatic int load_lat_pending_now;
+            automatic logic [63:0] pc_div_next_bitmap;
+            automatic int pc_div_unique_now;
+            automatic int misp_hit_idx;
+            automatic int misp_free_idx;
+            automatic int misp_min_idx;
+            automatic int misp_min_count;
+            automatic int misp_use_idx;
 
             perf_total_cyc    <= perf_total_cyc + 1;
             frontend_bin = int'(u_core.rename_dec_count);
@@ -458,11 +841,23 @@ module tb_top
             body_bin = int'(u_core.u_loop_buffer.body_len_r);
             if (body_bin > 6) body_bin = 6;
             sq_addr_only_pending_now = 0;
+            load_lat_pending_now = 0;
+            pc_div_next_bitmap = pc_div_bitmap;
+            pc_div_unique_now = 0;
 
             fetch_hist[u_core.fetch_count]        <= fetch_hist[u_core.fetch_count] + 1;
             frontend_hist[frontend_bin]           <= frontend_hist[frontend_bin] + 1;
             commit_hist[u_core.commit_count]      <= commit_hist[u_core.commit_count] + 1;
             if (u_core.lb_active)       lb_active_cycles  <= lb_active_cycles + 1;
+            // µop cache telemetry
+            if (u_core.uoc_ev_lookup)            uoc_lookup_total        <= uoc_lookup_total + 1;
+            if (u_core.uoc_ev_hit)               uoc_hit_total           <= uoc_hit_total + 1;
+            if (u_core.uoc_ev_miss)              uoc_miss_total          <= uoc_miss_total + 1;
+            if (u_core.uoc_ev_fill)              uoc_fill_total          <= uoc_fill_total + 1;
+            if (u_core.uoc_ev_fill_evict_valid)  uoc_fill_evict_total    <= uoc_fill_evict_total + 1;
+            if (u_core.uoc_ev_enter_playing)     uoc_enter_playing_total <= uoc_enter_playing_total + 1;
+            if (u_core.uoc_ev_exit_playing_miss) uoc_exit_miss_total     <= uoc_exit_miss_total + 1;
+            if (u_core.uoc_ev_invalidate)        uoc_invalidate_total    <= uoc_invalidate_total + 1;
             if (u_core.lb_active) begin
                 lb_replay_hist[u_core.lb_count] <= lb_replay_hist[u_core.lb_count] + 1;
                 lb_body_hist[body_bin]          <= lb_body_hist[body_bin] + 1;
@@ -483,6 +878,20 @@ module tb_top
             iq2_cnt_sum <= iq2_cnt_sum + u_core.u_iq2.count_r;
             if (u_core.backend_stall)   backend_stall_cyc <= backend_stall_cyc + 1;
             if (u_core.flush_out.valid) flush_cyc         <= flush_cyc + 1;
+            if (u_core.lb_active &&
+                (u_core.commit_count != 3'd0) &&
+                (u_core.load_commit_count == 3'd0)) begin
+                lb_commit_no_load_cyc <= lb_commit_no_load_cyc + 1;
+                lb_commit_no_load_run <= lb_commit_no_load_run + 1;
+                if ((lb_commit_no_load_run + 1) > lb_commit_no_load_run_max)
+                    lb_commit_no_load_run_max <= lb_commit_no_load_run + 1;
+            end else begin
+                lb_commit_no_load_run <= 0;
+            end
+`ifdef SIMULATION
+            if (u_core.lb_active && u_core.u_loop_buffer.sim_pb_mixedpath_c)
+                lb_mixedpath_cyc <= lb_mixedpath_cyc + 1;
+`endif
             if (u_core.fetch_count == 3'd0) begin
                 fetch_zero_total_cyc <= fetch_zero_total_cyc + 1;
                 if (u_core.u_fetch_unit.frontend_hold) begin
@@ -497,6 +906,46 @@ module tb_top
                         fetch_zero_pkt_full_cyc <= fetch_zero_pkt_full_cyc + 1;
                     if (u_core.u_fetch_unit.ic_req_valid)
                         fetch_zero_icreq_live_cyc <= fetch_zero_icreq_live_cyc + 1;
+                    if (u_core.u_fetch_unit.packet_buf_enq) begin
+                        fetch_zero_pkt_empty_enq_cyc <= fetch_zero_pkt_empty_enq_cyc + 1;
+                        if (u_core.u_fetch_unit.packet_buf_in.pd_ctl_valid) begin
+                            fetch_zero_enq_ctl_cyc <= fetch_zero_enq_ctl_cyc + 1;
+                            if ((u_core.u_fetch_unit.packet_buf_in.pd_ctl_type == 3'd0) &&
+                                !u_core.u_fetch_unit.packet_buf_in.ftq_pred_taken &&
+                                !(|u_core.u_fetch_unit.packet_buf_in.fetch_bp_taken)) begin
+                                fetch_zero_enq_ctl_cond_nt_cyc <=
+                                    fetch_zero_enq_ctl_cond_nt_cyc + 1;
+                            end
+                            if (u_core.u_fetch_unit.packet_buf_in.pd_ctl_type == 3'd0)
+                                fetch_zero_enq_ctl_cond_cyc <=
+                                    fetch_zero_enq_ctl_cond_cyc + 1;
+                            else if ((u_core.u_fetch_unit.packet_buf_in.pd_ctl_type == 3'd3) ||
+                                     (u_core.u_fetch_unit.packet_buf_in.pd_ctl_type == 3'd4))
+                                fetch_zero_enq_ctl_callret_cyc <=
+                                    fetch_zero_enq_ctl_callret_cyc + 1;
+                            else
+                                fetch_zero_enq_ctl_other_cyc <=
+                                    fetch_zero_enq_ctl_other_cyc + 1;
+                            if (u_core.u_fetch_unit.packet_buf_in.ftq_pred_taken ||
+                                (|u_core.u_fetch_unit.packet_buf_in.fetch_bp_taken))
+                                fetch_zero_enq_ctl_taken_cyc <=
+                                    fetch_zero_enq_ctl_taken_cyc + 1;
+                        end else begin
+                            fetch_zero_enq_noctl_cyc <= fetch_zero_enq_noctl_cyc + 1;
+                        end
+                        if (u_core.u_fetch_unit.packet_buf_in.ftq_owner_complete)
+                            fetch_zero_enq_owner_done_cyc <=
+                                fetch_zero_enq_owner_done_cyc + 1;
+                        if (u_core.u_fetch_unit.ftq_head_valid &&
+                            (u_core.u_fetch_unit.packet_buf_in.ftq_idx ==
+                             u_core.u_fetch_unit.ftq_head_idx) &&
+                            (u_core.u_fetch_unit.packet_buf_in.ftq_epoch ==
+                             u_core.u_fetch_unit.ftq_current_epoch) &&
+                            (u_core.u_fetch_unit.packet_buf_in.ftq_alloc_tag ==
+                             u_core.u_fetch_unit.ftq_head_tag))
+                            fetch_zero_enq_ftq_match_cyc <=
+                                fetch_zero_enq_ftq_match_cyc + 1;
+                    end
                     if (!u_core.u_fetch_unit.ic_resp_valid &&
                         !u_core.u_fetch_unit.fe_stall &&
                         u_core.u_fetch_unit.f1_valid)
@@ -504,6 +953,24 @@ module tb_top
                     if (u_core.u_fetch_unit.f2_valid_r &&
                         !u_core.u_fetch_unit.f2_data_valid)
                         fetch_zero_f2_wait_cyc <= fetch_zero_f2_wait_cyc + 1;
+                    if (u_core.u_fetch_unit.f2_valid_r &&
+                        u_core.u_fetch_unit.f2_data_valid) begin
+                        fetch_zero_f2_data_cyc <= fetch_zero_f2_data_cyc + 1;
+                        if (u_core.u_fetch_unit.f2_will_emit_c) begin
+                            fetch_zero_f2_emit_cyc <= fetch_zero_f2_emit_cyc + 1;
+                        end else if (u_core.u_fetch_unit.extract_count == 3'd0) begin
+                            fetch_zero_no_emit_extract0_cyc <=
+                                fetch_zero_no_emit_extract0_cyc + 1;
+                        end else if (u_core.u_fetch_unit.f2_last_emit_valid_r &&
+                                     (u_core.u_fetch_unit.f2_last_emit_pc_r ==
+                                      u_core.u_fetch_unit.f2_pc_r)) begin
+                            fetch_zero_no_emit_dup_cyc <=
+                                fetch_zero_no_emit_dup_cyc + 1;
+                        end else begin
+                            fetch_zero_no_emit_other_cyc <=
+                                fetch_zero_no_emit_other_cyc + 1;
+                        end
+                    end
                     if (!u_core.u_fetch_unit.ftq_full &&
                         !u_core.u_fetch_unit.packet_buf_full &&
                         !u_core.u_fetch_unit.ic_req_valid &&
@@ -573,6 +1040,209 @@ module tb_top
             if (u_core.u_lsu.p1_retry_valid_r)           p1_retry_valid_cyc <= p1_retry_valid_cyc + 1;
             if (u_core.u_lsu.p1_retry_valid_r && !prev_p1_retry_valid)
                 p1_retry_capture_cyc <= p1_retry_capture_cyc + 1;
+
+            begin : load_latency_profile
+                int issue_idx;
+                int wb_idx;
+                int lat;
+                int bucket;
+                int wb_src;
+                int hit_idx;
+                int free_idx;
+                int min_idx;
+                int min_count;
+                int use_idx;
+                logic [63:0] wb_pc;
+                int cyc_issue_count;
+                int cyc_reissue_count;
+                int cyc_wb_count;
+                int cyc_untracked_count;
+                int cyc_hist [0:LOAD_LAT_BUCKETS-1];
+                int cyc_src [0:LOAD_SRC_UNK];
+
+                cyc_issue_count = 0;
+                cyc_reissue_count = 0;
+                cyc_wb_count = 0;
+                cyc_untracked_count = 0;
+                for (int i = 0; i < LOAD_LAT_BUCKETS; i++)
+                    cyc_hist[i] = 0;
+                for (int i = 0; i <= LOAD_SRC_UNK; i++)
+                    cyc_src[i] = 0;
+
+                for (int r = 0; r < ROB_DEPTH; r++) begin
+                    if (load_lat_track_valid[r])
+                        load_lat_pending_now++;
+                end
+                load_lat_pending_sum <= load_lat_pending_sum + load_lat_pending_now;
+                if (load_lat_pending_now > load_lat_pending_max)
+                    load_lat_pending_max <= load_lat_pending_now;
+
+                for (int p = 0; p < 2; p++) begin
+                    if (u_core.iq_load_issue_valid[p]) begin
+                        issue_idx = int'(u_core.iq_load_issue_data[p].rob_idx);
+                        if (issue_idx < ROB_DEPTH) begin
+                            if (load_lat_track_valid[issue_idx])
+                                cyc_reissue_count++;
+                            load_lat_track_valid[issue_idx] <= 1'b1;
+                            load_lat_issue_cycle[issue_idx] <= perf_total_cyc;
+                            load_lat_issue_pc[issue_idx]    <= u_core.iq_load_issue_data[p].pc;
+                            load_lat_issue_port[issue_idx]  <= (p != 0);
+                            cyc_issue_count++;
+                        end
+                    end
+                end
+
+                for (int p = 0; p < 2; p++) begin
+                    if (u_core.lsu_load_wb_valid[p]) begin
+                        wb_idx = int'(u_core.lsu_load_wb_rob_idx[p]);
+                        wb_src = LOAD_SRC_UNK;
+
+                        if (p == 0) begin
+                            if (u_core.u_lsu.p0_dcache_hit_valid &&
+                                (int'(u_core.u_lsu.load_issue_data_r[0].rob_idx) == wb_idx))
+                                wb_src = LOAD_SRC_DCHIT;
+                            else if (u_core.u_lsu.fwd_hold_valid_r &&
+                                     (int'(u_core.u_lsu.fwd_hold_rob_idx_r) == wb_idx))
+                                wb_src = LOAD_SRC_FWD;
+                            else if (u_core.u_lsu.lmb_wb_port_free &&
+                                     u_core.u_lsu.lmb_any_match &&
+                                     (int'(u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].rob_idx) == wb_idx))
+                                wb_src = LOAD_SRC_LMB;
+                            else if (u_core.u_lsu.lmb_wb_port_free &&
+                                     !u_core.u_lsu.lmb_any_match &&
+                                     u_core.u_lsu.lmb_ready_any &&
+                                     (int'(u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].rob_idx) == wb_idx))
+                                wb_src = LOAD_SRC_LMB;
+                        end else begin
+                            if (u_core.u_lsu.load_issue_valid[1] &&
+                                u_core.u_lsu.load_addr_misaligned[1] &&
+                                !u_core.u_lsu.flush_in.valid &&
+                                (int'(u_core.u_lsu.load_issue_data[1].rob_idx) == wb_idx))
+                                wb_src = LOAD_SRC_MISALN;
+                            else if (u_core.u_lsu.dcache_load_resp_valid[1] &&
+                                     u_core.u_lsu.load_issue_valid_r[1] &&
+                                     !u_core.u_lsu.load_nocache_r[1] &&
+                                     (int'(u_core.u_lsu.load_issue_data_r[1].rob_idx) == wb_idx))
+                                wb_src = LOAD_SRC_DCHIT;
+                            else if (u_core.u_lsu.p0_fwd_spill_to_p1 &&
+                                     (int'(u_core.u_lsu.fwd_hold_rob_idx_r) == wb_idx))
+                                wb_src = LOAD_SRC_FWD;
+                            else if (u_core.u_lsu.p1_fwd_hold_valid_r &&
+                                     (int'(u_core.u_lsu.p1_fwd_hold_rob_idx_r) == wb_idx))
+                                wb_src = LOAD_SRC_FWD;
+                        end
+
+                        cyc_wb_count++;
+                        if ((wb_idx < ROB_DEPTH) && load_lat_track_valid[wb_idx]) begin
+                            lat = perf_total_cyc - load_lat_issue_cycle[wb_idx];
+                            wb_pc = load_lat_issue_pc[wb_idx];
+                            if (lat <= 0)
+                                bucket = 0;
+                            else if (lat == 1)
+                                bucket = 1;
+                            else if (lat == 2)
+                                bucket = 2;
+                            else if (lat == 3)
+                                bucket = 3;
+                            else if (lat == 4)
+                                bucket = 4;
+                            else if (lat == 5)
+                                bucket = 5;
+                            else if (lat <= 7)
+                                bucket = 6;
+                            else if (lat <= 15)
+                                bucket = 7;
+                            else if (lat <= 31)
+                                bucket = 8;
+                            else
+                                bucket = 9;
+
+                            cyc_hist[bucket]++;
+                            cyc_src[wb_src]++;
+
+                            hit_idx = -1;
+                            free_idx = -1;
+                            min_idx = 0;
+                            min_count = load_lat_pc_hist_count[0];
+                            use_idx = -1;
+                            for (int i = 0; i < LOAD_LAT_PC_HIST_SLOTS; i++) begin
+                                if ((load_lat_pc_hist_count[i] != 0) &&
+                                    (load_lat_pc_hist_pc[i] == wb_pc) &&
+                                    (hit_idx < 0))
+                                    hit_idx = i;
+                                if ((load_lat_pc_hist_count[i] == 0) &&
+                                    (free_idx < 0))
+                                    free_idx = i;
+                                if (load_lat_pc_hist_count[i] < min_count) begin
+                                    min_idx = i;
+                                    min_count = load_lat_pc_hist_count[i];
+                                end
+                            end
+                            if (hit_idx >= 0)
+                                use_idx = hit_idx;
+                            else if (free_idx >= 0)
+                                use_idx = free_idx;
+                            else
+                                use_idx = min_idx;
+
+                            if (hit_idx < 0) begin
+                                load_lat_pc_hist_pc[use_idx]    <= wb_pc;
+                                load_lat_pc_hist_count[use_idx] <= 1;
+                                load_lat_pc_hist_sum[use_idx]   <= lat;
+                                load_lat_pc_hist_max[use_idx]   <= lat;
+                                load_lat_pc_hist_dchit[use_idx] <=
+                                    (wb_src == LOAD_SRC_DCHIT) ? 1 : 0;
+                                load_lat_pc_hist_fwd[use_idx]   <=
+                                    (wb_src == LOAD_SRC_FWD) ? 1 : 0;
+                                load_lat_pc_hist_lmb[use_idx]   <=
+                                    (wb_src == LOAD_SRC_LMB) ? 1 : 0;
+                                load_lat_pc_hist_other[use_idx] <=
+                                    ((wb_src != LOAD_SRC_DCHIT) &&
+                                     (wb_src != LOAD_SRC_FWD) &&
+                                     (wb_src != LOAD_SRC_LMB)) ? 1 : 0;
+                            end else begin
+                                load_lat_pc_hist_count[use_idx] <=
+                                    load_lat_pc_hist_count[use_idx] + 1;
+                                load_lat_pc_hist_sum[use_idx] <=
+                                    load_lat_pc_hist_sum[use_idx] + lat;
+                                if (lat > load_lat_pc_hist_max[use_idx])
+                                    load_lat_pc_hist_max[use_idx] <= lat;
+                                if (wb_src == LOAD_SRC_DCHIT)
+                                    load_lat_pc_hist_dchit[use_idx] <=
+                                        load_lat_pc_hist_dchit[use_idx] + 1;
+                                else if (wb_src == LOAD_SRC_FWD)
+                                    load_lat_pc_hist_fwd[use_idx] <=
+                                        load_lat_pc_hist_fwd[use_idx] + 1;
+                                else if (wb_src == LOAD_SRC_LMB)
+                                    load_lat_pc_hist_lmb[use_idx] <=
+                                        load_lat_pc_hist_lmb[use_idx] + 1;
+                                else
+                                    load_lat_pc_hist_other[use_idx] <=
+                                        load_lat_pc_hist_other[use_idx] + 1;
+                            end
+
+                            load_lat_track_valid[wb_idx] <= 1'b0;
+                        end else begin
+                            cyc_untracked_count++;
+                        end
+                    end
+                end
+
+                load_lat_issue_total <= load_lat_issue_total + cyc_issue_count;
+                load_lat_reissue_total <= load_lat_reissue_total + cyc_reissue_count;
+                load_lat_wb_total <= load_lat_wb_total + cyc_wb_count;
+                load_lat_wb_untracked_total <=
+                    load_lat_wb_untracked_total + cyc_untracked_count;
+                for (int i = 0; i < LOAD_LAT_BUCKETS; i++)
+                    load_lat_hist[i] <= load_lat_hist[i] + cyc_hist[i];
+                for (int i = 0; i <= LOAD_SRC_UNK; i++)
+                    load_lat_src_count[i] <= load_lat_src_count[i] + cyc_src[i];
+
+                if (u_core.flush_out.valid) begin
+                    for (int r = 0; r < ROB_DEPTH; r++)
+                        load_lat_track_valid[r] <= 1'b0;
+                end
+            end
             if (u_core.lsu_spec_wakeup_valid[0])         spec_wk_p0_cyc <= spec_wk_p0_cyc + 1;
             if (u_core.lsu_spec_wakeup_valid[1])         spec_wk_p1_cyc <= spec_wk_p1_cyc + 1;
             if (dbg_std_spec_match_p0)                   std_spec_match_p0_cyc <= std_spec_match_p0_cyc + 1;
@@ -623,6 +1293,8 @@ module tb_top
             if (u_core.ras_restore_valid_fe)
                 ras_restore_cyc <= ras_restore_cyc + 1;
             for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (u_core.commit_out[i].valid)
+                    pc_div_next_bitmap[tb_pc_div_hash(u_core.rob_head_pc[i])] = 1'b1;
                 if (u_core.commit_out[i].valid &&
                     (u_core.rob_head_is_branch[i] || (u_core.rob_head_bpu_type[i] != 3'd0))) begin
                     case (u_core.rob_head_bpu_type[i])
@@ -633,6 +1305,71 @@ module tb_top
                         default: ctl_commit_cond_cyc <= ctl_commit_cond_cyc + 1;
                     endcase
                     if (u_core.rob_head_branch_mispredict[i]) begin
+                        misp_hit_idx = -1;
+                        misp_free_idx = -1;
+                        misp_min_idx = 0;
+                        misp_min_count = misp_pc_hist_count[0];
+                        misp_use_idx = -1;
+                        for (int j = 0; j < MISP_PC_HIST_SLOTS; j++) begin
+                            if ((misp_pc_hist_count[j] != 0) &&
+                                (misp_pc_hist_pc[j] == u_core.rob_head_pc[i]) &&
+                                (misp_hit_idx < 0))
+                                misp_hit_idx = j;
+                            if ((misp_pc_hist_count[j] == 0) &&
+                                (misp_free_idx < 0))
+                                misp_free_idx = j;
+                            if (misp_pc_hist_count[j] < misp_min_count) begin
+                                misp_min_idx = j;
+                                misp_min_count = misp_pc_hist_count[j];
+                            end
+                        end
+                        if (misp_hit_idx >= 0)
+                            misp_use_idx = misp_hit_idx;
+                        else if (misp_free_idx >= 0)
+                            misp_use_idx = misp_free_idx;
+                        else
+                            misp_use_idx = misp_min_idx;
+
+                        if (misp_hit_idx < 0) begin
+                            misp_pc_hist_pc[misp_use_idx]     <= u_core.rob_head_pc[i];
+                            misp_pc_hist_count[misp_use_idx]  <= 1;
+                            misp_pc_hist_cond[misp_use_idx]   <=
+                                (u_core.rob_head_bpu_type[i] == 3'd0) ? 1 : 0;
+                            misp_pc_hist_jal[misp_use_idx]    <=
+                                (u_core.rob_head_bpu_type[i] == 3'd1) ? 1 : 0;
+                            misp_pc_hist_jalr[misp_use_idx]   <=
+                                (u_core.rob_head_bpu_type[i] == 3'd2) ? 1 : 0;
+                            misp_pc_hist_call[misp_use_idx]   <=
+                                (u_core.rob_head_bpu_type[i] == 3'd3) ? 1 : 0;
+                            misp_pc_hist_ret[misp_use_idx]    <=
+                                (u_core.rob_head_bpu_type[i] == 3'd4) ? 1 : 0;
+                            misp_pc_hist_taken[misp_use_idx]  <=
+                                u_core.rob_head_branch_taken[i] ? 1 : 0;
+                            misp_pc_hist_ntaken[misp_use_idx] <=
+                                u_core.rob_head_branch_taken[i] ? 0 : 1;
+                        end else begin
+                            misp_pc_hist_count[misp_use_idx] <=
+                                misp_pc_hist_count[misp_use_idx] + 1;
+                            case (u_core.rob_head_bpu_type[i])
+                                3'd1: misp_pc_hist_jal[misp_use_idx] <=
+                                          misp_pc_hist_jal[misp_use_idx] + 1;
+                                3'd2: misp_pc_hist_jalr[misp_use_idx] <=
+                                          misp_pc_hist_jalr[misp_use_idx] + 1;
+                                3'd3: misp_pc_hist_call[misp_use_idx] <=
+                                          misp_pc_hist_call[misp_use_idx] + 1;
+                                3'd4: misp_pc_hist_ret[misp_use_idx] <=
+                                          misp_pc_hist_ret[misp_use_idx] + 1;
+                                default: misp_pc_hist_cond[misp_use_idx] <=
+                                             misp_pc_hist_cond[misp_use_idx] + 1;
+                            endcase
+                            if (u_core.rob_head_branch_taken[i])
+                                misp_pc_hist_taken[misp_use_idx] <=
+                                    misp_pc_hist_taken[misp_use_idx] + 1;
+                            else
+                                misp_pc_hist_ntaken[misp_use_idx] <=
+                                    misp_pc_hist_ntaken[misp_use_idx] + 1;
+                        end
+
                         case (u_core.rob_head_bpu_type[i])
                             3'd1: ctl_misp_jal_cyc  <= ctl_misp_jal_cyc + 1;
                             3'd2: ctl_misp_jalr_cyc <= ctl_misp_jalr_cyc + 1;
@@ -650,6 +1387,21 @@ module tb_top
                 else if (!u_core.u_rename.has_rob[0])   stall_rob_cyc   <= stall_rob_cyc + 1;
                 else if (!u_core.u_rename.has_dq[0])    stall_dq_cyc    <= stall_dq_cyc + 1;
                 else                                     stall_other_cyc <= stall_other_cyc + 1;
+            end
+            if (pc_div_window_cyc == (PC_DIV_WINDOW_CYC - 1)) begin
+                pc_div_unique_now = tb_count_ones64(pc_div_next_bitmap);
+                pc_div_windows_total <= pc_div_windows_total + 1;
+                if (pc_div_unique_now <= PC_DIV_LOW_UNIQUE_THRESH)
+                    pc_div_low_windows <= pc_div_low_windows + 1;
+                if (pc_div_unique_now < pc_div_min_unique)
+                    pc_div_min_unique <= pc_div_unique_now;
+                if (pc_div_unique_now > pc_div_max_unique)
+                    pc_div_max_unique <= pc_div_unique_now;
+                pc_div_bitmap <= '0;
+                pc_div_window_cyc <= 0;
+            end else begin
+                pc_div_bitmap <= pc_div_next_bitmap;
+                pc_div_window_cyc <= pc_div_window_cyc + 1;
             end
         end
     end
@@ -689,6 +1441,21 @@ module tb_top
             $display("  packet_empty_icreq_live   : %0d", fetch_zero_icreq_live_cyc);
             $display("  packet_empty_wait_icresp  : %0d", fetch_zero_wait_icresp_cyc);
             $display("  packet_empty_f2_wait      : %0d", fetch_zero_f2_wait_cyc);
+            $display("  packet_empty_enq          : %0d", fetch_zero_pkt_empty_enq_cyc);
+            $display("  packet_empty_enq_ctl      : %0d", fetch_zero_enq_ctl_cyc);
+            $display("  packet_empty_enq_noctl    : %0d", fetch_zero_enq_noctl_cyc);
+            $display("  packet_empty_enq_ctl_cond : %0d", fetch_zero_enq_ctl_cond_cyc);
+            $display("  packet_empty_enq_ctl_nt   : %0d", fetch_zero_enq_ctl_cond_nt_cyc);
+            $display("  packet_empty_enq_ctl_taken: %0d", fetch_zero_enq_ctl_taken_cyc);
+            $display("  packet_empty_enq_ctl_callret: %0d", fetch_zero_enq_ctl_callret_cyc);
+            $display("  packet_empty_enq_ctl_other: %0d", fetch_zero_enq_ctl_other_cyc);
+            $display("  packet_empty_enq_done     : %0d", fetch_zero_enq_owner_done_cyc);
+            $display("  packet_empty_enq_ftq_match: %0d", fetch_zero_enq_ftq_match_cyc);
+            $display("  packet_empty_f2_data      : %0d", fetch_zero_f2_data_cyc);
+            $display("  packet_empty_f2_emit      : %0d", fetch_zero_f2_emit_cyc);
+            $display("  packet_empty_noemit_dup   : %0d", fetch_zero_no_emit_dup_cyc);
+            $display("  packet_empty_noemit_ext0  : %0d", fetch_zero_no_emit_extract0_cyc);
+            $display("  packet_empty_noemit_other : %0d", fetch_zero_no_emit_other_cyc);
             $display("  packet_empty_other        : %0d", fetch_zero_other_cyc);
             $display("Commit histogram (cycles with N instr committed):");
             for (int i = 0; i <= 6; i++)
@@ -697,6 +1464,32 @@ module tb_top
             $display("Loop buffer active: %0d cycles (%0d%%)",
                      lb_active_cycles,
                      (perf_total_cyc > 0) ? (lb_active_cycles * 100 / perf_total_cyc) : 0);
+            $display("UOC telemetry:");
+            $display("  lookups        : %0d", uoc_lookup_total);
+            $display("  hits           : %0d (%0d%%)",
+                     uoc_hit_total,
+                     (uoc_lookup_total > 0) ? (uoc_hit_total * 100 / uoc_lookup_total) : 0);
+            $display("  misses         : %0d", uoc_miss_total);
+            $display("  fills          : %0d", uoc_fill_total);
+            $display("  fills_evicting : %0d", uoc_fill_evict_total);
+            $display("  enter_playing  : %0d", uoc_enter_playing_total);
+            $display("  exit_on_miss   : %0d", uoc_exit_miss_total);
+            $display("  invalidates    : %0d", uoc_invalidate_total);
+            $display("Loop-buffer forward-progress summary:");
+            $display("  commit_no_load cycles       : %0d", lb_commit_no_load_cyc);
+            $display("  commit_no_load max run      : %0d", lb_commit_no_load_run_max);
+`ifdef SIMULATION
+            $display("  mixed-path replay cycles    : %0d", lb_mixedpath_cyc);
+`endif
+            $display("Committed PC diversity (%0d-cycle 64-bin windows):",
+                     PC_DIV_WINDOW_CYC);
+            $display("  windows total / low<=%0d    : %0d / %0d",
+                     PC_DIV_LOW_UNIQUE_THRESH,
+                     pc_div_windows_total,
+                     pc_div_low_windows);
+            $display("  min / max unique bins       : %0d / %0d",
+                     (pc_div_windows_total > 0) ? pc_div_min_unique : 0,
+                     pc_div_max_unique);
             $display("Stall breakdown (cycle-based):");
             $display("  rename_stall : %0d", rename_stall_cyc);
             $display("  backend_stall: %0d", backend_stall_cyc);
@@ -745,6 +1538,41 @@ module tb_top
                      p1_sq_wait_only_cyc, p1_dcache_conflict_cyc);
             $display("  p1_retry live/captures      : %0d / %0d",
                      p1_retry_valid_cyc, p1_retry_capture_cyc);
+            $display("Load issue-to-WB latency summary:");
+            $display("  issue/reissue/wb/untracked  : %0d / %0d / %0d / %0d",
+                     load_lat_issue_total, load_lat_reissue_total,
+                     load_lat_wb_total, load_lat_wb_untracked_total);
+            $display("  pending avg/max             : %0d.%02d / %0d",
+                     load_lat_pending_sum / perf_total_cyc,
+                     ((load_lat_pending_sum * 100) / perf_total_cyc) % 100,
+                     load_lat_pending_max);
+            $display("  latency buckets 0/1/2/3/4/5/6-7/8-15/16-31/32+: %0d / %0d / %0d / %0d / %0d / %0d / %0d / %0d / %0d / %0d",
+                     load_lat_hist[0], load_lat_hist[1], load_lat_hist[2],
+                     load_lat_hist[3], load_lat_hist[4], load_lat_hist[5],
+                     load_lat_hist[6], load_lat_hist[7], load_lat_hist[8],
+                     load_lat_hist[9]);
+            $display("  source dchit/fwd/lmb/misalign/unknown: %0d / %0d / %0d / %0d / %0d",
+                     load_lat_src_count[LOAD_SRC_DCHIT],
+                     load_lat_src_count[LOAD_SRC_FWD],
+                     load_lat_src_count[LOAD_SRC_LMB],
+                     load_lat_src_count[LOAD_SRC_MISALN],
+                     load_lat_src_count[LOAD_SRC_UNK]);
+            $display("  top load WB PCs: pc count avg_lat max_lat dchit/fwd/lmb/other");
+            for (int i = 0; i < LOAD_LAT_PC_HIST_SLOTS; i++) begin
+                if (load_lat_pc_hist_count[i] != 0) begin
+                    $display("    %016h %0d %0d.%02d %0d %0d/%0d/%0d/%0d",
+                        load_lat_pc_hist_pc[i],
+                        load_lat_pc_hist_count[i],
+                        load_lat_pc_hist_sum[i] / load_lat_pc_hist_count[i],
+                        ((load_lat_pc_hist_sum[i] * 100) /
+                            load_lat_pc_hist_count[i]) % 100,
+                        load_lat_pc_hist_max[i],
+                        load_lat_pc_hist_dchit[i],
+                        load_lat_pc_hist_fwd[i],
+                        load_lat_pc_hist_lmb[i],
+                        load_lat_pc_hist_other[i]);
+                end
+            end
             $display("  spec wake p0/p1             : %0d / %0d",
                      spec_wk_p0_cyc, spec_wk_p1_cyc);
             $display("  std IQ spec match p0/p1     : %0d / %0d",
@@ -768,6 +1596,21 @@ module tb_top
             $display("  cond/jal/jalr/call/ret      : %0d / %0d / %0d / %0d / %0d",
                      ctl_misp_cond_cyc, ctl_misp_jal_cyc, ctl_misp_jalr_cyc,
                      ctl_misp_call_cyc, ctl_misp_ret_cyc);
+            $display("  top mispredict PCs: pc count cond/jal/jalr/call/ret taken/not_taken");
+            for (int i = 0; i < MISP_PC_HIST_SLOTS; i++) begin
+                if (misp_pc_hist_count[i] != 0) begin
+                    $display("    %016h %0d %0d/%0d/%0d/%0d/%0d %0d/%0d",
+                        misp_pc_hist_pc[i],
+                        misp_pc_hist_count[i],
+                        misp_pc_hist_cond[i],
+                        misp_pc_hist_jal[i],
+                        misp_pc_hist_jalr[i],
+                        misp_pc_hist_call[i],
+                        misp_pc_hist_ret[i],
+                        misp_pc_hist_taken[i],
+                        misp_pc_hist_ntaken[i]);
+                end
+            end
             $display("GHR restore summary:");
             $display("  total/nonzero               : %0d / %0d",
                      ghr_restore_cyc, ghr_restore_nonzero_cyc);
@@ -779,19 +1622,77 @@ module tb_top
     integer trace_cycle;
     logic [7:0] trace_prev_rat_a0;
     logic [7:0] trace_prev_crat_a0;
+    logic [7:0] trace_prev_rat_a5;
+    logic [7:0] trace_prev_crat_a5;
+    logic [63:0] trace_prev_rat_a5_data;
+    logic [63:0] trace_prev_crat_a5_data;
+    logic [7:0] trace_prev_rat_sp;
+    logic [7:0] trace_prev_crat_sp;
+    logic [63:0] trace_prev_rat_sp_data;
+    logic [63:0] trace_prev_crat_sp_data;
+    logic [7:0] trace_prev_rat_ra;
+    logic [7:0] trace_prev_crat_ra;
+    logic [63:0] trace_prev_rat_ra_data;
+    logic [63:0] trace_prev_crat_ra_data;
+    logic [7:0] trace_prev_rat_s10;
+    logic [7:0] trace_prev_crat_s10;
+    logic [63:0] trace_prev_rat_s10_data;
+    logic [63:0] trace_prev_crat_s10_data;
     logic       trace_prev_free2;
     logic       trace_prev_cmt2;
     logic [1:0] trace_prev_lb_state;
     logic       trace_prev_lb_active;
+    logic [63:0] trace_sq_alloc_pc [0:SQ_DEPTH-1];
+    logic [ROB_IDX_BITS-1:0] trace_sq_alloc_rob [0:SQ_DEPTH-1];
+    logic [63:0] trace_csb_pc [0:CSB_DEPTH-1];
+    logic [ROB_IDX_BITS-1:0] trace_csb_rob [0:CSB_DEPTH-1];
+    integer     cm_progress_count [0:20];
+    integer     matrix_branch_trace_count;
+    integer     trace_lowpc_count;
+    localparam logic [63:0] COMMIT_HOTSPOT_BASE = 64'h0000_0000_8000_2000;
+    localparam int COMMIT_HOTSPOT_BINS = 4096;
+    integer     commit_pc_hist [0:COMMIT_HOTSPOT_BINS-1];
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             trace_cycle <= 0;
             trace_prev_rat_a0  <= 8'd10;
             trace_prev_crat_a0 <= 8'd10;
+            trace_prev_rat_a5  <= 8'd15;
+            trace_prev_crat_a5 <= 8'd15;
+            trace_prev_rat_a5_data  <= 64'd0;
+            trace_prev_crat_a5_data <= 64'd0;
+            trace_prev_rat_sp  <= 8'd2;
+            trace_prev_crat_sp <= 8'd2;
+            trace_prev_rat_sp_data  <= 64'd0;
+            trace_prev_crat_sp_data <= 64'd0;
+            trace_prev_rat_ra  <= 8'd1;
+            trace_prev_crat_ra <= 8'd1;
+            trace_prev_rat_ra_data  <= 64'd0;
+            trace_prev_crat_ra_data <= 64'd0;
+            trace_prev_rat_s10  <= 8'd26;
+            trace_prev_crat_s10 <= 8'd26;
+            trace_prev_rat_s10_data  <= 64'd0;
+            trace_prev_crat_s10_data <= 64'd0;
             trace_prev_free2   <= 1'b0;
             trace_prev_cmt2    <= 1'b0;
             trace_prev_lb_state  <= 2'd0;
             trace_prev_lb_active <= 1'b0;
+            for (int i = 0; i <= 20; i++) begin
+                cm_progress_count[i] <= 0;
+            end
+            for (int i = 0; i < SQ_DEPTH; i++) begin
+                trace_sq_alloc_pc[i]  <= 64'd0;
+                trace_sq_alloc_rob[i] <= '0;
+            end
+            for (int i = 0; i < CSB_DEPTH; i++) begin
+                trace_csb_pc[i]  <= 64'd0;
+                trace_csb_rob[i] <= '0;
+            end
+            for (int i = 0; i < COMMIT_HOTSPOT_BINS; i++) begin
+                commit_pc_hist[i] <= 0;
+            end
+            matrix_branch_trace_count <= 0;
+            trace_lowpc_count <= 0;
         end else begin
             trace_cycle <= trace_cycle + 1;
             if (trace_ordv_en && u_core.lsu_ordering_violation) begin
@@ -839,12 +1740,19 @@ module tb_top
                     if (u_core.fused_insn[i].valid &&
                         (((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2000) &&
                           (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_202a)) ||
-                         ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2150) &&
-                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_21a0)))) begin
+	                         ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2290) &&
+	                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_2320)) ||
+	                         ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2150) &&
+	                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_21a0)) ||
+	                         ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2440) &&
+	                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_24d0)))) begin
                         hot_lb_window = 1'b1;
                     end
                 end
                 if (hot_lb_window ||
+`ifdef SIMULATION
+                    u_core.u_loop_buffer.sim_pb_mixedpath_c ||
+`endif
                     u_core.backward_branch_taken ||
                     (u_core.lb_active != trace_prev_lb_active) ||
                     (u_core.u_loop_buffer.state_r != trace_prev_lb_state) ||
@@ -916,15 +1824,1148 @@ module tb_top
                 trace_prev_free2   <= u_core.u_rename.u_free_list.free_bitmap[2];
                 trace_prev_cmt2    <= u_core.u_rename.u_free_list.committed_bitmap[2];
             end
-            if (trace_commit_en && (u_core.commit_count > 3'd0)) begin
-                for (int i = 0; i < 6; i++) begin
-                    if (u_core.commit_out[i].valid) begin
-                        $display("[CPC] cyc=%0d slot=%0d pc=%016h br=%b tk=%b tgt=%016h mis=%b",
-                            trace_cycle, i,
+            if (trace_a5map_en) begin
+                automatic logic [7:0] rat_a5_phys;
+                automatic logic [7:0] crat_a5_phys;
+                automatic logic [63:0] rat_a5_data;
+                automatic logic [63:0] crat_a5_data;
+
+                rat_a5_phys  = u_core.u_rename.u_rat.rat_table[15];
+                crat_a5_phys = u_core.u_rename.u_rat.committed_rat[15];
+                rat_a5_data  = (rat_a5_phys == 8'd0)  ? 64'd0 : u_core.u_int_prf.regfile_copy0[rat_a5_phys];
+                crat_a5_data = (crat_a5_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[crat_a5_phys];
+
+                if ((rat_a5_phys != trace_prev_rat_a5) ||
+                    (crat_a5_phys != trace_prev_crat_a5) ||
+                    (rat_a5_data != trace_prev_rat_a5_data) ||
+                    (crat_a5_data != trace_prev_crat_a5_data) ||
+                    u_core.flush_out.valid) begin
+                    $display("[A5MAP] cyc=%0d rat15=%0d rat15_data=%016h crat15=%0d crat15_data=%016h ren_count=%0d commit_count=%0d flush=%b flush_pc=%016h",
+                        trace_cycle,
+                        rat_a5_phys,
+                        rat_a5_data,
+                        crat_a5_phys,
+                        crat_a5_data,
+                        u_core.ren_count_w,
+                        u_core.commit_count,
+                        u_core.flush_out.valid,
+                        u_core.flush_out.redirect_pc);
+                end
+                trace_prev_rat_a5       <= rat_a5_phys;
+                trace_prev_crat_a5      <= crat_a5_phys;
+                trace_prev_rat_a5_data  <= rat_a5_data;
+                trace_prev_crat_a5_data <= crat_a5_data;
+            end
+            if (trace_spmap_en) begin
+                automatic logic [7:0] rat_sp_phys;
+                automatic logic [7:0] crat_sp_phys;
+                automatic logic [63:0] rat_sp_data;
+                automatic logic [63:0] crat_sp_data;
+
+                rat_sp_phys  = u_core.u_rename.u_rat.rat_table[2];
+                crat_sp_phys = u_core.u_rename.u_rat.committed_rat[2];
+                rat_sp_data  = (rat_sp_phys == 8'd0)  ? 64'd0 : u_core.u_int_prf.regfile_copy0[rat_sp_phys];
+                crat_sp_data = (crat_sp_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[crat_sp_phys];
+
+                if ((rat_sp_phys != trace_prev_rat_sp) ||
+                    (crat_sp_phys != trace_prev_crat_sp) ||
+                    (rat_sp_data != trace_prev_rat_sp_data) ||
+                    (crat_sp_data != trace_prev_crat_sp_data) ||
+                    u_core.flush_out.valid) begin
+                    $display("[SPMAP] cyc=%0d rat2=%0d rat2_data=%016h crat2=%0d crat2_data=%016h ren_count=%0d commit_count=%0d flush=%b full=%b flush_pc=%016h",
+                        trace_cycle,
+                        rat_sp_phys,
+                        rat_sp_data,
+                        crat_sp_phys,
+                        crat_sp_data,
+                        u_core.ren_count_w,
+                        u_core.commit_count,
+                        u_core.flush_out.valid,
+                        u_core.flush_out.full_flush,
+                        u_core.flush_out.redirect_pc);
+                end
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if (u_core.commit_out[i].valid &&
+                        u_core.commit_out[i].rd_valid &&
+                        (u_core.commit_out[i].rd_arch == 5'd2)) begin
+                        $display("[SPCMT] cyc=%0d slot=%0d pc=%016h pdst=%0d old_pdst=%0d pdst_data=%016h commit_count=%0d flush=%b full=%b",
+                            trace_cycle,
+                            i,
                             u_core.rob_head_pc[i],
+                            u_core.commit_out[i].pdst,
+                            u_core.commit_out[i].old_pdst,
+                            (u_core.commit_out[i].pdst == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[u_core.commit_out[i].pdst],
+                            u_core.commit_count,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.full_flush);
+                    end
+                end
+                trace_prev_rat_sp       <= rat_sp_phys;
+                trace_prev_crat_sp      <= crat_sp_phys;
+                trace_prev_rat_sp_data  <= rat_sp_data;
+                trace_prev_crat_sp_data <= crat_sp_data;
+            end
+            if (trace_ralink_en) begin
+                automatic logic [7:0]  rat_ra_phys;
+                automatic logic [7:0]  crat_ra_phys;
+                automatic logic [63:0] rat_ra_data;
+                automatic logic [63:0] crat_ra_data;
+                automatic logic [7:0]  rat_s10_phys;
+                automatic logic [7:0]  crat_s10_phys;
+                automatic logic [63:0] rat_s10_data;
+                automatic logic [63:0] crat_s10_data;
+
+                rat_ra_phys  = u_core.u_rename.u_rat.rat_table[1];
+                crat_ra_phys = u_core.u_rename.u_rat.committed_rat[1];
+                rat_ra_data  = (rat_ra_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[rat_ra_phys];
+                crat_ra_data = (crat_ra_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[crat_ra_phys];
+                rat_s10_phys  = u_core.u_rename.u_rat.rat_table[26];
+                crat_s10_phys = u_core.u_rename.u_rat.committed_rat[26];
+                rat_s10_data  = (rat_s10_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[rat_s10_phys];
+                crat_s10_data = (crat_s10_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[crat_s10_phys];
+
+                if ((rat_ra_phys != trace_prev_rat_ra) ||
+                    (crat_ra_phys != trace_prev_crat_ra) ||
+                    (rat_ra_data != trace_prev_rat_ra_data) ||
+                    (crat_ra_data != trace_prev_crat_ra_data) ||
+                    u_core.flush_out.valid) begin
+	                        $display("[RAMAP] cyc=%0d rat1=%0d rat1_data=%016h crat1=%0d crat1_data=%016h ren_count=%0d commit_count=%0d flush=%b full=%b redir=%016h",
+                        trace_cycle,
+                        rat_ra_phys,
+                        rat_ra_data,
+                        crat_ra_phys,
+                        crat_ra_data,
+                        u_core.ren_count_w,
+                        u_core.commit_count,
+                        u_core.flush_out.valid,
+                        u_core.flush_out.full_flush,
+	                            u_core.flush_out.redirect_pc);
+	                end
+	                if ((rat_s10_phys != trace_prev_rat_s10) ||
+	                    (crat_s10_phys != trace_prev_crat_s10) ||
+	                    (rat_s10_data != trace_prev_rat_s10_data) ||
+	                    (crat_s10_data != trace_prev_crat_s10_data) ||
+	                    u_core.flush_out.valid) begin
+	                    $display("[S10MAP] cyc=%0d rat26=%0d rat26_data=%016h crat26=%0d crat26_data=%016h ren_count=%0d commit_count=%0d flush=%b full=%b redir=%016h",
+	                        trace_cycle,
+	                        rat_s10_phys,
+	                        rat_s10_data,
+	                        crat_s10_phys,
+	                        crat_s10_data,
+	                        u_core.ren_count_w,
+	                        u_core.commit_count,
+	                        u_core.flush_out.valid,
+	                        u_core.flush_out.full_flush,
+	                        u_core.flush_out.redirect_pc);
+	                end
+	                for (int w = 0; w < PIPE_WIDTH; w++) begin
+	                    if (u_core.u_rename.rat_wr_en[w] &&
+	                        ((u_core.u_rename.rat_wr_arch[w] == 5'd26) ||
+	                         (u_core.u_rename.rat_wr_phys[w] == 8'd10))) begin
+	                        $display("[RATWR] cyc=%0d slot=%0d arch=%0d phys=%0d pc=%016h ren_count=%0d flush=%b full=%b",
+	                            trace_cycle,
+	                            w,
+	                            u_core.u_rename.rat_wr_arch[w],
+	                            u_core.u_rename.rat_wr_phys[w],
+	                            u_core.u_rename.work_insn[w].pc,
+	                            u_core.ren_count_w,
+	                            u_core.flush_out.valid,
+	                            u_core.flush_out.full_flush);
+	                    end
+	                end
+
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if ((i < int'(u_core.ren_count_w)) &&
+                        u_core.ren_insn[i].base.valid &&
+                        (tb_coremark_ra_path_pc(u_core.ren_insn[i].base.pc) ||
+                         (u_core.ren_insn[i].base.rd_arch == 5'd1) ||
+                         (u_core.ren_insn[i].base.rs1_arch == 5'd1) ||
+                         (u_core.ren_insn[i].base.rs2_arch == 5'd1))) begin
+                        $display("[RAREN] cyc=%0d slot=%0d pc=%016h insn=%08h rob=%0d fu=%0d br=%0d rdv=%b rd=%0d pdst=%0d old=%0d rs1v=%b rs1=%0d rs1p=%0d rs1r=%b rs2v=%b rs2=%0d rs2p=%0d rs2r=%b rat1=%0d crat1=%0d",
+                            trace_cycle,
+                            i,
+                            u_core.ren_insn[i].base.pc,
+                            u_core.ren_insn[i].base.insn,
+                            u_core.ren_insn[i].rob_idx,
+                            u_core.ren_insn[i].base.fu_type,
+                            u_core.ren_insn[i].base.br_op,
+                            u_core.ren_insn[i].base.rd_valid,
+                            u_core.ren_insn[i].base.rd_arch,
+                            u_core.ren_insn[i].pdst,
+                            u_core.ren_insn[i].old_pdst,
+                            u_core.ren_insn[i].base.rs1_valid,
+                            u_core.ren_insn[i].base.rs1_arch,
+                            u_core.ren_insn[i].rs1_phys,
+                            u_core.ren_insn[i].rs1_ready,
+                            u_core.ren_insn[i].base.rs2_valid,
+                            u_core.ren_insn[i].base.rs2_arch,
+                            u_core.ren_insn[i].rs2_phys,
+                            u_core.ren_insn[i].rs2_ready,
+                            rat_ra_phys,
+                            crat_ra_phys);
+                    end
+                    if ((i < int'(u_core.dq_deq_count)) &&
+                        u_core.dq_deq_data[i].base.valid &&
+                        tb_coremark_ra_path_pc(u_core.dq_deq_data[i].base.pc)) begin
+                        $display("[RADQ] cyc=%0d slot=%0d pc=%016h rob=%0d iq=%0d rdv=%b rd=%0d pdst=%0d rs1p=%0d rs1r=%b rs2p=%0d rs2r=%b",
+                            trace_cycle,
+                            i,
+                            u_core.dq_deq_data[i].base.pc,
+                            u_core.dq_deq_data[i].rob_idx,
+                            u_core.dq_deq_iq_target[i],
+                            u_core.dq_deq_data[i].base.rd_valid,
+                            u_core.dq_deq_data[i].base.rd_arch,
+                            u_core.dq_deq_data[i].pdst,
+                            u_core.dq_deq_data[i].rs1_phys,
+                            u_core.dq_deq_data[i].rs1_ready,
+                            u_core.dq_deq_data[i].rs2_phys,
+                            u_core.dq_deq_data[i].rs2_ready);
+                    end
+                    if (u_core.commit_out[i].valid &&
+                        (tb_coremark_ra_path_pc(u_core.rob_head_pc[i]) ||
+                         (u_core.commit_out[i].rd_valid &&
+                          (u_core.commit_out[i].rd_arch == 5'd1)) ||
+                         (u_core.rob_head_is_branch[i] &&
+                          u_core.rob_head_branch_taken[i] &&
+                          (u_core.rob_head_branch_target[i] == 64'd0)))) begin
+                        $display("[RACMT] cyc=%0d slot=%0d pc=%016h cc=%0d rdv=%b rd=%0d pdst=%0d pdst_data=%016h old=%0d br=%b tk=%b tgt=%016h mis=%b rat1=%0d rat1_data=%016h crat1=%0d crat1_data=%016h",
+                            trace_cycle,
+                            i,
+                            u_core.rob_head_pc[i],
+                            u_core.commit_count,
+                            u_core.commit_out[i].rd_valid,
+                            u_core.commit_out[i].rd_arch,
+                            u_core.commit_out[i].pdst,
+                            (u_core.commit_out[i].pdst == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[u_core.commit_out[i].pdst],
+                            u_core.commit_out[i].old_pdst,
                             u_core.rob_head_is_branch[i],
                             u_core.rob_head_branch_taken[i],
                             u_core.rob_head_branch_target[i],
+                            u_core.rob_head_branch_mispredict[i],
+                            rat_ra_phys,
+                            rat_ra_data,
+                            crat_ra_phys,
+                            crat_ra_data);
+                    end
+                end
+
+                for (int c = 0; c < CDB_WIDTH; c++) begin
+                    if (u_core.cdb_valid[c] &&
+                        (u_core.cdb_tag[c] != 8'd0) &&
+                        ((u_core.cdb_tag[c] == rat_ra_phys) ||
+                         (u_core.cdb_tag[c] == crat_ra_phys) ||
+                         ((u_core.cdb_data[c] >= 64'h0000_0000_8000_0000) &&
+                          (u_core.cdb_data[c] <  64'h0000_0000_8001_0000)))) begin
+                        $display("[RACDB] cyc=%0d cdb=%0d rob=%0d tag=%0d data=%016h is_br=%b br_tgt=%016h mis=%b rat1=%0d crat1=%0d",
+                            trace_cycle,
+                            c,
+                            u_core.cdb_rob_idx[c],
+                            u_core.cdb_tag[c],
+                            u_core.cdb_data[c],
+                            u_core.cdb_is_branch[c],
+                            u_core.cdb_branch_target[c],
+                            u_core.cdb_branch_mispredict[c],
+                            rat_ra_phys,
+                            crat_ra_phys);
+                    end
+                end
+
+                if (u_core.bru_issue &&
+                    tb_coremark_ra_path_pc(u_core.iq0_issue_data[0].pc)) begin
+                    $display("[RABRU0] cyc=%0d pc=%016h rob=%0d op=%0d rvc=%b rd_pdst=%0d rs1p=%0d rs1r=%b prf=%016h byp=%016h bhit=%b imm=%016h bp_tk=%b bp_tgt=%016h taken=%b tgt=%016h link=%016h mis=%b",
+                        trace_cycle,
+                        u_core.iq0_issue_data[0].pc,
+                        u_core.iq0_issue_data[0].rob_idx,
+                        u_core.iq0_issue_data[0].br_op,
+                        u_core.iq0_issue_data[0].is_rvc,
+                        u_core.iq0_issue_data[0].pdst,
+                        u_core.iq0_issue_data[0].rs1_phys,
+                        u_core.iq0_issue_data[0].rs1_ready,
+                        u_core.prf_rdata[0],
+                        u_core.bypassed_data[0],
+                        u_core.bypass_hit[0],
+                        u_core.iq0_issue_data[0].imm,
+                        u_core.iq0_issue_data[0].bp_taken,
+                        u_core.iq0_issue_data[0].bp_target,
+                        u_core.bru_taken,
+                        u_core.bru_target,
+                        u_core.bru_result,
+                        u_core.bru_mispredict);
+                end
+                if (u_core.bru1_issue &&
+                    tb_coremark_ra_path_pc(u_core.iq0_issue_data[1].pc)) begin
+                    $display("[RABRU1] cyc=%0d pc=%016h rob=%0d op=%0d rvc=%b rd_pdst=%0d rs1p=%0d rs1r=%b prf=%016h byp=%016h bhit=%b imm=%016h bp_tk=%b bp_tgt=%016h taken=%b tgt=%016h link=%016h mis=%b",
+                        trace_cycle,
+                        u_core.iq0_issue_data[1].pc,
+                        u_core.iq0_issue_data[1].rob_idx,
+                        u_core.iq0_issue_data[1].br_op,
+                        u_core.iq0_issue_data[1].is_rvc,
+                        u_core.iq0_issue_data[1].pdst,
+                        u_core.iq0_issue_data[1].rs1_phys,
+                        u_core.iq0_issue_data[1].rs1_ready,
+                        u_core.prf_rdata[2],
+                        u_core.bypassed_data[2],
+                        u_core.bypass_hit[2],
+                        u_core.iq0_issue_data[1].imm,
+                        u_core.iq0_issue_data[1].bp_taken,
+                        u_core.iq0_issue_data[1].bp_target,
+                        u_core.bru1_taken,
+                        u_core.bru1_target,
+                        u_core.bru1_result,
+                        u_core.bru1_mispredict);
+                end
+
+                trace_prev_rat_ra       <= rat_ra_phys;
+                trace_prev_crat_ra      <= crat_ra_phys;
+                trace_prev_rat_ra_data  <= rat_ra_data;
+                trace_prev_crat_ra_data <= crat_ra_data;
+                trace_prev_rat_s10       <= rat_s10_phys;
+                trace_prev_crat_s10      <= crat_s10_phys;
+                trace_prev_rat_s10_data  <= rat_s10_data;
+                trace_prev_crat_s10_data <= crat_s10_data;
+            end
+            if (trace_listptr_en && (trace_cycle >= trace_listptr_start)) begin
+                if (u_core.u_fetch_unit.f2_valid_r &&
+                    u_core.u_fetch_unit.f2_data_valid &&
+                    tb_coremark_list_ptr_pc(u_core.u_fetch_unit.f2_pc_r)) begin
+                    $display("[LPF2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h bp=%b bp_tk=%b bp_slot=%0d bp_tgt=%016h sg_v=%b sg_pc=%016h pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b bypass=%b lb_active=%b rn_stall=%b fe_stall=%b flush=%b",
+                        trace_cycle,
+                        u_core.u_fetch_unit.f2_pc_r,
+                        u_core.u_fetch_unit.extract_count,
+                        u_core.u_fetch_unit.final_count,
+                        u_core.u_fetch_unit.f2_will_emit_c,
+                        u_core.u_fetch_unit.f2_data_valid,
+                        u_core.u_fetch_unit.remainder_valid_r,
+                        u_core.u_fetch_unit.consume_remainder_c,
+                        u_core.u_fetch_unit.f2_seq_valid,
+                        u_core.u_fetch_unit.f2_seq_next_pc,
+                        u_core.u_fetch_unit.bp_branch_found,
+                        u_core.u_fetch_unit.bp_taken,
+                        u_core.u_fetch_unit.bp_branch_slot,
+                        u_core.u_fetch_unit.bp_target_addr,
+                        u_core.u_fetch_unit.subgroup_seed_valid_r,
+                        u_core.u_fetch_unit.subgroup_seed_pc_r,
+                        u_core.u_fetch_unit.packet_buf_in.valid,
+                        u_core.u_fetch_unit.packet_buf_in.fetch_count,
+                        u_core.u_fetch_unit.fetch_count,
+                        u_core.u_fetch_unit.packet_buf_valid,
+                        u_core.u_fetch_unit.packet_bypass_valid,
+                        u_core.lb_active,
+                        u_core.rename_stall,
+                        u_core.frontend_backend_stall,
+                        u_core.flush_out.valid);
+                    for (int i = 0; i < PIPE_WIDTH; i++) begin
+                        if (u_core.u_fetch_unit.slot_valid[i] &&
+                            tb_coremark_list_ptr_pc(u_core.u_fetch_unit.slot_pc[i])) begin
+                            $display("[LPF2SLOT] cyc=%0d slot=%0d pc=%016h hw=%04h raw=%08h rvc=%b decomp=%08h final_in=%b",
+                                trace_cycle,
+                                i,
+                                u_core.u_fetch_unit.slot_pc[i],
+                                u_core.u_fetch_unit.raw_hw[i],
+                                u_core.u_fetch_unit.raw_insn[i],
+                                u_core.u_fetch_unit.slot_is_rvc[i],
+                                u_core.u_fetch_unit.decomp_out[i],
+                                (i < int'(u_core.u_fetch_unit.final_count)));
+                        end
+                    end
+                end
+
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if ((i < int'(u_core.u_fetch_unit.fetch_count)) &&
+                        tb_coremark_list_ptr_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
+                        $display("[LPFETCH] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b bypass=%b lb_active=%b rn_stall=%b fe_stall=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.u_fetch_unit.fetch_pc[i],
+                            u_core.u_fetch_unit.fetch_insn[i],
+                            u_core.u_fetch_unit.fetch_is_rvc[i],
+                            u_core.u_fetch_unit.fetch_count,
+                            u_core.u_fetch_unit.fetch_packet_out.fetch_count,
+                            u_core.u_fetch_unit.packet_buf_valid,
+                            u_core.u_fetch_unit.packet_bypass_valid,
+                            u_core.lb_active,
+                            u_core.rename_stall,
+                            u_core.frontend_backend_stall,
+                            u_core.flush_out.valid);
+                    end
+                    if ((i < int'(u_core.dec_count_out)) &&
+                        u_core.dec_insn_out[i].valid &&
+                        tb_coremark_list_ptr_pc(u_core.dec_insn_out[i].pc)) begin
+                        $display("[LPDEC] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rdv=%b rd=%0d rs1v=%b rs1=%0d rs2v=%b rs2=%0d br=%b bp_tk=%b bp_tgt=%016h count=%0d rn_stall=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.dec_insn_out[i].pc,
+                            u_core.dec_insn_out[i].insn,
+                            u_core.dec_insn_out[i].is_rvc,
+                            u_core.dec_insn_out[i].rd_valid,
+                            u_core.dec_insn_out[i].rd_arch,
+                            u_core.dec_insn_out[i].rs1_valid,
+                            u_core.dec_insn_out[i].rs1_arch,
+                            u_core.dec_insn_out[i].rs2_valid,
+                            u_core.dec_insn_out[i].rs2_arch,
+                            u_core.dec_insn_out[i].is_branch,
+                            u_core.dec_insn_out[i].bp_taken,
+                            u_core.dec_insn_out[i].bp_target,
+                            u_core.dec_count_out,
+                            u_core.rename_stall,
+                            u_core.flush_out.valid);
+                    end
+                    if ((i < int'(u_core.fused_count)) &&
+                        u_core.fused_insn[i].valid &&
+                        tb_coremark_list_ptr_pc(u_core.fused_insn[i].pc)) begin
+                        $display("[LPFUSED] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rdv=%b rd=%0d rs1v=%b rs1=%0d rs2v=%b rs2=%0d br=%b bp_tk=%b bp_tgt=%016h count=%0d lb_active=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.fused_insn[i].pc,
+                            u_core.fused_insn[i].insn,
+                            u_core.fused_insn[i].is_rvc,
+                            u_core.fused_insn[i].rd_valid,
+                            u_core.fused_insn[i].rd_arch,
+                            u_core.fused_insn[i].rs1_valid,
+                            u_core.fused_insn[i].rs1_arch,
+                            u_core.fused_insn[i].rs2_valid,
+                            u_core.fused_insn[i].rs2_arch,
+                            u_core.fused_insn[i].is_branch,
+                            u_core.fused_insn[i].bp_taken,
+                            u_core.fused_insn[i].bp_target,
+                            u_core.fused_count,
+                            u_core.lb_active,
+                            u_core.flush_out.valid);
+                    end
+                    if ((i < int'(u_core.rename_dec_count)) &&
+                        u_core.rename_dec_in[i].valid &&
+                        tb_coremark_list_ptr_pc(u_core.rename_dec_in[i].pc)) begin
+                        $display("[LPRENIN] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rdv=%b rd=%0d rs1v=%b rs1=%0d rs2v=%b rs2=%0d br=%b bp_tk=%b bp_tgt=%016h count=%0d lb_active=%b rn_stall=%b hold=%b work=%b adv=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.rename_dec_in[i].pc,
+                            u_core.rename_dec_in[i].insn,
+                            u_core.rename_dec_in[i].is_rvc,
+                            u_core.rename_dec_in[i].rd_valid,
+                            u_core.rename_dec_in[i].rd_arch,
+                            u_core.rename_dec_in[i].rs1_valid,
+                            u_core.rename_dec_in[i].rs1_arch,
+                            u_core.rename_dec_in[i].rs2_valid,
+                            u_core.rename_dec_in[i].rs2_arch,
+                            u_core.rename_dec_in[i].is_branch,
+                            u_core.rename_dec_in[i].bp_taken,
+                            u_core.rename_dec_in[i].bp_target,
+                            u_core.rename_dec_count,
+                            u_core.lb_active,
+                            u_core.rename_stall,
+                            u_core.u_rename.hold_valid,
+                            u_core.u_rename.work_valid,
+                            u_core.u_rename.slot_can_advance,
+                            u_core.flush_out.valid);
+                    end
+                    if ((i < int'(u_core.ren_count_w)) &&
+                        u_core.ren_insn[i].base.valid &&
+                        tb_coremark_list_ptr_pc(u_core.ren_insn[i].base.pc)) begin
+                        $display("[LPREN] cyc=%0d slot=%0d pc=%016h insn=%08h rob=%0d rdv=%b rd=%0d pdst=%0d old=%0d rs1v=%b rs1=%0d rs1p=%0d rs1r=%b rs2v=%b rs2=%0d rs2p=%0d rs2r=%b",
+                            trace_cycle,
+                            i,
+                            u_core.ren_insn[i].base.pc,
+                            u_core.ren_insn[i].base.insn,
+                            u_core.ren_insn[i].rob_idx,
+                            u_core.ren_insn[i].base.rd_valid,
+                            u_core.ren_insn[i].base.rd_arch,
+                            u_core.ren_insn[i].pdst,
+                            u_core.ren_insn[i].old_pdst,
+                            u_core.ren_insn[i].base.rs1_valid,
+                            u_core.ren_insn[i].base.rs1_arch,
+                            u_core.ren_insn[i].rs1_phys,
+                            u_core.ren_insn[i].rs1_ready,
+                            u_core.ren_insn[i].base.rs2_valid,
+                            u_core.ren_insn[i].base.rs2_arch,
+                            u_core.ren_insn[i].rs2_phys,
+                            u_core.ren_insn[i].rs2_ready);
+                    end
+                    if ((i < int'(u_core.dq_deq_count)) &&
+                        u_core.dq_deq_data[i].base.valid &&
+                        tb_coremark_list_ptr_pc(u_core.dq_deq_data[i].base.pc)) begin
+                        $display("[LPDQ] cyc=%0d slot=%0d pc=%016h rob=%0d iq=%0d rdv=%b rd=%0d pdst=%0d rs1p=%0d rs1r=%b rs2p=%0d rs2r=%b",
+                            trace_cycle,
+                            i,
+                            u_core.dq_deq_data[i].base.pc,
+                            u_core.dq_deq_data[i].rob_idx,
+                            u_core.dq_deq_iq_target[i],
+                            u_core.dq_deq_data[i].base.rd_valid,
+                            u_core.dq_deq_data[i].base.rd_arch,
+                            u_core.dq_deq_data[i].pdst,
+                            u_core.dq_deq_data[i].rs1_phys,
+                            u_core.dq_deq_data[i].rs1_ready,
+                            u_core.dq_deq_data[i].rs2_phys,
+                            u_core.dq_deq_data[i].rs2_ready);
+                    end
+                    if (u_core.commit_out[i].valid &&
+                        tb_coremark_list_ptr_pc(u_core.rob_head_pc[i])) begin
+                        $display("[LPCMT] cyc=%0d slot=%0d pc=%016h cc=%0d rdv=%b rd=%0d pdst=%0d data=%016h old=%0d br=%b tk=%b tgt=%016h mis=%b exc=%b code=%0d",
+                            trace_cycle,
+                            i,
+                            u_core.rob_head_pc[i],
+                            u_core.commit_count,
+                            u_core.commit_out[i].rd_valid,
+                            u_core.commit_out[i].rd_arch,
+                            u_core.commit_out[i].pdst,
+                            (u_core.commit_out[i].pdst == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[u_core.commit_out[i].pdst],
+                            u_core.commit_out[i].old_pdst,
+                            u_core.rob_head_is_branch[i],
+                            u_core.rob_head_branch_taken[i],
+                            u_core.rob_head_branch_target[i],
+                            u_core.rob_head_branch_mispredict[i],
+                            u_core.rob_head_has_exception[i],
+                            u_core.rob_head_exc_code[i]);
+                    end
+                end
+
+                for (int c = 0; c < CDB_WIDTH; c++) begin
+                    if (u_core.cdb_valid[c]) begin
+                        automatic logic [63:0] cdb_pc;
+                        cdb_pc = u_core.u_rob.pc_packed[u_core.cdb_rob_idx[c]*64 +: 64];
+                        if (tb_coremark_list_ptr_pc(cdb_pc) ||
+                            (u_core.cdb_data[c][63:32] == 32'h8011_011b)) begin
+                            $display("[LPCDB] cyc=%0d cdb=%0d pc=%016h rob=%0d tag=%0d data=%016h is_br=%b br_tgt=%016h mis=%b",
+                                trace_cycle,
+                                c,
+                                cdb_pc,
+                                u_core.cdb_rob_idx[c],
+                                u_core.cdb_tag[c],
+                                u_core.cdb_data[c],
+                                u_core.cdb_is_branch[c],
+                                u_core.cdb_branch_target[c],
+                                u_core.cdb_branch_mispredict[c]);
+                        end
+                    end
+                end
+
+                if (u_core.u_lsu.load_issue_candidate_valid[0] &&
+                    tb_coremark_list_ptr_pc(u_core.u_lsu.load_issue_data[0].pc)) begin
+                    $display("[LPLD0] cyc=%0d pc=%016h rob=%0d pdst=%0d rs1p=%0d rs1=%016h imm=%016h eff=%016h size=%0d cand=%b issue=%b suppress=%b sq_hit=%b sq_wait=%b sq_part=%b same_hit=%b same_part=%b csb_hit=%b dcreq=%b",
+                        trace_cycle,
+                        u_core.u_lsu.load_issue_data[0].pc,
+                        u_core.u_lsu.load_issue_data[0].rob_idx,
+                        u_core.u_lsu.load_issue_data[0].pdst,
+                        u_core.u_lsu.load_issue_data[0].rs1_phys,
+                        u_core.u_lsu.load_rs1[0],
+                        u_core.u_lsu.load_issue_data[0].imm,
+                        u_core.u_lsu.load_eff_addr[0],
+                        u_core.u_lsu.load_issue_data[0].mem_size,
+                        u_core.u_lsu.load_issue_candidate_valid[0],
+                        u_core.u_lsu.load_issue_valid[0],
+                        u_core.lsu_load_issue_suppress[0],
+                        u_core.u_lsu.sq_fwd_hit,
+                        u_core.u_lsu.sq_fwd_wait,
+                        u_core.u_lsu.sq_fwd_partial,
+                        u_core.u_lsu.same_cycle_fwd_hit,
+                        u_core.u_lsu.same_cycle_fwd_partial,
+                        u_core.u_lsu.csb_fwd_hit,
+                        u_core.u_lsu.dcache_load_req_valid[0]);
+                end
+                if (u_core.u_lsu.load_issue_candidate_valid[1] &&
+                    tb_coremark_list_ptr_pc(u_core.u_lsu.load_issue_data[1].pc)) begin
+                    $display("[LPLD1] cyc=%0d pc=%016h rob=%0d pdst=%0d rs1p=%0d rs1=%016h imm=%016h eff=%016h size=%0d cand=%b issue=%b suppress=%b sq_hit=%b sq_wait=%b sq_part=%b csb_hit=%b dcreq=%b retry=%b",
+                        trace_cycle,
+                        u_core.u_lsu.load_issue_data[1].pc,
+                        u_core.u_lsu.load_issue_data[1].rob_idx,
+                        u_core.u_lsu.load_issue_data[1].pdst,
+                        u_core.u_lsu.load_issue_data[1].rs1_phys,
+                        u_core.u_lsu.load_rs1[1],
+                        u_core.u_lsu.load_issue_data[1].imm,
+                        u_core.u_lsu.load_eff_addr[1],
+                        u_core.u_lsu.load_issue_data[1].mem_size,
+                        u_core.u_lsu.load_issue_candidate_valid[1],
+                        u_core.u_lsu.load_issue_valid[1],
+                        u_core.lsu_load_issue_suppress[1],
+                        u_core.u_lsu.sq_fwd_hit_p1,
+                        u_core.u_lsu.sq_wait_p1,
+                        u_core.u_lsu.sq_fwd_partial_p1,
+                        u_core.u_lsu.csb_fwd_hit_p1,
+                        u_core.u_lsu.dcache_load_req_valid[1],
+                        u_core.u_lsu.p1_retry_valid_r);
+                end
+
+                if (u_core.u_lsu.p0_dcache_hit_valid &&
+                    tb_coremark_list_ptr_pc(u_core.u_lsu.load_issue_data_r[0].pc)) begin
+                    $display("[LPDCHIT0] cyc=%0d pc=%016h rob=%0d pdst=%0d addr=%016h data=%016h",
+                        trace_cycle,
+                        u_core.u_lsu.load_issue_data_r[0].pc,
+                        u_core.u_lsu.load_issue_data_r[0].rob_idx,
+                        u_core.u_lsu.load_issue_data_r[0].pdst,
+                        u_core.u_lsu.load_eff_addr_r[0],
+                        u_core.u_lsu.load_extracted_dc[0]);
+                end
+                if (u_core.u_lsu.dcache_load_resp_valid[1] &&
+                    u_core.u_lsu.load_issue_valid_r[1] &&
+                    !u_core.u_lsu.load_nocache_r[1] &&
+                    tb_coremark_list_ptr_pc(u_core.u_lsu.load_issue_data_r[1].pc)) begin
+                    $display("[LPDCHIT1] cyc=%0d pc=%016h rob=%0d pdst=%0d addr=%016h data=%016h",
+                        trace_cycle,
+                        u_core.u_lsu.load_issue_data_r[1].pc,
+                        u_core.u_lsu.load_issue_data_r[1].rob_idx,
+                        u_core.u_lsu.load_issue_data_r[1].pdst,
+                        u_core.u_lsu.load_eff_addr_r[1],
+                        u_core.u_lsu.load_extracted_dc[1]);
+                end
+            end
+            if (trace_coremark_progress_en && (u_core.commit_count > 3'd0)) begin
+                for (int i = 0; i < 6; i++) begin
+                    automatic int cm_idx;
+                    cm_idx = tb_coremark_progress_index(u_core.rob_head_pc[i]);
+                    if (u_core.commit_out[i].valid && (cm_idx >= 0)) begin
+                        cm_progress_count[cm_idx] <= cm_progress_count[cm_idx] + 1;
+                        $display("[CM_PROGRESS] cyc=%0d slot=%0d idx=%0d count=%0d pc=%016h",
+                            trace_cycle,
+                            i,
+                            cm_idx,
+                            cm_progress_count[cm_idx] + 1,
+                            u_core.rob_head_pc[i]);
+                    end
+                end
+            end
+            if (trace_coremark_exit_en) begin
+                automatic int lowpc_next_count;
+
+                lowpc_next_count = trace_lowpc_count;
+                if (u_core.u_fetch_unit.f2_valid_r &&
+                    u_core.u_fetch_unit.f2_data_valid &&
+                    tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.f2_pc_r)) begin
+                    $display("[CM_FETCH_F2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h strad=%b pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b bypass=%b lb_active=%b stall=%b flush=%b",
+                        trace_cycle,
+                        u_core.u_fetch_unit.f2_pc_r,
+                        u_core.u_fetch_unit.extract_count,
+                        u_core.u_fetch_unit.final_count,
+                        u_core.u_fetch_unit.f2_will_emit_c,
+                        u_core.u_fetch_unit.f2_data_valid,
+                        u_core.u_fetch_unit.remainder_valid_r,
+                        u_core.u_fetch_unit.consume_remainder_c,
+                        u_core.u_fetch_unit.f2_seq_valid,
+                        u_core.u_fetch_unit.f2_seq_next_pc,
+                        u_core.u_fetch_unit.straddle_detected,
+                        u_core.u_fetch_unit.packet_buf_in.valid,
+                        u_core.u_fetch_unit.packet_buf_in.fetch_count,
+                        u_core.u_fetch_unit.fetch_count,
+                        u_core.u_fetch_unit.packet_buf_valid,
+                        u_core.u_fetch_unit.packet_bypass_valid,
+                        u_core.lb_active,
+                        u_core.frontend_backend_stall,
+                        u_core.flush_out.valid);
+                    for (int i = 0; i < PIPE_WIDTH; i++) begin
+                        if (u_core.u_fetch_unit.slot_valid[i]) begin
+                            $display("[CM_FETCH_SLOT] cyc=%0d slot=%0d pc=%016h hw=%04h raw=%08h rvc=%b decomp=%08h final_in=%b",
+                                trace_cycle,
+                                i,
+                                u_core.u_fetch_unit.slot_pc[i],
+                                u_core.u_fetch_unit.raw_hw[i],
+                                u_core.u_fetch_unit.raw_insn[i],
+                                u_core.u_fetch_unit.slot_is_rvc[i],
+                                u_core.u_fetch_unit.decomp_out[i],
+                                (i < int'(u_core.u_fetch_unit.final_count)));
+                        end
+                    end
+                end
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if ((i < int'(u_core.u_fetch_unit.fetch_count)) &&
+                        tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
+                        $display("[CM_FETCH_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b bypass=%b lb_active=%b stall=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.u_fetch_unit.fetch_pc[i],
+                            u_core.u_fetch_unit.fetch_insn[i],
+                            u_core.u_fetch_unit.fetch_is_rvc[i],
+                            u_core.u_fetch_unit.fetch_count,
+                            u_core.u_fetch_unit.fetch_packet_out.fetch_count,
+                            u_core.u_fetch_unit.packet_buf_valid,
+                            u_core.u_fetch_unit.packet_bypass_valid,
+                            u_core.lb_active,
+                            u_core.frontend_backend_stall,
+                            u_core.flush_out.valid);
+                    end
+                    if ((i < int'(u_core.dec_count_out)) &&
+                        u_core.dec_insn_out[i].valid &&
+                        tb_coremark_bad_fetch_pc(u_core.dec_insn_out[i].pc)) begin
+                        $display("[CM_DECODE_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d rdv=%b jal=%b jalr=%b br=%b load=%b store=%b count=%0d stall=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.dec_insn_out[i].pc,
+                            u_core.dec_insn_out[i].insn,
+                            u_core.dec_insn_out[i].is_rvc,
+                            u_core.dec_insn_out[i].rd_arch,
+                            u_core.dec_insn_out[i].rd_valid,
+                            u_core.dec_insn_out[i].is_jal,
+                            u_core.dec_insn_out[i].is_jalr,
+                            u_core.dec_insn_out[i].is_branch,
+                            u_core.dec_insn_out[i].is_load,
+                            u_core.dec_insn_out[i].is_store,
+                            u_core.dec_count_out,
+                            u_core.frontend_backend_stall,
+                            u_core.flush_out.valid);
+                    end
+                    if ((i < int'(u_core.fused_count)) &&
+                        u_core.fused_insn[i].valid &&
+                        tb_coremark_bad_fetch_pc(u_core.fused_insn[i].pc)) begin
+                        $display("[CM_FUSED] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d rdv=%b jal=%b jalr=%b br=%b load=%b store=%b count=%0d lb_active=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.fused_insn[i].pc,
+                            u_core.fused_insn[i].insn,
+                            u_core.fused_insn[i].is_rvc,
+                            u_core.fused_insn[i].rd_arch,
+                            u_core.fused_insn[i].rd_valid,
+                            u_core.fused_insn[i].is_jal,
+                            u_core.fused_insn[i].is_jalr,
+                            u_core.fused_insn[i].is_branch,
+                            u_core.fused_insn[i].is_load,
+                            u_core.fused_insn[i].is_store,
+                            u_core.fused_count,
+                            u_core.lb_active,
+                            u_core.flush_out.valid);
+                    end
+                    if ((i < int'(u_core.rename_dec_count)) &&
+                        u_core.rename_dec_in[i].valid &&
+                        tb_coremark_bad_fetch_pc(u_core.rename_dec_in[i].pc)) begin
+                        $display("[CM_RENAME_IN] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d rdv=%b jal=%b jalr=%b br=%b load=%b store=%b count=%0d lb_active=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.rename_dec_in[i].pc,
+                            u_core.rename_dec_in[i].insn,
+                            u_core.rename_dec_in[i].is_rvc,
+                            u_core.rename_dec_in[i].rd_arch,
+                            u_core.rename_dec_in[i].rd_valid,
+                            u_core.rename_dec_in[i].is_jal,
+                            u_core.rename_dec_in[i].is_jalr,
+                            u_core.rename_dec_in[i].is_branch,
+                            u_core.rename_dec_in[i].is_load,
+                            u_core.rename_dec_in[i].is_store,
+                            u_core.rename_dec_count,
+                            u_core.lb_active,
+                            u_core.flush_out.valid);
+                    end
+                    if ((i < int'(u_core.ren_count_w)) &&
+                        u_core.ren_insn[i].base.valid &&
+                        tb_coremark_bad_fetch_pc(u_core.ren_insn[i].base.pc)) begin
+                        $display("[CM_RENAME_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d pdst=%0d rob=%0d jal=%b jalr=%b br=%b load=%b store=%b count=%0d lb_active=%b flush=%b",
+                            trace_cycle,
+                            i,
+                            u_core.ren_insn[i].base.pc,
+                            u_core.ren_insn[i].base.insn,
+                            u_core.ren_insn[i].base.is_rvc,
+                            u_core.ren_insn[i].base.rd_arch,
+                            u_core.ren_insn[i].pdst,
+                            u_core.ren_insn[i].rob_idx,
+                            u_core.ren_insn[i].base.is_jal,
+                            u_core.ren_insn[i].base.is_jalr,
+                            u_core.ren_insn[i].base.is_branch,
+                            u_core.ren_insn[i].base.is_load,
+                            u_core.ren_insn[i].base.is_store,
+                            u_core.ren_count_w,
+                            u_core.lb_active,
+                            u_core.flush_out.valid);
+                    end
+                end
+                if ((lowpc_next_count < 120) &&
+                    u_core.bru_early_redirect &&
+                    tb_low_text_pc(u_core.bru_early_target)) begin
+                    $display("[LOWPC] cyc=%0d n=%0d stage=bru_redirect pc=%016h lb_active=%b lb_state=%0d flush=%b redir=%016h bru0=%b bru1=%b",
+                        trace_cycle,
+                        lowpc_next_count,
+                        u_core.bru_early_target,
+                        u_core.lb_active,
+                        u_core.u_loop_buffer.state_r,
+                        u_core.flush_out.valid,
+                        u_core.flush_out.redirect_pc,
+                        u_core.bru0_early_redirect,
+                        u_core.bru1_early_redirect);
+                    lowpc_next_count++;
+                end
+                if ((lowpc_next_count < 120) &&
+                    u_core.flush_out.valid &&
+                    tb_low_text_pc(u_core.flush_out.redirect_pc)) begin
+                    $display("[LOWPC] cyc=%0d n=%0d stage=flush pc=%016h lb_active=%b lb_state=%0d full=%b bru_redir=%b bru_pc=%016h",
+                        trace_cycle,
+                        lowpc_next_count,
+                        u_core.flush_out.redirect_pc,
+                        u_core.lb_active,
+                        u_core.u_loop_buffer.state_r,
+                        u_core.flush_out.full_flush,
+                        u_core.bru_early_redirect,
+                        u_core.bru_early_target);
+                    lowpc_next_count++;
+                end
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if ((lowpc_next_count < 120) &&
+                        (i < int'(u_core.u_fetch_unit.fetch_count)) &&
+                        tb_low_text_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=fetch slot=%0d pc=%016h lb_active=%b lb_state=%0d flush=%b redir=%016h bru_redir=%b bru_pc=%016h fetch_count=%0d",
+                            trace_cycle,
+                            lowpc_next_count,
+                            i,
+                            u_core.u_fetch_unit.fetch_pc[i],
+                            u_core.lb_active,
+                            u_core.u_loop_buffer.state_r,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.redirect_pc,
+                            u_core.bru_early_redirect,
+                            u_core.bru_early_target,
+                            u_core.u_fetch_unit.fetch_count);
+                        lowpc_next_count++;
+                    end
+                    if ((lowpc_next_count < 120) &&
+                        (i < int'(u_core.dec_count_out)) &&
+                        u_core.dec_insn_out[i].valid &&
+                        tb_low_text_pc(u_core.dec_insn_out[i].pc)) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=decode slot=%0d pc=%016h lb_active=%b lb_state=%0d flush=%b redir=%016h dec_count=%0d",
+                            trace_cycle,
+                            lowpc_next_count,
+                            i,
+                            u_core.dec_insn_out[i].pc,
+                            u_core.lb_active,
+                            u_core.u_loop_buffer.state_r,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.redirect_pc,
+                            u_core.dec_count_out);
+                        lowpc_next_count++;
+                    end
+                    if ((lowpc_next_count < 120) &&
+                        (i < int'(u_core.fused_count)) &&
+                        u_core.fused_insn[i].valid &&
+                        tb_low_text_pc(u_core.fused_insn[i].pc)) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=fused slot=%0d pc=%016h lb_active=%b lb_state=%0d flush=%b redir=%016h fused_count=%0d br=%b jal=%b jalr=%b bp_tk=%b bp_tgt=%016h",
+                            trace_cycle,
+                            lowpc_next_count,
+                            i,
+                            u_core.fused_insn[i].pc,
+                            u_core.lb_active,
+                            u_core.u_loop_buffer.state_r,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.redirect_pc,
+                            u_core.fused_count,
+                            u_core.fused_insn[i].is_branch,
+                            u_core.fused_insn[i].is_jal,
+                            u_core.fused_insn[i].is_jalr,
+                            u_core.fused_insn[i].bp_taken,
+                            u_core.fused_insn[i].bp_target);
+                        lowpc_next_count++;
+                    end
+                    if ((lowpc_next_count < 120) &&
+                        u_core.lb_active &&
+                        (i < int'(u_core.lb_count)) &&
+                        u_core.lb_insn[i].valid &&
+                        tb_low_text_pc(u_core.lb_insn[i].pc)) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=lb slot=%0d pc=%016h lb_state=%0d flush=%b redir=%016h lb_count=%0d rd_ptr=%0d body_len=%0d br=%b bp_tk=%b bp_tgt=%016h",
+                            trace_cycle,
+                            lowpc_next_count,
+                            i,
+                            u_core.lb_insn[i].pc,
+                            u_core.u_loop_buffer.state_r,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.redirect_pc,
+                            u_core.lb_count,
+                            u_core.u_loop_buffer.rd_ptr_r,
+                            u_core.u_loop_buffer.body_len_r,
+                            u_core.lb_insn[i].is_branch,
+                            u_core.lb_insn[i].bp_taken,
+                            u_core.lb_insn[i].bp_target);
+                        lowpc_next_count++;
+                    end
+                    if ((lowpc_next_count < 120) &&
+                        (i < int'(u_core.rename_dec_count)) &&
+                        u_core.rename_dec_in[i].valid &&
+                        tb_low_text_pc(u_core.rename_dec_in[i].pc)) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=rename_in slot=%0d pc=%016h src_lb=%b lb_state=%0d flush=%b redir=%016h ren_dec_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
+                            trace_cycle,
+                            lowpc_next_count,
+                            i,
+                            u_core.rename_dec_in[i].pc,
+                            u_core.lb_active,
+                            u_core.u_loop_buffer.state_r,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.redirect_pc,
+                            u_core.rename_dec_count,
+                            u_core.rename_dec_in[i].is_branch,
+                            u_core.rename_dec_in[i].bp_taken,
+                            u_core.rename_dec_in[i].bp_target);
+                        lowpc_next_count++;
+                    end
+                    if ((lowpc_next_count < 120) &&
+                        (i < int'(u_core.ren_count_w)) &&
+                        u_core.ren_insn[i].base.valid &&
+                        tb_low_text_pc(u_core.ren_insn[i].base.pc)) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=rename_out slot=%0d pc=%016h rob=%0d lb_active=%b lb_state=%0d flush=%b redir=%016h ren_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
+                            trace_cycle,
+                            lowpc_next_count,
+                            i,
+                            u_core.ren_insn[i].base.pc,
+                            u_core.ren_insn[i].rob_idx,
+                            u_core.lb_active,
+                            u_core.u_loop_buffer.state_r,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.redirect_pc,
+                            u_core.ren_count_w,
+                            u_core.ren_insn[i].base.is_branch,
+                            u_core.ren_insn[i].base.bp_taken,
+                            u_core.ren_insn[i].base.bp_target);
+                        lowpc_next_count++;
+                    end
+                    if ((lowpc_next_count < 120) &&
+                        (i < int'(u_core.dq_deq_count)) &&
+                        u_core.dq_deq_data[i].base.valid &&
+                        tb_low_text_pc(u_core.dq_deq_data[i].base.pc)) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=dq_deq slot=%0d pc=%016h rob=%0d iq=%0d lb_active=%b lb_state=%0d flush=%b redir=%016h deq_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
+                            trace_cycle,
+                            lowpc_next_count,
+                            i,
+                            u_core.dq_deq_data[i].base.pc,
+                            u_core.dq_deq_data[i].rob_idx,
+                            u_core.dq_deq_iq_target[i],
+                            u_core.lb_active,
+                            u_core.u_loop_buffer.state_r,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.redirect_pc,
+                            u_core.dq_deq_count,
+                            u_core.dq_deq_data[i].base.is_branch,
+                            u_core.dq_deq_data[i].base.bp_taken,
+                            u_core.dq_deq_data[i].base.bp_target);
+                        lowpc_next_count++;
+                    end
+                    if ((lowpc_next_count < 120) &&
+                        u_core.commit_out[i].valid &&
+                        tb_low_text_pc(u_core.rob_head_pc[i])) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=commit slot=%0d pc=%016h cc=%0d lb_active=%b lb_state=%0d flush=%b redir=%016h br=%b tk=%b tgt=%016h mis=%b",
+                            trace_cycle,
+                            lowpc_next_count,
+                            i,
+                            u_core.rob_head_pc[i],
+                            u_core.commit_count,
+                            u_core.lb_active,
+                            u_core.u_loop_buffer.state_r,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.redirect_pc,
+                            u_core.rob_head_is_branch[i],
+                            u_core.rob_head_branch_taken[i],
+                            u_core.rob_head_branch_target[i],
+                            u_core.rob_head_branch_mispredict[i]);
+                        lowpc_next_count++;
+                    end
+                end
+                trace_lowpc_count <= lowpc_next_count;
+            end
+            if (trace_coremark_exit_en && (u_core.commit_count > 3'd0)) begin
+                automatic logic [7:0]  crat_ra_phys;
+                automatic logic [7:0]  crat_a0_phys;
+                automatic logic [7:0]  crat_a1_phys;
+                automatic logic [7:0]  crat_sp_phys;
+                automatic logic [63:0] crat_ra_data;
+                automatic logic [63:0] crat_a0_data;
+                automatic logic [63:0] crat_a1_data;
+                automatic logic [63:0] crat_sp_data;
+
+                crat_ra_phys = u_core.u_rename.u_rat.committed_rat[1];
+                crat_sp_phys = u_core.u_rename.u_rat.committed_rat[2];
+                crat_a0_phys = u_core.u_rename.u_rat.committed_rat[10];
+                crat_a1_phys = u_core.u_rename.u_rat.committed_rat[11];
+                crat_ra_data = (crat_ra_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[crat_ra_phys];
+                crat_sp_data = (crat_sp_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[crat_sp_phys];
+                crat_a0_data = (crat_a0_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[crat_a0_phys];
+                crat_a1_data = (crat_a1_phys == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[crat_a1_phys];
+
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if (u_core.commit_out[i].valid &&
+                        tb_coremark_exit_pc(u_core.rob_head_pc[i])) begin
+                        $display("[CM_EXIT] cyc=%0d slot=%0d pc=%016h cc=%0d flush=%b full=%b redir=%016h rdv=%b rd=%0d pdst=%0d pdst_data=%016h ra=%016h a0=%016h a1=%016h sp=%016h",
+                            trace_cycle,
+                            i,
+                            u_core.rob_head_pc[i],
+                            u_core.commit_count,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.full_flush,
+                            u_core.flush_out.redirect_pc,
+                            u_core.commit_out[i].rd_valid,
+                            u_core.commit_out[i].rd_arch,
+                            u_core.commit_out[i].pdst,
+                            (u_core.commit_out[i].pdst == 8'd0) ? 64'd0 : u_core.u_int_prf.regfile_copy0[u_core.commit_out[i].pdst],
+                            crat_ra_data,
+                            crat_a0_data,
+                            crat_a1_data,
+                            crat_sp_data);
+                    end
+                end
+            end
+            if (trace_coremark_exit_en) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if ((i < int'(u_core.ren_count_w)) &&
+                        u_core.ren_insn[i].base.is_store) begin
+                        trace_sq_alloc_pc[u_core.ren_insn[i].sq_idx] <=
+                            u_core.ren_insn[i].base.pc;
+                        trace_sq_alloc_rob[u_core.ren_insn[i].sq_idx] <=
+                            u_core.ren_insn[i].rob_idx;
+                        if (tb_coremark_exit_pc(u_core.ren_insn[i].base.pc)) begin
+                            $display("[CM_SQ_ALLOC] cyc=%0d sq=%0d rob=%0d pc=%016h ren_slot=%0d tail=%0d count=%0d flush=%b",
+                                trace_cycle,
+                                u_core.ren_insn[i].sq_idx,
+                                u_core.ren_insn[i].rob_idx,
+                                u_core.ren_insn[i].base.pc,
+                                i,
+                                u_core.u_lsu.u_store_queue.tail_r,
+                                u_core.u_lsu.u_store_queue.count_r,
+                                u_core.flush_out.valid);
+                        end
+                    end
+                end
+
+                if (u_core.u_lsu.sta_issue_valid &&
+                    (tb_coremark_exit_pc(u_core.u_lsu.sta_issue_data.pc) ||
+                     tb_coremark_mmio_addr(u_core.u_lsu.sta_eff_addr))) begin
+                    $display("[CM_SQ_STA] cyc=%0d sq=%0d rob=%0d pc=%016h alloc_pc=%016h addr=%016h size=%0d flush=%b head=%0d tail=%0d count=%0d",
+                        trace_cycle,
+                        u_core.u_lsu.sta_issue_data.sq_idx,
+                        u_core.u_lsu.sta_issue_data.rob_idx,
+                        u_core.u_lsu.sta_issue_data.pc,
+                        trace_sq_alloc_pc[u_core.u_lsu.sta_issue_data.sq_idx],
+                        u_core.u_lsu.sta_eff_addr,
+                        u_core.u_lsu.sta_issue_data.mem_size,
+                        u_core.flush_out.valid,
+                        u_core.u_lsu.u_store_queue.head_r,
+                        u_core.u_lsu.u_store_queue.tail_r,
+                        u_core.u_lsu.u_store_queue.count_r);
+                end
+
+                if (u_core.u_lsu.std_issue_valid &&
+                    (tb_coremark_exit_pc(u_core.u_lsu.std_issue_data.pc) ||
+                     tb_coremark_mmio_addr(u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr))) begin
+                    $display("[CM_SQ_STD] cyc=%0d sq=%0d rob=%0d pc=%016h alloc_pc=%016h data=%016h mask=%02h flush=%b entry_valid=%b entry_rob=%0d addr_valid=%b addr=%016h",
+                        trace_cycle,
+                        u_core.u_lsu.std_issue_data.sq_idx,
+                        u_core.u_lsu.std_issue_data.rob_idx,
+                        u_core.u_lsu.std_issue_data.pc,
+                        trace_sq_alloc_pc[u_core.u_lsu.std_issue_data.sq_idx],
+                        u_core.u_lsu.std_rs2,
+                        u_core.u_lsu.std_byte_mask,
+                        u_core.flush_out.valid,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].valid,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].rob_idx,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr_valid,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr);
+                end
+
+                if (u_core.u_lsu.sq_drain_valid && u_core.u_lsu.sq_drain_ready) begin
+                    trace_csb_pc[u_core.u_lsu.u_csb.tail_r] <=
+                        trace_sq_alloc_pc[u_core.u_lsu.u_store_queue.head_r];
+                    trace_csb_rob[u_core.u_lsu.u_csb.tail_r] <=
+                        u_core.u_lsu.sq_drain_entry.rob_idx;
+                    if (tb_coremark_mmio_addr(u_core.u_lsu.sq_drain_entry.addr) ||
+                        tb_coremark_exit_pc(trace_sq_alloc_pc[u_core.u_lsu.u_store_queue.head_r])) begin
+                        $display("[CM_SQ_DRAIN] cyc=%0d sq=%0d rob=%0d alloc_rob=%0d alloc_pc=%016h addr=%016h data=%016h mask=%02h csb_tail=%0d flush=%b",
+                            trace_cycle,
+                            u_core.u_lsu.u_store_queue.head_r,
+                            u_core.u_lsu.sq_drain_entry.rob_idx,
+                            trace_sq_alloc_rob[u_core.u_lsu.u_store_queue.head_r],
+                            trace_sq_alloc_pc[u_core.u_lsu.u_store_queue.head_r],
+                            u_core.u_lsu.sq_drain_entry.addr,
+                            u_core.u_lsu.sq_drain_entry.data,
+                            u_core.u_lsu.sq_drain_entry.byte_mask,
+                            u_core.u_lsu.u_csb.tail_r,
+                            u_core.flush_out.valid);
+                    end
+                end
+
+                if (u_core.dc_store_req_valid &&
+                    tb_coremark_mmio_addr(u_core.dc_store_req_addr)) begin
+                    $display("[CM_CSB_DEQ] cyc=%0d csb=%0d rob=%0d pc=%016h addr=%016h data=%016h ack=%b count=%0d tohost=%b",
+                        trace_cycle,
+                        u_core.u_lsu.u_csb.head_r,
+                        trace_csb_rob[u_core.u_lsu.u_csb.head_r],
+                        trace_csb_pc[u_core.u_lsu.u_csb.head_r],
+                        u_core.dc_store_req_addr,
+                        u_core.dc_store_req_data,
+                        u_core.dc_store_ack,
+                        u_core.u_lsu.u_csb.count_r,
+                        u_core.tohost_wr_valid);
+                end
+            end
+            if (trace_matrix_branch_en) begin
+                if (u_core.bru_issue &&
+                    ((u_core.iq0_issue_data[0].pc == 64'h0000_0000_8000_31c8) ||
+                     (u_core.iq0_issue_data[0].pc == 64'h0000_0000_8000_31d4) ||
+                     (u_core.iq0_issue_data[0].pc == 64'h0000_0000_8000_31e8)) &&
+                    (((matrix_branch_trace_count < 160) ||
+                      ((matrix_branch_trace_count % 512) == 0)) ||
+                     (u_core.iq0_issue_data[0].pc != 64'h0000_0000_8000_31c8))) begin
+                    matrix_branch_trace_count <= matrix_branch_trace_count + 1;
+                    $display("[MATRIX_BR] cyc=%0d count=%0d port=0 pc=%016h rs1=%016h rs2=%016h bp_taken=%b taken=%b target=%016h misp=%b rob=%0d",
+                        trace_cycle,
+                        matrix_branch_trace_count + 1,
+                        u_core.iq0_issue_data[0].pc,
+                        u_core.bypassed_data[0],
+                        u_core.bypassed_data[1],
+                        u_core.iq0_issue_data[0].bp_taken,
+                        u_core.bru_taken,
+                        u_core.bru_target,
+                        u_core.bru_mispredict,
+                        u_core.iq0_issue_data[0].rob_idx);
+                end else if (u_core.bru1_issue &&
+                    ((u_core.iq0_issue_data[1].pc == 64'h0000_0000_8000_31c8) ||
+                     (u_core.iq0_issue_data[1].pc == 64'h0000_0000_8000_31d4) ||
+                     (u_core.iq0_issue_data[1].pc == 64'h0000_0000_8000_31e8)) &&
+                    (((matrix_branch_trace_count < 160) ||
+                      ((matrix_branch_trace_count % 512) == 0)) ||
+                     (u_core.iq0_issue_data[1].pc != 64'h0000_0000_8000_31c8))) begin
+                    matrix_branch_trace_count <= matrix_branch_trace_count + 1;
+                    $display("[MATRIX_BR] cyc=%0d count=%0d port=1 pc=%016h rs1=%016h rs2=%016h bp_taken=%b taken=%b target=%016h misp=%b rob=%0d",
+                        trace_cycle,
+                        matrix_branch_trace_count + 1,
+                        u_core.iq0_issue_data[1].pc,
+                        u_core.bypassed_data[2],
+                        u_core.bypassed_data[3],
+                        u_core.iq0_issue_data[1].bp_taken,
+                        u_core.bru1_taken,
+                        u_core.bru1_target,
+                        u_core.bru1_mispredict,
+                        u_core.iq0_issue_data[1].rob_idx);
+                end
+            end
+            if (trace_commit_hotspots_en && (u_core.commit_count > 3'd0)) begin
+                for (int i = 0; i < 6; i++) begin
+                    if (u_core.commit_out[i].valid &&
+                        (u_core.rob_head_pc[i] >= COMMIT_HOTSPOT_BASE) &&
+                        (((u_core.rob_head_pc[i] - COMMIT_HOTSPOT_BASE) >> 1) < COMMIT_HOTSPOT_BINS)) begin
+                        commit_pc_hist[int'((u_core.rob_head_pc[i] - COMMIT_HOTSPOT_BASE) >> 1)] <=
+                            commit_pc_hist[int'((u_core.rob_head_pc[i] - COMMIT_HOTSPOT_BASE) >> 1)] + 1;
+                    end
+                end
+            end
+            if (trace_commit_en && (u_core.commit_count > 3'd0)) begin
+                for (int i = 0; i < 6; i++) begin
+                    if (u_core.commit_out[i].valid) begin
+                        // ty bitfield (hex):
+                        //   bit0=is_branch, bit1=is_jal,    bit2=is_jalr,
+                        //   bit3=is_load,   bit4=is_store,  bit5=is_csr,
+                        //   bit6=is_fence|is_fence_i,       bit7=is_ecall|is_ebreak|is_mret|is_sret|is_sfence_vma|is_wfi
+                        // (no is_jal/is_jalr/is_amo signal at rob head — JAL/JALR
+                        // are encoded in is_branch + bpu_type so we read from the
+                        // bpu_type field 1=JAL, 2=JALR, 3=COND-OR-BR-WITH-BPU)
+                        automatic logic [7:0] ty;
+                        ty = '0;
+                        ty[0] = u_core.rob_head_is_branch[i];
+                        ty[1] = (u_core.rob_head_bpu_type[i] == 3'd1); // JAL
+                        ty[2] = (u_core.rob_head_bpu_type[i] == 3'd2); // JALR
+                        ty[3] = u_core.rob_head_is_load[i];
+                        ty[4] = u_core.rob_head_is_store[i];
+                        ty[5] = u_core.rob_head_is_csr[i];
+                        ty[6] = u_core.rob_head_is_fence[i] || u_core.rob_head_is_fence_i[i];
+                        ty[7] = u_core.rob_head_is_ecall[i] || u_core.rob_head_is_mret[i] ||
+                                u_core.rob_head_is_sret[i] || u_core.rob_head_is_sfence_vma[i] ||
+                                u_core.rob_head_is_wfi[i];
+                        // act_tgt = where we actually went (= taken_target if taken, else fall-through);
+                        // tgt    = post-resolve target field as written by BRU (taken_target when taken,
+                        //          fall-through when not — same field as before, kept for back-compat).
+                        $display("[CPC] cyc=%0d slot=%0d pc=%016h ty=%02h br=%b tk=%b tgt=%016h act=%016h mis=%b",
+                            trace_cycle, i,
+                            u_core.rob_head_pc[i],
+                            ty,
+                            u_core.rob_head_is_branch[i],
+                            u_core.rob_head_branch_taken[i],
+                            u_core.rob_head_branch_target[i],
+                            u_core.rob_head_branch_taken_target[i],
                             u_core.rob_head_branch_mispredict[i]);
                     end
                 end
@@ -934,6 +2975,26 @@ module tb_top
                     trace_cycle,
                     u_core.flush_out.redirect_pc,
                     u_core.flush_out.full_flush);
+            end
+            if (trace_head_stall_en &&
+                u_core.rob_head_valid[0] &&
+                !u_core.rob_head_ready[0]) begin
+                $display("[HEADSTALL] cyc=%0d head=%0d pc=%016h load=%b store=%b branch=%b bpu_type=%0d csr=%b fence=%b fencei=%b mret=%b sret=%b sfence=%b ecall=%b wfi=%b",
+                    trace_cycle,
+                    u_core.rob_head_idx,
+                    u_core.rob_head_pc[0],
+                    u_core.rob_head_is_load[0],
+                    u_core.rob_head_is_store[0],
+                    u_core.rob_head_is_branch[0],
+                    u_core.rob_head_bpu_type[0],
+                    u_core.rob_head_is_csr[0],
+                    u_core.rob_head_is_fence[0],
+                    u_core.rob_head_is_fence_i[0],
+                    u_core.rob_head_is_mret[0],
+                    u_core.rob_head_is_sret[0],
+                    u_core.rob_head_is_sfence_vma[0],
+                    u_core.rob_head_is_ecall[0],
+                    u_core.rob_head_is_wfi[0]);
             end
             if (trace_commit_en && u_core.bru_issue &&
                 (u_core.iq0_issue_data[0].pc >= 64'h0000000080002000) &&
@@ -1106,7 +3167,8 @@ module tb_top
             // Watchdog fire detection: log what ROB entry was stuck and type.
             // Earlier 12'd61 corresponds to watchdog value 1 cycle before it fires
             // (we sample before the final increment).
-            if (trace_commit_en && (u_core.u_rob.rob_head_watchdog == 12'd61)) begin
+            if ((trace_commit_en || trace_wdog_en) &&
+                (u_core.u_rob.rob_head_watchdog == 12'd61)) begin
                 automatic int sta_match_found = 0;
                 automatic int sta_match_idx = -1;
                 automatic int sta_s1_rdy = 0;
@@ -1240,6 +3302,17 @@ module tb_top
                     u_core.dc_store_ack,
                     u_core.tohost_wr_valid);
             end
+            if (trace_coremark_exit_en && u_core.dc_store_req_valid &&
+                (((u_core.dc_store_req_addr >= BENCH_RESULT_BASE) &&
+                  (u_core.dc_store_req_addr < BENCH_RESULT_END)) ||
+                 (u_core.dc_store_req_addr[31:3] == TOHOST_ADDR[31:3]))) begin
+                $display("[CM_STORE] cyc=%0d addr=%016h data=%016h ack=%b tohost=%b",
+                    trace_cycle,
+                    u_core.dc_store_req_addr,
+                    u_core.dc_store_req_data,
+                    u_core.dc_store_ack,
+                    u_core.tohost_wr_valid);
+            end
             // DC L2 traffic trace (to diagnose MSHR/fill stalls)
             if (trace_commit_en && u_core.u_dcache.l2_req_valid) begin
                 $display("[DC_L2REQ] cyc=%0d addr=%016h we=%b l2_ready=%b state=%0d",
@@ -1318,6 +3391,37 @@ module tb_top
                         u_core.iq1_issue_data[0].is_w_op,
                         u_core.iq1_issue_data[0].use_imm,
                         u_core.iq1_issue_data[0].imm);
+                end
+                if (u_core.iq1_issue_valid[0] && u_core.iq1_issue_data[0].fu_type == FU_MUL) begin
+                    $display("[MULISS] cyc=%0d pc=%016h opa=%016h opb=%016h op=%0d is_w=%b pdst=%0d rob=%0d rs1_p=%0d rs2_p=%0d",
+                        trace_cycle,
+                        u_core.iq1_issue_data[0].pc,
+                        u_core.bypassed_data[4],
+                        u_core.bypassed_data[5],
+                        u_core.iq1_issue_data[0].mul_op,
+                        u_core.iq1_issue_data[0].is_w_op,
+                        u_core.iq1_issue_data[0].pdst,
+                        u_core.iq1_issue_data[0].rob_idx,
+                        u_core.iq1_issue_data[0].rs1_phys,
+                        u_core.iq1_issue_data[0].rs2_phys);
+                end
+                if (u_core.u_multiplier.s1_valid || u_core.u_multiplier.s2_valid ||
+                    u_core.mul_hold_valid_r ||
+                    u_core.cdb_valid[2]) begin
+                    $display("[MULWB] cyc=%0d s1v=%b s1_rob=%0d s1_pdst=%0d s2v=%b s2_rob=%0d s2_pdst=%0d vout=%b hold=%b cdb2=%b cdb2_rob=%0d cdb2_pdst=%0d cdb2_data=%016h",
+                        trace_cycle,
+                        u_core.u_multiplier.s1_valid,
+                        u_core.mul_rob_idx_s1,
+                        u_core.mul_pdst_s1,
+                        u_core.u_multiplier.s2_valid,
+                        u_core.mul_rob_idx_s2,
+                        u_core.mul_pdst_s2,
+                        u_core.mul_valid_out,
+                        u_core.mul_hold_valid_r,
+                        u_core.cdb_valid[2],
+                        u_core.cdb_rob_idx[2],
+                        u_core.cdb_tag[2],
+                        u_core.cdb_data[2]);
                 end
                 if (u_core.iq2_issue_valid[0] && u_core.iq2_issue_data[0].fu_type == FU_ALU) begin
                     $display("[ALU3] cyc=%0d pc=%016h opa=%016h opb=%016h op=%0d is_w=%b use_imm=%b imm=%016h",
@@ -1524,34 +3628,129 @@ module tb_top
                         u_core.rob_empty,
                         u_core.rob_full);
                 end
+                if (trace_iqld_watch_en) begin
+                    for (int p = 0; p < 2; p++) begin
+                        if (u_core.u_iq_load.sel_found[p]) begin
+                            automatic iq_entry_t sel_ent;
+                            sel_ent = iq_entry_t'(u_core.u_iq_load.payload_r[u_core.u_iq_load.sel_idx[p]]);
+                            $display("[IQLD_SEL%0d] cyc=%0d idx=%0d rob=%0d pc=%016h pdst=%0d rs1p=%0d s1=%b n1=%b elig=%b suppress=%b issue=%b",
+                                p,
+                                trace_cycle,
+                                u_core.u_iq_load.sel_idx[p],
+                                u_core.u_iq_load.rob_idx_r[u_core.u_iq_load.sel_idx[p]],
+                                sel_ent.pc,
+                                sel_ent.pdst,
+                                u_core.u_iq_load.rs1_phys_r[u_core.u_iq_load.sel_idx[p]],
+                                u_core.u_iq_load.src1_ready[u_core.u_iq_load.sel_idx[p]],
+                                u_core.u_iq_load.next_src1_ready[u_core.u_iq_load.sel_idx[p]],
+                                u_core.u_iq_load.eligible[u_core.u_iq_load.sel_idx[p]],
+                                u_core.lsu_load_issue_suppress[p],
+                                u_core.iq_load_issue_valid[p]);
+                        end
+                    end
+                    for (int e = 0; e < IQ_MEM_DEPTH; e++) begin
+                        automatic iq_entry_t iqld_watch_ent;
+                        iqld_watch_ent = iq_entry_t'(u_core.u_iq_load.payload_r[e]);
+                        if (u_core.u_iq_load.entry_valid[e] &&
+                            (u_core.u_iq_load.rob_idx_r[e] == ROB_IDX_BITS'(trace_iqld_watch_rob))) begin
+                            $display("[IQLD_WATCH] cyc=%0d idx=%0d rob=%0d pc=%016h pdst=%0d rs1p=%0d rs2p=%0d s1=%b s2=%b n1=%b n2=%b sp1=%b sp2=%b elig=%b age=%0d count=%0d preg1=%b cdb4=%b/%0d cdb5=%b/%0d spec_wk=%b/%0d cancel=%b/%0d flush=%b full=%b rem=%b",
+                                trace_cycle,
+                                e,
+                                u_core.u_iq_load.rob_idx_r[e],
+                                iqld_watch_ent.pc,
+                                iqld_watch_ent.pdst,
+                                u_core.u_iq_load.rs1_phys_r[e],
+                                u_core.u_iq_load.rs2_phys_r[e],
+                                u_core.u_iq_load.src1_ready[e],
+                                u_core.u_iq_load.src2_ready[e],
+                                u_core.u_iq_load.next_src1_ready[e],
+                                u_core.u_iq_load.next_src2_ready[e],
+                                u_core.u_iq_load.src1_spec[e],
+                                u_core.u_iq_load.src2_spec[e],
+                                u_core.u_iq_load.eligible[e],
+                                u_core.u_iq_load.entry_age[e],
+                                u_core.u_iq_load.count_r,
+                                u_core.preg_ready_table[u_core.u_iq_load.rs1_phys_r[e]],
+                                u_core.cdb_valid[4],
+                                u_core.cdb_tag[4],
+                                u_core.cdb_valid[5],
+                                u_core.cdb_tag[5],
+                                u_core.lsu_spec_wakeup_valid[0],
+                                u_core.lsu_spec_wakeup_tag[0],
+                                u_core.lsu_spec_cancel_valid[0],
+                                u_core.lsu_spec_cancel_tag[0],
+                                u_core.flush_out.valid,
+                                u_core.flush_out.full_flush,
+                                u_core.u_iq_load.flush_remove[e]);
+                        end
+                    end
+                end
                 // Trace load IQ enqueue
                 for (int qq = 0; qq < 2; qq++) begin
                     if (u_core.iq_load_enq_valid[qq]) begin
-                        $display("[LDENQ%0d] cyc=%0d pc=%016h fu=%0d rs1_phys=%0d pdst=%0d imm=%016h is_fused=%b",
+                        $display("[LDENQ%0d] cyc=%0d pc=%016h fu=%0d rs1_phys=%0d pdst=%0d rob=%0d imm=%016h is_fused=%b dqcnt=%0d ld_enq_cnt=%0d iq_count=%0d iq_full=%b free_found=%b free_idx=%0d valid_map=%08h issue=%b",
                             qq,
                             trace_cycle,
                             u_core.iq_load_enq_data[qq].pc,
                             u_core.iq_load_enq_data[qq].fu_type,
                             u_core.iq_load_enq_data[qq].rs1_phys,
                             u_core.iq_load_enq_data[qq].pdst,
+                            u_core.iq_load_enq_data[qq].rob_idx,
                             u_core.iq_load_enq_data[qq].imm,
-                            u_core.iq_load_enq_data[qq].is_fused);
+                            u_core.iq_load_enq_data[qq].is_fused,
+                            u_core.dq_deq_count,
+                            u_core.iq_ld_enq_cnt,
+                            u_core.u_iq_load.count_r,
+                            u_core.iq_load_full,
+                            u_core.u_iq_load.free_found[qq],
+                            u_core.u_iq_load.free_idx[qq],
+                            u_core.u_iq_load.entry_valid,
+                            u_core.iq_load_issue_valid);
+                        if (!u_core.u_iq_load.free_found[qq]) begin
+                            $display("[LDENQ_DROP] cyc=%0d lane=%0d rob=%0d pc=%016h iq_count=%0d valid_map=%08h",
+                                trace_cycle,
+                                qq,
+                                u_core.iq_load_enq_data[qq].rob_idx,
+                                u_core.iq_load_enq_data[qq].pc,
+                                u_core.u_iq_load.count_r,
+                                u_core.u_iq_load.entry_valid);
+                        end
+                    end
+                end
+                // Trace IQ1 enqueue (ALU2/MUL path)
+                for (int qq = 0; qq < 2; qq++) begin
+                    if (u_core.iq1_enq_valid[qq]) begin
+                        $display("[IQ1ENQ%0d] cyc=%0d pc=%016h fu=%0d rs1_phys=%0d rs2_phys=%0d pdst=%0d rob=%0d s1_rdy=%b s2_rdy=%b",
+                            qq,
+                            trace_cycle,
+                            u_core.iq1_enq_data[qq].pc,
+                            u_core.iq1_enq_data[qq].fu_type,
+                            u_core.iq1_enq_data[qq].rs1_phys,
+                            u_core.iq1_enq_data[qq].rs2_phys,
+                            u_core.iq1_enq_data[qq].pdst,
+                            u_core.iq1_enq_data[qq].rob_idx,
+                            u_core.iq1_enq_data[qq].rs1_ready,
+                            u_core.iq1_enq_data[qq].rs2_ready);
                     end
                 end
                 // Trace dq_iq_entry (raw output of dispatch_queue with iq routing)
                 for (int dqi = 0; dqi < 6; dqi++) begin
-                    if (u_core.dq_deq_data[dqi].base.valid &&
+                    if ((dqi < int'(u_core.dq_deq_count)) &&
+                        u_core.dq_deq_data[dqi].base.valid &&
                         u_core.dq_deq_data[dqi].base.is_load) begin
-                        $display("[DQDEQ%0d] cyc=%0d pc=%016h fu=%0d rs1_phys=%0d pdst=%0d imm=%016h is_fused=%b is_load=%b",
+                        $display("[DQDEQ%0d] cyc=%0d pc=%016h fu=%0d rs1_phys=%0d pdst=%0d rob=%0d imm=%016h is_fused=%b is_load=%b dqcnt=%0d target=%0d",
                             dqi,
                             trace_cycle,
                             u_core.dq_deq_data[dqi].base.pc,
                             u_core.dq_deq_data[dqi].base.fu_type,
                             u_core.dq_deq_data[dqi].rs1_phys,
                             u_core.dq_deq_data[dqi].pdst,
+                            u_core.dq_deq_data[dqi].rob_idx,
                             u_core.dq_deq_data[dqi].base.imm,
                             u_core.dq_deq_data[dqi].base.is_fused,
-                            u_core.dq_deq_data[dqi].base.is_load);
+                            u_core.dq_deq_data[dqi].base.is_load,
+                            u_core.dq_deq_count,
+                            u_core.dq_deq_iq_target[dqi]);
                     end
                 end
                 // Trace fetcher output (decode input)
@@ -1582,6 +3781,40 @@ module tb_top
                     u_core.u_fetch_unit.u_icache.ic_mshr_valid[1],
                     u_core.u_fetch_unit.u_icache.fill_resp_valid,
                     u_core.u_fetch_unit.u_icache.fill_resp_data[63:0]);
+            end
+        end
+    end
+
+    final begin
+        if (trace_coremark_progress_en) begin
+            $display("=== COREMARK PROGRESS SUMMARY ===");
+            for (int i = 0; i <= 20; i++) begin
+                $display("[CM_PROGRESS_SUMMARY] idx=%0d count=%0d",
+                    i, cm_progress_count[i]);
+            end
+        end
+        if (trace_commit_hotspots_en) begin
+            logic [COMMIT_HOTSPOT_BINS-1:0] printed;
+            integer max_count;
+            integer max_idx;
+            printed = '0;
+            $display("=== COMMIT PC HOTSPOTS ===");
+            for (int rank = 0; rank < 32; rank++) begin
+                max_count = 0;
+                max_idx = 0;
+                for (int i = 0; i < COMMIT_HOTSPOT_BINS; i++) begin
+                    if (!printed[i] && (commit_pc_hist[i] > max_count)) begin
+                        max_count = commit_pc_hist[i];
+                        max_idx = i;
+                    end
+                end
+                if (max_count != 0) begin
+                    printed[max_idx] = 1'b1;
+                    $display("[COMMIT_HOTSPOT] rank=%0d pc=%016h count=%0d",
+                        rank,
+                        COMMIT_HOTSPOT_BASE + (64'(max_idx) << 1),
+                        max_count);
+                end
             end
         end
     end
