@@ -189,6 +189,7 @@ module tb_top
     // Enabled only when +TRACE_COMMIT is passed on the simulator command line.
     logic trace_commit_en;
     logic trace_dep_en;
+    logic trace_pipeline_en;
     logic trace_bru_en;
     logic trace_a0map_en;
     logic trace_a5map_en;
@@ -211,6 +212,7 @@ module tb_top
     initial begin
         trace_commit_en = 0;
         trace_dep_en    = 0;
+        trace_pipeline_en = 0;
         trace_bru_en    = 0;
         trace_a0map_en  = 0;
         trace_a5map_en  = 0;
@@ -232,6 +234,7 @@ module tb_top
         trace_listptr_start = 0;
         if ($test$plusargs("TRACE_COMMIT")) trace_commit_en = 1;
         if ($test$plusargs("TRACE_DEP"))    trace_dep_en    = 1;
+        if ($test$plusargs("TRACE_PIPELINE")) trace_pipeline_en = 1;
         if ($test$plusargs("TRACE_BRU"))    trace_bru_en    = 1;
         if ($test$plusargs("TRACE_A0MAP"))  trace_a0map_en  = 1;
         if ($test$plusargs("TRACE_A5MAP"))  trace_a5map_en  = 1;
@@ -3135,6 +3138,80 @@ module tb_top
                     trace_cycle,
                     u_core.flush_out.redirect_pc,
                     u_core.flush_out.full_flush);
+            end
+            // -----------------------------------------------------------------
+            // pipe.v1: per-cycle pipeline trace
+            // -----------------------------------------------------------------
+            // Emits one [PIPE schema=pipe.v1] line per cycle when
+            // +TRACE_PIPELINE is set.  All counters are this-cycle values
+            // (stage instruction counts are pre-register; queue occupancies
+            // are post-register, captured the same way PERF_PROFILE does).
+            //
+            // reason codes:
+            //   0 = no flush/replay this cycle
+            //   1 = branch mispredict (flush_out.full_flush)
+            //   2 = LSU ordering replay
+            //   3 = ROB-head watchdog (full_flush without mispredict marker)
+            //   4 = other flush (e.g., partial flush)
+            // The dispatch count is dq_deq_count (the only point where 6
+            // entries leave the dispatch queue toward the IQ array each
+            // cycle).  cdb count is a popcount of cdb_valid_r.
+            if (trace_pipeline_en) begin
+                automatic int pipe_cdb_cnt;
+                automatic int pipe_iss0_cnt;
+                automatic int pipe_iss1_cnt;
+                automatic int pipe_iss2_cnt;
+                automatic int pipe_free_cnt;
+                automatic int pipe_ckpt_cnt;
+                automatic int pipe_reason;
+                pipe_cdb_cnt  = $countones(u_core.cdb_valid_r);
+                pipe_iss0_cnt = $countones(u_core.iq0_issue_valid);
+                pipe_iss1_cnt = $countones(u_core.iq1_issue_valid);
+                pipe_iss2_cnt = $countones(u_core.iq2_issue_valid);
+                pipe_free_cnt = $countones(u_core.u_rename.u_free_list.free_bitmap);
+                pipe_ckpt_cnt = $countones(u_core.u_rename.u_checkpoint.occupied);
+                pipe_reason   = 0;
+                if (u_core.flush_out.valid && u_core.flush_out.full_flush) begin
+                    // Heuristic: if any current commit-slot is marked as a
+                    // mispredict, classify as branch mispredict.  Otherwise
+                    // treat as watchdog/other.
+                    pipe_reason = 3; // default to watchdog/other full flush
+                    for (int i = 0; i < 6; i++) begin
+                        if (u_core.commit_out[i].valid &&
+                            u_core.rob_head_branch_mispredict[i]) begin
+                            pipe_reason = 1;
+                        end
+                    end
+                end else if (u_core.replay_valid) begin
+                    pipe_reason = 2;
+                end else if (u_core.flush_out.valid) begin
+                    pipe_reason = 4;
+                end
+                $display("[PIPE schema=pipe.v1] cyc=%0d rst=%b fetch=%0d decode=%0d rename=%0d dispatch=%0d issue0=%0d issue1=%0d issue2=%0d cdb=%0d commit=%0d rob_head=%0d rob_tail=%0d rob_cnt=%0d iq0=%0d iq1=%0d iq2=%0d lq=%0d sq=%0d free=%0d ckpt=%0d flush=%b replay=%b reason=%0d",
+                    trace_cycle,
+                    !rst_n,
+                    u_core.fetch_count,
+                    u_core.dec_count_out,
+                    u_core.ren_count_w,
+                    u_core.dq_deq_count,
+                    pipe_iss0_cnt,
+                    pipe_iss1_cnt,
+                    pipe_iss2_cnt,
+                    pipe_cdb_cnt,
+                    u_core.commit_count,
+                    u_core.rob_head_idx,
+                    u_core.rob_tail_idx,
+                    u_core.u_rob.count_r,
+                    u_core.u_iq0.count_r,
+                    u_core.u_iq1.count_r,
+                    u_core.u_iq2.count_r,
+                    u_core.u_lsu.u_load_queue.count_r,
+                    u_core.u_lsu.u_store_queue.count_r,
+                    pipe_free_cnt,
+                    pipe_ckpt_cnt,
+                    u_core.flush_out.valid,
+                    u_core.replay_valid,
+                    pipe_reason);
             end
             if (trace_head_stall_en &&
                 u_core.rob_head_valid[0] &&
