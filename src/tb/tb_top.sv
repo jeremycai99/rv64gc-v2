@@ -188,6 +188,7 @@ module tb_top
     // Dumps every committed PC to stdout so we can post-process in Python.
     // Enabled only when +TRACE_COMMIT is passed on the simulator command line.
     logic trace_commit_en;
+    logic trace_dep_en;
     logic trace_bru_en;
     logic trace_a0map_en;
     logic trace_a5map_en;
@@ -209,6 +210,7 @@ module tb_top
     int   trace_listptr_start;
     initial begin
         trace_commit_en = 0;
+        trace_dep_en    = 0;
         trace_bru_en    = 0;
         trace_a0map_en  = 0;
         trace_a5map_en  = 0;
@@ -229,6 +231,7 @@ module tb_top
         trace_iqld_watch_rob = -1;
         trace_listptr_start = 0;
         if ($test$plusargs("TRACE_COMMIT")) trace_commit_en = 1;
+        if ($test$plusargs("TRACE_DEP"))    trace_dep_en    = 1;
         if ($test$plusargs("TRACE_BRU"))    trace_bru_en    = 1;
         if ($test$plusargs("TRACE_A0MAP"))  trace_a0map_en  = 1;
         if ($test$plusargs("TRACE_A5MAP"))  trace_a5map_en  = 1;
@@ -1620,6 +1623,26 @@ module tb_top
     end
 
     integer trace_cycle;
+    // -------------------------------------------------------------------------
+    // dep.v1 / pipe.v1 trace state
+    // -------------------------------------------------------------------------
+    // Per-ROB-entry shadow buffer captured at rename time.  Holds the few
+    // decode/rename fields needed for the dep.v1 trace that are not already
+    // exposed via rob_head_* (raw insn, src arch regs, src physical regs,
+    // FU class, mem access size).  A separate sibling array avoids bloating
+    // the synthesizable rename_buf; the snoop reads u_core.ren_insn[].
+    logic [31:0] dep_raw       [0:ROB_DEPTH-1];
+    logic [4:0]  dep_rs1_arch  [0:ROB_DEPTH-1];
+    logic [4:0]  dep_rs2_arch  [0:ROB_DEPTH-1];
+    logic [PHYS_REG_BITS-1:0] dep_rs1_phys [0:ROB_DEPTH-1];
+    logic [PHYS_REG_BITS-1:0] dep_rs2_phys [0:ROB_DEPTH-1];
+    logic [2:0]  dep_fu        [0:ROB_DEPTH-1]; // fu_type_e (3-bit enum)
+    logic [1:0]  dep_mem_size  [0:ROB_DEPTH-1]; // mem_size_e
+    // Monotonic global commit sequence number (across all slots, all cycles).
+    longint dep_seq_counter;
+    // Branch epoch: increments on each commit-side full-flush event.
+    longint dep_epoch_counter;
+
     logic [7:0] trace_prev_rat_a0;
     logic [7:0] trace_prev_crat_a0;
     logic [7:0] trace_prev_rat_a5;
@@ -1693,8 +1716,42 @@ module tb_top
             end
             matrix_branch_trace_count <= 0;
             trace_lowpc_count <= 0;
+            // dep.v1 shadow buffer + counters reset
+            for (int i = 0; i < ROB_DEPTH; i++) begin
+                dep_raw[i]      <= 32'd0;
+                dep_rs1_arch[i] <= 5'd0;
+                dep_rs2_arch[i] <= 5'd0;
+                dep_rs1_phys[i] <= '0;
+                dep_rs2_phys[i] <= '0;
+                dep_fu[i]       <= 3'd0;
+                dep_mem_size[i] <= 2'd0;
+            end
+            dep_seq_counter   <= 0;
+            dep_epoch_counter <= 0;
         end else begin
             trace_cycle <= trace_cycle + 1;
+            // -----------------------------------------------------------------
+            // dep.v1: snoop rename-stage outputs and stash per-ROB metadata
+            // for use at commit time.  Mirrors the same gating that
+            // rv64gc_core_top uses to write rename_buf.
+            // -----------------------------------------------------------------
+            if (trace_dep_en) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if (3'(i) < u_core.ren_count_w) begin
+                        dep_raw[u_core.ren_insn[i].rob_idx]      <= u_core.ren_insn[i].base.insn;
+                        dep_rs1_arch[u_core.ren_insn[i].rob_idx] <= u_core.ren_insn[i].base.rs1_arch;
+                        dep_rs2_arch[u_core.ren_insn[i].rob_idx] <= u_core.ren_insn[i].base.rs2_arch;
+                        dep_rs1_phys[u_core.ren_insn[i].rob_idx] <= u_core.ren_insn[i].rs1_phys;
+                        dep_rs2_phys[u_core.ren_insn[i].rob_idx] <= u_core.ren_insn[i].rs2_phys;
+                        dep_fu[u_core.ren_insn[i].rob_idx]       <= u_core.ren_insn[i].base.fu_type;
+                        dep_mem_size[u_core.ren_insn[i].rob_idx] <= u_core.ren_insn[i].base.mem_size;
+                    end
+                end
+            end
+            // Increment branch epoch on commit-side full flush.
+            if (trace_dep_en && u_core.flush_out.valid && u_core.flush_out.full_flush) begin
+                dep_epoch_counter <= dep_epoch_counter + 1;
+            end
             if (trace_ordv_en && u_core.lsu_ordering_violation) begin
                 $display("[ORDV] cyc=%0d viol_rob=%0d replay_valid=%b flush=%b head=%0d tail=%0d count=%0d",
                     trace_cycle,
@@ -2933,7 +2990,9 @@ module tb_top
                     end
                 end
             end
-            if (trace_commit_en && (u_core.commit_count > 3'd0)) begin
+            if ((trace_commit_en || trace_dep_en) && (u_core.commit_count > 3'd0)) begin
+                automatic int dep_seq_off; // slot-local seq offset within this cycle
+                dep_seq_off = 0;
                 for (int i = 0; i < 6; i++) begin
                     if (u_core.commit_out[i].valid) begin
                         // ty bitfield (hex):
@@ -2944,6 +3003,13 @@ module tb_top
                         // are encoded in is_branch + bpu_type so we read from the
                         // bpu_type field 1=JAL, 2=JALR, 3=COND-OR-BR-WITH-BPU)
                         automatic logic [7:0] ty;
+                        // Resolved per-commit-slot helpers used by both
+                        // [CPC] and [DEP].
+                        automatic logic [ROB_IDX_BITS-1:0] dep_rob_idx;
+                        automatic logic [63:0] dep_mem_addr;
+                        automatic logic dep_mem_store_b;
+                        automatic logic dep_replay_b;
+                        automatic logic dep_flush_b;
                         ty = '0;
                         ty[0] = u_core.rob_head_is_branch[i];
                         ty[1] = (u_core.rob_head_bpu_type[i] == 3'd1); // JAL
@@ -2958,16 +3024,110 @@ module tb_top
                         // act_tgt = where we actually went (= taken_target if taken, else fall-through);
                         // tgt    = post-resolve target field as written by BRU (taken_target when taken,
                         //          fall-through when not — same field as before, kept for back-compat).
-                        $display("[CPC] cyc=%0d slot=%0d pc=%016h ty=%02h br=%b tk=%b tgt=%016h act=%016h mis=%b",
-                            trace_cycle, i,
-                            u_core.rob_head_pc[i],
-                            ty,
-                            u_core.rob_head_is_branch[i],
-                            u_core.rob_head_branch_taken[i],
-                            u_core.rob_head_branch_target[i],
-                            u_core.rob_head_branch_taken_target[i],
-                            u_core.rob_head_branch_mispredict[i]);
+                        if (trace_commit_en) begin
+                            $display("[CPC] cyc=%0d slot=%0d pc=%016h ty=%02h br=%b tk=%b tgt=%016h act=%016h mis=%b",
+                                trace_cycle, i,
+                                u_core.rob_head_pc[i],
+                                ty,
+                                u_core.rob_head_is_branch[i],
+                                u_core.rob_head_branch_taken[i],
+                                u_core.rob_head_branch_target[i],
+                                u_core.rob_head_branch_taken_target[i],
+                                u_core.rob_head_branch_mispredict[i]);
+                        end
+                        // ----------------------------------------------------
+                        // dep.v1 emit (commit-aligned, one line per slot)
+                        // ----------------------------------------------------
+                        // Notes on field provenance and intentional defaults:
+                        //   raw        = post-RVC-expansion 32-bit decoded.insn.
+                        //                For RVC, this is the EXPANDED form
+                        //                (the 16-bit pre-decompress value is
+                        //                not retained at decode/rename).
+                        //   epoch      = local commit-side full-flush counter
+                        //                (no in-RTL epoch field, so this is a
+                        //                tb-side approximation).
+                        //   br_pred    = defaulted to br_tk; the BPU prediction
+                        //                is not separately routed through
+                        //                ROB to commit.
+                        //   mem_addr   = looked up at commit time by scanning
+                        //                LQ (loads) / SQ (stores) for the
+                        //                committing rob_idx; 0 if no entry
+                        //                (drained or non-mem op).
+                        //   replay/flush = associated with this cycle; gated
+                        //                on rob_idx match where possible.
+                        if (trace_dep_en) begin
+                            // Compute the wrapped ROB index for this commit slot.
+                            if ((u_core.rob_head_idx + ROB_IDX_BITS'(i)) >= ROB_IDX_BITS'(ROB_DEPTH))
+                                dep_rob_idx = u_core.rob_head_idx + ROB_IDX_BITS'(i) - ROB_IDX_BITS'(ROB_DEPTH);
+                            else
+                                dep_rob_idx = u_core.rob_head_idx + ROB_IDX_BITS'(i);
+                            // Resolve mem_addr by scanning LQ/SQ for matching
+                            // rob_idx.  This catches loads/stores still
+                            // resident in the queue at commit time; any miss
+                            // (entry already drained) reports 0.
+                            dep_mem_addr    = 64'd0;
+                            dep_mem_store_b = 1'b0;
+                            if (u_core.rob_head_is_load[i]) begin
+                                for (int q = 0; q < LQ_DEPTH; q++) begin
+                                    if (u_core.u_lsu.u_load_queue.queue[q].valid &&
+                                        (u_core.u_lsu.u_load_queue.queue[q].rob_idx == dep_rob_idx)) begin
+                                        dep_mem_addr = u_core.u_lsu.u_load_queue.queue[q].addr;
+                                    end
+                                end
+                            end else if (u_core.rob_head_is_store[i]) begin
+                                dep_mem_store_b = 1'b1;
+                                for (int q = 0; q < SQ_DEPTH; q++) begin
+                                    if (u_core.u_lsu.u_store_queue.queue[q].valid &&
+                                        (u_core.u_lsu.u_store_queue.queue[q].rob_idx == dep_rob_idx)) begin
+                                        dep_mem_addr = u_core.u_lsu.u_store_queue.queue[q].addr;
+                                    end
+                                end
+                            end
+                            // replay = LSU ordering replay this cycle pointing
+                            // at this rob_idx (or older).
+                            dep_replay_b = u_core.replay_valid &&
+                                           (u_core.replay_rob_idx_from == dep_rob_idx);
+                            // flush = full commit-side flush this cycle whose
+                            // recovery rob_idx matches this commit slot.
+                            dep_flush_b  = u_core.flush_out.valid &&
+                                           u_core.flush_out.full_flush &&
+                                           (u_core.flush_out.rob_idx == dep_rob_idx);
+                            $display("[DEP schema=dep.v1] cyc=%0d seq=%0d slot=%0d rob=%0d epoch=%0d pc=%016h raw=%08h ty=%02h rs1=%0d rs2=%0d rd=%0d ps1=%0d ps2=%0d pdst=%0d old=%0d fu=%0d br_tk=%b br_pred=%b br_tgt=%016h br_act=%016h br_mis=%b mem_addr=%016h mem_size=%0d mem_store=%b replay=%b flush=%b",
+                                trace_cycle,
+                                dep_seq_counter + dep_seq_off,
+                                i,
+                                dep_rob_idx,
+                                dep_epoch_counter,
+                                u_core.rob_head_pc[i],
+                                dep_raw[dep_rob_idx],
+                                ty,
+                                dep_rs1_arch[dep_rob_idx],
+                                dep_rs2_arch[dep_rob_idx],
+                                u_core.rb_head_rd_arch[i],
+                                dep_rs1_phys[dep_rob_idx],
+                                dep_rs2_phys[dep_rob_idx],
+                                u_core.rb_head_pdst[i],
+                                u_core.rb_head_old_pdst[i],
+                                dep_fu[dep_rob_idx],
+                                u_core.rob_head_branch_taken[i],
+                                u_core.rob_head_branch_taken[i], // br_pred placeholder
+                                u_core.rob_head_branch_target[i],
+                                u_core.rob_head_branch_taken_target[i],
+                                u_core.rob_head_branch_mispredict[i],
+                                dep_mem_addr,
+                                dep_mem_size[dep_rob_idx],
+                                dep_mem_store_b,
+                                dep_replay_b,
+                                dep_flush_b);
+                            dep_seq_off = dep_seq_off + 1;
+                        end
                     end
+                end
+                // Advance the global dep.v1 sequence number by the number of
+                // commits this cycle (only when the dep trace was emitted, so
+                // the perf model sees a contiguous seq stream).
+                if (trace_dep_en) begin
+                    dep_seq_counter <= dep_seq_counter + 64'(dep_seq_off);
                 end
             end
             if (trace_commit_en && u_core.flush_out.valid) begin
