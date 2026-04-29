@@ -1,6 +1,10 @@
-# CLAUDE.md
+# AGENTS.md — rv64gc-v2
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Project guidance for agentic developers (Claude Code, Codex, Cursor, etc.).
+Vendor-neutral — written to the [agents.md](https://agents.md) convention.
+
+Companion: `../rv64gc-perf-model/AGENTS.md` (perf-model side that drives
+the 4-wide pivot decision before any RTL refactor here).
 
 ## Ground Rules
 
@@ -100,8 +104,8 @@ Optimization log: `doc/coremark_optimization_changelog.md`
 
 ### Known Issues
 - **Dhrystone 2-cycle fetch cadence**: 44% of cycles produce 0 instructions. F2→F1 feedback through registered SRAM. Needs decoupled F2 stage with independent PC counter (~200 LOC pipeline rewrite).
-- **BTB dead for Dhrystone**: BTB indexes by PC[9:2] but lookup uses fetch-group PC while update uses branch PC — index mismatch.
-- **CoreMark -O3 slow (0.37 IPC)**: 24.6% branch mispredict rate from dead BTB.
+- **CoreMark mispredict rate ~9% on dsim iter=1 (2026-04-25 measurement)**: BTB index-mismatch bug is FIXED (commit 0a3ca2f, both lookup/update use pc[13:6]). Remaining mispredict cause is suspected to be TAGE training / commit-side training that picks the oldest control in a wide commit batch and may starve younger CFIs (`rv64gc_core_top.sv:3683-3727`), or anchor-PC mismatch in TAGE update (`rv64gc_core_top.sv:3747-3770`). Investigate before claiming the BTB causes mispredicts.
+- **CoreMark -O3 slow (0.37 IPC)**: high branch mispredict rate. Likely TAGE training related per the bullet above; revisit after TAGE update path is verified.
 - **xsim vs Verilator residual gap** (~5%): remaining Verilator eval-scheduling artifacts still elevate Verilator IPC above xsim. Suspected sources: forwarding hold register (adds 1 cycle to same-cycle forwarded loads), registered fetch_insn fields, converge-limit 500, UNOPTFLAT suppressions. Not blocking (xsim already meets 3.0 target).
 - **Verilator convergence**: structural CDB→bypass loop currently settled by forwarding hold register + address gating. The hold register is a real 1-cycle latency cost, not a Verilator-only artifact — on xsim it also applies. To remove, need structural CDB loop break at the source.
 
