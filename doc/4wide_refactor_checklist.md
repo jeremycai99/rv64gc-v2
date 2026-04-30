@@ -252,10 +252,11 @@ For each file:
   - `[5:0]` arrays → `[PIPE_WIDTH-1:0]`
   - Any free-list / RAT entry sized to old PRF_DEPTH → use new INT_PRF_DEPTH
 
-- [ ] **Step 2: Re-write `int_prf` port list (12R6W → 8R4W)**
+- [ ] **Step 2: ~~Re-write `int_prf` port list (12R6W → 8R4W)~~ — DEFERRED to Stage 2**
 
-  - `core/rename/rat.sv` (or wherever PRF lives) — drop ports `read[8..11]` and `write[4..5]`; renumber if needed.
-  - This is the largest module-level rewrite in this stage. Effort: M.
+  Originally scoped to Stage 1, but the rewrite is tightly coupled with `CDB_WIDTH` (which is still 6 in Stage 1; CDB_WIDTH 6→4 is a Stage 2 change).  Reducing `int_prf` write ports to 4 while CDB still emits 6 results would be a partial structural change — better to land int_prf reduction atomically with CDB_WIDTH reduction in Stage 2.  See Task 2.4.
+
+  The actual `int_prf` lives at `src/rtl/core/regfile/int_prf.sv` (not under `core/rename/` as the plan originally said).  At Stage 1 commit `a64efbc`, ports remain 12R6W; `INT_PRF_DEPTH` is reduced to 160 (parameter-driven).
 
 - [ ] **Step 3: Build**
 
@@ -436,11 +437,13 @@ For each file:
 
 - [ ] **Step 2: Build**
 
-### Task 2.4: IQ depth + bypass network rewrite
+### Task 2.4: IQ depth + bypass network rewrite + int_prf port reduction
 
 **Files:**
-- Modify: the IQ module(s) — locate via `grep -rn "NUM_INT_IQS\|issue_queue" core/ --include='*.sv' | head` (likely `core/issue/issue_queue.sv` or similar).
-- Modify: the bypass network module — locate via `grep -rn "bypass_network\|NUM_BYPASS_SRCS" core/ --include='*.sv' | head` (likely `core/execute/bypass_network.sv` or instantiated inside `core_top`).
+- Modify: the IQ module(s) — locate via `grep -rn "NUM_INT_IQS\|issue_queue" src/rtl/core/ --include='*.sv' | head` (likely `src/rtl/core/issue/issue_queue.sv` or similar).
+- Modify: the bypass network module — locate via `grep -rn "bypass_network\|NUM_BYPASS_SRCS" src/rtl/core/ --include='*.sv' | head` (likely `src/rtl/core/execute/bypass_network.sv` or instantiated inside `core_top`).
+- Modify: `src/rtl/core/regfile/int_prf.sv` — port-list reduction 12R6W → 8R4W (deferred from Stage 1 Task 1.3 Step 2 — see deferral note there).
+- Modify: `src/rtl/core/rv64gc_core_top.sv` — int_prf instantiation port reduction (drives only 4 write ports / 8 read ports after this stage).
 
 - [ ] **Step 1: IQ depth cascade**
 
@@ -449,6 +452,13 @@ For each file:
 - [ ] **Step 2: Bypass network 6 srcs → 4 (24 muxes vs 48)**
 
   Effort: M. The mux array is the visible cost of dropping CDB_WIDTH and NUM_BYPASS_SRCS.
+
+- [ ] **Step 2b: int_prf port-list reduction 12R6W → 8R4W (deferred from Stage 1)**
+
+  - `src/rtl/core/regfile/int_prf.sv`: drop ports `read[8..11]` and `write[4..5]`; renumber if needed; loops `for (wp = 0; wp < 6; wp++)` → `< NUM_BYPASS_SRCS` or `< CDB_WIDTH`.
+  - `src/rtl/core/rv64gc_core_top.sv`: int_prf instantiation drives only 4 write ports + 8 read ports (consistent with `NUM_ALU=3 + NUM_BRU=2 = 5 FUs × 2 srcs = 10` — wait, that's 10 reads; 8R supports 4 ALU × 2srcs only.  RECONFIRM port count vs FU read demand before reducing to 8R.  May need 10R; planning doc says 8R but that assumed NUM_ALU=3 + ports/FU < 2; verify against the actual FU-to-PRF read connections).
+
+  **Note:** the planning doc said 8R4W, but verify the actual minimum read-port count needed by the new FU mix (NUM_ALU=3, NUM_BRU=2, plus LSU AGU srcs).  If the analysis shows 10R or 12R is required, keep the higher count — sign-off on a port-starved PRF is not the goal.
 
 - [ ] **Step 3: Build**
 
