@@ -134,16 +134,16 @@ module rob
     // =========================================================================
     reg [ROB_IDX_BITS-1:0] head_r  = '0;
     reg [ROB_IDX_BITS-1:0] tail_r  = '0;
-    reg [ROB_IDX_BITS-1:0] count_r = '0;
+    reg [ROB_IDX_BITS:0] count_r = '0;
 
     assign head_idx = head_r;
     assign tail_idx = tail_r;
-    assign empty    = (count_r == ROB_IDX_BITS'(0));
-    assign full     = ({1'b0, count_r} + (ROB_IDX_BITS+1)'(PIPE_WIDTH) > ROB_DEPTH_U8);
+    assign empty    = (count_r == (ROB_IDX_BITS+1)'(0));
+    assign full     = (count_r + (ROB_IDX_BITS+1)'(PIPE_WIDTH) > ROB_DEPTH_U8);
 
     // alloc_ready: true when free entries >= PIPE_WIDTH
     // free_count is one bit wider to hold ROB_DEPTH_U8 without truncation.
-    wire [ROB_IDX_BITS:0] free_count = ROB_DEPTH_U8 - {1'b0, count_r};
+    wire [ROB_IDX_BITS:0] free_count = ROB_DEPTH_U8 - count_r;
     assign alloc_ready = (free_count >= (ROB_IDX_BITS+1)'(PIPE_WIDTH));
 
     // =========================================================================
@@ -253,7 +253,7 @@ module rob
         head_ready_head_load_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w >= LOAD_CDB_FIRST) &&
-                (count_r != ROB_IDX_BITS'(0)) &&
+                (count_r != (ROB_IDX_BITS+1)'(0)) &&
                 valid_r[head_idx_w[0]] &&
                 !ready_r[head_idx_w[0]] &&
                 is_load_r[head_idx_w[0]] &&
@@ -281,7 +281,7 @@ module rob
         head_ready_head_arith_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w < LOAD_CDB_FIRST) &&
-                (count_r != ROB_IDX_BITS'(0)) &&
+                (count_r != (ROB_IDX_BITS+1)'(0)) &&
                 valid_r[head_idx_w[0]] &&
                 !ready_r[head_idx_w[0]] &&
                 !is_load_r[head_idx_w[0]] &&
@@ -318,7 +318,7 @@ module rob
         head_ready_slot1_load_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w >= LOAD_CDB_FIRST) &&
-                (count_r > ROB_IDX_BITS'(1)) &&
+                (count_r > (ROB_IDX_BITS+1)'(1)) &&
                 valid_r[head_idx_w[1]] &&
                 !ready_r[head_idx_w[1]] &&
                 is_load_r[head_idx_w[1]] &&
@@ -340,7 +340,7 @@ module rob
         head_ready_slot1_arith_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w < LOAD_CDB_FIRST) &&
-                (count_r > ROB_IDX_BITS'(1)) &&
+                (count_r > (ROB_IDX_BITS+1)'(1)) &&
                 valid_r[head_idx_w[1]] &&
                 !ready_r[head_idx_w[1]] &&
                 !is_load_r[head_idx_w[1]] &&
@@ -375,7 +375,7 @@ module rob
         head_ready_slot2_load_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w >= LOAD_CDB_FIRST) &&
-                (count_r > ROB_IDX_BITS'(2)) &&
+                (count_r > (ROB_IDX_BITS+1)'(2)) &&
                 valid_r[head_idx_w[2]] &&
                 !ready_r[head_idx_w[2]] &&
                 is_load_r[head_idx_w[2]] &&
@@ -397,7 +397,7 @@ module rob
         head_ready_slot2_arith_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w < LOAD_CDB_FIRST) &&
-                (count_r > ROB_IDX_BITS'(2)) &&
+                (count_r > (ROB_IDX_BITS+1)'(2)) &&
                 valid_r[head_idx_w[2]] &&
                 !ready_r[head_idx_w[2]] &&
                 !is_load_r[head_idx_w[2]] &&
@@ -455,7 +455,7 @@ module rob
     // =========================================================================
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            head_valid[i]            = valid_r[head_idx_w[i]] && (count_r > ROB_IDX_BITS'(i));
+            head_valid[i]            = valid_r[head_idx_w[i]] && (count_r > (ROB_IDX_BITS+1)'(i));
             head_ready[i]            = ready_r[head_idx_w[i]];
             if (i == 0)
                 head_ready[i] = head_ready[i] |
@@ -529,9 +529,9 @@ module rob
                     : nh_sum[ROB_IDX_BITS-1:0];
 
     // --- Flush count recomputation (partial flush + commit) ---
-    logic [ROB_IDX_BITS-1:0] max_valid;
-    logic [ROB_IDX_BITS-1:0] raw_count;
-    assign max_valid = count_r - {(ROB_IDX_BITS-3)'(0), commit_count};
+    logic [ROB_IDX_BITS:0] max_valid;
+    logic [ROB_IDX_BITS:0] raw_count;
+    assign max_valid = count_r - (ROB_IDX_BITS+1)'(commit_count);
     always_comb begin
         if (flush_rob_tail >= nh)
             raw_count = flush_rob_tail - nh;
@@ -679,7 +679,7 @@ module rob
             if (raw_count <= max_valid) begin
                 count_r <= raw_count;
             end else begin
-                count_r <= ROB_IDX_BITS'(0);
+                count_r <= (ROB_IDX_BITS+1)'(0);
                 head_r  <= flush_rob_tail;  // head=tail when empty
             end
 
@@ -873,7 +873,7 @@ module rob
                 head_r <= nh;
 
             // Update count
-            count_r <= count_r + {(ROB_IDX_BITS-3)'(0), alloc_count} - {(ROB_IDX_BITS-3)'(0), commit_count};
+            count_r <= count_r + {(ROB_IDX_BITS-2)'(0), alloc_count} - {(ROB_IDX_BITS-2)'(0), commit_count};
         end
     end
 
