@@ -147,6 +147,13 @@ module commit
     // exception path which would jump to the trap vector.
     logic       found_replay;
     logic [2:0] replay_slot;
+    logic [PIPE_WIDTH-1:0] head_is_control;
+
+    always_comb begin
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            head_is_control[i] = head_is_branch[i] || (head_bpu_type[i] != 3'd0);
+        end
+    end
 
     always_comb begin
         scan_count       = 3'd0;
@@ -208,7 +215,7 @@ module commit
                 if (head_is_load[i])  load_cnt = load_cnt  + 3'd1;
 
                 // Check for mispredict
-                if (head_branch_mispredict[i]) begin
+                if (head_is_control[i] && head_branch_mispredict[i]) begin
                     found_mispredict = 1'b1;
                     misp_slot = i[2:0];
                 end
@@ -316,7 +323,10 @@ module commit
                 flush_out.ras_top_restore_addr  = head_bp_ras_top[misp_slot];
             end
             flush_out.ghr_restore_valid = 1'b1;
-            flush_out.ghr_restore_val   = head_bp_ghr[misp_slot];
+            flush_out.ghr_restore_val   = head_is_branch[misp_slot]
+                ? {head_bp_ghr[misp_slot][GHR_BITS-2:0],
+                   head_branch_taken[misp_slot]}
+                : head_bp_ghr[misp_slot];
         end else if (found_ret) begin
             // MRET/SRET: full flush, redirect to mepc/sepc
             flush_out.valid       = 1'b1;
@@ -409,6 +419,7 @@ module commit
 
 `ifdef SIMULATION
     logic   trace_commit_en;
+    logic   trace_flush_en;
     integer trace_commit_cycle;
     // STAT_DUMP: categorize flushes by cause (sim-only, +STAT_DUMP runtime).
     integer cmt_leak_cyc;
@@ -418,6 +429,7 @@ module commit
     integer total_commits;
     integer total_store_commits, total_load_commits, total_branch_commits;
     initial trace_commit_en = ($test$plusargs("TRACE_COMMIT") ? 1'b1 : 1'b0);
+    initial trace_flush_en  = ($test$plusargs("TRACE_FLUSH")  ? 1'b1 : trace_commit_en);
     initial cmt_stat_en = ($test$plusargs("STAT_DUMP") ? 1'b1 : 1'b0);
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -442,7 +454,7 @@ module commit
                 if (slot_can_commit[i] && head_is_branch[i])
                     total_branch_commits <= total_branch_commits + 1;
             end
-            if (trace_commit_en && flush_out.valid) begin
+            if (trace_flush_en && flush_out.valid) begin
                 $display(
                     "[CMT_FLUSH] cyc=%0d replay=%b replay_slot=%0d exc=%b exc_slot=%0d exc_code=%0d misp=%b misp_slot=%0d ret=%b irq=%b redirect=%016h full=%b trap=%016h irq_vec=%016h mepc=%016h sepc=%016h ras_tos=%0d ghr_v=%b",
                     trace_commit_cycle,

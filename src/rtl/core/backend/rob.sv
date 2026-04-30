@@ -15,6 +15,7 @@ module rob
     input  logic [2:0]              alloc_count,     // 0..6 valid entries to allocate
     output logic [ROB_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],  // allocated ROB indices
     output logic                    alloc_ready,     // can accept alloc_count entries
+    input  logic [PIPE_WIDTH-1:0]   alloc_ready_now, // entries complete at rename
     // Data to write at allocation time (per-entry fields)
     input  logic [63:0]             alloc_pc [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   alloc_is_branch,
@@ -105,6 +106,7 @@ module rob
     input  logic                    flush_valid,
     input  logic [ROB_IDX_BITS-1:0] flush_rob_tail,  // restore tail to this value (from checkpoint)
     input  logic                    flush_full,       // full flush: reset head and tail to 0
+    input  logic                    flush_clear_branch_mispredict,
 
     // Status
     output logic [ROB_IDX_BITS-1:0] tail_idx,
@@ -116,6 +118,7 @@ module rob
     // Constants for modular arithmetic (ROB_DEPTH=192 is not power of 2)
     // =========================================================================
     localparam logic [7:0] ROB_DEPTH_U8 = 8'(ROB_DEPTH);
+    localparam int LOAD_CDB_FIRST = 4;
 
     // =========================================================================
     // Head and tail pointers, entry count
@@ -202,6 +205,243 @@ module rob
     reg [ROB_DEPTH-1:0]          csr_we_r;
     reg [1:0]                    csr_op_r [0:ROB_DEPTH-1];
 
+    // Same-cycle ready bypass into commit for simple writebacks.
+    //
+    // ROB ready_r is normally updated at the clock edge after CDB writeback,
+    // so a head instruction whose result arrives this cycle otherwise costs an
+    // extra commit bubble.  Only bypass simple, non-control, non-exception
+    // writebacks; branches, CSR/serializing ops, stores, and replay-marked
+    // loads still wait for their registered ROB side effects.
+    logic [PIPE_WIDTH-1:0] head_ready_wb_bypass;
+    always_comb begin
+        head_ready_wb_bypass = '0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            for (int w = 0; w < CDB_WIDTH; w++) begin
+                if (wb_valid[w] &&
+                    (wb_idx[w] == head_idx_w[i][ROB_IDX_BITS-1:0]) &&
+                    !wb_has_exception[w] &&
+                    !wb_is_branch[w] &&
+                    !wb_csr_we[w] &&
+                    !is_store_r[head_idx_w[i]] &&
+                    !is_csr_r[head_idx_w[i]] &&
+                    !is_fence_r[head_idx_w[i]] &&
+                    !is_fence_i_r[head_idx_w[i]] &&
+                    !is_mret_r[head_idx_w[i]] &&
+                    !is_sret_r[head_idx_w[i]] &&
+                    !is_sfence_vma_r[head_idx_w[i]] &&
+                    !is_ecall_r[head_idx_w[i]] &&
+                    !is_wfi_r[head_idx_w[i]] &&
+                    !(ordering_violation_valid &&
+                      (ordering_violation_rob_idx == head_idx_w[i][ROB_IDX_BITS-1:0]))) begin
+                    head_ready_wb_bypass[i] = 1'b1;
+                end
+            end
+        end
+    end
+
+    // Default-on, narrow version of the bypass above: only allow the ROB head
+    // slot to retire a normal load whose registered load CDB writeback is
+    // present in this cycle.  This trims the common one-cycle load-at-head
+    // bubble without changing wider commit-group ordering.
+    logic head_ready_head_load_wb_bypass;
+    always_comb begin
+        head_ready_head_load_wb_bypass = 1'b0;
+        for (int w = 0; w < CDB_WIDTH; w++) begin
+            if ((w >= LOAD_CDB_FIRST) &&
+                (count_r != 8'd0) &&
+                valid_r[head_idx_w[0]] &&
+                !ready_r[head_idx_w[0]] &&
+                is_load_r[head_idx_w[0]] &&
+                !has_exc_r[head_idx_w[0]] &&
+                wb_valid[w] &&
+                (wb_idx[w] == head_idx_w[0][ROB_IDX_BITS-1:0]) &&
+                !wb_has_exception[w] &&
+                !wb_is_branch[w] &&
+                !wb_csr_we[w] &&
+                !(ordering_violation_valid &&
+                  (ordering_violation_rob_idx == head_idx_w[0][ROB_IDX_BITS-1:0]))) begin
+                head_ready_head_load_wb_bypass = 1'b1;
+            end
+        end
+    end
+
+    // Default-on, narrow bypass for non-load arithmetic (ALU / MUL / DIV)
+    // writebacks at the ROB head.  Mirror image of head_ready_head_load_wb_bypass:
+    // head slot only, scans CDB[0..LOAD_CDB_FIRST-1], and excludes the same
+    // control/side-effect classes as the existing bypasses.  Targets the
+    // per-cycle head-other wait cycles measured in CoreMark matrix MUL and
+    // Dhrystone divw.
+    logic head_ready_head_arith_wb_bypass;
+    always_comb begin
+        head_ready_head_arith_wb_bypass = 1'b0;
+        for (int w = 0; w < CDB_WIDTH; w++) begin
+            if ((w < LOAD_CDB_FIRST) &&
+                (count_r != 8'd0) &&
+                valid_r[head_idx_w[0]] &&
+                !ready_r[head_idx_w[0]] &&
+                !is_load_r[head_idx_w[0]] &&
+                !is_store_r[head_idx_w[0]] &&
+                !is_csr_r[head_idx_w[0]] &&
+                !is_branch_r[head_idx_w[0]] &&
+                !is_fence_r[head_idx_w[0]] &&
+                !is_fence_i_r[head_idx_w[0]] &&
+                !is_mret_r[head_idx_w[0]] &&
+                !is_sret_r[head_idx_w[0]] &&
+                !is_sfence_vma_r[head_idx_w[0]] &&
+                !is_ecall_r[head_idx_w[0]] &&
+                !is_wfi_r[head_idx_w[0]] &&
+                !has_exc_r[head_idx_w[0]] &&
+                wb_valid[w] &&
+                (wb_idx[w] == head_idx_w[0][ROB_IDX_BITS-1:0]) &&
+                !wb_has_exception[w] &&
+                !wb_is_branch[w] &&
+                !wb_csr_we[w] &&
+                !(ordering_violation_valid &&
+                  (ordering_violation_rob_idx == head_idx_w[0][ROB_IDX_BITS-1:0]))) begin
+                head_ready_head_arith_wb_bypass = 1'b1;
+            end
+        end
+    end
+
+    // Slot-1 symmetric bypasses (load + arith), same safety envelope as the
+    // slot-0 bypasses.  Only matters when slot 0 is also committing this
+    // cycle (commit scanner stops at the first not-ready slot).  This lets
+    // the pipeline retire 2 instructions on cycles where slot-0 bypasses
+    // and slot-1 has its writeback arriving in parallel.
+    logic head_ready_slot1_load_wb_bypass;
+    always_comb begin
+        head_ready_slot1_load_wb_bypass = 1'b0;
+        for (int w = 0; w < CDB_WIDTH; w++) begin
+            if ((w >= LOAD_CDB_FIRST) &&
+                (count_r > 8'd1) &&
+                valid_r[head_idx_w[1]] &&
+                !ready_r[head_idx_w[1]] &&
+                is_load_r[head_idx_w[1]] &&
+                !has_exc_r[head_idx_w[1]] &&
+                wb_valid[w] &&
+                (wb_idx[w] == head_idx_w[1][ROB_IDX_BITS-1:0]) &&
+                !wb_has_exception[w] &&
+                !wb_is_branch[w] &&
+                !wb_csr_we[w] &&
+                !(ordering_violation_valid &&
+                  (ordering_violation_rob_idx == head_idx_w[1][ROB_IDX_BITS-1:0]))) begin
+                head_ready_slot1_load_wb_bypass = 1'b1;
+            end
+        end
+    end
+
+    logic head_ready_slot1_arith_wb_bypass;
+    always_comb begin
+        head_ready_slot1_arith_wb_bypass = 1'b0;
+        for (int w = 0; w < CDB_WIDTH; w++) begin
+            if ((w < LOAD_CDB_FIRST) &&
+                (count_r > 8'd1) &&
+                valid_r[head_idx_w[1]] &&
+                !ready_r[head_idx_w[1]] &&
+                !is_load_r[head_idx_w[1]] &&
+                !is_store_r[head_idx_w[1]] &&
+                !is_csr_r[head_idx_w[1]] &&
+                !is_branch_r[head_idx_w[1]] &&
+                !is_fence_r[head_idx_w[1]] &&
+                !is_fence_i_r[head_idx_w[1]] &&
+                !is_mret_r[head_idx_w[1]] &&
+                !is_sret_r[head_idx_w[1]] &&
+                !is_sfence_vma_r[head_idx_w[1]] &&
+                !is_ecall_r[head_idx_w[1]] &&
+                !is_wfi_r[head_idx_w[1]] &&
+                !has_exc_r[head_idx_w[1]] &&
+                wb_valid[w] &&
+                (wb_idx[w] == head_idx_w[1][ROB_IDX_BITS-1:0]) &&
+                !wb_has_exception[w] &&
+                !wb_is_branch[w] &&
+                !wb_csr_we[w] &&
+                !(ordering_violation_valid &&
+                  (ordering_violation_rob_idx == head_idx_w[1][ROB_IDX_BITS-1:0]))) begin
+                head_ready_slot1_arith_wb_bypass = 1'b1;
+            end
+        end
+    end
+
+    // Slot-2 symmetric bypasses (load + arith), same safety envelope.  Only
+    // matters when slots 0 and 1 are also committing this cycle; further
+    // shifts commit=2 cycles to commit=3 in the commit histogram.
+    logic head_ready_slot2_load_wb_bypass;
+    always_comb begin
+        head_ready_slot2_load_wb_bypass = 1'b0;
+        for (int w = 0; w < CDB_WIDTH; w++) begin
+            if ((w >= LOAD_CDB_FIRST) &&
+                (count_r > 8'd2) &&
+                valid_r[head_idx_w[2]] &&
+                !ready_r[head_idx_w[2]] &&
+                is_load_r[head_idx_w[2]] &&
+                !has_exc_r[head_idx_w[2]] &&
+                wb_valid[w] &&
+                (wb_idx[w] == head_idx_w[2][ROB_IDX_BITS-1:0]) &&
+                !wb_has_exception[w] &&
+                !wb_is_branch[w] &&
+                !wb_csr_we[w] &&
+                !(ordering_violation_valid &&
+                  (ordering_violation_rob_idx == head_idx_w[2][ROB_IDX_BITS-1:0]))) begin
+                head_ready_slot2_load_wb_bypass = 1'b1;
+            end
+        end
+    end
+
+    logic head_ready_slot2_arith_wb_bypass;
+    always_comb begin
+        head_ready_slot2_arith_wb_bypass = 1'b0;
+        for (int w = 0; w < CDB_WIDTH; w++) begin
+            if ((w < LOAD_CDB_FIRST) &&
+                (count_r > 8'd2) &&
+                valid_r[head_idx_w[2]] &&
+                !ready_r[head_idx_w[2]] &&
+                !is_load_r[head_idx_w[2]] &&
+                !is_store_r[head_idx_w[2]] &&
+                !is_csr_r[head_idx_w[2]] &&
+                !is_branch_r[head_idx_w[2]] &&
+                !is_fence_r[head_idx_w[2]] &&
+                !is_fence_i_r[head_idx_w[2]] &&
+                !is_mret_r[head_idx_w[2]] &&
+                !is_sret_r[head_idx_w[2]] &&
+                !is_sfence_vma_r[head_idx_w[2]] &&
+                !is_ecall_r[head_idx_w[2]] &&
+                !is_wfi_r[head_idx_w[2]] &&
+                !has_exc_r[head_idx_w[2]] &&
+                wb_valid[w] &&
+                (wb_idx[w] == head_idx_w[2][ROB_IDX_BITS-1:0]) &&
+                !wb_has_exception[w] &&
+                !wb_is_branch[w] &&
+                !wb_csr_we[w] &&
+                !(ordering_violation_valid &&
+                  (ordering_violation_rob_idx == head_idx_w[2][ROB_IDX_BITS-1:0]))) begin
+                head_ready_slot2_arith_wb_bypass = 1'b1;
+            end
+        end
+    end
+
+`ifdef SIMULATION
+    logic sim_rob_commit_wb_bypass_en;
+    logic sim_rob_commit_wb_bypass_load_only;
+
+    initial begin
+        sim_rob_commit_wb_bypass_en =
+            $test$plusargs("ROB_COMMIT_WB_BYPASS") ? 1'b1 : 1'b0;
+        sim_rob_commit_wb_bypass_load_only =
+            $test$plusargs("ROB_COMMIT_WB_BYPASS_LOAD_ONLY") ? 1'b1 : 1'b0;
+    end
+
+    logic [PIPE_WIDTH-1:0] head_ready_wb_bypass_allowed;
+    always_comb begin
+        head_ready_wb_bypass_allowed = head_ready_wb_bypass;
+        if (sim_rob_commit_wb_bypass_load_only) begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                head_ready_wb_bypass_allowed[i] =
+                    head_ready_wb_bypass[i] && is_load_r[head_idx_w[i]];
+            end
+        end
+    end
+`endif
+
     // =========================================================================
     // Commit read: combinational from head
     // Gate head_valid on count_r to prevent reading stale valid bits after
@@ -212,6 +452,18 @@ module rob
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             head_valid[i]            = valid_r[head_idx_w[i]] && (count_r > 8'(i));
             head_ready[i]            = ready_r[head_idx_w[i]];
+            if (i == 0)
+                head_ready[i] = head_ready[i] |
+                                head_ready_head_load_wb_bypass |
+                                head_ready_head_arith_wb_bypass;
+            else if (i == 1)
+                head_ready[i] = head_ready[i] |
+                                head_ready_slot1_load_wb_bypass |
+                                head_ready_slot1_arith_wb_bypass;
+`ifdef SIMULATION
+            if (sim_rob_commit_wb_bypass_en)
+                head_ready[i] = head_ready[i] | head_ready_wb_bypass_allowed[i];
+`endif
             head_pc[i]               = pc_packed[head_idx_w[i]*64 +: 64];
             head_has_exception[i]    = has_exc_r[head_idx_w[i]];
             head_exc_code[i]         = exc_code_packed[head_idx_w[i]*4 +: 4];
@@ -244,6 +496,7 @@ module rob
     // rob_in_range[i] = 1 when entry i is in [flush_rob_tail, tail_r)
     // =========================================================================
     logic [ROB_DEPTH-1:0] rob_in_range;
+    logic [7:0] flush_prev_idx;
     always_comb begin
         for (int i = 0; i < ROB_DEPTH; i++) begin
             if (flush_rob_tail == tail_r)
@@ -254,6 +507,9 @@ module rob
                 rob_in_range[i] = (8'(i) >= flush_rob_tail) || (8'(i) < tail_r);
         end
     end
+    assign flush_prev_idx = (flush_rob_tail == 8'd0)
+                            ? (ROB_DEPTH_U8 - 8'd1)
+                            : (flush_rob_tail - 8'd1);
 
     // =========================================================================
     // Combinational signals replacing automatic variables in always_ff
@@ -384,7 +640,6 @@ module rob
                     csr_op_r[i]            <= 2'd0;
                 end
             end
-
             tail_r <= flush_rob_tail;
 
             // Commit on same cycle as partial flush
@@ -462,6 +717,13 @@ module rob
                 has_exc_r[ordering_violation_rob_idx]              <= 1'b1;
                 exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
             end
+
+            if (flush_clear_branch_mispredict &&
+                valid_r[flush_prev_idx] &&
+                is_branch_r[flush_prev_idx]) begin
+                ready_r[flush_prev_idx]             <= 1'b1;
+                branch_mispredict_r[flush_prev_idx] <= 1'b0;
+            end
         end else begin
             // Normal operation
 
@@ -469,7 +731,7 @@ module rob
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (alloc_count > i[2:0]) begin
                     valid_r[ai_w[i]]  <= 1'b1;
-                    ready_r[ai_w[i]]  <= 1'b0;
+                    ready_r[ai_w[i]]  <= alloc_ready_now[i];
                     store_addr_done_r[ai_w[i]] <= 1'b0;
                     store_data_done_r[ai_w[i]] <= 1'b0;
                     pc_packed[ai_w[i]*64 +: 64]       <= alloc_pc[i];
@@ -605,5 +867,315 @@ module rob
             count_r <= count_r + {5'd0, alloc_count} - {5'd0, commit_count};
         end
     end
+
+`ifdef SIMULATION
+    logic rob_stat_en;
+    logic rob_trace_wdog_en;
+    integer rob_stat_cyc;
+    integer rob_head_not_ready_cyc;
+    integer rob_head_not_ready_load_cyc;
+    integer rob_head_not_ready_store_cyc;
+    integer rob_head_not_ready_branch_cyc;
+    integer rob_head_not_ready_serial_cyc;
+    integer rob_head_not_ready_other_cyc;
+    integer rob_wdog_fire_cnt;
+    integer rob_wdog_load_cnt;
+    integer rob_wdog_store_cnt;
+    integer rob_wdog_branch_cnt;
+    integer rob_wdog_serial_cnt;
+    integer rob_wdog_other_cnt;
+    integer rob_head_wait_run;
+    integer rob_head_wait_max;
+    integer rob_head_wb_bypass_cand_cnt;
+    integer rob_head_wb_bypass_load_cnt;
+    integer rob_head_wb_bypass_store_cnt;
+    integer rob_head_wb_bypass_branch_cnt;
+    integer rob_head_wb_bypass_serial_cnt;
+    integer rob_head_wb_bypass_other_cnt;
+    integer rob_head_load_wb_bypass_fire_cnt;
+    integer rob_head_arith_wb_bypass_fire_cnt;
+    integer rob_slot1_load_wb_bypass_fire_cnt;
+    integer rob_slot1_arith_wb_bypass_fire_cnt;
+    integer rob_slot2_load_wb_bypass_fire_cnt;
+    integer rob_slot2_arith_wb_bypass_fire_cnt;
+    localparam int ROB_HEAD_PC_HIST_SLOTS = 32;
+    logic [63:0] rob_head_pc_hist_pc [0:ROB_HEAD_PC_HIST_SLOTS-1];
+    integer rob_head_pc_hist_count [0:ROB_HEAD_PC_HIST_SLOTS-1];
+    integer rob_head_pc_hist_load [0:ROB_HEAD_PC_HIST_SLOTS-1];
+    integer rob_head_pc_hist_store [0:ROB_HEAD_PC_HIST_SLOTS-1];
+    integer rob_head_pc_hist_branch [0:ROB_HEAD_PC_HIST_SLOTS-1];
+    integer rob_head_pc_hist_serial [0:ROB_HEAD_PC_HIST_SLOTS-1];
+    integer rob_head_pc_hist_other [0:ROB_HEAD_PC_HIST_SLOTS-1];
+
+    wire rob_head_serial =
+        is_csr_r[head_r] | is_fence_r[head_r] | is_fence_i_r[head_r] |
+        is_mret_r[head_r] | is_sret_r[head_r] | is_sfence_vma_r[head_r] |
+        is_ecall_r[head_r] | is_wfi_r[head_r];
+
+    logic rob_head_wb_bypass_cand;
+    always_comb begin
+        rob_head_wb_bypass_cand = head_ready_wb_bypass[0];
+    end
+
+    initial begin
+        rob_stat_en = ($test$plusargs("PERF_PROFILE") || $test$plusargs("STAT_DUMP")) ? 1'b1 : 1'b0;
+        rob_trace_wdog_en = ($test$plusargs("TRACE_WDOG") ? 1'b1 : 1'b0);
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rob_stat_cyc                   <= 0;
+            rob_head_not_ready_cyc         <= 0;
+            rob_head_not_ready_load_cyc    <= 0;
+            rob_head_not_ready_store_cyc   <= 0;
+            rob_head_not_ready_branch_cyc  <= 0;
+            rob_head_not_ready_serial_cyc  <= 0;
+            rob_head_not_ready_other_cyc   <= 0;
+            rob_wdog_fire_cnt              <= 0;
+            rob_wdog_load_cnt              <= 0;
+            rob_wdog_store_cnt             <= 0;
+            rob_wdog_branch_cnt            <= 0;
+            rob_wdog_serial_cnt            <= 0;
+            rob_wdog_other_cnt             <= 0;
+            rob_head_wait_run              <= 0;
+            rob_head_wait_max              <= 0;
+            rob_head_wb_bypass_cand_cnt    <= 0;
+            rob_head_wb_bypass_load_cnt    <= 0;
+            rob_head_wb_bypass_store_cnt   <= 0;
+            rob_head_wb_bypass_branch_cnt  <= 0;
+            rob_head_wb_bypass_serial_cnt  <= 0;
+            rob_head_wb_bypass_other_cnt   <= 0;
+            rob_head_load_wb_bypass_fire_cnt <= 0;
+            rob_head_arith_wb_bypass_fire_cnt <= 0;
+            rob_slot1_load_wb_bypass_fire_cnt <= 0;
+            rob_slot1_arith_wb_bypass_fire_cnt <= 0;
+            rob_slot2_load_wb_bypass_fire_cnt <= 0;
+            rob_slot2_arith_wb_bypass_fire_cnt <= 0;
+            for (int i = 0; i < ROB_HEAD_PC_HIST_SLOTS; i++) begin
+                rob_head_pc_hist_pc[i]     <= 64'd0;
+                rob_head_pc_hist_count[i]  <= 0;
+                rob_head_pc_hist_load[i]   <= 0;
+                rob_head_pc_hist_store[i]  <= 0;
+                rob_head_pc_hist_branch[i] <= 0;
+                rob_head_pc_hist_serial[i] <= 0;
+                rob_head_pc_hist_other[i]  <= 0;
+            end
+        end else if (rob_stat_en || rob_trace_wdog_en) begin
+            rob_stat_cyc <= rob_stat_cyc + 1;
+
+            if (valid_r[head_r] && !ready_r[head_r]) begin
+                begin : head_pc_hist_sample
+                    int hit_idx;
+                    int free_idx;
+                    int min_idx;
+                    int min_count;
+                    int use_idx;
+                    logic [63:0] stall_pc;
+
+                    hit_idx = -1;
+                    free_idx = -1;
+                    min_idx = 0;
+                    min_count = rob_head_pc_hist_count[0];
+                    use_idx = -1;
+                    stall_pc = pc_packed[head_r*64 +: 64];
+                    for (int i = 0; i < ROB_HEAD_PC_HIST_SLOTS; i++) begin
+                        if ((rob_head_pc_hist_count[i] != 0) &&
+                            (rob_head_pc_hist_pc[i] == stall_pc) &&
+                            (hit_idx < 0)) begin
+                            hit_idx = i;
+                        end
+                        if ((rob_head_pc_hist_count[i] == 0) &&
+                            (free_idx < 0)) begin
+                            free_idx = i;
+                        end
+                        if (rob_head_pc_hist_count[i] < min_count) begin
+                            min_idx = i;
+                            min_count = rob_head_pc_hist_count[i];
+                        end
+                    end
+
+                    if (hit_idx >= 0)
+                        use_idx = hit_idx;
+                    else if (free_idx >= 0)
+                        use_idx = free_idx;
+                    else
+                        use_idx = min_idx;
+
+                    if (hit_idx < 0) begin
+                        rob_head_pc_hist_pc[use_idx] <= stall_pc;
+                        rob_head_pc_hist_count[use_idx] <= 1;
+                        rob_head_pc_hist_load[use_idx] <=
+                            is_load_r[head_r] ? 1 : 0;
+                        rob_head_pc_hist_store[use_idx] <=
+                            is_store_r[head_r] ? 1 : 0;
+                        rob_head_pc_hist_branch[use_idx] <=
+                            is_branch_r[head_r] ? 1 : 0;
+                        rob_head_pc_hist_serial[use_idx] <=
+                            rob_head_serial ? 1 : 0;
+                        rob_head_pc_hist_other[use_idx] <=
+                            (!is_load_r[head_r] &&
+                             !is_store_r[head_r] &&
+                             !is_branch_r[head_r] &&
+                             !rob_head_serial) ? 1 : 0;
+                    end else begin
+                        rob_head_pc_hist_count[use_idx] <=
+                            rob_head_pc_hist_count[use_idx] + 1;
+                        if (is_load_r[head_r])
+                            rob_head_pc_hist_load[use_idx] <=
+                                rob_head_pc_hist_load[use_idx] + 1;
+                        else if (is_store_r[head_r])
+                            rob_head_pc_hist_store[use_idx] <=
+                                rob_head_pc_hist_store[use_idx] + 1;
+                        else if (is_branch_r[head_r])
+                            rob_head_pc_hist_branch[use_idx] <=
+                                rob_head_pc_hist_branch[use_idx] + 1;
+                        else if (rob_head_serial)
+                            rob_head_pc_hist_serial[use_idx] <=
+                                rob_head_pc_hist_serial[use_idx] + 1;
+                        else
+                            rob_head_pc_hist_other[use_idx] <=
+                                rob_head_pc_hist_other[use_idx] + 1;
+                    end
+                end
+
+                rob_head_not_ready_cyc <= rob_head_not_ready_cyc + 1;
+                rob_head_wait_run <= rob_head_wait_run + 1;
+                if ((rob_head_wait_run + 1) > rob_head_wait_max)
+                    rob_head_wait_max <= rob_head_wait_run + 1;
+
+                if (is_load_r[head_r])
+                    rob_head_not_ready_load_cyc <= rob_head_not_ready_load_cyc + 1;
+                else if (is_store_r[head_r])
+                    rob_head_not_ready_store_cyc <= rob_head_not_ready_store_cyc + 1;
+                else if (is_branch_r[head_r])
+                    rob_head_not_ready_branch_cyc <= rob_head_not_ready_branch_cyc + 1;
+                else if (rob_head_serial)
+                    rob_head_not_ready_serial_cyc <= rob_head_not_ready_serial_cyc + 1;
+                else
+                    rob_head_not_ready_other_cyc <= rob_head_not_ready_other_cyc + 1;
+
+                if (rob_head_wb_bypass_cand) begin
+                    rob_head_wb_bypass_cand_cnt <= rob_head_wb_bypass_cand_cnt + 1;
+                    if (is_load_r[head_r])
+                        rob_head_wb_bypass_load_cnt <= rob_head_wb_bypass_load_cnt + 1;
+                    else if (is_store_r[head_r])
+                        rob_head_wb_bypass_store_cnt <= rob_head_wb_bypass_store_cnt + 1;
+                    else if (is_branch_r[head_r])
+                        rob_head_wb_bypass_branch_cnt <= rob_head_wb_bypass_branch_cnt + 1;
+                    else if (rob_head_serial)
+                        rob_head_wb_bypass_serial_cnt <= rob_head_wb_bypass_serial_cnt + 1;
+                    else
+                        rob_head_wb_bypass_other_cnt <= rob_head_wb_bypass_other_cnt + 1;
+                end
+
+                if (head_ready_head_load_wb_bypass)
+                    rob_head_load_wb_bypass_fire_cnt <=
+                        rob_head_load_wb_bypass_fire_cnt + 1;
+                if (head_ready_head_arith_wb_bypass)
+                    rob_head_arith_wb_bypass_fire_cnt <=
+                        rob_head_arith_wb_bypass_fire_cnt + 1;
+                if (head_ready_slot1_load_wb_bypass)
+                    rob_slot1_load_wb_bypass_fire_cnt <=
+                        rob_slot1_load_wb_bypass_fire_cnt + 1;
+                if (head_ready_slot1_arith_wb_bypass)
+                    rob_slot1_arith_wb_bypass_fire_cnt <=
+                        rob_slot1_arith_wb_bypass_fire_cnt + 1;
+                if (head_ready_slot2_load_wb_bypass)
+                    rob_slot2_load_wb_bypass_fire_cnt <=
+                        rob_slot2_load_wb_bypass_fire_cnt + 1;
+                if (head_ready_slot2_arith_wb_bypass)
+                    rob_slot2_arith_wb_bypass_fire_cnt <=
+                        rob_slot2_arith_wb_bypass_fire_cnt + 1;
+            end else begin
+                rob_head_wait_run <= 0;
+            end
+
+            if (rob_head_watchdog == 12'd62) begin
+                rob_wdog_fire_cnt <= rob_wdog_fire_cnt + 1;
+                if (is_load_r[head_r])
+                    rob_wdog_load_cnt <= rob_wdog_load_cnt + 1;
+                else if (is_store_r[head_r])
+                    rob_wdog_store_cnt <= rob_wdog_store_cnt + 1;
+                else if (is_branch_r[head_r])
+                    rob_wdog_branch_cnt <= rob_wdog_branch_cnt + 1;
+                else if (rob_head_serial)
+                    rob_wdog_serial_cnt <= rob_wdog_serial_cnt + 1;
+                else
+                    rob_wdog_other_cnt <= rob_wdog_other_cnt + 1;
+
+                if (rob_trace_wdog_en) begin
+                    $display("[ROB_WDOG] cyc=%0d head=%0d pc=%016h load=%b store=%b branch=%b serial=%b sta_done=%b std_done=%b count=%0d tail=%0d",
+                        rob_stat_cyc,
+                        head_r,
+                        pc_packed[head_r*64 +: 64],
+                        is_load_r[head_r],
+                        is_store_r[head_r],
+                        is_branch_r[head_r],
+                        rob_head_serial,
+                        store_addr_done_r[head_r],
+                        store_data_done_r[head_r],
+                        count_r,
+                        tail_r);
+                end
+            end
+        end
+    end
+
+    final begin
+        if (rob_stat_en || rob_trace_wdog_en) begin
+            $display("");
+            $display("=== ROB HEAD STALL SUMMARY ===");
+            $display("Cycles sampled:             %0d", rob_stat_cyc);
+            $display("Head valid-not-ready cycles:%0d", rob_head_not_ready_cyc);
+            $display("  load/store/branch/serial/other: %0d / %0d / %0d / %0d / %0d",
+                rob_head_not_ready_load_cyc,
+                rob_head_not_ready_store_cyc,
+                rob_head_not_ready_branch_cyc,
+                rob_head_not_ready_serial_cyc,
+                rob_head_not_ready_other_cyc);
+            $display("Max contiguous head wait:   %0d", rob_head_wait_max);
+            $display("Same-cycle WB ready bypass candidates: %0d", rob_head_wb_bypass_cand_cnt);
+            $display("  load/store/branch/serial/other: %0d / %0d / %0d / %0d / %0d",
+                rob_head_wb_bypass_load_cnt,
+                rob_head_wb_bypass_store_cnt,
+                rob_head_wb_bypass_branch_cnt,
+                rob_head_wb_bypass_serial_cnt,
+                rob_head_wb_bypass_other_cnt);
+            $display("Head-load WB bypass fires: %0d",
+                rob_head_load_wb_bypass_fire_cnt);
+            $display("Head-arith WB bypass fires: %0d",
+                rob_head_arith_wb_bypass_fire_cnt);
+            $display("Slot1-load WB bypass fires: %0d",
+                rob_slot1_load_wb_bypass_fire_cnt);
+            $display("Slot1-arith WB bypass fires: %0d",
+                rob_slot1_arith_wb_bypass_fire_cnt);
+            $display("Slot2-load WB bypass fires: %0d",
+                rob_slot2_load_wb_bypass_fire_cnt);
+            $display("Slot2-arith WB bypass fires: %0d",
+                rob_slot2_arith_wb_bypass_fire_cnt);
+            $display("Watchdog fires total:       %0d", rob_wdog_fire_cnt);
+            $display("  load/store/branch/serial/other: %0d / %0d / %0d / %0d / %0d",
+                rob_wdog_load_cnt,
+                rob_wdog_store_cnt,
+                rob_wdog_branch_cnt,
+                rob_wdog_serial_cnt,
+                rob_wdog_other_cnt);
+            $display("Head valid-not-ready PC samples (approx top %0d PCs):",
+                     ROB_HEAD_PC_HIST_SLOTS);
+            for (int i = 0; i < ROB_HEAD_PC_HIST_SLOTS; i++) begin
+                if (rob_head_pc_hist_count[i] != 0) begin
+                    $display("  pc=%016h total=%0d load/store/branch/serial/other=%0d/%0d/%0d/%0d/%0d",
+                        rob_head_pc_hist_pc[i],
+                        rob_head_pc_hist_count[i],
+                        rob_head_pc_hist_load[i],
+                        rob_head_pc_hist_store[i],
+                        rob_head_pc_hist_branch[i],
+                        rob_head_pc_hist_serial[i],
+                        rob_head_pc_hist_other[i]);
+                end
+            end
+        end
+    end
+`endif
 
 endmodule

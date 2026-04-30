@@ -49,8 +49,8 @@ package rv64gc_pkg;
     // =========================================================================
     // Checkpoints (branch snapshots)
     // =========================================================================
-    localparam int NUM_CHECKPOINTS = 16;
-    localparam int CHECKPOINT_BITS = 4;  // $clog2(16) = 4
+    localparam int NUM_CHECKPOINTS = 64;
+    localparam int CHECKPOINT_BITS = 6;  // $clog2(64) = 6
 
     // =========================================================================
     // Issue queues
@@ -95,6 +95,23 @@ package rv64gc_pkg;
     // Loop buffer
     // =========================================================================
     localparam int LOOP_BUF_DEPTH = 64;
+
+    // =========================================================================
+    // µop cache (gen-2, replaces loop buffer when proven; parallel during
+    // bring-up behind +UOC_ENABLE plusarg).
+    //
+    // Geometry: 32 sets × 8 ways × 6 µops per entry = 1,536 µop slots.
+    // Indexed by fetch-group start PC: PC[5:1] (RVC 2-byte alignment).
+    // Modeled after Intel DSB / AMD Zen op-cache / ARM Mop-cache.
+    // =========================================================================
+    localparam int UOC_SETS        = 32;
+    localparam int UOC_WAYS        = 8;
+    localparam int UOC_PER_ENTRY   = PIPE_WIDTH;          // 6 µops/entry
+    localparam int UOC_INDEX_BITS  = $clog2(UOC_SETS);    // 5
+    localparam int UOC_WAY_BITS    = $clog2(UOC_WAYS);    // 3
+    localparam int UOC_OFFSET_BITS = 1;                   // PC[0] ignored (RVC 2B align)
+    localparam int UOC_TAG_BITS    = XLEN - UOC_INDEX_BITS - UOC_OFFSET_BITS; // 58
+    localparam int UOC_PLRU_BITS   = UOC_WAYS - 1;        // 7-bit tree pLRU per set
 
     // =========================================================================
     // Frontend queues

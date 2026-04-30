@@ -16,6 +16,7 @@ module store_queue
 
     // Allocate (from rename, up to 6 per cycle)
     input logic [2:0] alloc_count,
+    input logic [ROB_IDX_BITS-1:0] alloc_rob_idx [0:PIPE_WIDTH-1],
     output logic [SQ_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],
     output logic full,
 
@@ -29,6 +30,7 @@ module store_queue
     // STD fill (store data from register file)
     input logic std_valid,
     input logic [SQ_IDX_BITS-1:0] std_idx,
+    input logic [ROB_IDX_BITS-1:0] std_rob_idx,
     input logic [63:0] std_data,
     input logic [7:0] std_byte_mask,
 
@@ -64,12 +66,14 @@ module store_queue
 
     // Flush
     input logic flush_valid,
+    input logic [ROB_IDX_BITS-1:0] flush_rob_tail,
     input logic flush_full
 );
 
 `ifndef SYNTHESIS
     bit trace_sq_alloc_fill;
     bit trace_sq_fill_check;
+    bit trace_stack_store;
     logic                    sta_fill_check_pending_r;
     logic [SQ_IDX_BITS-1:0]  sta_fill_check_idx_r;
     logic [ROB_IDX_BITS-1:0] sta_fill_check_rob_r;
@@ -77,6 +81,11 @@ module store_queue
     logic [SQ_IDX_BITS-1:0]  std_fill_check_idx_r;
     initial trace_sq_alloc_fill = $test$plusargs("TRACE_SQ_ALLOC_FILL");
     initial trace_sq_fill_check = $test$plusargs("TRACE_SQ_FILL_CHECK");
+    initial trace_stack_store   = $test$plusargs("TRACE_STACK_STORE");
+
+    function automatic logic trace_stack_addr(input logic [63:0] addr);
+        trace_stack_addr = (addr[63:12] == 52'h800ff);
+    endfunction
 `endif
 
     // =========================================================================
@@ -111,6 +120,16 @@ module store_queue
     assign drain_valid = queue[head_r].valid & queue[head_r].committed
                        & queue[head_r].addr_valid & queue[head_r].data_valid;
     assign drain_entry = queue[head_r];
+
+    logic sta_fill_accept;
+    logic std_fill_accept;
+
+    assign sta_fill_accept = sta_valid &&
+                             queue[sta_idx].valid &&
+                             (queue[sta_idx].rob_idx == sta_rob_idx);
+    assign std_fill_accept = std_valid &&
+                             queue[std_idx].valid &&
+                             (queue[std_idx].rob_idx == std_rob_idx);
 
     // =========================================================================
     // Forwarding: byte mask for the load request
@@ -173,40 +192,68 @@ module store_queue
                 logic [7:0]             uncovered_mask;
                 logic [ROB_AGE_BITS-1:0] store_age;
                 logic                   store_is_older;
-                logic                   addr_match;
-                int                     idx_int;
+	                logic                   addr_match;
+	                logic                   data_ready;
+	                logic                   std_match_scan;
+	                logic                   sta_match_scan;
+	                logic                   scan_addr_valid;
+	                logic [63:0]            scan_addr;
+	                logic [1:0]             scan_size;
+	                logic [63:0]            data_value;
+	                int                     idx_int;
 
                 idx_int = int'(tail_r) - step - 1;
                 if (idx_int < 0)
                     idx_int = idx_int + SQ_DEPTH;
                 scan_idx = SQ_IDX_BITS'(idx_int);
 
-                case (queue[scan_idx].size)
-                    2'd0:    scan_bmask = 8'h01 << queue[scan_idx].addr[2:0];
-                    2'd1:    scan_bmask = 8'h03 << queue[scan_idx].addr[2:0];
-                    2'd2:    scan_bmask = 8'h0F << queue[scan_idx].addr[2:0];
-                    default: scan_bmask = 8'hFF;
-                endcase
+	                std_match_scan = std_valid &&
+	                                 queue[scan_idx].valid &&
+	                                 (std_idx == scan_idx) &&
+	                                 (queue[scan_idx].rob_idx == std_rob_idx);
+	                sta_match_scan = sta_valid &&
+	                                 queue[scan_idx].valid &&
+	                                 (sta_idx == scan_idx) &&
+	                                 (queue[scan_idx].rob_idx == sta_rob_idx);
+	                scan_addr_valid = queue[scan_idx].addr_valid || sta_match_scan;
+	                scan_addr       = sta_match_scan ? sta_addr : queue[scan_idx].addr;
+	                scan_size       = sta_match_scan ? sta_size : queue[scan_idx].size;
+	
+	                case (scan_size)
+	                    2'd0:    scan_bmask = 8'h01 << scan_addr[2:0];
+	                    2'd1:    scan_bmask = 8'h03 << scan_addr[2:0];
+	                    2'd2:    scan_bmask = 8'h0F << scan_addr[2:0];
+	                    default: scan_bmask = 8'hFF;
+	                endcase
+	
+	                store_age      = rob_age_from_head(queue[scan_idx].rob_idx);
+	                store_is_older = fwd_req_valid &&
+	                                 queue[scan_idx].valid &&
+	                                 (queue[scan_idx].committed || (store_age < fwd_req_age));
+	                addr_match     = store_is_older &&
+	                                 scan_addr_valid &&
+	                                 (scan_addr[63:3] == fwd_req_addr[63:3]);
+	                overlap_mask   = addr_match ? (scan_bmask & fwd_req_bmask) : 8'h00;
+	                uncovered_mask = (store_is_older && !scan_addr_valid)
+	                               ? (fwd_req_bmask & ~fwd_cover_mask)
+	                               : (overlap_mask & ~fwd_cover_mask);
+	                data_ready     = queue[scan_idx].data_valid ||
+	                                 std_match_scan;
+	                data_value     = std_match_scan
+	                               ? std_data
+	                               : queue[scan_idx].data;
 
-                store_age      = rob_age_from_head(queue[scan_idx].rob_idx);
-                store_is_older = fwd_req_valid &&
-                                 queue[scan_idx].valid &&
-                                 (queue[scan_idx].committed || (store_age < fwd_req_age));
-                addr_match     = store_is_older &&
-                                 queue[scan_idx].addr_valid &&
-                                 (queue[scan_idx].addr[63:3] == fwd_req_addr[63:3]);
-                overlap_mask   = addr_match ? (scan_bmask & fwd_req_bmask) : 8'h00;
-                uncovered_mask = overlap_mask & ~fwd_cover_mask;
-
-                if (queue[scan_idx].data_valid) begin
-                    for (int b = 0; b < 8; b++) begin
-                        if (uncovered_mask[b] &&
-                            (b >= int'(queue[scan_idx].addr[2:0]))) begin
-                            fwd_data[b*8 +: 8] =
-                                queue[scan_idx].data[(b - int'(queue[scan_idx].addr[2:0])) * 8 +: 8];
-                        end
-                    end
-                    fwd_cover_mask = fwd_cover_mask | uncovered_mask;
+	                if (store_is_older && !scan_addr_valid) begin
+	                    fwd_wait_mask = fwd_wait_mask | uncovered_mask;
+	                end else if (data_ready) begin
+	                    for (int b = 0; b < 8; b++) begin
+	                        if (uncovered_mask[b] &&
+	                            (b >= int'(scan_addr[2:0]))) begin
+	                            fwd_data[b*8 +: 8] =
+	                                data_value[(b - int'(scan_addr[2:0])) * 8 +: 8];
+	                        end
+	                    end
+	                    fwd_cover_mask = fwd_cover_mask | uncovered_mask;
                 end else begin
                     fwd_wait_mask = fwd_wait_mask | uncovered_mask;
                 end
@@ -236,39 +283,67 @@ module store_queue
                 logic [7:0]             uncovered_mask;
                 logic [ROB_AGE_BITS-1:0] store_age;
                 logic                   store_is_older;
-                logic                   addr_match;
-                int                     idx_int;
+	                logic                   addr_match;
+	                logic                   data_ready;
+	                logic                   std_match_scan;
+	                logic                   sta_match_scan;
+	                logic                   scan_addr_valid;
+	                logic [63:0]            scan_addr;
+	                logic [1:0]             scan_size;
+	                logic [63:0]            data_value;
+	                int                     idx_int;
 
                 idx_int = int'(tail_r) - step - 1;
                 if (idx_int < 0)
                     idx_int = idx_int + SQ_DEPTH;
                 scan_idx = SQ_IDX_BITS'(idx_int);
 
-                case (queue[scan_idx].size)
-                    2'd0:    scan_bmask = 8'h01 << queue[scan_idx].addr[2:0];
-                    2'd1:    scan_bmask = 8'h03 << queue[scan_idx].addr[2:0];
-                    2'd2:    scan_bmask = 8'h0F << queue[scan_idx].addr[2:0];
-                    default: scan_bmask = 8'hFF;
-                endcase
+	                std_match_scan = std_valid &&
+	                                 queue[scan_idx].valid &&
+	                                 (std_idx == scan_idx) &&
+	                                 (queue[scan_idx].rob_idx == std_rob_idx);
+	                sta_match_scan = sta_valid &&
+	                                 queue[scan_idx].valid &&
+	                                 (sta_idx == scan_idx) &&
+	                                 (queue[scan_idx].rob_idx == sta_rob_idx);
+	                scan_addr_valid = queue[scan_idx].addr_valid || sta_match_scan;
+	                scan_addr       = sta_match_scan ? sta_addr : queue[scan_idx].addr;
+	                scan_size       = sta_match_scan ? sta_size : queue[scan_idx].size;
+	
+	                case (scan_size)
+	                    2'd0:    scan_bmask = 8'h01 << scan_addr[2:0];
+	                    2'd1:    scan_bmask = 8'h03 << scan_addr[2:0];
+	                    2'd2:    scan_bmask = 8'h0F << scan_addr[2:0];
+	                    default: scan_bmask = 8'hFF;
+	                endcase
+	
+	                store_age      = rob_age_from_head(queue[scan_idx].rob_idx);
+	                store_is_older = wait_req_valid &&
+	                                 queue[scan_idx].valid &&
+	                                 (queue[scan_idx].committed || (store_age < wait_req_age_now));
+	                addr_match     = store_is_older &&
+	                                 scan_addr_valid &&
+	                                 (scan_addr[63:3] == wait_req_addr[63:3]);
+	                overlap_mask   = addr_match ? (scan_bmask & wait_req_bmask) : 8'h00;
+	                uncovered_mask = (store_is_older && !scan_addr_valid)
+	                               ? (wait_req_bmask & ~wait_cover_mask)
+	                               : (overlap_mask & ~wait_cover_mask);
+	                data_ready     = queue[scan_idx].data_valid ||
+	                                 std_match_scan;
+	                data_value     = std_match_scan
+	                               ? std_data
+	                               : queue[scan_idx].data;
 
-                store_age      = rob_age_from_head(queue[scan_idx].rob_idx);
-                store_is_older = wait_req_valid &&
-                                 queue[scan_idx].valid &&
-                                 (queue[scan_idx].committed || (store_age < wait_req_age_now));
-                addr_match     = store_is_older &&
-                                 queue[scan_idx].addr_valid &&
-                                 (queue[scan_idx].addr[63:3] == wait_req_addr[63:3]);
-                overlap_mask   = addr_match ? (scan_bmask & wait_req_bmask) : 8'h00;
-                uncovered_mask = overlap_mask & ~wait_cover_mask;
-
-                if (queue[scan_idx].data_valid) begin
-                    for (int b = 0; b < 8; b++) begin
-                        if (uncovered_mask[b] &&
-                            (b >= int'(queue[scan_idx].addr[2:0]))) begin
-                            wait_data[b*8 +: 8] =
-                                queue[scan_idx].data[(b - int'(queue[scan_idx].addr[2:0])) * 8 +: 8];
-                        end
-                    end
+	                if (store_is_older && !scan_addr_valid) begin
+	                    wait_wait_mask = wait_wait_mask | uncovered_mask;
+	                end else if (data_ready) begin
+	                    for (int b = 0; b < 8; b++) begin
+	                        if (uncovered_mask[b] &&
+	                            (b >= int'(scan_addr[2:0]))) begin
+	                            wait_data[b*8 +: 8] =
+	                                data_value[(b - int'(scan_addr[2:0])) * 8 +: 8];
+	                        end
+	                    end
                     wait_cover_mask = wait_cover_mask | uncovered_mask;
                 end else begin
                     wait_wait_mask = wait_wait_mask | uncovered_mask;
@@ -288,7 +363,19 @@ module store_queue
     // =========================================================================
     logic [SQ_IDX_BITS-1:0] flush_new_commit_ptr;
     logic [SQ_DEPTH-1:0]   flush_newly_committed;
-    logic [SQ_IDX_BITS:0]  flush_survivor_count;
+    logic                  drain_fire_c;
+    logic [SQ_IDX_BITS-1:0] full_flush_head;
+    logic [SQ_IDX_BITS-1:0] full_flush_tail;
+    logic [SQ_IDX_BITS:0]  full_flush_base_count;
+    logic [SQ_IDX_BITS:0]  full_flush_count;
+    logic [SQ_DEPTH-1:0]   full_flush_keep;
+    logic [SQ_IDX_BITS-1:0] partial_flush_head;
+    logic [SQ_IDX_BITS-1:0] partial_flush_tail;
+    logic [SQ_IDX_BITS:0]   partial_flush_base_count;
+    logic [SQ_IDX_BITS:0]   partial_flush_count;
+    logic [SQ_DEPTH-1:0]    partial_flush_keep;
+
+    assign drain_fire_c = drain_valid && drain_ready;
 
     always_comb begin
         flush_new_commit_ptr = SQ_IDX_BITS'(commit_ptr_r + commit_count);
@@ -298,12 +385,68 @@ module store_queue
                 flush_newly_committed[SQ_IDX_BITS'(commit_ptr_r + SQ_IDX_BITS'(c))] = 1'b1;
             end
         end
-        if (flush_new_commit_ptr >= head_r)
-            flush_survivor_count = {1'b0, flush_new_commit_ptr} - {1'b0, head_r};
-        else
-            flush_survivor_count = (SQ_IDX_BITS+1)'(SQ_DEPTH)
-                                 - {1'b0, head_r}
-                                 + {1'b0, flush_new_commit_ptr};
+    end
+
+    always_comb begin
+        logic [ROB_AGE_BITS-1:0] flush_tail_age;
+        logic [ROB_AGE_BITS-1:0] entry_age;
+        logic [SQ_IDX_BITS-1:0]  scan_idx;
+        logic                    entry_committed_after;
+
+        partial_flush_head       = SQ_IDX_BITS'(head_r + SQ_IDX_BITS'(drain_fire_c));
+        partial_flush_tail       = partial_flush_head;
+        partial_flush_base_count = '0;
+        partial_flush_count      = '0;
+        partial_flush_keep       = '0;
+
+        if (count_r >= (SQ_IDX_BITS+1)'(drain_fire_c))
+            partial_flush_base_count = count_r - (SQ_IDX_BITS+1)'(drain_fire_c);
+
+        flush_tail_age = rob_age_from_head(flush_rob_tail);
+
+        for (int step = 0; step < SQ_DEPTH; step++) begin
+            if (step < int'(partial_flush_base_count)) begin
+                scan_idx = SQ_IDX_BITS'(partial_flush_head + SQ_IDX_BITS'(step));
+                entry_committed_after = queue[scan_idx].committed ||
+                                        flush_newly_committed[scan_idx];
+                entry_age = rob_age_from_head(queue[scan_idx].rob_idx);
+                if (queue[scan_idx].valid &&
+                    (entry_committed_after || (entry_age < flush_tail_age))) begin
+                    partial_flush_keep[scan_idx] = 1'b1;
+                    partial_flush_count          = partial_flush_count + (SQ_IDX_BITS+1)'(1);
+                end
+            end
+        end
+
+        partial_flush_tail = SQ_IDX_BITS'(partial_flush_head + SQ_IDX_BITS'(partial_flush_count));
+    end
+
+    always_comb begin
+        logic [SQ_IDX_BITS-1:0] scan_idx;
+        logic                   entry_committed_after;
+
+        full_flush_head       = SQ_IDX_BITS'(head_r + SQ_IDX_BITS'(drain_fire_c));
+        full_flush_tail       = full_flush_head;
+        full_flush_base_count = '0;
+        full_flush_count      = '0;
+        full_flush_keep       = '0;
+
+        if (count_r >= (SQ_IDX_BITS+1)'(drain_fire_c))
+            full_flush_base_count = count_r - (SQ_IDX_BITS+1)'(drain_fire_c);
+
+        for (int step = 0; step < SQ_DEPTH; step++) begin
+            if (step < int'(full_flush_base_count)) begin
+                scan_idx = SQ_IDX_BITS'(full_flush_head + SQ_IDX_BITS'(step));
+                entry_committed_after = queue[scan_idx].committed ||
+                                        flush_newly_committed[scan_idx];
+                if (queue[scan_idx].valid && entry_committed_after) begin
+                    full_flush_keep[scan_idx] = 1'b1;
+                    full_flush_count          = full_flush_count + (SQ_IDX_BITS+1)'(1);
+                end
+            end
+        end
+
+        full_flush_tail = SQ_IDX_BITS'(full_flush_head + SQ_IDX_BITS'(full_flush_count));
     end
 
     // =========================================================================
@@ -323,19 +466,71 @@ module store_queue
             std_fill_check_pending_r <= 1'b0;
 `endif
         end else if (flush_valid && flush_full) begin
-            // Discard all speculative (uncommitted) entries.
-            // Account for any stores committed THIS cycle before flushing.
-            // Mark newly committed entries AND discard speculative ones
+            // Full redirect recovery keeps only stores that are committed
+            // after this cycle's commit markings.  A same-cycle drain has
+            // already been handed to the CSB, so drop it from the SQ here.
+            head_r       <= full_flush_head;
+            tail_r       <= full_flush_tail;
+            commit_ptr_r <= full_flush_tail;
+            count_r      <= full_flush_count;
+
             for (int i = 0; i < SQ_DEPTH; i++) begin
-                if (flush_newly_committed[i]) begin
-                    queue[i].committed <= 1'b1;
-                end else if (!queue[i].committed) begin
-                    queue[i].valid <= 1'b0;
+                if (full_flush_keep[i]) begin
+                    if (flush_newly_committed[i])
+                        queue[i].committed <= 1'b1;
+                end else begin
+                    queue[i] <= '0;
                 end
             end
+`ifndef SYNTHESIS
+            sta_fill_check_pending_r <= 1'b0;
+            std_fill_check_pending_r <= 1'b0;
+`endif
+        end else if (flush_valid) begin
+            // Partial flush: preserve committed stores plus speculative stores
+            // older than the ROB flush tail. Same-cycle drain and commit are
+            // accounted before survivor selection; allocation is suppressed.
+            head_r       <= partial_flush_head;
+            tail_r       <= partial_flush_tail;
             commit_ptr_r <= flush_new_commit_ptr;
-            tail_r  <= flush_new_commit_ptr;
-            count_r <= flush_survivor_count;
+            count_r      <= partial_flush_count;
+
+            for (int i = 0; i < SQ_DEPTH; i++) begin
+                if (partial_flush_keep[i]) begin
+                    if (flush_newly_committed[i])
+                        queue[i].committed <= 1'b1;
+                end else begin
+                    queue[i] <= '0;
+                end
+            end
+
+            if (sta_fill_accept && partial_flush_keep[sta_idx]) begin
+                queue[sta_idx].addr       <= sta_addr;
+                queue[sta_idx].size       <= sta_size;
+                queue[sta_idx].addr_valid <= 1'b1;
+            end
+
+            if (std_fill_accept && partial_flush_keep[std_idx]) begin
+                queue[std_idx].data       <= std_data;
+                queue[std_idx].byte_mask  <= std_byte_mask;
+                queue[std_idx].data_valid <= 1'b1;
+            end
+`ifndef SYNTHESIS
+            if (trace_stack_store) begin
+                if (sta_valid && !(sta_fill_accept && partial_flush_keep[sta_idx])) begin
+                    $display("[SQ_STA_REJECT] t=%0t idx=%0d fill_rob=%0d entry_valid=%0b entry_rob=%0d flush=1 keep=%0b addr=%016h",
+                             $time, sta_idx, sta_rob_idx,
+                             queue[sta_idx].valid, queue[sta_idx].rob_idx,
+                             partial_flush_keep[sta_idx], sta_addr);
+                end
+                if (std_valid && !(std_fill_accept && partial_flush_keep[std_idx])) begin
+                    $display("[SQ_STD_REJECT] t=%0t idx=%0d fill_rob=%0d entry_valid=%0b entry_rob=%0d flush=1 keep=%0b data=%016h mask=%02h",
+                             $time, std_idx, std_rob_idx,
+                             queue[std_idx].valid, queue[std_idx].rob_idx,
+                             partial_flush_keep[std_idx], std_data, std_byte_mask);
+                end
+            end
+`endif
 `ifndef SYNTHESIS
             sta_fill_check_pending_r <= 1'b0;
             std_fill_check_pending_r <= 1'b0;
@@ -387,19 +582,43 @@ module store_queue
             end
 
             // --- STA fill ---
-            if (sta_valid) begin
-                queue[sta_idx].rob_idx     <= sta_rob_idx;
+            if (sta_fill_accept) begin
                 queue[sta_idx].addr       <= sta_addr;
                 queue[sta_idx].size       <= sta_size;
                 queue[sta_idx].addr_valid <= 1'b1;
             end
 
             // --- STD fill ---
-            if (std_valid) begin
+            if (std_fill_accept) begin
                 queue[std_idx].data       <= std_data;
                 queue[std_idx].byte_mask  <= std_byte_mask;
                 queue[std_idx].data_valid <= 1'b1;
             end
+
+`ifndef SYNTHESIS
+            if (trace_stack_store) begin
+                if (sta_valid && !sta_fill_accept) begin
+                    $display("[SQ_STA_REJECT] t=%0t idx=%0d fill_rob=%0d entry_valid=%0b entry_rob=%0d addr=%016h",
+                             $time, sta_idx, sta_rob_idx,
+                             queue[sta_idx].valid, queue[sta_idx].rob_idx, sta_addr);
+                end
+                if (std_valid && !std_fill_accept) begin
+                    $display("[SQ_STD_REJECT] t=%0t idx=%0d fill_rob=%0d entry_valid=%0b entry_rob=%0d data=%016h mask=%02h",
+                             $time, std_idx, std_rob_idx,
+                             queue[std_idx].valid, queue[std_idx].rob_idx, std_data, std_byte_mask);
+                end
+                if (sta_fill_accept && trace_stack_addr(sta_addr)) begin
+                    $display("[SQ_STA_FILL] t=%0t idx=%0d rob=%0d addr=%016h size=%0d",
+                             $time, sta_idx, sta_rob_idx, sta_addr, sta_size);
+                end
+                if (drain_valid && drain_ready && trace_stack_addr(queue[head_r].addr)) begin
+                    $display("[SQ_DRAIN] t=%0t idx=%0d rob=%0d addr=%016h data=%016h mask=%02h",
+                             $time, head_r, queue[head_r].rob_idx,
+                             queue[head_r].addr, queue[head_r].data,
+                             queue[head_r].byte_mask);
+                end
+            end
+`endif
 
 `ifndef SYNTHESIS
             if (trace_sq_alloc_fill) begin
@@ -428,6 +647,7 @@ module store_queue
             for (int a = 0; a < PIPE_WIDTH; a++) begin
                 if (a < int'(alloc_count)) begin
                     queue[SQ_IDX_BITS'(tail_r + SQ_IDX_BITS'(a))].valid      <= 1'b1;
+                    queue[SQ_IDX_BITS'(tail_r + SQ_IDX_BITS'(a))].rob_idx    <= alloc_rob_idx[a];
                     queue[SQ_IDX_BITS'(tail_r + SQ_IDX_BITS'(a))].addr_valid <= 1'b0;
                     queue[SQ_IDX_BITS'(tail_r + SQ_IDX_BITS'(a))].data_valid <= 1'b0;
                     queue[SQ_IDX_BITS'(tail_r + SQ_IDX_BITS'(a))].committed  <= 1'b0;

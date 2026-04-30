@@ -21,99 +21,75 @@ module multiplier
 );
 
     // =========================================================================
-    // Stage 1 registers: capture and sign-extend operands
-    // =========================================================================
-    logic        s1_valid;
-    logic [63:0] s1_a, s1_b;
-    mul_op_e     s1_op;
-    logic        s1_is_w;
-
-    always_ff @(posedge clk) begin
-        if (!rst_n || flush) begin
-            s1_valid <= 1'b0;
-        end else begin
-            s1_valid <= valid_in;
-            if (valid_in) begin
-                // For W variants, sign-extend the lower 32 bits
-                s1_a    <= is_w_op ? {{32{operand_a[31]}}, operand_a[31:0]} : operand_a;
-                s1_b    <= is_w_op ? {{32{operand_b[31]}}, operand_b[31:0]} : operand_b;
-                s1_op   <= op;
-                s1_is_w <= is_w_op;
-            end
-        end
-    end
-
-    // =========================================================================
-    // Stage 2: compute 128-bit product
+    // Combinational product + result computation (no input register stage).
+    // Downstream s1_valid/s2_valid shadow signals are retained so tb probes
+    // and the mul_rob_idx_s1/s2 pipeline in core_top continue to work.
+    // Latency from valid_in to valid_out is now 1 cycle.
     // =========================================================================
     // Sign extension depends on operation:
     //   MUL/MULH:   signed x signed
     //   MULHU:      unsigned x unsigned
     //   MULHSU:     signed x unsigned
+    wire [63:0] ext_a = is_w_op ? {{32{operand_a[31]}}, operand_a[31:0]} : operand_a;
+    wire [63:0] ext_b = is_w_op ? {{32{operand_b[31]}}, operand_b[31:0]} : operand_b;
+
     logic signed [127:0] product_ss;
     logic signed [127:0] product_su;
     logic        [127:0] product_uu;
 
-    assign product_ss = $signed(s1_a) * $signed(s1_b);
-    assign product_su = $signed(s1_a) * $signed({1'b0, s1_b});
-    assign product_uu = s1_a * s1_b;
+    assign product_ss = $signed(ext_a) * $signed(ext_b);
+    assign product_su = $signed(ext_a) * $signed({1'b0, ext_b});
+    assign product_uu = ext_a * ext_b;
 
-    logic        s2_valid;
-    logic [127:0] s2_product;
-    mul_op_e     s2_op;
-    logic        s2_is_w;
-
-    always_ff @(posedge clk) begin
-        if (!rst_n || flush) begin
-            s2_valid <= 1'b0;
-        end else begin
-            s2_valid <= s1_valid;
-            if (s1_valid) begin
-                case (s1_op)
-                    MUL_MUL:    s2_product <= product_ss[127:0];
-                    MUL_MULH:   s2_product <= product_ss[127:0];
-                    MUL_MULHSU: s2_product <= product_su[127:0];
-                    MUL_MULHU:  s2_product <= product_uu;
-                    default:    s2_product <= product_ss[127:0];
-                endcase
-                s2_op   <= s1_op;
-                s2_is_w <= s1_is_w;
-            end
-        end
-    end
-
-    // =========================================================================
-    // Stage 3: select upper/lower half, handle W-suffix
-    // =========================================================================
-    logic [63:0] result_sel;
+    logic [127:0] product_sel;
     always_comb begin
-        case (s2_op)
-            MUL_MUL: begin
-                if (s2_is_w)
-                    result_sel = {{32{s2_product[31]}}, s2_product[31:0]};
-                else
-                    result_sel = s2_product[63:0];
-            end
-            MUL_MULH:   result_sel = s2_product[127:64];
-            MUL_MULHSU: result_sel = s2_product[127:64];
-            MUL_MULHU:  result_sel = s2_product[127:64];
-            default:    result_sel = s2_product[63:0];
+        case (op)
+            MUL_MUL:    product_sel = product_ss[127:0];
+            MUL_MULH:   product_sel = product_ss[127:0];
+            MUL_MULHSU: product_sel = product_su[127:0];
+            MUL_MULHU:  product_sel = product_uu;
+            default:    product_sel = product_ss[127:0];
         endcase
     end
 
-    logic        s3_valid;
-    logic [63:0] s3_result;
+    logic [63:0] result_sel;
+    always_comb begin
+        case (op)
+            MUL_MUL: begin
+                if (is_w_op)
+                    result_sel = {{32{product_sel[31]}}, product_sel[31:0]};
+                else
+                    result_sel = product_sel[63:0];
+            end
+            MUL_MULH:   result_sel = product_sel[127:64];
+            MUL_MULHSU: result_sel = product_sel[127:64];
+            MUL_MULHU:  result_sel = product_sel[127:64];
+            default:    result_sel = product_sel[63:0];
+        endcase
+    end
+
+    // Single register stage: latch result and valid.
+    logic        s1_valid;
+    logic [63:0] s1_result;
+    logic        s2_valid;
+    logic [63:0] s2_result;
 
     always_ff @(posedge clk) begin
         if (!rst_n || flush) begin
-            s3_valid <= 1'b0;
+            s1_valid <= 1'b0;
+            s2_valid <= 1'b0;
         end else begin
-            s3_valid  <= s2_valid;
-            s3_result <= result_sel;
+            s1_valid <= valid_in;
+            if (valid_in) begin
+                s1_result <= result_sel;
+            end
+            // s2 is retained for tb/core_top compatibility but is pass-through.
+            s2_valid  <= s1_valid;
+            s2_result <= s1_result;
         end
     end
 
-    assign valid_out = s3_valid;
-    assign result    = s3_result;
+    assign valid_out = s1_valid;
+    assign result    = s1_result;
 
 endmodule

@@ -56,6 +56,8 @@ module lsu
     // LQ/SQ allocation (from rename)
     input logic [2:0] lq_alloc_count,
     input logic [2:0] sq_alloc_count,
+    input logic [ROB_IDX_BITS-1:0] lq_alloc_rob_idx [0:PIPE_WIDTH-1],
+    input logic [ROB_IDX_BITS-1:0] sq_alloc_rob_idx [0:PIPE_WIDTH-1],
     output logic [LQ_IDX_BITS-1:0] lq_alloc_idx [0:PIPE_WIDTH-1],
     output logic [SQ_IDX_BITS-1:0] sq_alloc_idx [0:PIPE_WIDTH-1],
     output logic lq_full,
@@ -108,7 +110,14 @@ module lsu
     iq_entry_t       p1_eff_data;
     logic            p1_eff_nocache;
     logic            p0_fwd_hit;
+    logic            fwd_hold_valid_r;
     logic            p1_fwd_hold_valid_r;
+    logic            p0_dcache_hit_valid;
+    logic            p1_normal_wb_valid;
+    logic            p0_fwd_spill_to_p1;
+    logic            p1_fast_fwd_fire;
+    logic            fwd_hold_blocked;
+    logic            lmb_wb_port_free;
 
     // =========================================================================
     // Load AGU: effective address computation (x2)
@@ -199,43 +208,25 @@ module lsu
     assign std_wb_rob_idx = std_issue_data.rob_idx;
 
     // =========================================================================
-    // Speculative wakeup: load issue -> wake dependents
+    // Speculative wakeup: actual D-cache request issue -> wake dependents
     //
-    // Timing: pulse spec_wakeup the cycle BEFORE the load result is on the
-    // (combinational) CDB.  For a 2-cycle D-cache hit:
-    //   - T+0: load AGU (issue)
-    //   - T+1: load at _r stage  -> spec_wakeup pulses
-    //   - T+2: load result on combinational CDB (load_wb)
-    //   - T+2: dependent IQ entry observes spec_wakeup_r match -> latched
-    //          src1_ready -> consumer issues at T+3 with bypass from
-    //          cdb_r[4] (which captures the T+2 broadcast).
+    // With one-cycle D-cache hits:
+    //   - T+0: load request enters D-cache, spec_wakeup pulses.
+    //   - T+1: IQ has latched the wakeup.  If the load hit, its data is on
+    //          the combinational load CDB/bypass and the dependent can issue.
+    //   - T+1: if the load missed, spec_cancel clears the speculative ready
+    //          before eligibility, so the dependent does not issue.
     //
-    // The spec_wakeup is treated by the IQ as a registered hint that lets a
-    // consumer issue 1 cycle EARLIER than it would by waiting for the
-    // (already-registered) cdb_r broadcast.  Without the 1-cycle delay
-    // here, the consumer would issue the same cycle as the AGU and read
-    // stale operand data from PRF/bypass.
-    //
-    // We pulse spec_wakeup based on the *_r stage (1 cycle after AGU),
-    // then the IQ further latches it via src1_ready, giving a total of
-    // 2 cycles between load AGU and consumer issue — exactly matching the
-    // dcache-hit producer→bypass latency.
+    // The assignments live with D-cache request generation below, after SQ
+    // forwarding, retry, and conflict logic decide which requests really fire.
     // =========================================================================
-    generate
-        for (li = 0; li < 2; li++) begin : gen_spec_wakeup
-            assign spec_wakeup_valid[li] = load_issue_valid_r[li]
-                                         & ~load_nocache_r[li]
-                                         & ~flush_in.valid;
-            assign spec_wakeup_tag[li]   = load_issue_data_r[li].pdst;
-        end
-    endgenerate
 
     // =========================================================================
     // Store-to-load forwarding wires (SQ and CSB)
     // =========================================================================
     // Port 0 forwards from same-cycle STA/STD, SQ, and CSB.
-    // Port 1 now probes a second SQ forwarding port as well; CSB remains
-    // port-0 only.
+    // Port 1 probes SQ and CSB as well. A committed store can leave the SQ
+    // before it reaches D-cache; younger loads on either port must still see it.
     logic        sq_fwd_hit;
     logic        sq_fwd_partial;
     logic        sq_fwd_wait;
@@ -251,6 +242,9 @@ module lsu
 
     logic        csb_fwd_hit;
     logic [63:0] csb_fwd_data;
+    logic        csb_fwd_hit_p1;
+    logic [63:0] csb_fwd_data_p1;
+    logic        p1_any_fwd_hit;
 
     // =========================================================================
     // Same-cycle STA/STD → load forwarding bypass
@@ -397,6 +391,7 @@ module lsu
         .rst_n           (rst_n),
         // Allocate
         .alloc_count     (sq_alloc_count),
+        .alloc_rob_idx   (sq_alloc_rob_idx),
         .alloc_idx       (sq_alloc_idx),
         .full            (sq_full),
         .rob_head        (rob_head),
@@ -410,6 +405,7 @@ module lsu
         // STD fill (same rationale: let older stores through; SQ filters)
         .std_valid       (std_issue_valid),
         .std_idx         (std_issue_data.sq_idx),
+        .std_rob_idx     (std_issue_data.rob_idx),
         .std_data        (std_rs2),
         .std_byte_mask   (std_byte_mask),
         // Store-to-load forwarding (from load port 0).
@@ -441,6 +437,7 @@ module lsu
         .drain_ready     (sq_drain_ready),
         // Flush
         .flush_valid     (flush_in.valid),
+        .flush_rob_tail  (flush_in.rob_idx),
         .flush_full      (flush_in.full_flush)
     );
 
@@ -460,24 +457,48 @@ module lsu
     logic [63:0] lq_exec_addr;
     logic [1:0]  lq_exec_size;
     logic        lq_exec_is_unsigned;
+    logic        lq_exec1_valid;
+    logic [LQ_IDX_BITS-1:0] lq_exec1_idx;
+    logic [ROB_IDX_BITS-1:0] lq_exec1_rob_idx;
+    logic [63:0] lq_exec1_addr;
+    logic [1:0]  lq_exec1_size;
+    logic        lq_exec1_is_unsigned;
 
-    // Port 1 hold register for deferred LQ exec fill
+    // Port 1 skid FIFO for deferred LQ exec fill.  The LQ has one address
+    // write port; port 1 must be queued whenever port 0 or an older queued
+    // port-1 entry uses that port.
+    localparam int LQ_P1_HOLD_DEPTH = 4;
+    localparam int LQ_P1_HOLD_PTR_BITS = $clog2(LQ_P1_HOLD_DEPTH);
+
     logic        lq_p1_hold_valid_r;
-    logic [LQ_IDX_BITS-1:0] lq_p1_hold_idx_r;
-    logic [ROB_IDX_BITS-1:0] lq_p1_hold_rob_idx_r;
-    logic [63:0] lq_p1_hold_addr_r;
-    logic [1:0]  lq_p1_hold_size_r;
-    logic        lq_p1_hold_unsigned_r;
+    logic        lq_p1_hold_full;
+    logic        lq_p1_hold_pop;
+    logic        lq_p1_hold_push;
+    logic        lq_p1_issue_block;
+    logic [LQ_P1_HOLD_PTR_BITS-1:0] lq_p1_hold_head_r;
+    logic [LQ_P1_HOLD_PTR_BITS-1:0] lq_p1_hold_tail_r;
+    logic [LQ_P1_HOLD_PTR_BITS:0]   lq_p1_hold_count_r;
+    logic [LQ_IDX_BITS-1:0]         lq_p1_hold_idx_r      [0:LQ_P1_HOLD_DEPTH-1];
+    logic [ROB_IDX_BITS-1:0]        lq_p1_hold_rob_idx_r  [0:LQ_P1_HOLD_DEPTH-1];
+    logic [63:0]                    lq_p1_hold_addr_r     [0:LQ_P1_HOLD_DEPTH-1];
+    logic [1:0]                     lq_p1_hold_size_r     [0:LQ_P1_HOLD_DEPTH-1];
+    logic                           lq_p1_hold_unsigned_r [0:LQ_P1_HOLD_DEPTH-1];
 
-    // Port 0 has priority; port 1 deferred to hold register.
-    // Port 1 uses the EFFECTIVE issue (which includes the dcache-conflict
-    // retry register) so the LQ exec_idx tracks the deferred load.
+    // The LQ has two address-fill ports.  This keeps a dual-issued port-1
+    // load visible to later store-address ordering checks in the same way as
+    // port 0.  The old skid FIFO remains reset/idle as a diagnostic guard; it
+    // is no longer part of the functional LQ address-fill path.
     logic p0_exec_fire;
     logic p1_exec_fire;
     assign p0_exec_fire = load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid;
     assign p1_exec_fire = p1_eff_valid       & ~p1_eff_misalign        & ~flush_in.valid;
+    assign lq_p1_hold_valid_r = (lq_p1_hold_count_r != '0);
+    assign lq_p1_hold_full    = (lq_p1_hold_count_r == LQ_P1_HOLD_DEPTH);
+    assign lq_p1_issue_block  = 1'b0;
+    assign lq_p1_hold_pop     = 1'b0;
+    assign lq_p1_hold_push    = 1'b0;
 
-    // Mux: port 0 new > port 1 hold > port 1 effective (new or retry)
+    // Port 0 address fill.
     always_comb begin
         if (p0_exec_fire) begin
             lq_exec_valid       = 1'b1;
@@ -486,20 +507,6 @@ module lsu
             lq_exec_addr        = load_eff_addr[0];
             lq_exec_size        = load_issue_data[0].mem_size;
             lq_exec_is_unsigned = load_issue_data[0].is_unsigned;
-        end else if (lq_p1_hold_valid_r) begin
-            lq_exec_valid       = 1'b1;
-            lq_exec_idx         = lq_p1_hold_idx_r;
-            lq_exec_rob_idx     = lq_p1_hold_rob_idx_r;
-            lq_exec_addr        = lq_p1_hold_addr_r;
-            lq_exec_size        = lq_p1_hold_size_r;
-            lq_exec_is_unsigned = lq_p1_hold_unsigned_r;
-        end else if (p1_exec_fire) begin
-            lq_exec_valid       = 1'b1;
-            lq_exec_idx         = p1_eff_data.lq_idx;
-            lq_exec_rob_idx     = p1_eff_data.rob_idx;
-            lq_exec_addr        = p1_eff_addr;
-            lq_exec_size        = p1_eff_data.mem_size;
-            lq_exec_is_unsigned = p1_eff_data.is_unsigned;
         end else begin
             lq_exec_valid       = 1'b0;
             lq_exec_idx         = '0;
@@ -510,42 +517,65 @@ module lsu
         end
     end
 
-    // Hold register: capture port 1 (effective) when port 0 also fires
-    // same cycle.  Uses p1_eff which already accounts for the dcache
-    // conflict retry path.
+    // Port 1 address fill.  Uses the EFFECTIVE issue source, so retries and
+    // store-forwarded port-1 loads record the same metadata as the D-cache
+    // request/writeback pipeline.
+    assign lq_exec1_valid       = p1_exec_fire;
+    assign lq_exec1_idx         = p1_eff_data.lq_idx;
+    assign lq_exec1_rob_idx     = p1_eff_data.rob_idx;
+    assign lq_exec1_addr        = p1_eff_addr;
+    assign lq_exec1_size        = p1_eff_data.mem_size;
+    assign lq_exec1_is_unsigned = p1_eff_data.is_unsigned;
+
+    // Capture deferred port-1 LQ exec metadata.  Uses p1_eff, which already
+    // accounts for d-cache conflict retries and store-forwarding blocks.
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            lq_p1_hold_valid_r    <= 1'b0;
+            lq_p1_hold_head_r  <= '0;
+            lq_p1_hold_tail_r  <= '0;
+            lq_p1_hold_count_r <= '0;
         end else if (flush_in.valid) begin
-            lq_p1_hold_valid_r    <= 1'b0;
+            lq_p1_hold_head_r  <= '0;
+            lq_p1_hold_tail_r  <= '0;
+            lq_p1_hold_count_r <= '0;
         end else begin
-            if (p0_exec_fire && p1_exec_fire) begin
-                // Port 1 deferred
-                lq_p1_hold_valid_r    <= 1'b1;
-                lq_p1_hold_idx_r      <= p1_eff_data.lq_idx;
-                lq_p1_hold_rob_idx_r  <= p1_eff_data.rob_idx;
-                lq_p1_hold_addr_r     <= p1_eff_addr;
-                lq_p1_hold_size_r     <= p1_eff_data.mem_size;
-                lq_p1_hold_unsigned_r <= p1_eff_data.is_unsigned;
-            end else if (lq_p1_hold_valid_r && !p0_exec_fire) begin
-                // Held entry consumed this cycle
-                lq_p1_hold_valid_r <= 1'b0;
+            if (lq_p1_hold_push) begin
+                lq_p1_hold_idx_r[lq_p1_hold_tail_r]      <= p1_eff_data.lq_idx;
+                lq_p1_hold_rob_idx_r[lq_p1_hold_tail_r]  <= p1_eff_data.rob_idx;
+                lq_p1_hold_addr_r[lq_p1_hold_tail_r]     <= p1_eff_addr;
+                lq_p1_hold_size_r[lq_p1_hold_tail_r]     <= p1_eff_data.mem_size;
+                lq_p1_hold_unsigned_r[lq_p1_hold_tail_r] <= p1_eff_data.is_unsigned;
+                lq_p1_hold_tail_r <= lq_p1_hold_tail_r + 1'b1;
             end
+
+            if (lq_p1_hold_pop) begin
+                lq_p1_hold_head_r <= lq_p1_hold_head_r + 1'b1;
+            end
+
+            case ({lq_p1_hold_push, lq_p1_hold_pop})
+                2'b10: lq_p1_hold_count_r <= lq_p1_hold_count_r + 1'b1;
+                2'b01: lq_p1_hold_count_r <= lq_p1_hold_count_r - 1'b1;
+                default: ;
+            endcase
+`ifdef SIMULATION
+            if (lq_p1_hold_push && lq_p1_hold_full && !lq_p1_hold_pop) begin
+                $error("LSU LQ port1 skid overflow: p1 load accepted with no LQ exec slot");
+            end
+`endif
         end
     end
 
     // =========================================================================
     // Load pipeline metadata: shift-register chain
     // =========================================================================
-    // The D-cache has a 2-cycle load latency (stage-0 RAM read + stage-1 tag
-    // compare).  We must track the issued load metadata for 2 cycles so that
-    // the writeback on cache hit uses the correct rob_idx / pdst / lq_idx /
-    // byte_offset — not the stale values from the CURRENT (post-issue) cycle.
+    // The D-cache tag/data RAMs are synchronous-read and the hit response is
+    // driven from S1, one cycle after issue.  Track the issued load metadata so
+    // cache-hit writeback uses the matching rob_idx / pdst / lq_idx /
+    // byte_offset, not the current post-issue values.
     //
     // Stages:
-    //   *_r  = 1 cycle after issue
-    //   *_rr = 2 cycles after issue (matches the cycle dcache_load_resp_valid
-    //          fires for a hit).
+    //   *_r  = 1 cycle after issue (matches dcache_load_resp_valid for a hit)
+    //   *_rr = legacy/debug stage; miss/hit functional paths use *_r.
     // =========================================================================
     iq_entry_t load_issue_data_r  [0:1];
     iq_entry_t load_issue_data_rr [0:1];
@@ -560,16 +590,27 @@ module lsu
             load_issue_valid_rr <= '0;
             load_nocache_r      <= '0;
             load_nocache_rr     <= '0;
+            for (int i = 0; i < 2; i++) begin
+                load_issue_data_r[i]  <= '0;
+                load_issue_data_rr[i] <= '0;
+                load_eff_addr_r[i]    <= '0;
+                load_eff_addr_rr[i]   <= '0;
+            end
         end else if (flush_in.valid) begin
-            // Clear _rr (2-cycle stale) to prevent wrong-path writebacks
-            // from hitting reallocated ROB entries after a full flush.
-            // Leave _r: a load that issued 1 cycle ago will age into _rr
-            // next cycle; if the flush is full, the next cycle's _rr eval
-            // will see flush_in cleared and process normally.
+            // Kill all in-flight load metadata on a redirect. Keeping the
+            // one-cycle stage live lets a wrong-path miss allocate an LMB
+            // entry after the flush, then write stale data into a recycled
+            // ROB/pdst when the fill returns.
+            load_issue_valid_r  <= '0;
             load_issue_valid_rr <= '0;
-            load_nocache_rr     <= '0;
             load_nocache_r      <= '0;
             load_nocache_rr     <= '0;
+            for (int i = 0; i < 2; i++) begin
+                load_issue_data_r[i]  <= '0;
+                load_issue_data_rr[i] <= '0;
+                load_eff_addr_r[i]    <= '0;
+                load_eff_addr_rr[i]   <= '0;
+            end
         end else begin
             // Port 0 propagates the original issue.  Port 1 propagates the
             // EFFECTIVE issue (which includes the retry register), so the
@@ -586,7 +627,7 @@ module lsu
                                       sq_fwd_partial | flush_in.valid);
             load_nocache_r[1]     <= p1_eff_valid & p1_eff_nocache;
 
-            // Stage 2 (2 cycles after issue): matches cache response cycle.
+            // Stage 2 retained for debug-only traces and legacy assertions.
             load_issue_valid_rr   <= load_issue_valid_r;
             load_issue_data_rr[0] <= load_issue_data_r[0];
             load_issue_data_rr[1] <= load_issue_data_r[1];
@@ -634,6 +675,7 @@ module lsu
         .rst_n             (rst_n),
         // Allocate
         .alloc_count       (lq_alloc_count),
+        .alloc_rob_idx     (lq_alloc_rob_idx),
         .alloc_idx         (lq_alloc_idx),
         .full              (lq_full),
         .rob_head          (rob_head),
@@ -644,6 +686,12 @@ module lsu
         .exec_addr         (lq_exec_addr),
         .exec_size         (lq_exec_size),
         .exec_is_unsigned  (lq_exec_is_unsigned),
+        .exec1_valid       (lq_exec1_valid),
+        .exec1_idx         (lq_exec1_idx),
+        .exec1_rob_idx     (lq_exec1_rob_idx),
+        .exec1_addr        (lq_exec1_addr),
+        .exec1_size        (lq_exec1_size),
+        .exec1_is_unsigned (lq_exec1_is_unsigned),
         // Load result
         .result_valid      (lq_result_valid),
         .result_idx        (lq_result_idx),
@@ -661,6 +709,7 @@ module lsu
         .commit_count      (load_commit_count),
         // Flush
         .flush_valid       (flush_in.valid),
+        .flush_rob_tail    (flush_in.rob_idx),
         .flush_full        (flush_in.full_flush)
     );
 
@@ -683,13 +732,18 @@ module lsu
         .deq_byte_mask  (dcache_store_req_byte_mask),
         .deq_size       (),
         .deq_ack        (dcache_store_ack),
-        // Store-to-load forwarding (from load port 0)
+        // Store-to-load forwarding
         .fwd_valid      (load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
         .fwd_addr       ((load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
                           ? load_eff_addr[0] : 64'd0),
         .fwd_size       (load_issue_data[0].mem_size),
         .fwd_hit        (csb_fwd_hit),
         .fwd_data       (csb_fwd_data),
+        .fwd1_valid     (p1_wait_req_valid),
+        .fwd1_addr      (p1_wait_req_valid ? p1_wait_req_addr : 64'd0),
+        .fwd1_size      (p1_wait_req_size),
+        .fwd1_hit       (csb_fwd_hit_p1),
+        .fwd1_data      (csb_fwd_data_p1),
         // Full
         .full           ()
     );
@@ -699,8 +753,7 @@ module lsu
     // =========================================================================
     // D-cache load request generation
     // =========================================================================
-    // Port 0: send to D-cache only if no SQ/CSB forwarding hit and no misalign
-    // Port 1: always send to D-cache (no forwarding check on port 1)
+    // Send to D-cache only if no SQ/CSB forwarding hit and no misalign.
     //
     // p0_fwd_hit covers three sources: the same-cycle STA/STD bypass, the
     // SQ CAM (older stores in the SQ), and the CSB CAM (committed but not
@@ -708,6 +761,7 @@ module lsu
     // load to the D-cache (avoids polluting the cache and wasting an MSHR).
     // p0_fwd_hit declared earlier (forward decl)
     assign p0_fwd_hit = same_cycle_fwd_hit | sq_fwd_hit | csb_fwd_hit;
+    assign p1_any_fwd_hit = sq_fwd_hit_p1 | csb_fwd_hit_p1;
 
     // -------------------------------------------------------------------------
     // Port-1 retry hold register for d-cache same-set conflicts.
@@ -728,20 +782,225 @@ module lsu
     logic [63:0]     p1_retry_addr_r;
     logic            p1_retry_misalign_r;
     logic            p1_retry_load_nocache_r;
-    logic            p1_sq_fwd_blocked;
+    logic            p1_fwd_blocked;
+`ifdef SIMULATION
+    logic            sim_p1_fast_fwd_enable;
+    initial begin
+        sim_p1_fast_fwd_enable = $test$plusargs("LSU_P1_FAST_FWD");
+    end
+`else
+    localparam logic sim_p1_fast_fwd_enable = 1'b0;
+`endif
+
+    assign p0_dcache_hit_valid = !flush_in.valid
+                               && dcache_load_resp_valid[0]
+                               && load_issue_valid_r[0]
+                               && !load_nocache_r[0];
+    assign p1_normal_wb_valid  = (load_issue_valid[1] && load_addr_misaligned[1] && !flush_in.valid)
+                               || (!flush_in.valid
+                                   && dcache_load_resp_valid[1]
+                                   && load_issue_valid_r[1]
+                                   && !load_nocache_r[1]);
+    assign p0_fwd_spill_to_p1  = fwd_hold_valid_r && p0_dcache_hit_valid && !p1_normal_wb_valid;
+    assign fwd_hold_blocked    = fwd_hold_valid_r && p0_dcache_hit_valid && p1_normal_wb_valid;
+    assign lmb_wb_port_free    = !p0_dcache_hit_valid && !fwd_hold_valid_r;
+    assign p1_fast_fwd_fire    =
+        sim_p1_fast_fwd_enable &&
+        p1_eff_valid &&
+        !p1_eff_misalign &&
+        p1_any_fwd_hit &&
+        !sq_wait_p1 &&
+        !sq_fwd_partial_p1 &&
+        !sta_issue_valid &&
+        !p1_normal_wb_valid &&
+        !p0_fwd_spill_to_p1 &&
+        !p1_fwd_hold_valid_r;
+
     assign load_issue_suppress[0] =
         load_issue_candidate_valid[0] &&
         ~load_addr_misaligned[0] &&
         ~flush_in.valid &&
-        (sq_fwd_wait || same_cycle_sta_wait0);
+        (sq_fwd_wait || same_cycle_sta_wait0 || fwd_hold_blocked);
 
-    // Combinational: same-set conflict between port 0 and port 1
+`ifndef SYNTHESIS
+    bit sim_allow_same_line_dual_load;
+    initial sim_allow_same_line_dual_load =
+        $test$plusargs("ALLOW_SAME_LINE_DUAL_LOAD");
+`endif
+
+    // Combinational: same-set conflict between port 0 and port 1.  The
+    // same-line relaxation is kept behind a simulation-only switch because
+    // CoreMark still shows a wrong-path/performance collapse when it is enabled.
     logic dcache_conflict;
     assign dcache_conflict = load_issue_valid[0] && load_issue_valid[1]
                             && ~load_addr_misaligned[0]
                             && ~load_addr_misaligned[1]
                             && (load_eff_addr[0][13:6] ==
-                                load_eff_addr[1][13:6]);
+                                load_eff_addr[1][13:6])
+`ifndef SYNTHESIS
+                            && (!sim_allow_same_line_dual_load ||
+                                (load_eff_addr[0][63:LINE_BITS] !=
+                                 load_eff_addr[1][63:LINE_BITS]))
+`endif
+`ifdef SYNTHESIS
+                            && 1'b1
+`endif
+                            ;
+
+`ifndef SYNTHESIS
+    localparam int SIM_P1_CONFLICT_TOPN = 16;
+
+    logic sim_p1_conf_en;
+    integer sim_p1_conf_total_cnt;
+    integer sim_p1_conf_capture_cnt;
+    integer sim_p1_conf_same_line_cnt;
+    integer sim_p1_conf_diff_line_cnt;
+    integer sim_p1_conf_sq_hit_cnt;
+    integer sim_p1_conf_sq_wait_cnt;
+    integer sim_p1_conf_sq_partial_cnt;
+    integer sim_p1_conf_lq_block_cnt;
+    integer sim_p1_lq_push_cnt;
+    integer sim_p1_lq_pop_cnt;
+    integer sim_p1_lq_full_cnt;
+    integer sim_p1_lq_max_occ;
+    logic [63:0] sim_p1_conf_p0_pc   [0:SIM_P1_CONFLICT_TOPN-1];
+    logic [63:0] sim_p1_conf_p1_pc   [0:SIM_P1_CONFLICT_TOPN-1];
+    integer      sim_p1_conf_count   [0:SIM_P1_CONFLICT_TOPN-1];
+    integer      sim_p1_conf_sameln  [0:SIM_P1_CONFLICT_TOPN-1];
+    integer      sim_p1_conf_diffln  [0:SIM_P1_CONFLICT_TOPN-1];
+
+    initial sim_p1_conf_en =
+        ($test$plusargs("PERF_PROFILE") || $test$plusargs("TRACE_P1_CONFLICT"))
+            ? 1'b1 : 1'b0;
+
+    function automatic logic sim_same_cache_line(
+        input logic [63:0] a,
+        input logic [63:0] b
+    );
+        sim_same_cache_line = (a[63:LINE_BITS] == b[63:LINE_BITS]);
+    endfunction
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sim_p1_conf_total_cnt     <= 0;
+            sim_p1_conf_capture_cnt   <= 0;
+            sim_p1_conf_same_line_cnt <= 0;
+            sim_p1_conf_diff_line_cnt <= 0;
+            sim_p1_conf_sq_hit_cnt    <= 0;
+            sim_p1_conf_sq_wait_cnt   <= 0;
+            sim_p1_conf_sq_partial_cnt <= 0;
+            sim_p1_conf_lq_block_cnt  <= 0;
+            sim_p1_lq_push_cnt        <= 0;
+            sim_p1_lq_pop_cnt         <= 0;
+            sim_p1_lq_full_cnt        <= 0;
+            sim_p1_lq_max_occ         <= 0;
+            for (int i = 0; i < SIM_P1_CONFLICT_TOPN; i++) begin
+                sim_p1_conf_p0_pc[i]  <= '0;
+                sim_p1_conf_p1_pc[i]  <= '0;
+                sim_p1_conf_count[i]  <= 0;
+                sim_p1_conf_sameln[i] <= 0;
+                sim_p1_conf_diffln[i] <= 0;
+            end
+        end else if (sim_p1_conf_en) begin
+            automatic logic same_line_now;
+            same_line_now = sim_same_cache_line(load_eff_addr[0], load_eff_addr[1]);
+
+            if (int'(lq_p1_hold_count_r) > sim_p1_lq_max_occ)
+                sim_p1_lq_max_occ <= int'(lq_p1_hold_count_r);
+            if (lq_p1_hold_push)
+                sim_p1_lq_push_cnt <= sim_p1_lq_push_cnt + 1;
+            if (lq_p1_hold_pop)
+                sim_p1_lq_pop_cnt <= sim_p1_lq_pop_cnt + 1;
+            if (lq_p1_hold_full)
+                sim_p1_lq_full_cnt <= sim_p1_lq_full_cnt + 1;
+
+            if (dcache_conflict) begin
+                automatic int hit_idx;
+                automatic int empty_idx;
+                automatic logic do_capture;
+
+                hit_idx = -1;
+                empty_idx = -1;
+                do_capture = !sq_wait_p1 && !sq_fwd_partial_p1 && !sq_fwd_hit_p1;
+
+                sim_p1_conf_total_cnt <= sim_p1_conf_total_cnt + 1;
+                if (do_capture)
+                    sim_p1_conf_capture_cnt <= sim_p1_conf_capture_cnt + 1;
+                if (same_line_now)
+                    sim_p1_conf_same_line_cnt <= sim_p1_conf_same_line_cnt + 1;
+                else
+                    sim_p1_conf_diff_line_cnt <= sim_p1_conf_diff_line_cnt + 1;
+                if (sq_fwd_hit_p1)
+                    sim_p1_conf_sq_hit_cnt <= sim_p1_conf_sq_hit_cnt + 1;
+                if (sq_wait_p1)
+                    sim_p1_conf_sq_wait_cnt <= sim_p1_conf_sq_wait_cnt + 1;
+                if (sq_fwd_partial_p1)
+                    sim_p1_conf_sq_partial_cnt <= sim_p1_conf_sq_partial_cnt + 1;
+                if (lq_p1_issue_block)
+                    sim_p1_conf_lq_block_cnt <= sim_p1_conf_lq_block_cnt + 1;
+
+                for (int i = 0; i < SIM_P1_CONFLICT_TOPN; i++) begin
+                    if ((hit_idx < 0) &&
+                        (sim_p1_conf_count[i] != 0) &&
+                        (sim_p1_conf_p0_pc[i] == load_issue_data[0].pc) &&
+                        (sim_p1_conf_p1_pc[i] == load_issue_data[1].pc)) begin
+                        hit_idx = i;
+                    end
+                    if ((empty_idx < 0) && (sim_p1_conf_count[i] == 0))
+                        empty_idx = i;
+                end
+
+                if (hit_idx >= 0) begin
+                    sim_p1_conf_count[hit_idx] <= sim_p1_conf_count[hit_idx] + 1;
+                    if (same_line_now)
+                        sim_p1_conf_sameln[hit_idx] <= sim_p1_conf_sameln[hit_idx] + 1;
+                    else
+                        sim_p1_conf_diffln[hit_idx] <= sim_p1_conf_diffln[hit_idx] + 1;
+                end else if (empty_idx >= 0) begin
+                    sim_p1_conf_p0_pc[empty_idx]  <= load_issue_data[0].pc;
+                    sim_p1_conf_p1_pc[empty_idx]  <= load_issue_data[1].pc;
+                    sim_p1_conf_count[empty_idx]  <= 1;
+                    sim_p1_conf_sameln[empty_idx] <= same_line_now ? 1 : 0;
+                    sim_p1_conf_diffln[empty_idx] <= same_line_now ? 0 : 1;
+                end
+
+                if ($test$plusargs("TRACE_P1_CONFLICT")) begin
+                    $display("[LSU_P1_CONFLICT] cyc=%0t p0_pc=%016h p1_pc=%016h p0_addr=%016h p1_addr=%016h same_line=%b capture=%b sq_hit=%b sq_wait=%b sq_partial=%b lq_block=%b retry_live=%b",
+                        $time, load_issue_data[0].pc, load_issue_data[1].pc,
+                        load_eff_addr[0], load_eff_addr[1], same_line_now,
+                        do_capture, sq_fwd_hit_p1, sq_wait_p1,
+                        sq_fwd_partial_p1, lq_p1_issue_block,
+                        p1_retry_valid_r);
+                end
+            end
+        end
+    end
+
+    final begin
+        if (sim_p1_conf_en) begin
+            $display("");
+            $display("=== LSU P1 CONFLICT SUMMARY ===");
+            $display("total/capture same_line/diff_line : %0d / %0d   %0d / %0d",
+                     sim_p1_conf_total_cnt, sim_p1_conf_capture_cnt,
+                     sim_p1_conf_same_line_cnt, sim_p1_conf_diff_line_cnt);
+            $display("blocked by sq_hit/wait/partial/lq : %0d / %0d / %0d / %0d",
+                     sim_p1_conf_sq_hit_cnt, sim_p1_conf_sq_wait_cnt,
+                     sim_p1_conf_sq_partial_cnt, sim_p1_conf_lq_block_cnt);
+            $display("LQ p1 skid push/pop/full/max_occ  : %0d / %0d / %0d / %0d",
+                     sim_p1_lq_push_cnt, sim_p1_lq_pop_cnt,
+                     sim_p1_lq_full_cnt, sim_p1_lq_max_occ);
+            $display("p0_pc              p1_pc              count same_line diff_line");
+            for (int i = 0; i < SIM_P1_CONFLICT_TOPN; i++) begin
+                if (sim_p1_conf_count[i] != 0) begin
+                    $display("%016h %016h %0d %0d %0d",
+                             sim_p1_conf_p0_pc[i], sim_p1_conf_p1_pc[i],
+                             sim_p1_conf_count[i], sim_p1_conf_sameln[i],
+                             sim_p1_conf_diffln[i]);
+                end
+            end
+        end
+    end
+`endif
 
     // Effective port 1 sources: prefer the retry register if valid;
     // otherwise the new issue (suppressed on conflict).
@@ -763,12 +1022,12 @@ module lsu
         end
     end
 
-    assign p1_sq_fwd_blocked =
+    assign p1_fwd_blocked =
         !p1_retry_valid_r &&
         load_issue_candidate_valid[1] &&
         !load_addr_misaligned[1] &&
         !flush_in.valid &&
-        sq_fwd_hit_p1 &&
+        p1_any_fwd_hit &&
         !sq_wait_p1 &&
         p1_fwd_hold_valid_r;
 
@@ -776,27 +1035,29 @@ module lsu
         load_issue_candidate_valid[1] &&
         (p1_retry_valid_r ||
          (!load_addr_misaligned[1] && !flush_in.valid && !p1_retry_valid_r &&
-          (sq_wait_p1 || sq_fwd_partial_p1 || p1_sq_fwd_blocked ||
-           same_cycle_sta_wait1)));
+          (sq_wait_p1 || sq_fwd_partial_p1 || p1_fwd_blocked ||
+           same_cycle_sta_wait1 || lq_p1_issue_block)));
 
     always_comb begin
         if (p1_retry_valid_r) begin
             p1_eff_valid    = !sq_wait_p1 &&
                               !sq_fwd_partial_p1 &&
-                              (!sq_fwd_hit_p1 || !p1_fwd_hold_valid_r);
+                              !lq_p1_issue_block &&
+                              (!p1_any_fwd_hit || !p1_fwd_hold_valid_r);
             p1_eff_data     = p1_retry_data_r;
             p1_eff_addr     = p1_retry_addr_r;
             p1_eff_misalign = p1_retry_misalign_r;
             p1_eff_nocache  = p1_retry_load_nocache_r |
-                              sq_fwd_hit_p1 | sq_fwd_partial_p1;
+                              p1_any_fwd_hit | sq_fwd_partial_p1;
         end else if (load_issue_valid[1] && !sq_wait_p1 && !sq_fwd_partial_p1 &&
-                     (sq_fwd_hit_p1 ? !p1_fwd_hold_valid_r : !dcache_conflict)) begin
+                     !lq_p1_issue_block &&
+                     (p1_any_fwd_hit ? !p1_fwd_hold_valid_r : !dcache_conflict)) begin
             p1_eff_valid    = 1'b1;
             p1_eff_data     = load_issue_data[1];
             p1_eff_addr     = load_eff_addr[1];
             p1_eff_misalign = load_addr_misaligned[1];
             p1_eff_nocache  = load_addr_misaligned[1] | flush_in.valid |
-                              sq_fwd_hit_p1 | sq_fwd_partial_p1;
+                              p1_any_fwd_hit | sq_fwd_partial_p1;
         end else begin
             p1_eff_valid    = 1'b0;
             p1_eff_data     = '0;
@@ -818,10 +1079,12 @@ module lsu
                 // Drain after one cycle unless the retried load is still
                 // blocked by an older store whose address is known but whose
                 // data has not reached the SQ yet.
-                if (!sq_wait_p1 && !sq_fwd_partial_p1)
+                if (!sq_wait_p1 && !sq_fwd_partial_p1 &&
+                    !lq_p1_issue_block &&
+                    (!p1_any_fwd_hit || !p1_fwd_hold_valid_r))
                     p1_retry_valid_r <= 1'b0;
             end
-            if (dcache_conflict && !sq_wait_p1 && !sq_fwd_partial_p1 && !sq_fwd_hit_p1) begin
+            if (dcache_conflict && !sq_wait_p1 && !sq_fwd_partial_p1 && !p1_any_fwd_hit) begin
                 p1_retry_valid_r        <= 1'b1;
                 p1_retry_data_r         <= load_issue_data[1];
                 p1_retry_addr_r         <= load_eff_addr[1];
@@ -843,12 +1106,17 @@ module lsu
 
     assign dcache_load_req_valid[1] = p1_eff_valid
                                     & ~p1_eff_misalign
-                                    & ~sq_fwd_hit_p1
+                                    & ~p1_any_fwd_hit
                                     & ~sq_fwd_partial_p1
                                     & ~flush_in.valid;
     assign dcache_load_req_addr[1]  = p1_eff_addr;
     assign dcache_load_req_size[1]  = p1_eff_data.mem_size;
     assign dcache_load_req_is_unsigned[1] = p1_eff_data.is_unsigned;
+
+    assign spec_wakeup_valid[0] = dcache_load_req_valid[0];
+    assign spec_wakeup_tag[0]   = load_issue_data[0].pdst;
+    assign spec_wakeup_valid[1] = dcache_load_req_valid[1];
+    assign spec_wakeup_tag[1]   = p1_eff_data.pdst;
 
     // =========================================================================
     // Load data extraction and sign/zero extension
@@ -909,7 +1177,9 @@ module lsu
     always_comb begin
         logic [63:0] p1_fwd_shifted;
 
-        p1_fwd_shifted = sq_fwd_data_p1 >> ({3'b0, p1_eff_addr[2:0]} * 4'd8);
+        p1_fwd_shifted =
+            (sq_fwd_hit_p1 ? sq_fwd_data_p1 : csb_fwd_data_p1)
+            >> ({3'b0, p1_eff_addr[2:0]} * 4'd8);
         case (p1_eff_data.mem_size)
             MEM_BYTE: p1_extracted_fwd = p1_eff_data.is_unsigned
                         ? {56'b0, p1_fwd_shifted[7:0]}
@@ -937,11 +1207,12 @@ module lsu
     // requested bytes from the fill data and generate a CDB writeback for
     // that load.  The LMB is a simple, free-list-allocated array.
     // =========================================================================
-    localparam int LMB_DEPTH    = 8;
+    localparam int LMB_DEPTH    = 32;
     localparam int LMB_IDX_BITS = $clog2(LMB_DEPTH);
 
     typedef struct packed {
         logic                       valid;
+        logic                       ready;         // fill data captured, waiting for WB port
         logic [63:0]                line_addr;     // address aligned to LINE_SIZE
         logic [5:0]                 byte_offset;   // byte offset within the line
         logic [1:0]                 size;          // mem_size_e
@@ -949,47 +1220,155 @@ module lsu
         logic [ROB_IDX_BITS-1:0]    rob_idx;
         logic [PHYS_REG_BITS-1:0]   pdst;
         logic [LQ_IDX_BITS-1:0]     lq_idx;
+        logic [63:0]                data;
+`ifdef SIMULATION
+        logic [63:0]                pc;
+`endif
     } lmb_entry_t;
 
     lmb_entry_t lmb [0:LMB_DEPTH-1];
 
-    // Miss detection: a load issued 2 cycles ago whose cache path did not
+    function automatic logic [63:0] lmb_extract_from_fill(
+        input logic [LINE_SIZE*8-1:0] fill_data,
+        input logic [5:0]             byte_offset,
+        input logic [1:0]             size,
+        input logic                   is_unsigned
+    );
+        logic [63:0] fill_dword;
+        logic [63:0] fill_shifted;
+        begin
+            fill_dword = fill_data[{byte_offset[5:3], 3'b000} * 8 +: 64];
+            fill_shifted = fill_dword >> ({3'b0, byte_offset[2:0]} * 4'd8);
+            case (size)
+                MEM_BYTE: lmb_extract_from_fill = is_unsigned
+                            ? {56'b0, fill_shifted[7:0]}
+                            : {{56{fill_shifted[7]}}, fill_shifted[7:0]};
+                MEM_HALF: lmb_extract_from_fill = is_unsigned
+                            ? {48'b0, fill_shifted[15:0]}
+                            : {{48{fill_shifted[15]}}, fill_shifted[15:0]};
+                MEM_WORD: lmb_extract_from_fill = is_unsigned
+                            ? {32'b0, fill_shifted[31:0]}
+                            : {{32{fill_shifted[31]}}, fill_shifted[31:0]};
+                default:  lmb_extract_from_fill = fill_shifted;
+            endcase
+        end
+    endfunction
+
+    // Miss detection: a load issued 1 cycle ago whose cache path did not
     // produce a response this cycle and which wasn't handled via forwarding
     // or the misalign exception path.
     logic p0_miss_detect;
     logic p1_miss_detect;
-    assign p0_miss_detect = load_issue_valid_rr[0]
-                          & ~load_nocache_rr[0]
+    logic p0_miss_fill_hit;
+    logic p1_miss_fill_hit;
+    logic [LINE_SIZE*8-1:0] p0_miss_fill_data;
+    logic [LINE_SIZE*8-1:0] p1_miss_fill_data;
+    assign p0_miss_detect = !flush_in.valid
+                          & load_issue_valid_r[0]
+                          & ~load_nocache_r[0]
                           & ~dcache_load_resp_valid[0];
-    assign p1_miss_detect = load_issue_valid_rr[1]
-                          & ~load_nocache_rr[1]
+    assign p1_miss_detect = !flush_in.valid
+                          & load_issue_valid_r[1]
+                          & ~load_nocache_r[1]
                           & ~dcache_load_resp_valid[1];
+
+    // D-cache can install a line before the two-cycle load-miss detection
+    // stage sees that an older request missed.  Keep a tiny recent-fill
+    // window so those late miss detections can capture the fill data instead
+    // of allocating an LMB entry that will never see another fill.
+    localparam int FILL_BYPASS_DEPTH = 4;
+    logic fill_bypass_valid [0:FILL_BYPASS_DEPTH-1];
+    logic [63:0] fill_bypass_addr [0:FILL_BYPASS_DEPTH-1];
+    logic [LINE_SIZE*8-1:0] fill_bypass_data [0:FILL_BYPASS_DEPTH-1];
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int i = 0; i < FILL_BYPASS_DEPTH; i++) begin
+                fill_bypass_valid[i] <= 1'b0;
+                fill_bypass_addr[i]  <= 64'd0;
+                fill_bypass_data[i]  <= '0;
+            end
+        end else begin
+            for (int i = FILL_BYPASS_DEPTH-1; i > 0; i--) begin
+                fill_bypass_valid[i] <= fill_bypass_valid[i-1];
+                fill_bypass_addr[i]  <= fill_bypass_addr[i-1];
+                fill_bypass_data[i]  <= fill_bypass_data[i-1];
+            end
+            fill_bypass_valid[0] <= dcache_fill_valid;
+            fill_bypass_addr[0]  <= dcache_fill_addr;
+            fill_bypass_data[0]  <= dcache_fill_data;
+        end
+    end
+
+    always_comb begin
+        p0_miss_fill_hit  = p0_miss_detect
+                          & dcache_fill_valid
+                          & (load_eff_addr_r[0][63:LINE_BITS]
+                             == dcache_fill_addr[63:LINE_BITS]);
+        p1_miss_fill_hit  = p1_miss_detect
+                          & dcache_fill_valid
+                          & (load_eff_addr_r[1][63:LINE_BITS]
+                             == dcache_fill_addr[63:LINE_BITS]);
+        p0_miss_fill_data = dcache_fill_data;
+        p1_miss_fill_data = dcache_fill_data;
+
+        for (int i = 0; i < FILL_BYPASS_DEPTH; i++) begin
+            if (!p0_miss_fill_hit && p0_miss_detect &&
+                fill_bypass_valid[i] &&
+                (load_eff_addr_r[0][63:LINE_BITS] == fill_bypass_addr[i][63:LINE_BITS])) begin
+                p0_miss_fill_hit  = 1'b1;
+                p0_miss_fill_data = fill_bypass_data[i];
+            end
+            if (!p1_miss_fill_hit && p1_miss_detect &&
+                fill_bypass_valid[i] &&
+                (load_eff_addr_r[1][63:LINE_BITS] == fill_bypass_addr[i][63:LINE_BITS])) begin
+                p1_miss_fill_hit  = 1'b1;
+                p1_miss_fill_data = fill_bypass_data[i];
+            end
+        end
+    end
 
     // Find a free LMB slot (lowest index).
     logic                     lmb_free_avail;
     logic [LMB_IDX_BITS-1:0]  lmb_free_idx;
+    logic                     lmb_free2_avail;
+    logic [LMB_IDX_BITS-1:0]  lmb_free2_idx;
+    logic                     lmb_p1_alloc_avail;
+    logic [LMB_IDX_BITS-1:0]  lmb_p1_alloc_idx;
 
     always_comb begin
         lmb_free_avail = 1'b0;
         lmb_free_idx   = '0;
+        lmb_free2_avail = 1'b0;
+        lmb_free2_idx   = '0;
         for (int i = 0; i < LMB_DEPTH; i++) begin
             if (!lmb[i].valid && !lmb_free_avail) begin
                 lmb_free_avail = 1'b1;
                 lmb_free_idx   = LMB_IDX_BITS'(i);
+            end else if (!lmb[i].valid && !lmb_free2_avail) begin
+                lmb_free2_avail = 1'b1;
+                lmb_free2_idx   = LMB_IDX_BITS'(i);
             end
         end
+        lmb_p1_alloc_avail = p0_miss_detect ? lmb_free2_avail : lmb_free_avail;
+        lmb_p1_alloc_idx   = p0_miss_detect ? lmb_free2_idx   : lmb_free_idx;
     end
 
     // Match an incoming fill to an LMB entry (line-aligned compare).
     logic [LMB_DEPTH-1:0] lmb_fill_match;
     logic                 lmb_any_match;
     logic [LMB_IDX_BITS-1:0] lmb_match_idx;
+    logic                 lmb_ready_any;
+    logic [LMB_IDX_BITS-1:0] lmb_ready_idx;
 
     always_comb begin
         lmb_any_match = 1'b0;
         lmb_match_idx = '0;
+        lmb_ready_any = 1'b0;
+        lmb_ready_idx = '0;
         for (int i = 0; i < LMB_DEPTH; i++) begin
             lmb_fill_match[i] = lmb[i].valid
+                              & !lmb[i].ready
                               & dcache_fill_valid
                               & (lmb[i].line_addr[63:LINE_BITS]
                                  == dcache_fill_addr[63:LINE_BITS]);
@@ -997,33 +1376,184 @@ module lsu
                 lmb_any_match = 1'b1;
                 lmb_match_idx = LMB_IDX_BITS'(i);
             end
+            if (lmb[i].valid && lmb[i].ready && !lmb_ready_any) begin
+                lmb_ready_any = 1'b1;
+                lmb_ready_idx = LMB_IDX_BITS'(i);
+            end
         end
     end
+
+`ifdef SIMULATION
+    logic lsu_stat_en;
+    logic lsu_trace_lmb_hot;
+    integer lsu_lmb_cyc;
+    integer lsu_lmb_occ_now;
+    integer lsu_lmb_max_occ;
+    integer lsu_lmb_full_cyc;
+    integer lsu_lmb_p0_miss_cnt;
+    integer lsu_lmb_p1_miss_cnt;
+    integer lsu_lmb_p0_alloc_cnt;
+    integer lsu_lmb_p1_alloc_cnt;
+    integer lsu_lmb_fill_match_cnt;
+    integer lsu_lmb_ready_wb_cnt;
+    integer lsu_lmb_drop_full_cnt;
+    integer lsu_lmb_drop_dual_cnt;
+    integer lsu_lmb_alloc_ready_cnt;
+    integer lsu_fwd_hold_blocked_cnt;
+    integer lsu_lmb_wb_blocked_cnt;
+
+    initial lsu_stat_en =
+        ($test$plusargs("PERF_PROFILE") || $test$plusargs("STAT_DUMP")) ? 1'b1 : 1'b0;
+    initial lsu_trace_lmb_hot = $test$plusargs("TRACE_LMB_HOT") ? 1'b1 : 1'b0;
+
+    function automatic logic lsu_hot_load_pc(input logic [63:0] pc);
+        lsu_hot_load_pc = (pc == 64'h0000_0000_8000_35f6) ||
+                          (pc == 64'h0000_0000_8000_32c2) ||
+                          (pc == 64'h0000_0000_8000_3976);
+    endfunction
+
+    always_comb begin
+        lsu_lmb_occ_now = 0;
+        for (int i = 0; i < LMB_DEPTH; i++) begin
+            if (lmb[i].valid)
+                lsu_lmb_occ_now++;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            lsu_lmb_cyc            <= 0;
+            lsu_lmb_max_occ        <= 0;
+            lsu_lmb_full_cyc       <= 0;
+            lsu_lmb_p0_miss_cnt    <= 0;
+            lsu_lmb_p1_miss_cnt    <= 0;
+            lsu_lmb_p0_alloc_cnt   <= 0;
+            lsu_lmb_p1_alloc_cnt   <= 0;
+            lsu_lmb_fill_match_cnt <= 0;
+            lsu_lmb_ready_wb_cnt    <= 0;
+            lsu_lmb_drop_full_cnt  <= 0;
+            lsu_lmb_drop_dual_cnt  <= 0;
+            lsu_lmb_alloc_ready_cnt <= 0;
+            lsu_fwd_hold_blocked_cnt <= 0;
+            lsu_lmb_wb_blocked_cnt <= 0;
+        end else if (lsu_stat_en) begin
+            lsu_lmb_cyc <= lsu_lmb_cyc + 1;
+
+            if (lsu_lmb_occ_now > lsu_lmb_max_occ)
+                lsu_lmb_max_occ <= lsu_lmb_occ_now;
+            if (lsu_lmb_occ_now == LMB_DEPTH)
+                lsu_lmb_full_cyc <= lsu_lmb_full_cyc + 1;
+
+            if (!flush_in.valid) begin
+                if (p0_miss_detect)
+                    lsu_lmb_p0_miss_cnt <= lsu_lmb_p0_miss_cnt + 1;
+                if (p1_miss_detect)
+                    lsu_lmb_p1_miss_cnt <= lsu_lmb_p1_miss_cnt + 1;
+
+                if (p0_miss_detect && lmb_free_avail)
+                    lsu_lmb_p0_alloc_cnt <= lsu_lmb_p0_alloc_cnt + 1;
+                else if (p0_miss_detect && !lmb_free_avail)
+                    lsu_lmb_drop_full_cnt <= lsu_lmb_drop_full_cnt + 1;
+
+                if (p1_miss_detect && lmb_p1_alloc_avail)
+                    lsu_lmb_p1_alloc_cnt <= lsu_lmb_p1_alloc_cnt + 1;
+                else if (p0_miss_detect && p1_miss_detect)
+                    lsu_lmb_drop_dual_cnt <= lsu_lmb_drop_dual_cnt + 1;
+                else if (p1_miss_detect && !lmb_p1_alloc_avail)
+                    lsu_lmb_drop_full_cnt <= lsu_lmb_drop_full_cnt + 1;
+
+                if ((p0_miss_fill_hit && lmb_free_avail) ||
+                    (p1_miss_fill_hit && lmb_p1_alloc_avail))
+                    lsu_lmb_alloc_ready_cnt <= lsu_lmb_alloc_ready_cnt +
+                        ((p0_miss_fill_hit && lmb_free_avail) ? 1 : 0) +
+                        ((p1_miss_fill_hit && lmb_p1_alloc_avail) ? 1 : 0);
+            end
+
+            if (lmb_any_match)
+                lsu_lmb_fill_match_cnt <= lsu_lmb_fill_match_cnt + 1;
+            if (lmb_wb_port_free && !lmb_any_match && lmb_ready_any)
+                lsu_lmb_ready_wb_cnt <= lsu_lmb_ready_wb_cnt + 1;
+            if (fwd_hold_blocked)
+                lsu_fwd_hold_blocked_cnt <= lsu_fwd_hold_blocked_cnt + 1;
+            if (!lmb_wb_port_free && (lmb_any_match || lmb_ready_any))
+                lsu_lmb_wb_blocked_cnt <= lsu_lmb_wb_blocked_cnt + 1;
+        end
+    end
+
+    final begin
+        if (lsu_stat_en) begin
+            $display("");
+            $display("=== LSU LMB SUMMARY ===");
+            $display("Cycles sampled:             %0d", lsu_lmb_cyc);
+            $display("Max occupied/full cycles:   %0d / %0d", lsu_lmb_max_occ, lsu_lmb_full_cyc);
+            $display("Miss detect p0/p1:          %0d / %0d", lsu_lmb_p0_miss_cnt, lsu_lmb_p1_miss_cnt);
+            $display("Alloc p0/p1:                %0d / %0d", lsu_lmb_p0_alloc_cnt, lsu_lmb_p1_alloc_cnt);
+            $display("Fill matches:               %0d", lsu_lmb_fill_match_cnt);
+            $display("Ready drains:               %0d", lsu_lmb_ready_wb_cnt);
+            $display("Alloc ready from same fill:  %0d", lsu_lmb_alloc_ready_cnt);
+            $display("Dropped full/dual:          %0d / %0d", lsu_lmb_drop_full_cnt, lsu_lmb_drop_dual_cnt);
+            $display("Fwd-hold blocked cycles:    %0d", lsu_fwd_hold_blocked_cnt);
+            $display("LMB WB blocked cycles:      %0d", lsu_lmb_wb_blocked_cnt);
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        if (lsu_trace_lmb_hot) begin
+            if (p0_miss_detect && lsu_hot_load_pc(load_issue_data_r[0].pc)) begin
+                $display("[LMB_HOT] cyc=%0d alloc_req p0 pc=%016h rob=%0d addr=%016h free=%b fillhit=%b flush=%b",
+                    lsu_lmb_cyc, load_issue_data_r[0].pc, load_issue_data_r[0].rob_idx,
+                    load_eff_addr_r[0], lmb_free_avail, p0_miss_fill_hit, flush_in.valid);
+            end
+            if (p1_miss_detect && lsu_hot_load_pc(load_issue_data_r[1].pc)) begin
+                $display("[LMB_HOT] cyc=%0d alloc_req p1 pc=%016h rob=%0d addr=%016h free=%b fillhit=%b flush=%b",
+                    lsu_lmb_cyc, load_issue_data_r[1].pc, load_issue_data_r[1].rob_idx,
+                    load_eff_addr_r[1], lmb_p1_alloc_avail, p1_miss_fill_hit, flush_in.valid);
+            end
+            if (lmb_wb_port_free && lmb_any_match && lsu_hot_load_pc(lmb[lmb_match_idx].pc)) begin
+                $display("[LMB_HOT] cyc=%0d fill_wb pc=%016h rob=%0d line=%016h fill=%016h",
+                    lsu_lmb_cyc, lmb[lmb_match_idx].pc, lmb[lmb_match_idx].rob_idx,
+                    lmb[lmb_match_idx].line_addr, dcache_fill_addr);
+            end
+            if (lmb_wb_port_free && !lmb_any_match && lmb_ready_any && lsu_hot_load_pc(lmb[lmb_ready_idx].pc)) begin
+                $display("[LMB_HOT] cyc=%0d ready_wb pc=%016h rob=%0d line=%016h",
+                    lsu_lmb_cyc, lmb[lmb_ready_idx].pc, lmb[lmb_ready_idx].rob_idx,
+                    lmb[lmb_ready_idx].line_addr);
+            end
+            if (flush_in.valid && flush_in.full_flush) begin
+                for (int i = 0; i < LMB_DEPTH; i++) begin
+                    if (lmb[i].valid && lsu_hot_load_pc(lmb[i].pc)) begin
+                        $display("[LMB_HOT] cyc=%0d flush_clear pc=%016h rob=%0d line=%016h ready=%b redirect=%016h",
+                            lsu_lmb_cyc, lmb[i].pc, lmb[i].rob_idx,
+                            lmb[i].line_addr, lmb[i].ready, flush_in.redirect_pc);
+                    end
+                end
+            end
+            if (p0_dcache_hit_valid && lsu_hot_load_pc(load_issue_data_r[0].pc)) begin
+                $display("[LMB_HOT] cyc=%0d dcache_wb p0 pc=%016h rob=%0d addr=%016h flush=%b",
+                    lsu_lmb_cyc, load_issue_data_r[0].pc, load_issue_data_r[0].rob_idx,
+                    load_eff_addr_r[0], flush_in.valid);
+            end
+            if ((dcache_load_resp_valid[1] && load_issue_valid_r[1] && !load_nocache_r[1]) &&
+                lsu_hot_load_pc(load_issue_data_r[1].pc)) begin
+                $display("[LMB_HOT] cyc=%0d dcache_wb p1 pc=%016h rob=%0d addr=%016h flush=%b",
+                    lsu_lmb_cyc, load_issue_data_r[1].pc, load_issue_data_r[1].rob_idx,
+                    load_eff_addr_r[1], flush_in.valid);
+            end
+        end
+    end
+`endif
 
     // Extract bytes from the fill line based on the matched entry's offset.
     // The fill data is LINE_SIZE*8 bits (512 bits).  We extract a 64-bit
     // aligned dword using the entry's [5:3] index, then sign/zero extend
     // using [2:0] byte offset + size.
-    logic [63:0] lmb_fill_dword;
-    logic [63:0] lmb_fill_shifted;
     logic [63:0] lmb_extracted;
-    always_comb begin
-        lmb_fill_dword = dcache_fill_data[{lmb[lmb_match_idx].byte_offset[5:3],
-                                            3'b000} * 8 +: 64];
-        lmb_fill_shifted = lmb_fill_dword >> ({3'b0, lmb[lmb_match_idx].byte_offset[2:0]} * 4'd8);
-        case (lmb[lmb_match_idx].size)
-            MEM_BYTE: lmb_extracted = lmb[lmb_match_idx].is_unsigned
-                        ? {56'b0, lmb_fill_shifted[7:0]}
-                        : {{56{lmb_fill_shifted[7]}}, lmb_fill_shifted[7:0]};
-            MEM_HALF: lmb_extracted = lmb[lmb_match_idx].is_unsigned
-                        ? {48'b0, lmb_fill_shifted[15:0]}
-                        : {{48{lmb_fill_shifted[15]}}, lmb_fill_shifted[15:0]};
-            MEM_WORD: lmb_extracted = lmb[lmb_match_idx].is_unsigned
-                        ? {32'b0, lmb_fill_shifted[31:0]}
-                        : {{32{lmb_fill_shifted[31]}}, lmb_fill_shifted[31:0]};
-            default:  lmb_extracted = lmb_fill_shifted;
-        endcase
-    end
+    assign lmb_extracted = lmb_extract_from_fill(
+        dcache_fill_data,
+        lmb[lmb_match_idx].byte_offset,
+        lmb[lmb_match_idx].size,
+        lmb[lmb_match_idx].is_unsigned
+    );
 
     // =========================================================================
     // LMB sequential logic
@@ -1032,43 +1562,88 @@ module lsu
         if (!rst_n) begin
             for (int i = 0; i < LMB_DEPTH; i++) begin
                 lmb[i].valid <= 1'b0;
+                lmb[i].ready <= 1'b0;
             end
         end else if (flush_in.valid && flush_in.full_flush) begin
             // Full flush: drop all speculative pending misses.
             for (int i = 0; i < LMB_DEPTH; i++) begin
                 lmb[i].valid <= 1'b0;
+                lmb[i].ready <= 1'b0;
             end
         end else begin
-            // Allocate on miss detection. If both ports miss in the same
-            // cycle, port 0 wins the single allocation slot; port 1 still
-            // cancels its speculative wakeup and will at least not commit
-            // wrong data.
+            // Allocate on miss detection.  Both load ports can allocate in
+            // the same cycle when two LMB slots are free; otherwise port 0
+            // has priority.
             if (p0_miss_detect && lmb_free_avail) begin
                 lmb[lmb_free_idx].valid        <= 1'b1;
+                lmb[lmb_free_idx].ready        <= p0_miss_fill_hit;
                 lmb[lmb_free_idx].line_addr    <=
-                    {load_eff_addr_rr[0][63:LINE_BITS], {LINE_BITS{1'b0}}};
-                lmb[lmb_free_idx].byte_offset  <= load_eff_addr_rr[0][5:0];
-                lmb[lmb_free_idx].size         <= load_issue_data_rr[0].mem_size;
-                lmb[lmb_free_idx].is_unsigned  <= load_issue_data_rr[0].is_unsigned;
-                lmb[lmb_free_idx].rob_idx      <= load_issue_data_rr[0].rob_idx;
-                lmb[lmb_free_idx].pdst         <= load_issue_data_rr[0].pdst;
-                lmb[lmb_free_idx].lq_idx       <= load_issue_data_rr[0].lq_idx;
-            end else if (p1_miss_detect && lmb_free_avail) begin
-                lmb[lmb_free_idx].valid        <= 1'b1;
-                lmb[lmb_free_idx].line_addr    <=
-                    {load_eff_addr_rr[1][63:LINE_BITS], {LINE_BITS{1'b0}}};
-                lmb[lmb_free_idx].byte_offset  <= load_eff_addr_rr[1][5:0];
-                lmb[lmb_free_idx].size         <= load_issue_data_rr[1].mem_size;
-                lmb[lmb_free_idx].is_unsigned  <= load_issue_data_rr[1].is_unsigned;
-                lmb[lmb_free_idx].rob_idx      <= load_issue_data_rr[1].rob_idx;
-                lmb[lmb_free_idx].pdst         <= load_issue_data_rr[1].pdst;
-                lmb[lmb_free_idx].lq_idx       <= load_issue_data_rr[1].lq_idx;
+                    {load_eff_addr_r[0][63:LINE_BITS], {LINE_BITS{1'b0}}};
+                lmb[lmb_free_idx].byte_offset  <= load_eff_addr_r[0][5:0];
+                lmb[lmb_free_idx].size         <= load_issue_data_r[0].mem_size;
+                lmb[lmb_free_idx].is_unsigned  <= load_issue_data_r[0].is_unsigned;
+                lmb[lmb_free_idx].rob_idx      <= load_issue_data_r[0].rob_idx;
+                lmb[lmb_free_idx].pdst         <= load_issue_data_r[0].pdst;
+                lmb[lmb_free_idx].lq_idx       <= load_issue_data_r[0].lq_idx;
+                lmb[lmb_free_idx].data         <= p0_miss_fill_hit
+                    ? lmb_extract_from_fill(
+                        p0_miss_fill_data,
+                        load_eff_addr_r[0][5:0],
+                        load_issue_data_r[0].mem_size,
+                        load_issue_data_r[0].is_unsigned)
+                    : '0;
+`ifdef SIMULATION
+                lmb[lmb_free_idx].pc           <= load_issue_data_r[0].pc;
+`endif
+            end
+            if (p1_miss_detect && lmb_p1_alloc_avail) begin
+                lmb[lmb_p1_alloc_idx].valid        <= 1'b1;
+                lmb[lmb_p1_alloc_idx].ready        <= p1_miss_fill_hit;
+                lmb[lmb_p1_alloc_idx].line_addr    <=
+                    {load_eff_addr_r[1][63:LINE_BITS], {LINE_BITS{1'b0}}};
+                lmb[lmb_p1_alloc_idx].byte_offset  <= load_eff_addr_r[1][5:0];
+                lmb[lmb_p1_alloc_idx].size         <= load_issue_data_r[1].mem_size;
+                lmb[lmb_p1_alloc_idx].is_unsigned  <= load_issue_data_r[1].is_unsigned;
+                lmb[lmb_p1_alloc_idx].rob_idx      <= load_issue_data_r[1].rob_idx;
+                lmb[lmb_p1_alloc_idx].pdst         <= load_issue_data_r[1].pdst;
+                lmb[lmb_p1_alloc_idx].lq_idx       <= load_issue_data_r[1].lq_idx;
+                lmb[lmb_p1_alloc_idx].data         <= p1_miss_fill_hit
+                    ? lmb_extract_from_fill(
+                        p1_miss_fill_data,
+                        load_eff_addr_r[1][5:0],
+                        load_issue_data_r[1].mem_size,
+                        load_issue_data_r[1].is_unsigned)
+                    : '0;
+`ifdef SIMULATION
+                lmb[lmb_p1_alloc_idx].pc           <= load_issue_data_r[1].pc;
+`endif
             end
 
-            // On fill match, free the LMB entry (response is generated
-            // combinationally via lmb_any_match in the writeback mux below).
-            if (lmb_any_match) begin
-                lmb[lmb_match_idx].valid <= 1'b0;
+            // A fill can satisfy multiple missed loads to the same line.
+            // The first match is written back immediately only when the load
+            // writeback port is free.  If the port is occupied by a normal
+            // D-cache hit or forwarding skid, all fill matches capture data
+            // and remain valid/ready for a later drain.
+            for (int i = 0; i < LMB_DEPTH; i++) begin
+                if (lmb_fill_match[i]) begin
+                    if (lmb_wb_port_free && (LMB_IDX_BITS'(i) == lmb_match_idx)) begin
+                        lmb[i].valid <= 1'b0;
+                        lmb[i].ready <= 1'b0;
+                    end else begin
+                        lmb[i].ready <= 1'b1;
+                        lmb[i].data  <= lmb_extract_from_fill(
+                            dcache_fill_data,
+                            lmb[i].byte_offset,
+                            lmb[i].size,
+                            lmb[i].is_unsigned
+                        );
+                    end
+                end
+            end
+
+            if (lmb_wb_port_free && !lmb_any_match && lmb_ready_any) begin
+                lmb[lmb_ready_idx].valid <= 1'b0;
+                lmb[lmb_ready_idx].ready <= 1'b0;
             end
         end
     end
@@ -1079,7 +1654,6 @@ module lsu
     // Delay forwarding writeback by 1 cycle to break the combinational loop:
     //   CDB → bypass → IQ → issue → load_eff_addr → SQ fwd → load_wb → CDB
     // The consumer reads from PRF (written at the next edge from this CDB).
-    logic        fwd_hold_valid_r;
     logic [ROB_IDX_BITS-1:0] fwd_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] fwd_hold_pdst_r;
     logic [63:0] fwd_hold_data_r;
@@ -1090,10 +1664,29 @@ module lsu
     logic [PHYS_REG_BITS-1:0] p1_fwd_hold_pdst_r;
     logic [63:0] p1_fwd_hold_data_r;
 
+    // Port-1 misalign-exception hold register (mirrors the port-0 fwd_hold
+    // pattern). Original same-cycle path at the writeback mux was a
+    // combinational leak: load_eff_addr[1] -> load_addr_misaligned[1] ->
+    // load_wb_pdst[1] -> cdb_tag[5] -> bypass[5] -> IQ readiness ->
+    // load_issue_valid[1] -> back to load_eff_addr[1]. Loop-buffer-driven
+    // dispatch pressure amplifies the transient into a non-converging
+    // delta-cycle loop on dsim (CoreMark iter>=2 hits IterLimit at cyc 316,161).
+    // Registering breaks the loop at the cost of 1 cycle latency on the
+    // (rare) misalign exception path.
+    logic                     p1_misalign_hold_valid_r;
+    logic [ROB_IDX_BITS-1:0]  p1_misalign_hold_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] p1_misalign_hold_pdst_r;
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || flush_in.valid) begin
             fwd_hold_valid_r  <= 1'b0;
             fwd_hold_is_exc_r <= 1'b0;
+        end else if (fwd_hold_blocked) begin
+            // Retain the delayed port-0 forward/misalign result until a load
+            // CDB slot can accept it.  Dropping this skid entry leaves the
+            // corresponding ROB load permanently not-ready.
+            fwd_hold_valid_r  <= fwd_hold_valid_r;
+            fwd_hold_is_exc_r <= fwd_hold_is_exc_r;
         end else begin
             // Capture ANY same-cycle load writeback (fwd OR misalign)
             // to eliminate all same-cycle CDB loops from load port 0.
@@ -1107,23 +1700,43 @@ module lsu
         end
     end
 
+    // Port-1 misalign hold capture/drain.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_in.valid) begin
+            p1_misalign_hold_valid_r <= 1'b0;
+        end else begin
+            if (p1_misalign_hold_valid_r) begin
+                // Drains via writeback this cycle; clear at next edge.
+                p1_misalign_hold_valid_r <= 1'b0;
+            end
+            if (!p1_misalign_hold_valid_r
+                && load_issue_valid[1] && load_addr_misaligned[1]
+                && !flush_in.valid) begin
+                p1_misalign_hold_valid_r   <= 1'b1;
+                p1_misalign_hold_rob_idx_r <= load_issue_data[1].rob_idx;
+                p1_misalign_hold_pdst_r    <= load_issue_data[1].pdst;
+            end
+        end
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || flush_in.valid) begin
             p1_fwd_hold_valid_r <= 1'b0;
         end else begin
             if (p1_fwd_hold_valid_r &&
-                !((load_issue_valid[1] && load_addr_misaligned[1] && !flush_in.valid) ||
-                   (dcache_load_resp_valid[1] && load_issue_valid_rr[1] &&
-                    !load_nocache_rr[1]) ||
+                !(p1_misalign_hold_valid_r ||
+                   (dcache_load_resp_valid[1] && load_issue_valid_r[1] &&
+                    !load_nocache_r[1]) ||
                    (fwd_hold_valid_r && dcache_load_resp_valid[0] &&
-                    load_issue_valid_rr[0] && !load_nocache_rr[0]))) begin
+                    load_issue_valid_r[0] && !load_nocache_r[0]))) begin
                 p1_fwd_hold_valid_r <= 1'b0;
             end
 
-            if (!p1_fwd_hold_valid_r &&
+            if (!p1_fast_fwd_fire &&
+                !p1_fwd_hold_valid_r &&
                 p1_eff_valid &&
                 !p1_eff_misalign &&
-                sq_fwd_hit_p1 &&
+                p1_any_fwd_hit &&
                 !sq_wait_p1 &&
                 !flush_in.valid) begin
                 p1_fwd_hold_valid_r   <= 1'b1;
@@ -1140,10 +1753,11 @@ module lsu
     // Priority (Port 0):
     //   1. Misalign exception (same-cycle, rare — doesn't oscillate)
     //   2. Forwarding hold (1-cycle delayed SQ/CSB fwd)
-    //   3. D-cache hit response (2-cycle delayed metadata)
+        //   3. D-cache hit response (1-cycle delayed metadata)
     //   4. LMB fill match (late miss response)
     // Priority (Port 1):
-    //   1. Misalign exception
+    //   1. Misalign exception (1-cycle-delayed registered hold — was a
+    //      same-cycle CDB-loop leak; see p1_misalign_hold_valid_r above)
     //   2. D-cache hit response
     //   3. Port-0 forwarded spill
     //   4. SQ-forward hold
@@ -1151,37 +1765,27 @@ module lsu
     // Note: only port 0 is wired to the LMB for now (single-port fill match).
     // =========================================================================
     always_comb begin
-        logic p0_dcache_hit_valid;
-        logic p1_normal_wb_valid;
-        logic p0_fwd_spill_to_p1;
-
-        p0_dcache_hit_valid = dcache_load_resp_valid[0] && load_issue_valid_rr[0]
-                           && !load_nocache_rr[0];
-        p1_normal_wb_valid  = (load_issue_valid[1] && load_addr_misaligned[1] && !flush_in.valid)
-                           || (dcache_load_resp_valid[1] && load_issue_valid_rr[1]
-                               && !load_nocache_rr[1]);
-        // If a same-cycle forwarded/misaligned load is queued in fwd_hold at
-        // the exact cycle an older port-0 dcache hit returns, the older hit
-        // must not be dropped.  Spill the held forwarded result onto port 1
-        // when that slot is otherwise idle.
-        p0_fwd_spill_to_p1 = fwd_hold_valid_r && p0_dcache_hit_valid && !p1_normal_wb_valid;
-
         // Default LQ index selector (drives lq_result_idx_sel)
         lq_result_idx_sel = '0;
 
         // Port 0 — no same-cycle paths.  Misalign + fwd both go through
         // the hold register (1-cycle delayed) to eliminate CDB loops.
-        if (p0_dcache_hit_valid) begin
-            // D-cache hit response — 2 cycles after issue.
-            // NOT gated by flush: an older load must write back even if a
-            // younger instruction triggers a flush in the same cycle.
+        if (flush_in.valid) begin
+            load_wb_valid[0]         = 1'b0;
+            load_wb_rob_idx[0]       = '0;
+            load_wb_pdst[0]          = '0;
+            load_wb_data[0]          = '0;
+            load_wb_has_exception[0] = 1'b0;
+            load_wb_exc_code[0]      = '0;
+        end else if (p0_dcache_hit_valid) begin
+            // D-cache hit response — 1 cycle after issue.
             load_wb_valid[0]         = 1'b1;
-            load_wb_rob_idx[0]       = load_issue_data_rr[0].rob_idx;
-            load_wb_pdst[0]          = load_issue_data_rr[0].pdst;
+            load_wb_rob_idx[0]       = load_issue_data_r[0].rob_idx;
+            load_wb_pdst[0]          = load_issue_data_r[0].pdst;
             load_wb_data[0]          = load_extracted_dc[0];
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-            lq_result_idx_sel        = load_issue_data_rr[0].lq_idx;
+            lq_result_idx_sel        = load_issue_data_r[0].lq_idx;
         end else if (fwd_hold_valid_r) begin
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = fwd_hold_rob_idx_r;
@@ -1190,7 +1794,7 @@ module lsu
             load_wb_has_exception[0] = fwd_hold_is_exc_r;
             load_wb_exc_code[0]      = fwd_hold_is_exc_r ? 4'd4 : 4'd0;
             lq_result_idx_sel        = fwd_hold_lq_idx_r;
-        end else if (lmb_any_match) begin
+        end else if (lmb_wb_port_free && lmb_any_match) begin
             // Late miss response from LMB (fill arrived).
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = lmb[lmb_match_idx].rob_idx;
@@ -1199,6 +1803,16 @@ module lsu
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = lmb[lmb_match_idx].lq_idx;
+        end else if (lmb_wb_port_free && lmb_ready_any) begin
+            // A previous fill satisfied this miss, but the single LMB WB
+            // port was busy with an older same-line match in that cycle.
+            load_wb_valid[0]         = 1'b1;
+            load_wb_rob_idx[0]       = lmb[lmb_ready_idx].rob_idx;
+            load_wb_pdst[0]          = lmb[lmb_ready_idx].pdst;
+            load_wb_data[0]          = lmb[lmb_ready_idx].data;
+            load_wb_has_exception[0] = 1'b0;
+            load_wb_exc_code[0]      = '0;
+            lq_result_idx_sel        = lmb[lmb_ready_idx].lq_idx;
         end else begin
             load_wb_valid[0]         = 1'b0;
             load_wb_rob_idx[0]       = '0;
@@ -1209,19 +1823,33 @@ module lsu
         end
 
         // Port 1
-        if (load_issue_valid[1] && load_addr_misaligned[1] && !flush_in.valid) begin
+        if (flush_in.valid) begin
+            load_wb_valid[1]         = 1'b0;
+            load_wb_rob_idx[1]       = '0;
+            load_wb_pdst[1]          = '0;
+            load_wb_data[1]          = '0;
+            load_wb_has_exception[1] = 1'b0;
+            load_wb_exc_code[1]      = '0;
+        end else if (p1_misalign_hold_valid_r) begin
             load_wb_valid[1]         = 1'b1;
-            load_wb_rob_idx[1]       = load_issue_data[1].rob_idx;
-            load_wb_pdst[1]          = load_issue_data[1].pdst;
+            load_wb_rob_idx[1]       = p1_misalign_hold_rob_idx_r;
+            load_wb_pdst[1]          = p1_misalign_hold_pdst_r;
             load_wb_data[1]          = '0;
             load_wb_has_exception[1] = 1'b1;
             load_wb_exc_code[1]      = 4'd4;
-        end else if (dcache_load_resp_valid[1] && load_issue_valid_rr[1]
-                     && !load_nocache_rr[1]) begin
+        end else if (dcache_load_resp_valid[1] && load_issue_valid_r[1]
+                     && !load_nocache_r[1]) begin
             load_wb_valid[1]         = 1'b1;
-            load_wb_rob_idx[1]       = load_issue_data_rr[1].rob_idx;
-            load_wb_pdst[1]          = load_issue_data_rr[1].pdst;
+            load_wb_rob_idx[1]       = load_issue_data_r[1].rob_idx;
+            load_wb_pdst[1]          = load_issue_data_r[1].pdst;
             load_wb_data[1]          = load_extracted_dc[1];
+            load_wb_has_exception[1] = 1'b0;
+            load_wb_exc_code[1]      = '0;
+        end else if (p1_fast_fwd_fire) begin
+            load_wb_valid[1]         = 1'b1;
+            load_wb_rob_idx[1]       = p1_eff_data.rob_idx;
+            load_wb_pdst[1]          = p1_eff_data.pdst;
+            load_wb_data[1]          = p1_extracted_fwd;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
         end else if (p0_fwd_spill_to_p1) begin
@@ -1251,18 +1879,17 @@ module lsu
     // =========================================================================
     // Speculative wakeup cancel on cache miss
     // =========================================================================
-    // If a load was issued (speculative wakeup sent) but the D-cache missed
-    // (no hit response 2 cycles after issue), cancel the wakeup so dependents
-    // re-wait until the LMB generates the late response.
+    // Speculative load wakeup is emitted when the D-cache request is issued.
+    // One cycle later, cancel it if the request did not produce a hit response.
     generate
         for (li = 0; li < 2; li++) begin : gen_spec_cancel
             always_comb begin
                 spec_cancel_valid[li] = 1'b0;
                 spec_cancel_tag[li]   = '0;
-                if (load_issue_valid_rr[li] && !load_nocache_rr[li] &&
+                if (load_issue_valid_r[li] && !load_nocache_r[li] &&
                     !dcache_load_resp_valid[li] && !flush_in.valid) begin
                     spec_cancel_valid[li] = 1'b1;
-                    spec_cancel_tag[li]   = load_issue_data_rr[li].pdst;
+                    spec_cancel_tag[li]   = load_issue_data_r[li].pdst;
                 end
             end
         end
@@ -1305,9 +1932,9 @@ module lsu
         end
         if (p0_miss_detect && lmb_free_avail) begin
             $display("[%0d] LSU LMB alloc: rob=%0d pdst=%0d line=%016h off=%0d",
-                dbg_cycle, load_issue_data_rr[0].rob_idx, load_issue_data_rr[0].pdst,
-                {load_eff_addr_rr[0][63:LINE_BITS], {LINE_BITS{1'b0}}},
-                load_eff_addr_rr[0][5:0]);
+                dbg_cycle, load_issue_data_r[0].rob_idx, load_issue_data_r[0].pdst,
+                {load_eff_addr_r[0][63:LINE_BITS], {LINE_BITS{1'b0}}},
+                load_eff_addr_r[0][5:0]);
         end
         if (dcache_fill_valid) begin
             $display("[%0d] LSU fill snoop: addr=%016h", dbg_cycle, dcache_fill_addr);
@@ -1327,6 +1954,40 @@ module lsu
         if (ordering_violation) begin
             $display("[%0d] LSU ORDERING VIOL: load_rob=%0d (sta_rob=%0d sta_addr=%016h)",
                 dbg_cycle, violation_rob_idx, sta_issue_data.rob_idx, sta_eff_addr);
+        end
+    end
+`endif
+
+`ifndef SYNTHESIS
+    bit trace_stack_store;
+    initial trace_stack_store = $test$plusargs("TRACE_STACK_STORE");
+
+    function automatic logic trace_calc_func_pc(input logic [63:0] pc);
+        trace_calc_func_pc = (pc >= 64'h00000000800022d0) &&
+                             (pc <  64'h00000000800023d0);
+    endfunction
+
+    function automatic logic trace_stack_addr(input logic [63:0] addr);
+        trace_stack_addr = (addr[63:12] == 52'h800ff);
+    endfunction
+
+    always_ff @(posedge clk) begin
+        if (trace_stack_store) begin
+            if (sta_issue_valid &&
+                (trace_calc_func_pc(sta_issue_data.pc) || trace_stack_addr(sta_eff_addr))) begin
+                $display("[LSU_STA_ISSUE] t=%0t pc=%016h rob=%0d sq=%0d rs1p=%0d rs1=%016h imm=%0d addr=%016h size=%0d flush=%0b",
+                         $time, sta_issue_data.pc, sta_issue_data.rob_idx,
+                         sta_issue_data.sq_idx, sta_issue_data.rs1_phys,
+                         sta_rs1, sta_issue_data.imm, sta_eff_addr,
+                         sta_issue_data.mem_size, flush_in.valid);
+            end
+            if (std_issue_valid && trace_calc_func_pc(std_issue_data.pc)) begin
+                $display("[LSU_STD_ISSUE] t=%0t pc=%016h rob=%0d sq=%0d rs2p=%0d data=%016h size=%0d mask=%02h flush=%0b",
+                         $time, std_issue_data.pc, std_issue_data.rob_idx,
+                         std_issue_data.sq_idx, std_issue_data.rs2_phys,
+                         std_rs2, std_issue_data.mem_size,
+                         std_byte_mask, flush_in.valid);
+            end
         end
     end
 `endif

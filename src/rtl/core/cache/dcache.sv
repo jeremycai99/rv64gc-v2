@@ -78,6 +78,31 @@ module dcache
     logic [L1D_TAG_BITS-1:0]   tr_wtag;
 
     logic                      tr_dirty_we;
+
+`ifndef SYNTHESIS
+    bit     sim_perf_profile;
+    integer sim_store_req_cyc;
+    integer sim_store_ack_cyc;
+    integer sim_store_hit_ack_cyc;
+    integer sim_store_fill_ack_cyc;
+    integer sim_store_wait_fill_cyc;
+    integer sim_store_port_wait_cyc;
+    integer sim_store_miss_alloc_cyc;
+    integer sim_store_miss_merge_cyc;
+    integer sim_store_port_grant_a_cyc;
+    integer sim_store_port_grant_b_cyc;
+    integer sim_ld_both_s1_cyc;
+    integer sim_ld0_miss_new_cyc;
+    integer sim_ld1_miss_new_cyc;
+    integer sim_ld0_miss_alloc_cyc;
+    integer sim_ld1_miss_alloc_cyc;
+    integer sim_ld0_miss_merge_cyc;
+    integer sim_ld1_miss_merge_cyc;
+    integer sim_ld1_new_blocked_by_ld0_alloc_cyc;
+    integer sim_ld1_new_blocked_same_line_cyc;
+    integer sim_ld1_new_blocked_diff_line_cyc;
+    integer sim_ld_new_blocked_no_free_cyc;
+`endif
     logic [L1D_SET_BITS-1:0]   tr_dirty_waddr;
     logic [1:0]                tr_dirty_wway;
 
@@ -171,6 +196,8 @@ module dcache
     logic                    s1_st_use_port_b;
     logic                    s0_store_lookup_grant_a;
     logic                    s0_store_lookup_grant_b;
+    logic                    store_ack_s1;
+    logic                    store_ack_matches_head;
 
     // Store lookup can use either shared read port:
     //   - port A when load0 is idle
@@ -245,7 +272,13 @@ module dcache
             s1_ld1_size     <= load_req_size[1];
             s1_ld1_unsigned <= load_req_is_unsigned[1];
 
-            s1_st_valid     <= s0_store_lookup_grant_a || s0_store_lookup_grant_b;
+            // store_ack_s1 is generated from the previous cycle's S1 store
+            // lookup.  When it acknowledges the current CSB head, the CSB
+            // will advance on this edge; do not re-latch that same store into
+            // S1 or the next cycle could perform a duplicate write while the
+            // CSB is already presenting the following store.
+            s1_st_valid     <= (s0_store_lookup_grant_a || s0_store_lookup_grant_b) &&
+                               !store_ack_matches_head;
             s1_st_addr      <= store_req_addr;
             s1_st_data      <= store_req_data;
             s1_st_byte_mask <= store_req_byte_mask;
@@ -427,6 +460,8 @@ module dcache
         logic [5:0]              store_byte_off; // byte offset within the line
         logic [63:0]             store_data;     // LSB-aligned store data
         logic [7:0]              store_byte_mask;// valid bytes in store_data
+        logic [LINE_SIZE*8-1:0]  store_line_data;// full-line store overlay
+        logic [LINE_SIZE-1:0]    store_line_mask;// bytes valid in overlay
         logic [1:0]              victim;         // victim way for fill
         logic                    dirty_evict;    // victim was dirty
         logic [511:0]            evict_data;     // dirty line data for writeback
@@ -451,6 +486,22 @@ module dcache
                     merged[line_byte*8 +: 8] = store_data[b*8 +: 8];
             end
             merge_store_into_line = merged;
+        end
+    endfunction
+
+    function automatic logic [511:0] merge_store_overlay_into_line(
+        input logic [511:0]           line_data,
+        input logic [LINE_SIZE*8-1:0] store_line_data,
+        input logic [LINE_SIZE-1:0]   store_line_mask
+    );
+        logic [511:0] merged;
+        begin
+            merged = line_data;
+            for (int b = 0; b < LINE_SIZE; b++) begin
+                if (store_line_mask[b])
+                    merged[b*8 +: 8] = store_line_data[b*8 +: 8];
+            end
+            merge_store_overlay_into_line = merged;
         end
     endfunction
 
@@ -643,6 +694,8 @@ module dcache
     logic [5:0]             st_line_off;
     int                     st_line_byte [0:7];
     logic [LINE_SIZE*8-1:0] fill_done_line_data;
+    logic                   fill_done_store_merge;
+    logic                   s1_st_is_tohost;
 
     always_comb begin
         st_full_mask = '0;
@@ -660,16 +713,32 @@ module dcache
     end
 
     always_comb begin
+        logic [LINE_SIZE*8-1:0] base_line;
         fill_done_line_data = '0;
+        fill_done_store_merge = 1'b0;
         if (fill_done_avail) begin
-            fill_done_line_data = mshr[fill_done_idx].store_pending
-                ? merge_store_into_line(
+            base_line = mshr[fill_done_idx].store_pending
+                ? merge_store_overlay_into_line(
                       mshr[fill_done_idx].fill_data,
-                      mshr[fill_done_idx].store_byte_off,
-                      mshr[fill_done_idx].store_data,
-                      mshr[fill_done_idx].store_byte_mask
+                      mshr[fill_done_idx].store_line_data,
+                      mshr[fill_done_idx].store_line_mask
                   )
                 : mshr[fill_done_idx].fill_data;
+
+            // A store can be looking up the same line in the cycle a fill is
+            // installed.  Fill install has RAM-write priority over store-hit,
+            // so include those bytes in the installed line instead of acking
+            // the store while dropping its data.
+            fill_done_store_merge =
+                s1_st_valid && !s1_st_is_tohost && !invalidate_all &&
+                (st_line_addr[63:LINE_BITS] ==
+                 mshr[fill_done_idx].addr[63:LINE_BITS]);
+
+            fill_done_line_data = fill_done_store_merge
+                ? merge_store_overlay_into_line(base_line,
+                                                st_full_data,
+                                                st_full_mask)
+                : base_line;
         end
     end
 
@@ -748,7 +817,6 @@ module dcache
     // An MSHR must be free to allocate a store-miss fill; if no MSHR is
     // available, the store is also ack'd (silently dropped) to keep the
     // CSB moving.  This is a bring-up compromise.
-    logic s1_st_is_tohost;
     assign s1_st_is_tohost = (s1_st_addr[31:12] == 20'h80001);
 
     logic s1_st_can_allocate_mshr;
@@ -759,20 +827,146 @@ module dcache
 
     // A store waiting for a pending fill (either just-allocated or already
     // in flight to the same line): do NOT ack yet.
+    logic s1_st_miss_accepted;
+    assign s1_st_miss_accepted = s1_st_valid && !st_cache_hit &&
+                                  !s1_st_is_tohost && !invalidate_all &&
+                                  !fill_done_avail &&
+                                  (s1_st_can_allocate_mshr || mshr_st_match_hit);
+
     logic s1_st_waiting_for_fill;
     assign s1_st_waiting_for_fill = s1_st_valid && !st_cache_hit &&
+                                    !s1_st_miss_accepted &&
                                     (s1_st_can_allocate_mshr || mshr_st_match_hit) &&
                                     !s1_st_is_tohost;
 
-    logic fill_completes_store;
-    assign fill_completes_store = fill_done_avail &&
-                                  mshr[fill_done_idx].store_pending &&
-                                  store_req_valid &&
-                                  (store_req_addr[63:LINE_BITS] ==
-                                   mshr[fill_done_idx].addr[63:LINE_BITS]);
+    // Completion is resolved in S1, one cycle after the CSB presents a store
+    // on store_req_*.  Only acknowledge the CSB when its current head is still
+    // the S1 store being completed; otherwise a completion for the previous
+    // store can incorrectly dequeue the next store and drop it before D-cache
+    // ever observes it.
+    assign store_ack_s1 =
+        s1_st_valid &&
+        (fill_done_store_merge ||
+         (!fill_done_avail && !s1_st_waiting_for_fill));
 
-    assign store_ack = fill_completes_store ||
-                       (s1_st_valid && !fill_done_avail && !s1_st_waiting_for_fill);
+    assign store_ack_matches_head =
+        store_ack_s1 &&
+        store_req_valid &&
+        (store_req_addr == s1_st_addr) &&
+        (store_req_data == s1_st_data) &&
+        (store_req_byte_mask == s1_st_byte_mask);
+
+    assign store_ack = store_ack_matches_head;
+
+    logic ld0_new_miss_req;
+    logic ld1_new_miss_req;
+    logic ld0_miss_alloc_sel;
+    logic ld1_miss_alloc_sel;
+    logic ld0_miss_merge_req;
+    logic ld1_miss_merge_req;
+    logic ld1_new_blocked_by_ld0_alloc;
+    logic ld1_new_blocked_same_line;
+    logic ld1_new_blocked_diff_line;
+    logic ld_new_blocked_no_free;
+
+    assign ld0_new_miss_req = s1_ld0_valid && !ld0_cache_hit &&
+                              !mshr_match_hit && !invalidate_all;
+    assign ld1_new_miss_req = s1_ld1_valid && !ld1_cache_hit &&
+                              !mshr_ld1_match_hit && !invalidate_all;
+    assign ld0_miss_alloc_sel = ld0_new_miss_req && mshr_free_avail;
+    assign ld1_miss_alloc_sel = !ld0_miss_alloc_sel && ld1_new_miss_req &&
+                                mshr_free_avail;
+    assign ld0_miss_merge_req = s1_ld0_valid && !ld0_cache_hit &&
+                                mshr_match_hit && !invalidate_all;
+    assign ld1_miss_merge_req = s1_ld1_valid && !ld1_cache_hit &&
+                                mshr_ld1_match_hit && !invalidate_all;
+    assign ld1_new_blocked_by_ld0_alloc = ld0_miss_alloc_sel &&
+                                          ld1_new_miss_req;
+    assign ld1_new_blocked_same_line = ld1_new_blocked_by_ld0_alloc &&
+                                       (ld0_line_addr == ld1_line_addr);
+    assign ld1_new_blocked_diff_line = ld1_new_blocked_by_ld0_alloc &&
+                                       (ld0_line_addr != ld1_line_addr);
+    assign ld_new_blocked_no_free = (ld0_new_miss_req || ld1_new_miss_req) &&
+                                    !mshr_free_avail;
+
+`ifndef SYNTHESIS
+    initial sim_perf_profile = $test$plusargs("PERF_PROFILE");
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sim_store_req_cyc        <= 0;
+            sim_store_ack_cyc        <= 0;
+            sim_store_hit_ack_cyc    <= 0;
+            sim_store_fill_ack_cyc   <= 0;
+            sim_store_wait_fill_cyc  <= 0;
+            sim_store_port_wait_cyc  <= 0;
+            sim_store_miss_alloc_cyc <= 0;
+            sim_store_miss_merge_cyc <= 0;
+            sim_store_port_grant_a_cyc <= 0;
+            sim_store_port_grant_b_cyc <= 0;
+            sim_ld_both_s1_cyc <= 0;
+            sim_ld0_miss_new_cyc <= 0;
+            sim_ld1_miss_new_cyc <= 0;
+            sim_ld0_miss_alloc_cyc <= 0;
+            sim_ld1_miss_alloc_cyc <= 0;
+            sim_ld0_miss_merge_cyc <= 0;
+            sim_ld1_miss_merge_cyc <= 0;
+            sim_ld1_new_blocked_by_ld0_alloc_cyc <= 0;
+            sim_ld1_new_blocked_same_line_cyc <= 0;
+            sim_ld1_new_blocked_diff_line_cyc <= 0;
+            sim_ld_new_blocked_no_free_cyc <= 0;
+        end else if (sim_perf_profile) begin
+            if (store_req_valid)
+                sim_store_req_cyc <= sim_store_req_cyc + 1;
+            if (store_ack)
+                sim_store_ack_cyc <= sim_store_ack_cyc + 1;
+            if (store_ack && s1_st_valid && st_cache_hit)
+                sim_store_hit_ack_cyc <= sim_store_hit_ack_cyc + 1;
+            if (store_ack_s1 && fill_done_store_merge)
+                sim_store_fill_ack_cyc <= sim_store_fill_ack_cyc + 1;
+            if (store_req_valid && !store_ack && s1_st_waiting_for_fill)
+                sim_store_wait_fill_cyc <= sim_store_wait_fill_cyc + 1;
+            if (store_req_valid && !store_ack &&
+                !s1_st_waiting_for_fill && !(store_ack_s1 && fill_done_store_merge) &&
+                !s0_store_lookup_grant_a && !s0_store_lookup_grant_b)
+                sim_store_port_wait_cyc <= sim_store_port_wait_cyc + 1;
+            if (s1_st_can_allocate_mshr)
+                sim_store_miss_alloc_cyc <= sim_store_miss_alloc_cyc + 1;
+            if (s1_st_valid && !st_cache_hit && mshr_st_match_hit && !s1_st_is_tohost)
+                sim_store_miss_merge_cyc <= sim_store_miss_merge_cyc + 1;
+            if (s0_store_lookup_grant_a)
+                sim_store_port_grant_a_cyc <= sim_store_port_grant_a_cyc + 1;
+            if (s0_store_lookup_grant_b)
+                sim_store_port_grant_b_cyc <= sim_store_port_grant_b_cyc + 1;
+            if (s1_ld0_valid && s1_ld1_valid)
+                sim_ld_both_s1_cyc <= sim_ld_both_s1_cyc + 1;
+            if (ld0_new_miss_req)
+                sim_ld0_miss_new_cyc <= sim_ld0_miss_new_cyc + 1;
+            if (ld1_new_miss_req)
+                sim_ld1_miss_new_cyc <= sim_ld1_miss_new_cyc + 1;
+            if (ld0_miss_alloc_sel)
+                sim_ld0_miss_alloc_cyc <= sim_ld0_miss_alloc_cyc + 1;
+            if (ld1_miss_alloc_sel)
+                sim_ld1_miss_alloc_cyc <= sim_ld1_miss_alloc_cyc + 1;
+            if (ld0_miss_merge_req)
+                sim_ld0_miss_merge_cyc <= sim_ld0_miss_merge_cyc + 1;
+            if (ld1_miss_merge_req)
+                sim_ld1_miss_merge_cyc <= sim_ld1_miss_merge_cyc + 1;
+            if (ld1_new_blocked_by_ld0_alloc)
+                sim_ld1_new_blocked_by_ld0_alloc_cyc <=
+                    sim_ld1_new_blocked_by_ld0_alloc_cyc + 1;
+            if (ld1_new_blocked_same_line)
+                sim_ld1_new_blocked_same_line_cyc <=
+                    sim_ld1_new_blocked_same_line_cyc + 1;
+            if (ld1_new_blocked_diff_line)
+                sim_ld1_new_blocked_diff_line_cyc <=
+                    sim_ld1_new_blocked_diff_line_cyc + 1;
+            if (ld_new_blocked_no_free)
+                sim_ld_new_blocked_no_free_cyc <=
+                    sim_ld_new_blocked_no_free_cyc + 1;
+        end
+    end
+`endif
 
     // =========================================================================
     // Fill snoop (for LSU load miss buffer)
@@ -789,36 +983,16 @@ module dcache
     // =========================================================================
     // Load response outputs
     // =========================================================================
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            load_resp_valid[0] <= 1'b0;
-            load_resp_valid[1] <= 1'b0;
-            load_resp_data[0]  <= '0;
-            load_resp_data[1]  <= '0;
-            load_resp_hit[0]   <= 1'b0;
-            load_resp_hit[1]   <= 1'b0;
-        end else begin
-            load_resp_valid[0] <= 1'b0;
-            load_resp_valid[1] <= 1'b0;
-            load_resp_hit[0]   <= 1'b0;
-            load_resp_hit[1]   <= 1'b0;
-            load_resp_data[0]  <= '0;
-            load_resp_data[1]  <= '0;
-
-            if (s1_ld0_valid && ld0_cache_hit) begin
-                load_resp_valid[0] <= 1'b1;
-                load_resp_hit[0]   <= 1'b1;
-                load_resp_data[0]  <= ld0_extracted;
-            end
-
-            // Load port 1: uses tag RAM port B and data RAM port B.
-            // Both ports read independently — no conflict suppression needed.
-            if (s1_ld1_valid && ld1_cache_hit) begin
-                load_resp_valid[1] <= 1'b1;
-                load_resp_hit[1]   <= 1'b1;
-                load_resp_data[1]  <= ld1_extracted;
-            end
-        end
+    // Tag/data RAMs are synchronous-read and their outputs are already aligned
+    // with s1_ld*_valid.  Drive hit responses directly from S1 instead of
+    // adding another register stage; LSU metadata uses its _r stage to match.
+    always_comb begin
+        load_resp_valid[0] = s1_ld0_valid && ld0_cache_hit;
+        load_resp_valid[1] = s1_ld1_valid && ld1_cache_hit;
+        load_resp_hit[0]   = load_resp_valid[0];
+        load_resp_hit[1]   = load_resp_valid[1];
+        load_resp_data[0]  = load_resp_valid[0] ? ld0_extracted : '0;
+        load_resp_data[1]  = load_resp_valid[1] ? ld1_extracted : '0;
     end
 
     // =========================================================================
@@ -886,8 +1060,7 @@ module dcache
             l2_active_mshr_q <= l2_active_mshr_d;
 
             // ---- Allocate new MSHR on load miss ----
-            if (s1_ld0_valid && !ld0_cache_hit && !mshr_match_hit && mshr_free_avail
-                && !invalidate_all) begin
+            if (ld0_miss_alloc_sel) begin
                 mshr[mshr_free_idx].valid          <= 1'b1;
                 mshr[mshr_free_idx].addr           <= ld0_line_addr;
                 mshr[mshr_free_idx].victim         <= mshr_ld_vway;
@@ -898,6 +1071,8 @@ module dcache
                 mshr[mshr_free_idx].store_byte_off <= 6'd0;
                 mshr[mshr_free_idx].store_data     <= 64'd0;
                 mshr[mshr_free_idx].store_byte_mask<= 8'd0;
+                mshr[mshr_free_idx].store_line_data <= '0;
+                mshr[mshr_free_idx].store_line_mask <= '0;
                 mshr[mshr_free_idx].writeback_pend <= mshr_ld_dirty_v;
                 if (mshr_ld_dirty_v) begin
                     // Need to evict dirty line: save its address and data
@@ -908,8 +1083,7 @@ module dcache
                 end
             end
             // ---- Allocate new MSHR on load1 miss ----
-            else if (s1_ld1_valid && !ld1_cache_hit && !mshr_ld1_match_hit
-                     && mshr_free_avail && !invalidate_all) begin
+            else if (ld1_miss_alloc_sel) begin
                 mshr[mshr_free_idx].valid          <= 1'b1;
                 mshr[mshr_free_idx].addr           <= ld1_line_addr;
                 mshr[mshr_free_idx].victim         <= mshr_ld1_vway;
@@ -920,6 +1094,8 @@ module dcache
                 mshr[mshr_free_idx].store_byte_off <= 6'd0;
                 mshr[mshr_free_idx].store_data     <= 64'd0;
                 mshr[mshr_free_idx].store_byte_mask<= 8'd0;
+                mshr[mshr_free_idx].store_line_data <= '0;
+                mshr[mshr_free_idx].store_line_mask <= '0;
                 mshr[mshr_free_idx].writeback_pend <= mshr_ld1_dirty_v;
                 if (mshr_ld1_dirty_v) begin
                     mshr[mshr_free_idx].evict_data <= dr_rdata_all2[mshr_ld1_vway];
@@ -944,6 +1120,8 @@ module dcache
                 mshr[mshr_free_idx].store_byte_off <= s1_st_addr[5:0];
                 mshr[mshr_free_idx].store_data     <= s1_st_data;
                 mshr[mshr_free_idx].store_byte_mask<= s1_st_byte_mask;
+                mshr[mshr_free_idx].store_line_data <= st_full_data;
+                mshr[mshr_free_idx].store_line_mask <= st_full_mask;
                 mshr[mshr_free_idx].writeback_pend <= mshr_st_dirty_v;
                 if (mshr_st_dirty_v) begin
                     mshr[mshr_free_idx].evict_data <= st_data_way[mshr_st_vway];
@@ -952,19 +1130,55 @@ module dcache
                 end
             end
 
+            // ---- Merge accepted store miss into an existing line fill ----
+            if (s1_st_valid && !st_cache_hit && mshr_st_match_hit &&
+                !s1_st_is_tohost && !invalidate_all && !fill_done_avail) begin
+                mshr[mshr_st_match_idx].store_pending <= 1'b1;
+                mshr[mshr_st_match_idx].store_line_mask <=
+                    mshr[mshr_st_match_idx].store_line_mask | st_full_mask;
+                for (int b = 0; b < LINE_SIZE; b++) begin
+                    if (st_full_mask[b]) begin
+                        mshr[mshr_st_match_idx].store_line_data[b*8 +: 8] <=
+                            st_full_data[b*8 +: 8];
+                    end
+                end
+                // Keep legacy single-store fields coherent for trace/debug.
+                mshr[mshr_st_match_idx].store_byte_off  <= s1_st_addr[5:0];
+                mshr[mshr_st_match_idx].store_data      <= s1_st_data;
+                mshr[mshr_st_match_idx].store_byte_mask <= s1_st_byte_mask;
+            end
+
             // ---- Fill response: capture data, mark fill_done ----
             if (l2_resp_valid) begin
                 for (int m = 0; m < MSHR_DEPTH; m++) begin
                     if (mshr[m].valid && mshr[m].fill_pend &&
                         (l2_resp_addr[63:LINE_BITS] == mshr[m].addr[63:LINE_BITS])) begin
-                        mshr[m].fill_data  <= mshr[m].store_pending
-                            ? merge_store_into_line(
-                                  l2_resp_data,
-                                  mshr[m].store_byte_off,
-                                  mshr[m].store_data,
-                                  mshr[m].store_byte_mask
-                              )
-                            : l2_resp_data;
+                        // If a store merges into this MSHR in the same cycle
+                        // as the fill response, the nonblocking update to the
+                        // overlay is not visible yet.  Fold the current store
+                        // bytes into the captured fill data explicitly.
+                        if (s1_st_valid && !st_cache_hit && mshr_st_match_hit &&
+                            (mshr_st_match_idx == MSHR_IDX_BITS'(m)) &&
+                            !s1_st_is_tohost && !invalidate_all) begin
+                            mshr[m].fill_data <=
+                                merge_store_overlay_into_line(
+                                    merge_store_overlay_into_line(
+                                        l2_resp_data,
+                                        mshr[m].store_line_data,
+                                        mshr[m].store_line_mask
+                                    ),
+                                    st_full_data,
+                                    st_full_mask
+                                );
+                        end else begin
+                            mshr[m].fill_data <= mshr[m].store_pending
+                                ? merge_store_overlay_into_line(
+                                      l2_resp_data,
+                                      mshr[m].store_line_data,
+                                      mshr[m].store_line_mask
+                                  )
+                                : l2_resp_data;
+                        end
                         mshr[m].fill_pend  <= 1'b0;
                         mshr[m].fill_done  <= 1'b1;
                     end
@@ -993,5 +1207,38 @@ module dcache
         else
             invalidate_busy <= invalidate_all;
     end
+
+`ifndef SYNTHESIS
+    final begin
+        if (sim_perf_profile) begin
+            $display("D-cache store summary:");
+            $display("  req / ack cycles           : %0d / %0d",
+                     sim_store_req_cyc, sim_store_ack_cyc);
+            $display("  hit_ack / fill_ack         : %0d / %0d",
+                     sim_store_hit_ack_cyc, sim_store_fill_ack_cyc);
+            $display("  wait_fill / port_wait      : %0d / %0d",
+                     sim_store_wait_fill_cyc, sim_store_port_wait_cyc);
+            $display("  miss_alloc / miss_merge    : %0d / %0d",
+                     sim_store_miss_alloc_cyc, sim_store_miss_merge_cyc);
+            $display("  grant_a / grant_b          : %0d / %0d",
+                     sim_store_port_grant_a_cyc, sim_store_port_grant_b_cyc);
+            $display("D-cache load miss allocation summary:");
+            $display("  both_loads_s1              : %0d", sim_ld_both_s1_cyc);
+            $display("  ld0 new/alloc/merge        : %0d / %0d / %0d",
+                     sim_ld0_miss_new_cyc, sim_ld0_miss_alloc_cyc,
+                     sim_ld0_miss_merge_cyc);
+            $display("  ld1 new/alloc/merge        : %0d / %0d / %0d",
+                     sim_ld1_miss_new_cyc, sim_ld1_miss_alloc_cyc,
+                     sim_ld1_miss_merge_cyc);
+            $display("  ld1 blocked by ld0 alloc   : %0d",
+                     sim_ld1_new_blocked_by_ld0_alloc_cyc);
+            $display("    same_line / diff_line    : %0d / %0d",
+                     sim_ld1_new_blocked_same_line_cyc,
+                     sim_ld1_new_blocked_diff_line_cyc);
+            $display("  new load miss no free MSHR : %0d",
+                     sim_ld_new_blocked_no_free_cyc);
+        end
+    end
+`endif
 
 endmodule

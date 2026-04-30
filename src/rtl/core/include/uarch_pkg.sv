@@ -162,7 +162,7 @@ package uarch_pkg;
         logic               is_mul;
         logic               is_div;
         logic               is_w_op;        // W-suffix (32-bit op on RV64)
-        logic               is_unsigned;    // unsigned load
+        logic               is_unsigned;    // unsigned load or Zba unsigned-word op
         logic               use_imm;        // ALU operand B is immediate
         logic               is_fence;
         logic               is_fence_i;
@@ -311,9 +311,10 @@ package uarch_pkg;
 
     // =========================================================================
     // Issue queue entry
-    // Padded to 384 bits (6x64) to ensure Verilator aligns struct arrays
-    // correctly. Without padding the 323-bit width causes field misalignment
-    // when stored in unpacked arrays, corrupting pc/imm in the BRU path.
+    // Padded to 448 bits (7x64) to ensure Verilator aligns struct arrays
+    // correctly. Without padding, non-64-bit-aligned packed structs have caused
+    // field misalignment when stored in unpacked arrays, corrupting pc/imm in
+    // the BRU path.
     // =========================================================================
     typedef struct packed {
         logic [53:0]                    _pad;           // 54 bits -> 330+54 = 384
@@ -340,6 +341,7 @@ package uarch_pkg;
         logic                           bp_taken;
         logic [63:0]                    bp_target;
         logic [4:0]                     bp_ras_tos;
+        logic [63:0]                    bp_ras_top;
         logic [1:0]                     bp_ras_op;
         logic [GHR_BITS-1:0]            bp_ghr;
         // v2 fusion fields

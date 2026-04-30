@@ -44,7 +44,7 @@ module rv64gc_core_top
     // Flush signals
     // =========================================================================
     // commit_flush: from commit module (exceptions, ordering violations)
-    // bru_flush:    from BRU at execute time (branch mispredicts — early redirect)
+    // bru_flush:    from BRU0 at execute time (oldest-branch mispredict)
     // flush_out:    merged signal broadcast everywhere
     flush_t commit_flush;
     flush_t bru_flush;
@@ -52,7 +52,15 @@ module rv64gc_core_top
 
     // Forward declarations for BRU signals used in fetch_unit port connections
     logic        bru_early_redirect;
+    logic        bru0_early_redirect;
+    logic        bru1_early_redirect;
+    logic        bru_partial_recovery_valid;
+    logic [63:0] bru_early_target;
     logic [63:0] bru_target;
+    logic        frontend_backend_stall;
+    logic        frontend_late_flush_redundant;
+    logic        frontend_flush_valid;
+    logic [63:0] frontend_flush_pc;
 
     // =========================================================================
     // PRF Ready Table
@@ -127,6 +135,19 @@ module rv64gc_core_top
     logic [63:0] fetch_bp_ras_top;
     logic [GHR_BITS-1:0] fetch_bp_ghr;
     logic          lb_active;
+    logic          lb_capturing;
+    logic          lb_handoff_valid;
+    logic [63:0]   lb_handoff_pc;
+    // µop cache (gen-2) signals; gated on +UOC_ENABLE plusarg below.
+    logic          uoc_active;
+    logic          uoc_handoff_valid;
+    logic [63:0]   uoc_handoff_pc;
+    decoded_insn_t uoc_insn [0:PIPE_WIDTH-1];
+    logic [2:0]    uoc_count;
+    logic          uoc_ev_lookup, uoc_ev_hit, uoc_ev_miss;
+    logic          uoc_ev_fill, uoc_ev_fill_evict_valid;
+    logic          uoc_ev_enter_playing, uoc_ev_exit_playing_miss;
+    logic          uoc_ev_invalidate;
     logic [GHR_BITS-1:0] ghr_out;
     logic                ghr_restore_valid_fe;
     logic [GHR_BITS-1:0] ghr_restore_val_fe;
@@ -153,19 +174,87 @@ module rv64gc_core_top
     logic [63:0] pf_l2_resp_addr;
     logic [511:0] pf_l2_resp_data;
 
-    // BPU update signals (from commit)
+    // BPU update signals to fetch.  Commit remains the default source; an
+    // opt-in simulation knob can source mispredicted branches from execute to
+    // measure predictor update-lag effects without changing default RTL.
     logic        bpu_update_valid;
     logic [63:0] bpu_update_pc;
     logic        bpu_tage_update_valid;
     logic [63:0] bpu_tage_update_pc;
+    logic        bpu_tage_update_taken;
+    logic        bpu_tage_update_mispredict;
+    logic [63:0] bpu_tage_update_target;
+    logic [GHR_BITS-1:0] bpu_tage_update_ghr;
     logic        bpu_update_taken;
     logic        bpu_update_mispredict;
     logic [63:0] bpu_update_target;
     logic [2:0]  bpu_update_type;
     logic [GHR_BITS-1:0] bpu_update_ghr;
+    logic        commit_bpu_update_valid;
+    logic [63:0] commit_bpu_update_pc;
+    logic        commit_bpu_tage_update_valid;
+    logic [63:0] commit_bpu_tage_update_pc;
+    logic        commit_bpu_tage_update_taken;
+    logic        commit_bpu_tage_update_mispredict;
+    logic [63:0] commit_bpu_tage_update_target;
+    logic [GHR_BITS-1:0] commit_bpu_tage_update_ghr;
+    logic        commit_bpu_update_taken;
+    logic        commit_bpu_update_mispredict;
+    logic [63:0] commit_bpu_update_target;
+    logic [2:0]  commit_bpu_update_type;
+    logic [GHR_BITS-1:0] commit_bpu_update_ghr;
+    logic        exec_bpu_update_valid;
+    logic [63:0] exec_bpu_update_pc;
+    logic        exec_bpu_tage_update_valid;
+    logic [63:0] exec_bpu_tage_update_pc;
+    logic        exec_bpu_tage_update_taken;
+    logic        exec_bpu_tage_update_mispredict;
+    logic [63:0] exec_bpu_tage_update_target;
+    logic [GHR_BITS-1:0] exec_bpu_tage_update_ghr;
+    logic        exec_bpu_update_taken;
+    logic        exec_bpu_update_mispredict;
+    logic [63:0] exec_bpu_update_target;
+    logic [2:0]  exec_bpu_update_type;
+    logic [GHR_BITS-1:0] exec_bpu_update_ghr;
+
+`ifndef SYNTHESIS
+    bit sim_bpu_exec_misp_update;
+    bit sim_exec_partial_branch_recovery;
+    bit sim_tage_train_misp_cond_first;
+    bit sim_bru0_early_redirect_en;
+    bit sim_bru1_early_redirect_en;
+    bit sim_uoc_enable;
+    initial sim_bpu_exec_misp_update =
+        $test$plusargs("BPU_EXEC_MISP_UPDATE");
+    initial sim_exec_partial_branch_recovery =
+        $test$plusargs("EXEC_PARTIAL_BRANCH_RECOVERY");
+    initial sim_tage_train_misp_cond_first =
+        $test$plusargs("TAGE_TRAIN_MISP_COND_FIRST");
+    initial sim_bru0_early_redirect_en =
+        $test$plusargs("ENABLE_BRU_EARLY_REDIRECT") &&
+        !$test$plusargs("DISABLE_BRU_EARLY_REDIRECT") &&
+        !$test$plusargs("DISABLE_BRU0_EARLY_REDIRECT");
+    initial sim_bru1_early_redirect_en =
+        $test$plusargs("ENABLE_BRU_EARLY_REDIRECT") &&
+        !$test$plusargs("DISABLE_BRU_EARLY_REDIRECT") &&
+        !$test$plusargs("DISABLE_BRU1_EARLY_REDIRECT");
+    // Gen-2 µop cache: parallel-path bring-up; OFF unless plusarg set.
+    initial sim_uoc_enable = $test$plusargs("UOC_ENABLE");
+`else
+    localparam logic sim_bpu_exec_misp_update = 1'b0;
+    localparam logic sim_exec_partial_branch_recovery = 1'b0;
+    localparam logic sim_tage_train_misp_cond_first = 1'b0;
+    localparam logic sim_bru0_early_redirect_en = 1'b0;
+    localparam logic sim_bru1_early_redirect_en = 1'b0;
+    localparam logic sim_uoc_enable = 1'b0;
+`endif
 
     // Stall from decode/rename
     logic        backend_stall;
+    logic        bru_redirect_quarantine_r;
+    logic        bru_redirect_quarantine;
+    logic        keep_early_frontend;
+    logic        backward_branch_taken;
 
     // FENCE.I signal
     logic        fence_i_signal;
@@ -186,17 +275,27 @@ module rv64gc_core_top
         .fetch_bp_ras_tos       (fetch_bp_ras_tos),
         .fetch_bp_ras_top       (fetch_bp_ras_top),
         .fetch_bp_ghr           (fetch_bp_ghr),
-        .backend_stall          (backend_stall),
+        .backend_stall          (frontend_backend_stall),
         // Phase-5 convergence: when loop-buffer playback owns rename input,
         // quiesce fetch traffic and let redirect/flush restart the frontend.
-        .frontend_hold          (lb_active),
-        // Redirect from commit flush OR BRU early redirect (commit wins).
-        .redirect_valid         (flush_out.valid || bru_early_redirect),
-        .redirect_pc            (flush_out.valid ? flush_out.redirect_pc : bru_target),
+        // Same applies for µop cache playback when +UOC_ENABLE.
+        .frontend_hold          (lb_active || uoc_active),
+        .loop_buffer_capturing  (lb_capturing),
+        .loop_buffer_capture_start(backward_branch_taken),
+        // Redirect priority: commit flush > LB handoff > UOC handoff.
+        .redirect_valid         (frontend_flush_valid || lb_handoff_valid ||
+                                 uoc_handoff_valid),
+        .redirect_pc            (frontend_flush_valid ? frontend_flush_pc :
+                                 lb_handoff_valid     ? lb_handoff_pc :
+                                                        uoc_handoff_pc),
         .bpu_update_valid       (bpu_update_valid),
         .bpu_update_pc          (bpu_update_pc),
         .bpu_tage_update_valid  (bpu_tage_update_valid),
         .bpu_tage_update_pc     (bpu_tage_update_pc),
+        .bpu_tage_update_taken  (bpu_tage_update_taken),
+        .bpu_tage_update_mispredict(bpu_tage_update_mispredict),
+        .bpu_tage_update_target (bpu_tage_update_target),
+        .bpu_tage_update_ghr    (bpu_tage_update_ghr),
         .bpu_update_taken       (bpu_update_taken),
         .bpu_update_mispredict  (bpu_update_mispredict),
         .bpu_update_target      (bpu_update_target),
@@ -247,8 +346,8 @@ module rv64gc_core_top
         .fetch_bp_ghr   (fetch_bp_ghr),
         .dec_insn       (dec_insn_out),
         .dec_count      (dec_count_out),
-        .stall          (backend_stall),
-        .flush          (flush_out.valid)
+        .stall          (frontend_backend_stall),
+        .flush          (frontend_flush_valid || lb_handoff_valid)
     );
 
     // =========================================================================
@@ -276,7 +375,6 @@ module rv64gc_core_top
     // (A prior registered version was a Verilator eval-scheduling workaround;
     //  on xsim that workaround dropped loop-buffer activation to ~0% and
     //  starved fetch 52% of cycles on CoreMark.)
-    logic backward_branch_taken;
     always_comb begin
         backward_branch_taken = 1'b0;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
@@ -293,6 +391,11 @@ module rv64gc_core_top
     // Rename stall signal
     logic rename_stall;
 
+    // µop cache and loop buffer COEXIST: LB captures backward-taken loops
+    // (its specialty); UOC captures arbitrary PC-indexed groups.  The mux
+    // below prefers UOC over LB only when UOC is actively emitting, so LB
+    // continues to provide its existing benefit on tight loops while UOC
+    // fills bubbles outside the LB pattern.
     loop_buffer u_loop_buffer (
         .clk                    (clk),
         .rst_n                  (rst_n),
@@ -302,19 +405,67 @@ module rv64gc_core_top
         .lb_insn                (lb_insn),
         .lb_count               (lb_count),
         .active                 (lb_active),
+        .capturing              (lb_capturing),
+        .handoff_valid          (lb_handoff_valid),
+        .handoff_pc             (lb_handoff_pc),
         // Phase-5 convergence: loop-buffer playback must obey the same
         // frontend redirect epoch as fetch. Commit flushes and BRU early
         // redirects both terminate the current playback/capture state.
-        .invalidate             (flush_out.valid || bru_early_redirect),
+        .invalidate             (frontend_flush_valid),
+        .redirect_valid         (frontend_flush_valid),
+        .redirect_pc            (frontend_flush_pc),
         .stall                  (rename_stall)
     );
 
-    // Mux: loop buffer playback or normal decode path
+    // =========================================================================
+    // 4b. µop CACHE (gen-2)
+    //
+    // Parallel-path bring-up: instantiated unconditionally, but only emits
+    // (active=1) when sim_uoc_enable.  When enabled, supersedes LB.
+    // =========================================================================
+    uop_cache u_uop_cache (
+        .clk                    (clk),
+        .rst_n                  (rst_n),
+        // Disable UOC firing while the loop buffer is actively playing or
+        // capturing — they share the rename input mux and the frontend
+        // hold signal; coordinated mutual exclusion keeps both happy.
+        .en                     (sim_uoc_enable && !lb_active && !lb_capturing),
+        .fused_insn             (fused_insn),
+        .fused_count            (fused_count),
+        .uoc_insn               (uoc_insn),
+        .uoc_count              (uoc_count),
+        .active                 (uoc_active),
+        .handoff_valid          (uoc_handoff_valid),
+        .handoff_pc             (uoc_handoff_pc),
+        .redirect_valid         (frontend_flush_valid),
+        .redirect_pc            (frontend_flush_pc),
+        .invalidate             (frontend_flush_valid && fence_i_signal),
+        .stall                  (rename_stall),
+        .ev_lookup              (uoc_ev_lookup),
+        .ev_hit                 (uoc_ev_hit),
+        .ev_miss                (uoc_ev_miss),
+        .ev_fill                (uoc_ev_fill),
+        .ev_fill_evict_valid    (uoc_ev_fill_evict_valid),
+        .ev_enter_playing       (uoc_ev_enter_playing),
+        .ev_exit_playing_miss   (uoc_ev_exit_playing_miss),
+        .ev_invalidate          (uoc_ev_invalidate)
+    );
+
+    // Mux: bru-quarantine > UOC > LB > fused (uoc/lb mutually exclusive
+    // by gating above; the explicit ordering keeps the priority readable)
     decoded_insn_t rename_dec_in [0:PIPE_WIDTH-1];
     logic [2:0]    rename_dec_count;
 
     always_comb begin
-        if (lb_active) begin
+        if (bru_redirect_quarantine) begin
+            for (int i = 0; i < PIPE_WIDTH; i++)
+                rename_dec_in[i] = '0;
+            rename_dec_count = 3'd0;
+        end else if (uoc_active) begin
+            for (int i = 0; i < PIPE_WIDTH; i++)
+                rename_dec_in[i] = uoc_insn[i];
+            rename_dec_count = uoc_count;
+        end else if (lb_active) begin
             for (int i = 0; i < PIPE_WIDTH; i++)
                 rename_dec_in[i] = lb_insn[i];
             rename_dec_count = lb_count;
@@ -378,6 +529,11 @@ module rv64gc_core_top
     // so the ifdef SIMULATION init block below can reach them)
     logic                       rob_uses_checkpoint [0:ROB_DEPTH-1];
     logic [CHECKPOINT_BITS-1:0] rob_checkpoint_id   [0:ROB_DEPTH-1];
+    // Checkpoint snapshot tail parallel to ROB.  The current checkpoint
+    // snapshot is taken at the first renamed slot in a batch; a branch can use
+    // execute-time partial recovery without losing older same-batch mappings
+    // only when that snapshot tail equals the branch ROB.
+    logic [ROB_IDX_BITS-1:0]    rob_checkpoint_tail [0:ROB_DEPTH-1];
 
 `ifdef SIMULATION
     // Zero-initialize these unpacked arrays at t=0.  The commit-read
@@ -399,6 +555,7 @@ module rv64gc_core_top
             rename_buf[i]          = '{default: '0};
             rob_uses_checkpoint[i] = 1'b0;
             rob_checkpoint_id[i]   = '0;
+            rob_checkpoint_tail[i] = '0;
         end
     end
 `endif
@@ -505,8 +662,449 @@ module rv64gc_core_top
         .commit_cp_id     (commit_cp_id)
     );
 
-    // Backend stall: rename cannot accept or loop buffer stalls
+    logic [63:0]             bru_redirect_target_r;
+    logic [ROB_IDX_BITS-1:0] bru_redirect_rob_r;
+    logic                    bru_redirect_is_cond_r;
+    logic                    commit_mispredict_branch_valid;
+    logic [ROB_IDX_BITS-1:0] commit_mispredict_branch_rob;
+
+`ifdef SIMULATION
+    logic sim_keep_early_frontend;
+    initial begin
+        sim_keep_early_frontend = $test$plusargs("KEEP_EARLY_FRONTEND");
+    end
+    assign keep_early_frontend = sim_keep_early_frontend;
+`else
+    assign keep_early_frontend = 1'b0;
+`endif
+
+    always_comb begin
+        commit_mispredict_branch_valid = 1'b0;
+        commit_mispredict_branch_rob   = rob_head_idx;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            automatic logic [ROB_IDX_BITS:0] idx_sum;
+            automatic logic [ROB_IDX_BITS-1:0] idx_w;
+
+            idx_sum = {1'b0, rob_head_idx} +
+                      {{(ROB_IDX_BITS-2){1'b0}}, i[2:0]};
+            if (idx_sum >= (ROB_IDX_BITS+1)'(ROB_DEPTH))
+                idx_w = ROB_IDX_BITS'(idx_sum - (ROB_IDX_BITS+1)'(ROB_DEPTH));
+            else
+                idx_w = idx_sum[ROB_IDX_BITS-1:0];
+
+            if (!commit_mispredict_branch_valid &&
+                commit_out[i].valid &&
+                rob_head_branch_mispredict[i]) begin
+                commit_mispredict_branch_valid = 1'b1;
+                commit_mispredict_branch_rob   = idx_w;
+            end
+        end
+    end
+
+    assign frontend_late_flush_redundant =
+        keep_early_frontend &&
+        bru_redirect_quarantine_r &&
+        bru_redirect_is_cond_r &&
+        flush_out.valid &&
+        flush_out.full_flush &&
+        commit_mispredict_branch_valid &&
+        (commit_mispredict_branch_rob == bru_redirect_rob_r) &&
+        (flush_out.redirect_pc == bru_redirect_target_r);
+
+    assign frontend_flush_valid =
+        (flush_out.valid && !frontend_late_flush_redundant) ||
+        bru_early_redirect;
+    assign frontend_flush_pc =
+        (flush_out.valid && !frontend_late_flush_redundant)
+            ? flush_out.redirect_pc
+            : bru_early_target;
+
+    // Backend stall: rename cannot accept.  In the opt-in early-frontend
+    // retention mode, a BRU quarantine also stalls packet dequeue/decode so
+    // correct-path packets fetched by the execute-time redirect are not
+    // consumed and dropped while rename is forced to zero.
+    assign bru_redirect_quarantine = bru_early_redirect || bru_redirect_quarantine_r;
     assign backend_stall = rename_stall;
+    assign frontend_backend_stall =
+        rename_stall || (keep_early_frontend && bru_redirect_quarantine);
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_out.valid) begin
+            bru_redirect_quarantine_r <= 1'b0;
+            bru_redirect_target_r     <= 64'd0;
+            bru_redirect_rob_r        <= '0;
+            bru_redirect_is_cond_r    <= 1'b0;
+        end else if (bru_early_redirect) begin
+            bru_redirect_quarantine_r <= 1'b1;
+            bru_redirect_target_r     <= bru_early_target;
+            bru_redirect_rob_r        <= bru1_early_redirect
+                ? iq0_issue_data[1].rob_idx
+                : iq0_issue_data[0].rob_idx;
+            bru_redirect_is_cond_r    <= bru1_early_redirect
+                ? br_op_is_cond(iq0_issue_data[1].br_op)
+                : br_op_is_cond(iq0_issue_data[0].br_op);
+        end
+    end
+
+`ifdef SIMULATION
+    // Observability for the current fetch-only BRU redirect contract.
+    // After execute redirects fetch, rename is intentionally quarantined until
+    // the mispredicting branch reaches commit and performs the architectural
+    // flush.  These counters quantify that remaining recovery penalty.
+    logic sim_bru_recovery_en;
+    logic sim_bru_recovery_trace_en;
+    logic sim_bru_flush_is_mispredict;
+    integer sim_bru_early_cnt;
+    integer sim_bru0_early_cnt;
+    integer sim_bru1_early_cnt;
+    integer sim_bru_quarantine_cycles;
+    integer sim_bru_quarantine_runs;
+    integer sim_bru_quarantine_sum;
+    integer sim_bru_quarantine_max;
+    integer sim_bru_quarantine_run;
+    integer sim_bru_quarantine_misp_end;
+    integer sim_bru_quarantine_other_end;
+    integer sim_bru_quarantine_fused_suppressed;
+    integer sim_bru_quarantine_age;
+    integer sim_bru_quarantine_age_sum;
+    integer sim_bru_quarantine_age_max;
+    integer sim_bru_quarantine_ckpt_runs;
+    integer sim_bru_quarantine_ckpt_at_branch_runs;
+    integer sim_bru_quarantine_no_ckpt_runs;
+    integer sim_bru_quarantine_ckpt_at_branch_cycles;
+    logic [63:0] sim_bru_quarantine_pc;
+    logic [63:0] sim_bru_quarantine_target;
+    logic [ROB_IDX_BITS-1:0] sim_bru_quarantine_rob;
+    logic [2:0] sim_bru_quarantine_type;
+    logic sim_bru_quarantine_uses_checkpoint;
+    logic sim_bru_quarantine_ckpt_at_branch;
+
+    localparam int SIM_BRU_RECOVERY_TOPN = 16;
+    logic [63:0] sim_bru_top_pc [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_count [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_cycles [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_max [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_age_sum [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_age_max [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_cond [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_jal [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_jalr [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_uses_ckpt [0:SIM_BRU_RECOVERY_TOPN-1];
+    integer sim_bru_top_ckpt_at_branch [0:SIM_BRU_RECOVERY_TOPN-1];
+
+    logic [63:0] sim_bru_selected_pc;
+    logic [ROB_IDX_BITS-1:0] sim_bru_selected_rob;
+    logic [2:0] sim_bru_selected_type;
+    logic sim_bru_selected_uses_checkpoint;
+    logic sim_bru_selected_ckpt_at_branch;
+    logic [ROB_IDX_BITS:0] sim_bru_selected_age;
+
+    initial begin
+        sim_bru_recovery_en =
+            $test$plusargs("PERF_PROFILE") ||
+            $test$plusargs("STAT_DUMP") ||
+            $test$plusargs("TRACE_BRU_RECOVERY");
+        sim_bru_recovery_trace_en = $test$plusargs("TRACE_BRU_RECOVERY");
+    end
+
+    always_comb begin
+        sim_bru_flush_is_mispredict = 1'b0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if (commit_out[i].valid && rob_head_branch_mispredict[i])
+                sim_bru_flush_is_mispredict = 1'b1;
+        end
+    end
+
+    always_comb begin
+        sim_bru_selected_pc = bru1_early_redirect
+            ? iq0_issue_data[1].pc
+            : iq0_issue_data[0].pc;
+        sim_bru_selected_rob = bru1_early_redirect
+            ? iq0_issue_data[1].rob_idx
+            : iq0_issue_data[0].rob_idx;
+        sim_bru_selected_type = bru1_early_redirect
+            ? iq0_issue_data[1].br_op
+            : iq0_issue_data[0].br_op;
+        sim_bru_selected_uses_checkpoint = bru1_early_redirect
+            ? iq0_issue_data[1].uses_checkpoint
+            : iq0_issue_data[0].uses_checkpoint;
+        sim_bru_selected_ckpt_at_branch =
+            sim_bru_selected_uses_checkpoint &&
+            (rob_checkpoint_tail[sim_bru_selected_rob] == sim_bru_selected_rob);
+
+        if (sim_bru_selected_rob >= rob_head_idx) begin
+            sim_bru_selected_age =
+                {1'b0, sim_bru_selected_rob} - {1'b0, rob_head_idx};
+        end else begin
+            sim_bru_selected_age =
+                (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                {1'b0, rob_head_idx} + {1'b0, sim_bru_selected_rob};
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sim_bru_early_cnt                  <= 0;
+            sim_bru0_early_cnt                 <= 0;
+            sim_bru1_early_cnt                 <= 0;
+            sim_bru_quarantine_cycles          <= 0;
+            sim_bru_quarantine_runs            <= 0;
+            sim_bru_quarantine_sum             <= 0;
+            sim_bru_quarantine_max             <= 0;
+            sim_bru_quarantine_run             <= 0;
+            sim_bru_quarantine_misp_end        <= 0;
+            sim_bru_quarantine_other_end       <= 0;
+            sim_bru_quarantine_fused_suppressed <= 0;
+            sim_bru_quarantine_age             <= 0;
+            sim_bru_quarantine_age_sum         <= 0;
+            sim_bru_quarantine_age_max         <= 0;
+            sim_bru_quarantine_ckpt_runs       <= 0;
+            sim_bru_quarantine_ckpt_at_branch_runs <= 0;
+            sim_bru_quarantine_no_ckpt_runs    <= 0;
+            sim_bru_quarantine_ckpt_at_branch_cycles <= 0;
+            sim_bru_quarantine_pc              <= 64'd0;
+            sim_bru_quarantine_target          <= 64'd0;
+            sim_bru_quarantine_rob             <= '0;
+            sim_bru_quarantine_type            <= 3'd0;
+            sim_bru_quarantine_uses_checkpoint <= 1'b0;
+            sim_bru_quarantine_ckpt_at_branch  <= 1'b0;
+            for (int i = 0; i < SIM_BRU_RECOVERY_TOPN; i++) begin
+                sim_bru_top_pc[i]             <= 64'd0;
+                sim_bru_top_count[i]          <= 0;
+                sim_bru_top_cycles[i]         <= 0;
+                sim_bru_top_max[i]            <= 0;
+                sim_bru_top_age_sum[i]        <= 0;
+                sim_bru_top_age_max[i]        <= 0;
+                sim_bru_top_cond[i]           <= 0;
+                sim_bru_top_jal[i]            <= 0;
+                sim_bru_top_jalr[i]           <= 0;
+                sim_bru_top_uses_ckpt[i]      <= 0;
+                sim_bru_top_ckpt_at_branch[i] <= 0;
+            end
+        end else if (sim_bru_recovery_en) begin
+            if (bru0_early_redirect) begin
+                sim_bru0_early_cnt <= sim_bru0_early_cnt + 1;
+            end
+            if (bru1_early_redirect) begin
+                sim_bru1_early_cnt <= sim_bru1_early_cnt + 1;
+            end
+            if (bru_early_redirect) begin
+                sim_bru_early_cnt <= sim_bru_early_cnt + 1;
+                if (!bru_redirect_quarantine_r) begin
+                    sim_bru_quarantine_pc <= sim_bru_selected_pc;
+                    sim_bru_quarantine_target <= bru_early_target;
+                    sim_bru_quarantine_rob <= sim_bru_selected_rob;
+                    sim_bru_quarantine_type <= sim_bru_selected_type;
+                    sim_bru_quarantine_age <= int'(sim_bru_selected_age);
+                    sim_bru_quarantine_uses_checkpoint <=
+                        sim_bru_selected_uses_checkpoint;
+                    sim_bru_quarantine_ckpt_at_branch <=
+                        sim_bru_selected_ckpt_at_branch;
+                end
+            end
+
+            if (bru_redirect_quarantine) begin
+                sim_bru_quarantine_cycles <= sim_bru_quarantine_cycles + 1;
+                sim_bru_quarantine_fused_suppressed <=
+                    sim_bru_quarantine_fused_suppressed + fused_count;
+            end
+
+            if (flush_out.valid && bru_redirect_quarantine_r) begin
+                sim_bru_quarantine_runs <= sim_bru_quarantine_runs + 1;
+                sim_bru_quarantine_sum  <= sim_bru_quarantine_sum +
+                                           sim_bru_quarantine_run + 1;
+                if ((sim_bru_quarantine_run + 1) > sim_bru_quarantine_max)
+                    sim_bru_quarantine_max <= sim_bru_quarantine_run + 1;
+                if (sim_bru_flush_is_mispredict)
+                    sim_bru_quarantine_misp_end <= sim_bru_quarantine_misp_end + 1;
+                else
+                    sim_bru_quarantine_other_end <= sim_bru_quarantine_other_end + 1;
+                sim_bru_quarantine_age_sum <= sim_bru_quarantine_age_sum +
+                                               sim_bru_quarantine_age;
+                if (sim_bru_quarantine_age > sim_bru_quarantine_age_max)
+                    sim_bru_quarantine_age_max <= sim_bru_quarantine_age;
+                if (sim_bru_quarantine_uses_checkpoint)
+                    sim_bru_quarantine_ckpt_runs <= sim_bru_quarantine_ckpt_runs + 1;
+                else
+                    sim_bru_quarantine_no_ckpt_runs <= sim_bru_quarantine_no_ckpt_runs + 1;
+                if (sim_bru_quarantine_ckpt_at_branch) begin
+                    sim_bru_quarantine_ckpt_at_branch_runs <=
+                        sim_bru_quarantine_ckpt_at_branch_runs + 1;
+                    sim_bru_quarantine_ckpt_at_branch_cycles <=
+                        sim_bru_quarantine_ckpt_at_branch_cycles +
+                        sim_bru_quarantine_run + 1;
+                end
+
+                begin : sim_bru_top_update
+                    int hit_idx;
+                    int empty_idx;
+                    int min_idx;
+                    int use_idx;
+                    int min_cycles;
+
+                    hit_idx = -1;
+                    empty_idx = -1;
+                    min_idx = 0;
+                    min_cycles = sim_bru_top_cycles[0];
+                    for (int i = 0; i < SIM_BRU_RECOVERY_TOPN; i++) begin
+                        if ((sim_bru_top_count[i] != 0) &&
+                            (sim_bru_top_pc[i] == sim_bru_quarantine_pc) &&
+                            (hit_idx < 0)) begin
+                            hit_idx = i;
+                        end
+                        if ((sim_bru_top_count[i] == 0) &&
+                            (empty_idx < 0)) begin
+                            empty_idx = i;
+                        end
+                        if (sim_bru_top_cycles[i] < min_cycles) begin
+                            min_cycles = sim_bru_top_cycles[i];
+                            min_idx = i;
+                        end
+                    end
+
+                    if (hit_idx >= 0) begin
+                        use_idx = hit_idx;
+                        sim_bru_top_count[use_idx] <=
+                            sim_bru_top_count[use_idx] + 1;
+                        sim_bru_top_cycles[use_idx] <=
+                            sim_bru_top_cycles[use_idx] +
+                            sim_bru_quarantine_run + 1;
+                        if ((sim_bru_quarantine_run + 1) >
+                            sim_bru_top_max[use_idx]) begin
+                            sim_bru_top_max[use_idx] <=
+                                sim_bru_quarantine_run + 1;
+                        end
+                        sim_bru_top_age_sum[use_idx] <=
+                            sim_bru_top_age_sum[use_idx] +
+                            sim_bru_quarantine_age;
+                        if (sim_bru_quarantine_age >
+                            sim_bru_top_age_max[use_idx]) begin
+                            sim_bru_top_age_max[use_idx] <=
+                                sim_bru_quarantine_age;
+                        end
+                        if (br_op_is_cond(br_op_e'(sim_bru_quarantine_type)))
+                            sim_bru_top_cond[use_idx] <=
+                                sim_bru_top_cond[use_idx] + 1;
+                        else if (sim_bru_quarantine_type == BR_JAL)
+                            sim_bru_top_jal[use_idx] <=
+                                sim_bru_top_jal[use_idx] + 1;
+                        else if (sim_bru_quarantine_type == BR_JALR)
+                            sim_bru_top_jalr[use_idx] <=
+                                sim_bru_top_jalr[use_idx] + 1;
+                        if (sim_bru_quarantine_uses_checkpoint)
+                            sim_bru_top_uses_ckpt[use_idx] <=
+                                sim_bru_top_uses_ckpt[use_idx] + 1;
+                        if (sim_bru_quarantine_ckpt_at_branch)
+                            sim_bru_top_ckpt_at_branch[use_idx] <=
+                                sim_bru_top_ckpt_at_branch[use_idx] + 1;
+                    end else begin
+                        use_idx = (empty_idx >= 0) ? empty_idx : min_idx;
+                        sim_bru_top_pc[use_idx] <= sim_bru_quarantine_pc;
+                        sim_bru_top_count[use_idx] <= 1;
+                        sim_bru_top_cycles[use_idx] <=
+                            sim_bru_quarantine_run + 1;
+                        sim_bru_top_max[use_idx] <=
+                            sim_bru_quarantine_run + 1;
+                        sim_bru_top_age_sum[use_idx] <=
+                            sim_bru_quarantine_age;
+                        sim_bru_top_age_max[use_idx] <=
+                            sim_bru_quarantine_age;
+                        sim_bru_top_cond[use_idx] <=
+                            br_op_is_cond(br_op_e'(sim_bru_quarantine_type))
+                                ? 1 : 0;
+                        sim_bru_top_jal[use_idx] <=
+                            (sim_bru_quarantine_type == BR_JAL) ? 1 : 0;
+                        sim_bru_top_jalr[use_idx] <=
+                            (sim_bru_quarantine_type == BR_JALR) ? 1 : 0;
+                        sim_bru_top_uses_ckpt[use_idx] <=
+                            sim_bru_quarantine_uses_checkpoint ? 1 : 0;
+                        sim_bru_top_ckpt_at_branch[use_idx] <=
+                            sim_bru_quarantine_ckpt_at_branch ? 1 : 0;
+                    end
+                end
+
+                if (sim_bru_recovery_trace_en) begin
+                    $display("[BRU_RECOVERY] pc=%016h rob=%0d type=%0d target=%016h quarantine_cycles=%0d end_misp=%b flush_pc=%016h age=%0d uses_ckpt=%b ckpt_at_branch=%b",
+                             sim_bru_quarantine_pc,
+                             sim_bru_quarantine_rob,
+                             sim_bru_quarantine_type,
+                             sim_bru_quarantine_target,
+                             sim_bru_quarantine_run + 1,
+                             sim_bru_flush_is_mispredict,
+                             flush_out.redirect_pc,
+                             sim_bru_quarantine_age,
+                             sim_bru_quarantine_uses_checkpoint,
+                             sim_bru_quarantine_ckpt_at_branch);
+                end
+
+                sim_bru_quarantine_run <= 0;
+            end else if (bru_redirect_quarantine) begin
+                sim_bru_quarantine_run <= sim_bru_quarantine_run + 1;
+            end else begin
+                sim_bru_quarantine_run <= 0;
+            end
+        end
+    end
+
+    final begin
+        if (sim_bru_recovery_en) begin
+            $display("");
+            $display("=== BRU EARLY REDIRECT RECOVERY SUMMARY ===");
+            $display("Early redirects total / BRU0 / BRU1: %0d / %0d / %0d",
+                     sim_bru_early_cnt, sim_bru0_early_cnt, sim_bru1_early_cnt);
+            $display("Quarantine cycles:                   %0d", sim_bru_quarantine_cycles);
+            $display("Quarantine runs ended:               %0d", sim_bru_quarantine_runs);
+            $display("  ended by branch mispredict flush:  %0d", sim_bru_quarantine_misp_end);
+            $display("  ended by other flush:              %0d", sim_bru_quarantine_other_end);
+            $display("  open at simulation end:            %0d",
+                     (sim_bru_quarantine_run != 0) ? 1 : 0);
+            $display("Quarantine avg cycles/run x100:      %0d",
+                     (sim_bru_quarantine_runs != 0)
+                         ? (sim_bru_quarantine_sum * 100 / sim_bru_quarantine_runs)
+                         : 0);
+            $display("Quarantine max cycles/run:           %0d", sim_bru_quarantine_max);
+            $display("Quarantine avg ROB age x100:         %0d",
+                     (sim_bru_quarantine_runs != 0)
+                         ? (sim_bru_quarantine_age_sum * 100 /
+                            sim_bru_quarantine_runs)
+                         : 0);
+            $display("Quarantine max ROB age:              %0d",
+                     sim_bru_quarantine_age_max);
+            $display("Checkpoint runs any/safe-boundary/no:%0d / %0d / %0d",
+                     sim_bru_quarantine_ckpt_runs,
+                     sim_bru_quarantine_ckpt_at_branch_runs,
+                     sim_bru_quarantine_no_ckpt_runs);
+            $display("Safe-boundary quarantine cycles:     %0d",
+                     sim_bru_quarantine_ckpt_at_branch_cycles);
+            $display("Correct-path fused insns suppressed: %0d",
+                     sim_bru_quarantine_fused_suppressed);
+            $display("Upper-bound rename slots suppressed: %0d",
+                     sim_bru_quarantine_cycles * PIPE_WIDTH);
+            $display("BRU recovery PC attribution (approx top %0d by cycles):",
+                     SIM_BRU_RECOVERY_TOPN);
+            $display("  pc               count cycles avg_x100 max avg_age_x100 max_age cond/jal/jalr ckpt/safe");
+            for (int i = 0; i < SIM_BRU_RECOVERY_TOPN; i++) begin
+                if (sim_bru_top_count[i] != 0) begin
+                    $display("  %016h %0d %0d %0d %0d %0d %0d %0d/%0d/%0d %0d/%0d",
+                             sim_bru_top_pc[i],
+                             sim_bru_top_count[i],
+                             sim_bru_top_cycles[i],
+                             sim_bru_top_cycles[i] * 100 /
+                                 sim_bru_top_count[i],
+                             sim_bru_top_max[i],
+                             sim_bru_top_age_sum[i] * 100 /
+                                 sim_bru_top_count[i],
+                             sim_bru_top_age_max[i],
+                             sim_bru_top_cond[i],
+                             sim_bru_top_jal[i],
+                             sim_bru_top_jalr[i],
+                             sim_bru_top_uses_ckpt[i],
+                             sim_bru_top_ckpt_at_branch[i]);
+                end
+            end
+        end
+    end
+`endif
 
     // =========================================================================
     // Write rename buffer at allocation time
@@ -514,6 +1112,11 @@ module rv64gc_core_top
     localparam logic [1:0] RAS_NONE = 2'd0;
     localparam logic [1:0] RAS_PUSH = 2'd1;
     localparam logic [1:0] RAS_POP  = 2'd2;
+    localparam logic [2:0] BT_COND = 3'd0;
+    localparam logic [2:0] BT_JAL  = 3'd1;
+    localparam logic [2:0] BT_JALR = 3'd2;
+    localparam logic [2:0] BT_CALL = 3'd3;
+    localparam logic [2:0] BT_RET  = 3'd4;
 
     function automatic logic [4:0] ras_tos_after_redirect(
         input logic [4:0] pre_tos,
@@ -533,6 +1136,33 @@ module rv64gc_core_top
         end
     endfunction
 
+    function automatic logic br_op_is_cond(input br_op_e op);
+        begin
+            case (op)
+                BR_EQ, BR_NE, BR_LT, BR_GE, BR_LTU, BR_GEU:
+                    br_op_is_cond = 1'b1;
+                default:
+                    br_op_is_cond = 1'b0;
+            endcase
+        end
+    endfunction
+
+    function automatic logic [2:0] bpu_type_from_iq(input iq_entry_t issue);
+        begin
+            case (issue.br_op)
+                BR_JAL:
+                    bpu_type_from_iq =
+                        (issue.bp_ras_op == RAS_PUSH) ? BT_CALL : BT_JAL;
+                BR_JALR:
+                    bpu_type_from_iq =
+                        (issue.bp_ras_op == RAS_POP)  ? BT_RET  :
+                        (issue.bp_ras_op == RAS_PUSH) ? BT_CALL : BT_JALR;
+                default:
+                    bpu_type_from_iq = BT_COND;
+            endcase
+        end
+    endfunction
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
             // Clear on reset AND on full flush.  Stale entries in rename_buf
@@ -545,6 +1175,7 @@ module rv64gc_core_top
                 rename_buf[i]          <= '0;
                 rob_uses_checkpoint[i] <= 1'b0;
                 rob_checkpoint_id[i]   <= '0;
+                rob_checkpoint_tail[i] <= '0;
             end
         end else begin
             for (int i = 0; i < PIPE_WIDTH; i++) begin
@@ -574,6 +1205,7 @@ module rv64gc_core_top
                                    : RAS_NONE);
                     rob_uses_checkpoint[ren_insn[i].rob_idx] <= ren_insn[i].uses_checkpoint;
                     rob_checkpoint_id[ren_insn[i].rob_idx]   <= ren_insn[i].checkpoint_id;
+                    rob_checkpoint_tail[ren_insn[i].rob_idx] <= rob_alloc_idx[0];
                 end
             end
         end
@@ -685,6 +1317,7 @@ module rv64gc_core_top
         .alloc_count            (ren_count_w),
         .alloc_idx              (rob_alloc_idx),
         .alloc_ready            (rob_alloc_ready),
+        .alloc_ready_now        (ren_eliminated),
         .alloc_pc               (rob_alloc_pc),
         .alloc_is_branch        (rob_alloc_is_branch),
         .alloc_bpu_type         (rob_alloc_bpu_type),
@@ -749,6 +1382,7 @@ module rv64gc_core_top
         .flush_valid            (flush_out.valid),
         .flush_rob_tail         (flush_out.rob_idx),
         .flush_full             (flush_out.full_flush),
+        .flush_clear_branch_mispredict(bru_partial_recovery_valid),
         .tail_idx               (rob_tail_idx),
         .empty                  (rob_empty),
         .full                   (rob_full)
@@ -757,6 +1391,8 @@ module rv64gc_core_top
     // =========================================================================
     // 6. DISPATCH QUEUE
     // =========================================================================
+    logic [2:0]    dq_enq_count;
+    renamed_insn_t dq_enq_data [0:PIPE_WIDTH-1];
     logic [2:0]    dq_deq_count;
     renamed_insn_t dq_deq_data [0:PIPE_WIDTH-1];
     logic [1:0]    dq_deq_iq_target [0:PIPE_WIDTH-1];
@@ -767,6 +1403,11 @@ module rv64gc_core_top
     logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq0_occ;
     logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq1_occ;
     logic [$clog2(IQ_INT_DEPTH+1)-1:0] iq2_occ;
+    logic [$clog2(IQ_MEM_DEPTH+1)-1:0] iq_load_occ;
+    logic [$clog2(IQ_MEM_DEPTH+1)-1:0] iq_store_occ;
+    logic [$clog2(IQ_MEM_DEPTH+1)-1:0] iq_std_occ;
+    logic [1:0] dq_load_iq_credit;
+    logic [1:0] dq_store_iq_credit;
 
     // Pack per-IQ occupancy into an array for dispatch routing.
     logic [5:0] iq_occ_vec [0:NUM_INT_IQS-1];
@@ -774,19 +1415,58 @@ module rv64gc_core_top
     assign iq_occ_vec[1] = 6'(iq1_occ);
     assign iq_occ_vec[2] = 6'(iq2_occ);
 
+    function automatic logic [1:0] cap_mem_free2(input logic [5:0] occ);
+        int free_slots;
+        begin
+            free_slots = IQ_MEM_DEPTH - int'(occ);
+            if (free_slots <= 0)
+                cap_mem_free2 = 2'd0;
+            else if (free_slots == 1)
+                cap_mem_free2 = 2'd1;
+            else
+                cap_mem_free2 = 2'd2;
+        end
+    endfunction
+
+    assign dq_load_iq_credit = cap_mem_free2(6'(iq_load_occ));
+    assign dq_store_iq_credit =
+        (cap_mem_free2(6'(iq_store_occ)) < cap_mem_free2(6'(iq_std_occ)))
+            ? cap_mem_free2(6'(iq_store_occ))
+            : cap_mem_free2(6'(iq_std_occ));
+
+    // Rename still allocates a ROB entry for eliminated uops so commit/minstret
+    // stays precise, but they are already complete and need no IQ/FU work.
+    always_comb begin
+        dq_enq_count = 3'd0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            dq_enq_data[i] = '0;
+        end
+
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if ((3'(i) < ren_count_w) && !ren_eliminated[i]) begin
+                dq_enq_data[dq_enq_count] = ren_insn[i];
+                dq_enq_count = dq_enq_count + 3'd1;
+            end
+        end
+    end
+
     dispatch_queue u_dispatch_queue (
         .clk         (clk),
         .rst_n       (rst_n),
-        .enq_count   (ren_count_w),
-        .enq_data    (ren_insn),
+        .enq_count   (dq_enq_count),
+        .enq_data    (dq_enq_data),
         .full        (dq_full),
         .deq_count   (dq_deq_count),
         .deq_data    (dq_deq_data),
         .deq_iq_target(dq_deq_iq_target),
         .iq_full     (iq_full_vec),
         .iq_occ      (iq_occ_vec),
+        .load_iq_credit(dq_load_iq_credit),
+        .store_iq_credit(dq_store_iq_credit),
         .flush_valid (flush_out.valid),
-        .flush_full  (flush_out.full_flush)
+        .flush_full  (flush_out.full_flush),
+        .flush_rob_tail(flush_out.rob_idx),
+        .rob_head    (rob_head_idx)
     );
 
     // =========================================================================
@@ -866,8 +1546,20 @@ module rv64gc_core_top
     assign issueq_probe_none_rob_idx[1] = '0;
     assign store_iq_load_probe_rob_idx[0] = iq_load_issue_data[0].rob_idx;
     assign store_iq_load_probe_rob_idx[1] = iq_load_issue_data[1].rob_idx;
+
+`ifndef SYNTHESIS
+    bit sim_allow_load_spec_past_sta;
+    initial sim_allow_load_spec_past_sta =
+        $test$plusargs("ALLOW_LOAD_SPEC_PAST_STA");
+`endif
+
     assign lsu_load_issue_suppress = lsu_load_issue_suppress_raw |
+`ifndef SYNTHESIS
+                                     (sim_allow_load_spec_past_sta
+                                      ? 2'b00 : store_iq_older_than_load);
+`else
                                      store_iq_older_than_load;
+`endif
 
     // =========================================================================
     // Dispatch routing: precompute renamed_insn_t to iq_entry_t conversion
@@ -900,6 +1592,7 @@ module rv64gc_core_top
             dq_iq_entry[s].bp_taken     = dq_deq_data[s].base.bp_taken;
             dq_iq_entry[s].bp_target    = dq_deq_data[s].base.bp_target;
             dq_iq_entry[s].bp_ras_tos   = dq_deq_data[s].base.bp_ras_tos;
+            dq_iq_entry[s].bp_ras_top   = dq_deq_data[s].base.bp_ras_top;
             dq_iq_entry[s].bp_ras_op    =
                 ((dq_deq_data[s].base.is_jal &&
                   ((dq_deq_data[s].base.rd_arch == 5'd1) ||
@@ -1030,8 +1723,12 @@ module rv64gc_core_top
         .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
+        .spec_wk_valid1  (lsu_spec_wakeup_valid[1]),
+        .spec_wk_tag1    (lsu_spec_wakeup_tag[1]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
+        .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq0_issue_valid),
@@ -1062,8 +1759,12 @@ module rv64gc_core_top
         .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
+        .spec_wk_valid1  (lsu_spec_wakeup_valid[1]),
+        .spec_wk_tag1    (lsu_spec_wakeup_tag[1]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
+        .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq1_issue_valid_s),
@@ -1094,8 +1795,12 @@ module rv64gc_core_top
         .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
+        .spec_wk_valid1  (lsu_spec_wakeup_valid[1]),
+        .spec_wk_tag1    (lsu_spec_wakeup_tag[1]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
+        .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq2_issue_valid_s),
@@ -1127,8 +1832,12 @@ module rv64gc_core_top
         .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
+        .spec_wk_valid1  (lsu_spec_wakeup_valid[1]),
+        .spec_wk_tag1    (lsu_spec_wakeup_tag[1]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
+        .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(iq_load_issue_candidate_valid),
         .issue_valid     (iq_load_issue_valid),
@@ -1141,7 +1850,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  (lsu_load_issue_suppress),
-        .occupancy       (/* unused */)
+        .occupancy       (iq_load_occ)
     );
 
     // Store address IQ (STA): address publish depends only on rs1 readiness.
@@ -1156,8 +1865,12 @@ module rv64gc_core_top
         .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
+        .spec_wk_valid1  (lsu_spec_wakeup_valid[1]),
+        .spec_wk_tag1    (lsu_spec_wakeup_tag[1]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
+        .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq_store_issue_valid_s),
@@ -1170,7 +1883,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
-        .occupancy       (/* unused */)
+        .occupancy       (iq_store_occ)
     );
     assign iq_store_issue_valid[0] = iq_store_issue_valid_s[0];
     assign iq_store_issue_valid[1] = 1'b0;
@@ -1190,8 +1903,12 @@ module rv64gc_core_top
         .cdb_tag         (cdb_tag_r),
         .spec_wk_valid   (lsu_spec_wakeup_valid[0]),
         .spec_wk_tag     (lsu_spec_wakeup_tag[0]),
+        .spec_wk_valid1  (lsu_spec_wakeup_valid[1]),
+        .spec_wk_tag1    (lsu_spec_wakeup_tag[1]),
         .spec_cancel_valid(lsu_spec_cancel_valid[0]),
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
+        .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
+        .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq_std_issue_valid_s),
@@ -1204,7 +1921,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
-        .occupancy       (/* unused */)
+        .occupancy       (iq_std_occ)
     );
 
     // =========================================================================
@@ -1310,6 +2027,7 @@ module rv64gc_core_top
         .operand_b (alu0_op_b),
         .op        (iq0_issue_data[0].alu_op),
         .is_w_op   (iq0_issue_data[0].is_w_op),
+        .is_unsigned(iq0_issue_data[0].is_unsigned),
         .result    (alu0_result)
     );
 
@@ -1325,6 +2043,7 @@ module rv64gc_core_top
         .operand_b (alu1_op_b),
         .op        (iq0_issue_data[1].alu_op),
         .is_w_op   (iq0_issue_data[1].is_w_op),
+        .is_unsigned(iq0_issue_data[1].is_unsigned),
         .result    (alu1_result)
     );
 
@@ -1340,21 +2059,32 @@ module rv64gc_core_top
         .operand_b (alu2_op_b),
         .op        (iq1_issue_data[0].alu_op),
         .is_w_op   (iq1_issue_data[0].is_w_op),
+        .is_unsigned(iq1_issue_data[0].is_unsigned),
         .result    (alu2_result)
     );
 
     // ALU3 (IQ2 port 0)
     logic [63:0] alu3_result;
     logic [63:0] alu3_op_a, alu3_op_b;
+    logic [11:0] csr_read_addr;
+    logic [63:0] csr_read_data;
+    logic [63:0] csr_exec_wdata;
     assign alu3_op_a = (iq2_issue_data[0].use_imm && (iq2_issue_data[0].alu_op == ALU_PASS2))
                        ? iq2_issue_data[0].pc : bypassed_data[6];
     assign alu3_op_b = iq2_issue_data[0].use_imm ? iq2_issue_data[0].imm : bypassed_data[7];
+    assign csr_read_addr =
+        (iq2_issue_valid[0] && (iq2_issue_data[0].fu_type == FU_CSR))
+            ? iq2_issue_data[0].csr_addr
+            : 12'd0;
+    assign csr_exec_wdata =
+        iq2_issue_data[0].use_imm ? iq2_issue_data[0].imm : bypassed_data[6];
 
     alu u_alu3 (
         .operand_a (alu3_op_a),
         .operand_b (alu3_op_b),
         .op        (iq2_issue_data[0].alu_op),
         .is_w_op   (iq2_issue_data[0].is_w_op),
+        .is_unsigned(iq2_issue_data[0].is_unsigned),
         .result    (alu3_result)
     );
 
@@ -1419,27 +2149,165 @@ module rv64gc_core_top
     // =========================================================================
     // BRU early fetch redirect (fetch-only, no pipeline flush)
     // =========================================================================
-    // Only BRU0 (port 0, oldest branch) triggers early redirect.
-    // BRU1 (port 1, younger branch) uses the normal commit flush path.
-    // This prevents early-redirect storms from wrong-path branches on port 1.
-    // bru_early_redirect declared earlier (forward decl for fetch_unit port)
-    assign bru_early_redirect = bru_issue && bru_mispredict;
+    // BRU0 is the oldest branch issue slot; BRU1 is the second-oldest issue
+    // slot.  Allow either resolved mispredict to restart fetch immediately,
+    // choosing BRU0 if both mispredict in the same cycle.
+    // Once an execute-time redirect is pending, rename is quarantined until
+    // commit performs the architectural flush. Suppress nested BRU redirects in
+    // that window so younger wrong-path branches cannot keep restarting fetch.
+    // This path is opt-in because CoreMark exposes a correctness hazard in the
+    // current fetch-only recovery contract; commit-time flush remains the safe
+    // default until backend recovery is completed.
+    assign bru0_early_redirect =
+        sim_bru0_early_redirect_en &&
+        !bru_redirect_quarantine_r && !commit_flush.valid &&
+        bru_issue && bru_mispredict;
+    assign bru1_early_redirect =
+        sim_bru1_early_redirect_en &&
+        !bru0_early_redirect &&
+        !bru_redirect_quarantine_r && !commit_flush.valid &&
+        bru1_issue && bru1_mispredict;
+    assign bru_early_redirect  = bru0_early_redirect || bru1_early_redirect;
+    assign bru_early_target    = bru0_early_redirect ? bru_target : bru1_target;
+
+    always_comb begin
+        logic partial_from_cdb1;
+        logic [ROB_IDX_BITS-1:0] partial_rob_idx;
+
+        partial_from_cdb1 = 1'b0;
+        partial_rob_idx   = cdb_rob_idx_r[0];
+        if (cdb_valid_r[0] && cdb_is_branch_r[0] &&
+            cdb_branch_mispredict_r[0]) begin
+            partial_rob_idx = cdb_rob_idx_r[0];
+        end else if (cdb_valid_r[1] && cdb_is_branch_r[1] &&
+                     cdb_branch_mispredict_r[1]) begin
+            partial_from_cdb1 = 1'b1;
+            partial_rob_idx   = cdb_rob_idx_r[1];
+        end
+
+        bru_partial_recovery_valid =
+            sim_exec_partial_branch_recovery &&
+            !commit_flush.valid &&
+            bru_redirect_quarantine_r &&
+            // Partial recovery must not suppress the later commit flush while
+            // loop-buffer playback/capture is active; that full flush is the
+            // safety valve that breaks bad captured hot-loop paths.
+            !lb_active &&
+            !lb_capturing &&
+            ((cdb_valid_r[0] && cdb_is_branch_r[0] &&
+              cdb_branch_mispredict_r[0]) ||
+             (cdb_valid_r[1] && cdb_is_branch_r[1] &&
+              cdb_branch_mispredict_r[1])) &&
+            (partial_rob_idx == rob_head_idx) &&
+            !rename_buf[partial_rob_idx].rd_valid &&
+            rob_uses_checkpoint[partial_rob_idx] &&
+            (rob_checkpoint_tail[partial_rob_idx] == partial_rob_idx);
+
+        bru_flush = '0;
+        if (bru_partial_recovery_valid) begin
+            bru_flush.valid         = 1'b1;
+            bru_flush.full_flush    = 1'b0;
+            bru_flush.redirect_pc   = partial_from_cdb1
+                                      ? cdb_branch_target_r[1]
+                                      : cdb_branch_target_r[0];
+            bru_flush.checkpoint_id = rob_checkpoint_id[partial_rob_idx];
+            bru_flush.ras_tos       = ras_tos_after_redirect(
+                rename_buf[partial_rob_idx].bp_ras_tos,
+                rename_buf[partial_rob_idx].bp_ras_op
+            );
+            if ((rename_buf[partial_rob_idx].bp_ras_op == RAS_NONE) &&
+                (rename_buf[partial_rob_idx].bp_ras_tos != 5'd0)) begin
+                bru_flush.ras_top_restore_valid = 1'b1;
+                bru_flush.ras_top_restore_addr  =
+                    rename_buf[partial_rob_idx].bp_ras_top;
+            end
+            bru_flush.ghr_restore_valid = 1'b1;
+            bru_flush.ghr_restore_val =
+                {rename_buf[partial_rob_idx].bp_ghr[GHR_BITS-2:0],
+                 partial_from_cdb1 ? cdb_branch_taken_r[1]
+                                   : cdb_branch_taken_r[0]};
+            if (partial_rob_idx == ROB_IDX_BITS'(ROB_DEPTH - 1))
+                bru_flush.rob_idx = '0;
+            else
+                bru_flush.rob_idx = partial_rob_idx + 1'b1;
+        end
+    end
+
     assign ghr_restore_valid_fe =
         bru_early_redirect ||
         (flush_out.valid && flush_out.ghr_restore_valid);
     assign ghr_restore_val_fe =
-        bru_early_redirect ? iq0_issue_data[0].bp_ghr
-                           : flush_out.ghr_restore_val;
+        flush_out.valid ? flush_out.ghr_restore_val
+                        : (bru1_early_redirect
+                           ? (br_op_is_cond(iq0_issue_data[1].br_op)
+                              ? {iq0_issue_data[1].bp_ghr[GHR_BITS-2:0],
+                                 bru1_taken}
+                              : iq0_issue_data[1].bp_ghr)
+                           : (br_op_is_cond(iq0_issue_data[0].br_op)
+                              ? {iq0_issue_data[0].bp_ghr[GHR_BITS-2:0],
+                                 bru_taken}
+                              : iq0_issue_data[0].bp_ghr));
     assign ras_restore_valid_fe = bru_early_redirect || flush_out.valid;
     assign ras_restore_tos_fe =
         flush_out.valid ? flush_out.ras_tos
-                        : ras_tos_after_redirect(
-                              iq0_issue_data[0].bp_ras_tos,
-                              iq0_issue_data[0].bp_ras_op
-                          );
+                        : (bru1_early_redirect
+                           ? ras_tos_after_redirect(
+                                 iq0_issue_data[1].bp_ras_tos,
+                                 iq0_issue_data[1].bp_ras_op
+                             )
+                           : ras_tos_after_redirect(
+                                 iq0_issue_data[0].bp_ras_tos,
+                                 iq0_issue_data[0].bp_ras_op
+                             ));
     assign ras_restore_top_valid_fe =
-        flush_out.valid && flush_out.ras_top_restore_valid;
-    assign ras_restore_top_addr_fe = flush_out.ras_top_restore_addr;
+        flush_out.valid
+            ? flush_out.ras_top_restore_valid
+            : (bru1_early_redirect
+               ? ((iq0_issue_data[1].bp_ras_op == RAS_NONE) &&
+                  (iq0_issue_data[1].bp_ras_tos != 5'd0))
+               : (bru0_early_redirect &&
+                  (iq0_issue_data[0].bp_ras_op == RAS_NONE) &&
+                  (iq0_issue_data[0].bp_ras_tos != 5'd0)));
+    assign ras_restore_top_addr_fe =
+        flush_out.valid ? flush_out.ras_top_restore_addr
+                        : (bru1_early_redirect ? iq0_issue_data[1].bp_ras_top
+                                               : iq0_issue_data[0].bp_ras_top);
+
+    always_comb begin
+        logic        exec_from_bru1;
+        iq_entry_t   exec_issue;
+        logic        exec_taken;
+        logic [63:0] exec_redirect_target;
+        logic [63:0] exec_taken_target;
+
+        exec_from_bru1       = bru1_early_redirect;
+        exec_issue           = exec_from_bru1 ? iq0_issue_data[1]
+                                              : iq0_issue_data[0];
+        exec_taken           = exec_from_bru1 ? bru1_taken : bru_taken;
+        exec_redirect_target = exec_from_bru1 ? bru1_target : bru_target;
+        exec_taken_target    = exec_from_bru1 ? bru1_taken_target
+                                              : bru_taken_target;
+
+        exec_bpu_update_valid      =
+            sim_bpu_exec_misp_update && bru_early_redirect;
+        exec_bpu_update_pc         = exec_issue.pc;
+        exec_bpu_tage_update_valid =
+            exec_bpu_update_valid && br_op_is_cond(exec_issue.br_op);
+        exec_bpu_tage_update_pc    = exec_issue.pc;
+        exec_bpu_tage_update_taken = exec_taken;
+        exec_bpu_tage_update_mispredict = exec_bpu_update_valid;
+        exec_bpu_tage_update_target =
+            br_op_is_cond(exec_issue.br_op) ? exec_taken_target
+                                            : exec_redirect_target;
+        exec_bpu_tage_update_ghr   = exec_issue.bp_ghr;
+        exec_bpu_update_taken      = exec_taken;
+        exec_bpu_update_mispredict = exec_bpu_update_valid;
+        exec_bpu_update_target     = br_op_is_cond(exec_issue.br_op)
+                                     ? exec_taken_target
+                                     : exec_redirect_target;
+        exec_bpu_update_type       = bpu_type_from_iq(exec_issue);
+        exec_bpu_update_ghr        = exec_issue.bp_ghr;
+    end
 
 `ifdef SIMULATION
     logic trace_bru_en;
@@ -1502,12 +2370,7 @@ module rv64gc_core_top
     end
 `endif
 
-    // Merge: commit flush takes priority.  BRU redirect only applies to
-    // the fetch unit's redirect_valid / redirect_pc.
-    assign flush_out = commit_flush;
-
-    // The fetch unit sees redirect from EITHER commit_flush OR bru_redirect.
-    // This is wired in the fetch_unit instantiation below.
+    assign flush_out = commit_flush.valid ? commit_flush : bru_flush;
 
     // =========================================================================
     // 12. MULTIPLIER (shared with ALU2 on IQ1 port 0)
@@ -1517,7 +2380,10 @@ module rv64gc_core_top
     logic        mul_issue;
     assign mul_issue = iq1_issue_valid[0] && (iq1_issue_data[0].fu_type == FU_MUL);
 
-    // Track ROB idx and pdst through multiplier pipeline stages
+    // Track ROB idx and pdst through multiplier pipeline stages.
+    // Multiplier is now 2-stage (s3 removed); s2 holds the rob_idx/pdst
+    // aligned with the new valid_out.  s3 signals retained but driven from
+    // s2 so downstream consumers continue to work unchanged.
     logic [ROB_IDX_BITS-1:0]  mul_rob_idx_s1, mul_rob_idx_s2, mul_rob_idx_s3;
     logic [PHYS_REG_BITS-1:0] mul_pdst_s1, mul_pdst_s2, mul_pdst_s3;
 
@@ -1527,17 +2393,19 @@ module rv64gc_core_top
             mul_pdst_s1    <= '0;
             mul_rob_idx_s2 <= '0;
             mul_pdst_s2    <= '0;
-            mul_rob_idx_s3 <= '0;
-            mul_pdst_s3    <= '0;
         end else begin
             mul_rob_idx_s1 <= iq1_issue_data[0].rob_idx;
             mul_pdst_s1    <= iq1_issue_data[0].pdst;
             mul_rob_idx_s2 <= mul_rob_idx_s1;
             mul_pdst_s2    <= mul_pdst_s1;
-            mul_rob_idx_s3 <= mul_rob_idx_s2;
-            mul_pdst_s3    <= mul_pdst_s2;
         end
     end
+
+    // Multiplier is now 1-stage; valid_out fires at cycle N+1.  Alias s3
+    // wires to s1 so existing consumers (mul_eff_*, mul_hold_*) track the
+    // rob_idx/pdst aligned with the new valid_out timing.
+    assign mul_rob_idx_s3 = mul_rob_idx_s1;
+    assign mul_pdst_s3    = mul_pdst_s1;
 
     multiplier u_multiplier (
         .clk       (clk),
@@ -1677,40 +2545,145 @@ module rv64gc_core_top
             cdb_data[1] = alu1_result;
     end
 
-    // MUL output hold register: when MUL completes but ALU2 takes the CDB,
-    // latch the MUL result and replay next cycle. Without this, the MUL
-    // result is silently dropped and the ROB entry never becomes ready.
-    logic        mul_hold_valid_r;
-    logic [ROB_IDX_BITS-1:0]  mul_hold_rob_idx_r;
+    // MUL completion queue: IQ1 can issue back-to-back MULs, and their
+    // completions can overlap later ALU2 traffic on the shared CDB[2] port.
+    // A single hold register is insufficient because an older held result can
+    // be overwritten by a younger completion before it drains.  With a 3-stage
+    // multiplier and a single IQ1 issue slot, at most 3 MUL results can be
+    // outstanding while ALU2 occupies the port, so a 3-entry FIFO is enough.
+    logic                    mul_hold_valid_r;
+    logic [ROB_IDX_BITS-1:0] mul_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] mul_hold_pdst_r;
-    logic [63:0] mul_hold_data_r;
+    logic [63:0]             mul_hold_data_r;
+    logic                    mul_hold1_valid_r;
+    logic [ROB_IDX_BITS-1:0] mul_hold1_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] mul_hold1_pdst_r;
+    logic [63:0]             mul_hold1_data_r;
+    logic                    mul_hold2_valid_r;
+    logic [ROB_IDX_BITS-1:0] mul_hold2_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] mul_hold2_pdst_r;
+    logic [63:0]             mul_hold2_data_r;
+
+    logic                    mul_hold_valid_n;
+    logic [ROB_IDX_BITS-1:0] mul_hold_rob_idx_n;
+    logic [PHYS_REG_BITS-1:0] mul_hold_pdst_n;
+    logic [63:0]             mul_hold_data_n;
+    logic                    mul_hold1_valid_n;
+    logic [ROB_IDX_BITS-1:0] mul_hold1_rob_idx_n;
+    logic [PHYS_REG_BITS-1:0] mul_hold1_pdst_n;
+    logic [63:0]             mul_hold1_data_n;
+    logic                    mul_hold2_valid_n;
+    logic [ROB_IDX_BITS-1:0] mul_hold2_rob_idx_n;
+    logic [PHYS_REG_BITS-1:0] mul_hold2_pdst_n;
+    logic [63:0]             mul_hold2_data_n;
+
+    logic                    mul_take_hold;
+    logic                    mul_take_fresh;
+    logic                    mul_enqueue_fresh;
+    logic                    mul_hold_overflow;
+
+    assign mul_take_hold    = !alu2_issue && mul_hold_valid_r;
+    assign mul_take_fresh   = !alu2_issue && !mul_hold_valid_r && mul_valid_out;
+    assign mul_enqueue_fresh = mul_valid_out && !mul_take_fresh;
+
+    always_comb begin
+        mul_hold_valid_n    = mul_hold_valid_r;
+        mul_hold_rob_idx_n  = mul_hold_rob_idx_r;
+        mul_hold_pdst_n     = mul_hold_pdst_r;
+        mul_hold_data_n     = mul_hold_data_r;
+        mul_hold1_valid_n   = mul_hold1_valid_r;
+        mul_hold1_rob_idx_n = mul_hold1_rob_idx_r;
+        mul_hold1_pdst_n    = mul_hold1_pdst_r;
+        mul_hold1_data_n    = mul_hold1_data_r;
+        mul_hold2_valid_n   = mul_hold2_valid_r;
+        mul_hold2_rob_idx_n = mul_hold2_rob_idx_r;
+        mul_hold2_pdst_n    = mul_hold2_pdst_r;
+        mul_hold2_data_n    = mul_hold2_data_r;
+        mul_hold_overflow   = 1'b0;
+
+        if (mul_take_hold) begin
+            mul_hold_valid_n    = mul_hold1_valid_r;
+            mul_hold_rob_idx_n  = mul_hold1_rob_idx_r;
+            mul_hold_pdst_n     = mul_hold1_pdst_r;
+            mul_hold_data_n     = mul_hold1_data_r;
+            mul_hold1_valid_n   = mul_hold2_valid_r;
+            mul_hold1_rob_idx_n = mul_hold2_rob_idx_r;
+            mul_hold1_pdst_n    = mul_hold2_pdst_r;
+            mul_hold1_data_n    = mul_hold2_data_r;
+            mul_hold2_valid_n   = 1'b0;
+            mul_hold2_rob_idx_n = '0;
+            mul_hold2_pdst_n    = '0;
+            mul_hold2_data_n    = '0;
+        end
+
+        if (mul_enqueue_fresh) begin
+            if (!mul_hold_valid_n) begin
+                mul_hold_valid_n   = 1'b1;
+                mul_hold_rob_idx_n = mul_rob_idx_s3;
+                mul_hold_pdst_n    = mul_pdst_s3;
+                mul_hold_data_n    = mul_result;
+            end else if (!mul_hold1_valid_n) begin
+                mul_hold1_valid_n   = 1'b1;
+                mul_hold1_rob_idx_n = mul_rob_idx_s3;
+                mul_hold1_pdst_n    = mul_pdst_s3;
+                mul_hold1_data_n    = mul_result;
+            end else if (!mul_hold2_valid_n) begin
+                mul_hold2_valid_n   = 1'b1;
+                mul_hold2_rob_idx_n = mul_rob_idx_s3;
+                mul_hold2_pdst_n    = mul_pdst_s3;
+                mul_hold2_data_n    = mul_result;
+            end else begin
+                mul_hold_overflow = 1'b1;
+            end
+        end
+    end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || flush_out.valid) begin
-            mul_hold_valid_r <= 1'b0;
-        end else if (mul_valid_out && alu2_issue) begin
-            // MUL ready but ALU2 wins - hold until drain
-            mul_hold_valid_r   <= 1'b1;
-            mul_hold_rob_idx_r <= mul_rob_idx_s3;
-            mul_hold_pdst_r    <= mul_pdst_s3;
-            mul_hold_data_r    <= mul_result;
-        end else if (mul_hold_valid_r && !alu2_issue) begin
-            // Drain: held MUL result goes to CDB this cycle
-            mul_hold_valid_r <= 1'b0;
+            mul_hold_valid_r  <= 1'b0;
+            mul_hold_rob_idx_r <= '0;
+            mul_hold_pdst_r   <= '0;
+            mul_hold_data_r   <= '0;
+            mul_hold1_valid_r <= 1'b0;
+            mul_hold1_rob_idx_r <= '0;
+            mul_hold1_pdst_r  <= '0;
+            mul_hold1_data_r  <= '0;
+            mul_hold2_valid_r <= 1'b0;
+            mul_hold2_rob_idx_r <= '0;
+            mul_hold2_pdst_r  <= '0;
+            mul_hold2_data_r  <= '0;
+        end else begin
+            mul_hold_valid_r  <= mul_hold_valid_n;
+            mul_hold_rob_idx_r <= mul_hold_rob_idx_n;
+            mul_hold_pdst_r   <= mul_hold_pdst_n;
+            mul_hold_data_r   <= mul_hold_data_n;
+            mul_hold1_valid_r <= mul_hold1_valid_n;
+            mul_hold1_rob_idx_r <= mul_hold1_rob_idx_n;
+            mul_hold1_pdst_r  <= mul_hold1_pdst_n;
+            mul_hold1_data_r  <= mul_hold1_data_n;
+            mul_hold2_valid_r <= mul_hold2_valid_n;
+            mul_hold2_rob_idx_r <= mul_hold2_rob_idx_n;
+            mul_hold2_pdst_r  <= mul_hold2_pdst_n;
+            mul_hold2_data_r  <= mul_hold2_data_n;
+`ifndef SYNTHESIS
+            if (mul_hold_overflow) begin
+                $error("[MUL_HOLD] completion queue overflow");
+            end
+`endif
         end
-        // else: keep holding while ALU2 continues to occupy the port
     end
 
-    // Effective MUL output: fresh MUL result OR held result from last cycle
+    // Effective MUL output: older queued result has priority; otherwise a
+    // fresh completion may use the port directly when ALU2 is idle.
     logic        mul_eff_valid;
     logic [ROB_IDX_BITS-1:0]  mul_eff_rob_idx;
     logic [PHYS_REG_BITS-1:0] mul_eff_pdst;
     logic [63:0] mul_eff_data;
 
-    assign mul_eff_valid   = mul_valid_out || mul_hold_valid_r;
-    assign mul_eff_rob_idx = mul_valid_out ? mul_rob_idx_s3 : mul_hold_rob_idx_r;
-    assign mul_eff_pdst    = mul_valid_out ? mul_pdst_s3    : mul_hold_pdst_r;
-    assign mul_eff_data    = mul_valid_out ? mul_result     : mul_hold_data_r;
+    assign mul_eff_valid   = mul_take_hold || mul_take_fresh;
+    assign mul_eff_rob_idx = mul_take_hold ? mul_hold_rob_idx_r : mul_rob_idx_s3;
+    assign mul_eff_pdst    = mul_take_hold ? mul_hold_pdst_r    : mul_pdst_s3;
+    assign mul_eff_data    = mul_take_hold ? mul_hold_data_r    : mul_result;
 
     // CDB[2]: ALU2 (same cycle) or MUL (3-cycle latency, with hold)
     always_comb begin
@@ -1773,7 +2746,8 @@ module rv64gc_core_top
             cdb_valid[3]         = 1'b1;
             cdb_tag[3]           = iq2_issue_data[0].pdst;
             cdb_rob_idx[3]       = iq2_issue_data[0].rob_idx;
-            cdb_data[3]          = alu3_result;
+            cdb_data[3]          = (iq2_issue_data[0].fu_type == FU_CSR)
+                                   ? csr_read_data : alu3_result;
             // CSR write enable: only set for CSRRW (always writes) or
             // CSRRS/CSRRC with rs1 != x0 (rs1=x0 is a read-only alias).
             // The csr_op encodes: 0=RW, 1=RS, 2=RC, 3=NONE.
@@ -1782,9 +2756,9 @@ module rv64gc_core_top
             cdb_csr_we[3]        = (iq2_issue_data[0].fu_type == FU_CSR &&
                                     iq2_issue_data[0].csr_op != 2'd3 &&
                                     (iq2_issue_data[0].csr_op == 2'd0 ||
-                                     bypassed_data[6] != 64'd0)) ? 1'b1 : 1'b0;
+                                     csr_exec_wdata != 64'd0)) ? 1'b1 : 1'b0;
             cdb_csr_addr[3]      = iq2_issue_data[0].csr_addr;
-            cdb_csr_wdata[3]     = bypassed_data[6];  // rs1 value (the write mask)
+            cdb_csr_wdata[3]     = csr_exec_wdata;  // rs1/zimm write mask
             cdb_csr_op[3]        = iq2_issue_data[0].csr_op;
         end else begin
             cdb_valid[3]         = div_eff_valid;
@@ -2450,14 +3424,26 @@ module rv64gc_core_top
     // LQ/SQ alloc counts from rename
     logic [2:0] lq_alloc_count;
     logic [2:0] sq_alloc_count;
+    logic [ROB_IDX_BITS-1:0] lq_alloc_rob_idx [0:PIPE_WIDTH-1];
+    logic [ROB_IDX_BITS-1:0] sq_alloc_rob_idx [0:PIPE_WIDTH-1];
 
     always_comb begin
         lq_alloc_count = 3'd0;
         sq_alloc_count = 3'd0;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
+            lq_alloc_rob_idx[i] = '0;
+            sq_alloc_rob_idx[i] = '0;
+        end
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
             if (3'(i) < ren_count_w) begin
-                if (ren_insn[i].base.is_load) lq_alloc_count = lq_alloc_count + 3'd1;
-                if (ren_insn[i].base.is_store) sq_alloc_count = sq_alloc_count + 3'd1;
+                if (ren_insn[i].base.is_load) begin
+                    lq_alloc_rob_idx[lq_alloc_count] = ren_insn[i].rob_idx;
+                    lq_alloc_count = lq_alloc_count + 3'd1;
+                end
+                if (ren_insn[i].base.is_store) begin
+                    sq_alloc_rob_idx[sq_alloc_count] = ren_insn[i].rob_idx;
+                    sq_alloc_count = sq_alloc_count + 3'd1;
+                end
             end
         end
     end
@@ -2506,6 +3492,8 @@ module rv64gc_core_top
         // LQ/SQ allocation
         .lq_alloc_count         (lq_alloc_count),
         .sq_alloc_count         (sq_alloc_count),
+        .lq_alloc_rob_idx       (lq_alloc_rob_idx),
+        .sq_alloc_rob_idx       (sq_alloc_rob_idx),
         .lq_alloc_idx           (lq_alloc_idx),
         .sq_alloc_idx           (sq_alloc_idx),
         .lq_full                (lq_full),
@@ -2731,18 +3719,27 @@ module rv64gc_core_top
     // =========================================================================
     always_comb begin
         logic found_update;
+        logic found_tage_update;
+        logic found_tage_misp_update;
         logic is_control;
+        logic is_cond_branch;
 
-        bpu_update_valid     = 1'b0;
-        bpu_update_pc        = 64'd0;
-        bpu_tage_update_valid = 1'b0;
-        bpu_tage_update_pc   = 64'd0;
-        bpu_update_taken     = 1'b0;
-        bpu_update_mispredict = 1'b0;
-        bpu_update_target    = 64'd0;
-        bpu_update_type      = 3'd0;
-        bpu_update_ghr       = '0;
-        found_update         = 1'b0;
+        commit_bpu_update_valid      = 1'b0;
+        commit_bpu_update_pc         = 64'd0;
+        commit_bpu_tage_update_valid = 1'b0;
+        commit_bpu_tage_update_pc    = 64'd0;
+        commit_bpu_tage_update_taken = 1'b0;
+        commit_bpu_tage_update_mispredict = 1'b0;
+        commit_bpu_tage_update_target = 64'd0;
+        commit_bpu_tage_update_ghr   = '0;
+        commit_bpu_update_taken      = 1'b0;
+        commit_bpu_update_mispredict = 1'b0;
+        commit_bpu_update_target     = 64'd0;
+        commit_bpu_update_type       = 3'd0;
+        commit_bpu_update_ghr        = '0;
+        found_update                 = 1'b0;
+        found_tage_update            = 1'b0;
+        found_tage_misp_update       = 1'b0;
 
         // A block-based frontend must train the oldest qualifying control in
         // the commit batch: later control transfers in the same fetch block
@@ -2754,18 +3751,15 @@ module rv64gc_core_top
                 commit_out[i].valid &&
                 is_control &&
                 rob_head_branch_mispredict[i]) begin
-                bpu_update_valid     = 1'b1;
-                bpu_update_pc        = rob_head_pc[i];
-                bpu_tage_update_valid = rb_head_bp_owner[i] &&
-                                        rob_head_is_branch[i];
-                bpu_tage_update_pc   = rb_head_bp_lookup_pc[i];
-                bpu_update_taken     = rob_head_branch_taken[i];
-                bpu_update_mispredict = rob_head_branch_mispredict[i];
-                bpu_update_target    = rob_head_is_branch[i]
-                                       ? rob_head_branch_taken_target[i]
-                                       : rob_head_branch_target[i];
-                bpu_update_type      = rob_head_bpu_type[i];
-                bpu_update_ghr       = rb_head_bp_ghr[i];
+                commit_bpu_update_valid      = 1'b1;
+                commit_bpu_update_pc         = rob_head_pc[i];
+                commit_bpu_update_taken      = rob_head_branch_taken[i];
+                commit_bpu_update_mispredict = rob_head_branch_mispredict[i];
+                commit_bpu_update_target     = rob_head_is_branch[i]
+                                               ? rob_head_branch_taken_target[i]
+                                               : rob_head_branch_target[i];
+                commit_bpu_update_type       = rob_head_bpu_type[i];
+                commit_bpu_update_ghr        = rb_head_bp_ghr[i];
                 found_update         = 1'b1;
             end
         end
@@ -2773,27 +3767,110 @@ module rv64gc_core_top
         // If nothing mispredicted this cycle, still train the oldest
         // committed control transfer so BTB state stays aligned with the
         // earliest CFI in each fetch block.
-        if (!bpu_update_valid) begin
+        if (!commit_bpu_update_valid) begin
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 is_control = rob_head_is_branch[i] || (rob_head_bpu_type[i] != 3'd0);
                 if (!found_update &&
                     commit_out[i].valid &&
                     is_control) begin
-                    bpu_update_valid      = 1'b1;
-                    bpu_update_pc         = rob_head_pc[i];
-                    bpu_tage_update_valid = rb_head_bp_owner[i] &&
-                                            rob_head_is_branch[i];
-                    bpu_tage_update_pc    = rb_head_bp_lookup_pc[i];
-                    bpu_update_taken      = rob_head_branch_taken[i];
-                    bpu_update_mispredict = rob_head_branch_mispredict[i];
-                    bpu_update_target     = rob_head_is_branch[i]
-                                            ? rob_head_branch_taken_target[i]
-                                            : rob_head_branch_target[i];
-                    bpu_update_type       = rob_head_bpu_type[i];
-                    bpu_update_ghr        = rb_head_bp_ghr[i];
+                    commit_bpu_update_valid      = 1'b1;
+                    commit_bpu_update_pc         = rob_head_pc[i];
+                    commit_bpu_update_taken      = rob_head_branch_taken[i];
+                    commit_bpu_update_mispredict = rob_head_branch_mispredict[i];
+                    commit_bpu_update_target     = rob_head_is_branch[i]
+                                                    ? rob_head_branch_taken_target[i]
+                                                    : rob_head_branch_target[i];
+                    commit_bpu_update_type       = rob_head_bpu_type[i];
+                    commit_bpu_update_ghr        = rb_head_bp_ghr[i];
                     found_update          = 1'b1;
                 end
             end
+        end
+
+        // Direction training is independent from BTB target training.  A wide
+        // commit group may start with an unconditional jump or an older loop
+        // branch, but a younger conditional in the same group still needs a
+        // TAGE update so forward branches do not only learn on mispredicts.
+        //
+        // Optional sim experiment: prioritize a mispredicted conditional in the
+        // batch before falling back to the oldest committed conditional.  This
+        // does not change the default RTL contract unless the plusarg is used.
+        if (sim_tage_train_misp_cond_first) begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                is_cond_branch = rob_head_is_branch[i] &&
+                                 (rob_head_bpu_type[i] == BT_COND);
+                if (!found_tage_misp_update &&
+                    commit_out[i].valid &&
+                    is_cond_branch &&
+                    rob_head_branch_mispredict[i]) begin
+                    commit_bpu_tage_update_valid = 1'b1;
+                    commit_bpu_tage_update_pc =
+                        rb_head_bp_owner[i] ? rb_head_bp_lookup_pc[i]
+                                            : rob_head_pc[i];
+                    commit_bpu_tage_update_taken = rob_head_branch_taken[i];
+                    commit_bpu_tage_update_mispredict =
+                        rob_head_branch_mispredict[i];
+                    commit_bpu_tage_update_target =
+                        rob_head_branch_taken_target[i];
+                    commit_bpu_tage_update_ghr = rb_head_bp_ghr[i];
+                    found_tage_misp_update = 1'b1;
+                end
+            end
+        end
+
+        if (!commit_bpu_tage_update_valid) begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                is_cond_branch = rob_head_is_branch[i] &&
+                                 (rob_head_bpu_type[i] == BT_COND);
+                if (!found_tage_update &&
+                    commit_out[i].valid &&
+                    is_cond_branch) begin
+                    commit_bpu_tage_update_valid = 1'b1;
+                    commit_bpu_tage_update_pc =
+                        rb_head_bp_owner[i] ? rb_head_bp_lookup_pc[i]
+                                            : rob_head_pc[i];
+                    commit_bpu_tage_update_taken = rob_head_branch_taken[i];
+                    commit_bpu_tage_update_mispredict =
+                        rob_head_branch_mispredict[i];
+                    commit_bpu_tage_update_target =
+                        rob_head_branch_taken_target[i];
+                    commit_bpu_tage_update_ghr = rb_head_bp_ghr[i];
+                    found_tage_update = 1'b1;
+                end
+            end
+        end
+    end
+
+
+    always_comb begin
+        if (exec_bpu_update_valid) begin
+            bpu_update_valid      = exec_bpu_update_valid;
+            bpu_update_pc         = exec_bpu_update_pc;
+            bpu_tage_update_valid = exec_bpu_tage_update_valid;
+            bpu_tage_update_pc    = exec_bpu_tage_update_pc;
+            bpu_tage_update_taken = exec_bpu_tage_update_taken;
+            bpu_tage_update_mispredict = exec_bpu_tage_update_mispredict;
+            bpu_tage_update_target = exec_bpu_tage_update_target;
+            bpu_tage_update_ghr   = exec_bpu_tage_update_ghr;
+            bpu_update_taken      = exec_bpu_update_taken;
+            bpu_update_mispredict = exec_bpu_update_mispredict;
+            bpu_update_target     = exec_bpu_update_target;
+            bpu_update_type       = exec_bpu_update_type;
+            bpu_update_ghr        = exec_bpu_update_ghr;
+        end else begin
+            bpu_update_valid      = commit_bpu_update_valid;
+            bpu_update_pc         = commit_bpu_update_pc;
+            bpu_tage_update_valid = commit_bpu_tage_update_valid;
+            bpu_tage_update_pc    = commit_bpu_tage_update_pc;
+            bpu_tage_update_taken = commit_bpu_tage_update_taken;
+            bpu_tage_update_mispredict = commit_bpu_tage_update_mispredict;
+            bpu_tage_update_target = commit_bpu_tage_update_target;
+            bpu_tage_update_ghr   = commit_bpu_tage_update_ghr;
+            bpu_update_taken      = commit_bpu_update_taken;
+            bpu_update_mispredict = commit_bpu_update_mispredict;
+            bpu_update_target     = commit_bpu_update_target;
+            bpu_update_type       = commit_bpu_update_type;
+            bpu_update_ghr        = commit_bpu_update_ghr;
         end
     end
 
@@ -2804,7 +3881,6 @@ module rv64gc_core_top
     // =========================================================================
     // 19. CSR FILE
     // =========================================================================
-    logic [63:0] csr_read_data;
     logic [63:0] csr_mcycle_val, csr_minstret_val;
     logic [63:0] csr_satp;
 
@@ -2852,7 +3928,7 @@ module rv64gc_core_top
     csr_file u_csr_file (
         .clk                (clk),
         .rst_n              (rst_n),
-        .read_addr          (12'd0),
+        .read_addr          (csr_read_addr),
         .read_data          (csr_read_data),
         .write_valid        (csr_commit_valid),
         .write_addr         (csr_commit_addr),

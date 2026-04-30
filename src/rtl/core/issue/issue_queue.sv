@@ -31,9 +31,13 @@ module issue_queue
     // Speculative wakeup (from load AGU -- may be cancelled on cache miss)
     input  logic                     spec_wk_valid,
     input  logic [PHYS_REG_BITS-1:0] spec_wk_tag,
+    input  logic                     spec_wk_valid1,
+    input  logic [PHYS_REG_BITS-1:0] spec_wk_tag1,
     // Speculative cancel (cache miss -- undo speculative wakeup, replay)
     input  logic                     spec_cancel_valid,
     input  logic [PHYS_REG_BITS-1:0] spec_cancel_tag,
+    input  logic                     spec_cancel_valid1,
+    input  logic [PHYS_REG_BITS-1:0] spec_cancel_tag1,
 
     // PRF ready table: lets enqueue see "already-broadcast" producers even
     // when the entry arrives several cycles after the CDB pulse.
@@ -58,7 +62,7 @@ module issue_queue
 
     // Flush
     input  logic                    flush_valid,
-    input  logic [ROB_IDX_BITS-1:0] flush_rob_tail,  // invalidate entries younger than this
+    input  logic [ROB_IDX_BITS-1:0] flush_rob_tail,  // first ROB entry to invalidate
     input  logic                    flush_full,        // invalidate everything
 
     // Current occupancy (for dispatch load-balancing)
@@ -117,13 +121,10 @@ module issue_queue
     //
     // SPECULATIVE wakeup is NOT applied to the combinational eligibility.
     // It only sets the registered src1_ready / src1_spec flops, taking effect
-    // 1 cycle later.  The reason: spec_wk_valid pulses when the load is at
-    // the _r stage (1 cycle after AGU); the load CDB doesn't fire until the
-    // _rr stage (2 cycles after AGU).  We need the consumer to issue 1 cycle
-    // AFTER the spec_wk pulse, so the load result will be on the
-    // (combinational) CDB the cycle the consumer reads its operand via the
-    // bypass network.  Latching spec_wk into src1_ready (instead of
-    // overriding next_src1_ready combinationally) gives the right delay.
+    // 1 cycle later.  For a one-cycle D-cache hit, the LSU pulses spec_wk when
+    // the load request fires; the dependent becomes eligible the next cycle,
+    // exactly when the load result is on the combinational CDB/bypass.  If the
+    // load misses, spec_cancel clears the speculative ready before eligibility.
     // =====================================================================
     logic [DEPTH-1:0] next_src1_ready;
     logic [DEPTH-1:0] next_src2_ready;
@@ -178,18 +179,19 @@ module issue_queue
                     next_src2_spec[e]  = 1'b0;
                 end
 
-                // -- Speculative wakeup (load _r stage, 1 cycle pre-CDB) --
+                // -- Speculative wakeup (load request issue, 1 cycle pre-CDB) --
                 // LATCHED only: do NOT override next_src1_ready.  The
-                // sequential block below will write src1_ready=1 at the next
-                // clock edge so the consumer becomes eligible 1 cycle later
-                // (matching the cycle the load result lands on the
-                // combinational CDB and the bypass network).
-                if (spec_wk_valid && !src1_ready[e] && !rs1_cdb_hit[e] &&
-                    (spec_wk_tag == rs1_phys_r[e])) begin
+                // sequential block below will write src*_ready=1 at the next
+                // clock edge so the consumer becomes eligible when the load hit
+                // result lands on the combinational CDB/bypass.
+                if (((spec_wk_valid && (spec_wk_tag == rs1_phys_r[e])) ||
+                     (spec_wk_valid1 && (spec_wk_tag1 == rs1_phys_r[e]))) &&
+                    !src1_ready[e] && !rs1_cdb_hit[e]) begin
                     spec_set_src1[e] = 1'b1;
                 end
-                if (spec_wk_valid && !src2_ready[e] && !rs2_cdb_hit[e] &&
-                    (spec_wk_tag == rs2_phys_r[e])) begin
+                if (((spec_wk_valid && (spec_wk_tag == rs2_phys_r[e])) ||
+                     (spec_wk_valid1 && (spec_wk_tag1 == rs2_phys_r[e]))) &&
+                    !src2_ready[e] && !rs2_cdb_hit[e]) begin
                     spec_set_src2[e] = 1'b1;
                 end
 
@@ -198,15 +200,15 @@ module issue_queue
                 // into src1_ready, AND prevents this cycle's spec_set from
                 // taking effect.  CDB wakeup is unaffected (CDB is the
                 // authoritative result and overrides cancel).
-                if (spec_cancel_valid &&
-                    (spec_cancel_tag == rs1_phys_r[e]) &&
+                if (((spec_cancel_valid && (spec_cancel_tag == rs1_phys_r[e])) ||
+                     (spec_cancel_valid1 && (spec_cancel_tag1 == rs1_phys_r[e]))) &&
                     src1_spec[e] && !rs1_cdb_hit[e]) begin
                     next_src1_ready[e] = 1'b0;
                     next_src1_spec[e]  = 1'b0;
                     spec_cancel_rs1[e] = 1'b1;
                 end
-                if (spec_cancel_valid &&
-                    (spec_cancel_tag == rs2_phys_r[e]) &&
+                if (((spec_cancel_valid && (spec_cancel_tag == rs2_phys_r[e])) ||
+                     (spec_cancel_valid1 && (spec_cancel_tag1 == rs2_phys_r[e]))) &&
                     src2_spec[e] && !rs2_cdb_hit[e]) begin
                     next_src2_ready[e] = 1'b0;
                     next_src2_spec[e]  = 1'b0;
@@ -365,6 +367,17 @@ module issue_queue
         end
     end
 
+`ifdef SIMULATION
+    generate
+        for (genvar q = 0; q < NUM_ENQUEUE; q++) begin : gen_sva_enq_has_free
+            assert property (@(posedge clk) disable iff (!rst_n || (flush_valid && flush_full))
+                enq_valid[q] |-> free_found[q]
+            ) else $error("[SVA IQ_ENQ_NO_FREE] enq lane=%0d has no free slot count=%0d valid=%b",
+                          q, count_r, entry_valid);
+        end
+    endgenerate
+`endif
+
     // =====================================================================
     // Flush logic: determine which entries to invalidate
     // =====================================================================
@@ -381,7 +394,7 @@ module issue_queue
             for (int e = 0; e < DEPTH; e++) begin
                 if (entry_valid[e]) begin
                     flush_entry_age = ((rob_idx_r[e] >= rob_head) ? ({1'b0, rob_idx_r[e]} - {1'b0, rob_head}) : (ROB_DEPTH[AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, rob_idx_r[e]}));
-                    if (flush_entry_age > flush_tail_age)
+                    if (flush_entry_age >= flush_tail_age)
                         flush_remove[e] = 1'b1;
                 end
             end

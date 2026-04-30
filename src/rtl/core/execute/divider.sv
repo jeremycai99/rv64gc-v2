@@ -32,6 +32,8 @@ module divider
 
     state_e state_r;
 
+    localparam int DIV_BITS_PER_CYCLE = 16;
+
     logic [5:0]  iter_r;
     logic [5:0]  max_iter;
 
@@ -60,12 +62,6 @@ module divider
     wire [63:0] in_b = is_w_op ?
         {{32{operand_b[31] & is_signed_op}}, operand_b[31:0]} : operand_b;
 
-    // =========================================================================
-    // Compute-state helpers (hoisted for clarity)
-    // =========================================================================
-    wire [5:0]  bit_pos    = is_w_r ? (6'd31 - iter_r) : (6'd63 - iter_r);
-    wire [63:0] shifted_rem = {remainder_r[62:0], dividend_r[bit_pos]};
-
     // Final result negation
     wire [63:0] final_quo = negate_quo_r ? (~quotient_r + 64'd1) : quotient_r;
     wire [63:0] final_rem = negate_rem_r ? (~remainder_r + 64'd1) : remainder_r;
@@ -73,6 +69,43 @@ module divider
     // W-variant sign extension
     wire [63:0] final_quo_w = {{32{final_quo[31]}}, final_quo[31:0]};
     wire [63:0] final_rem_w = {{32{final_rem[31]}}, final_rem[31:0]};
+
+    // Multiple restoring-division bit steps per cycle.  This preserves the
+    // existing multi-cycle contract while reducing DIVW/DIV head stalls in
+    // integer benchmark loops.
+    logic [63:0] quotient_next;
+    logic [63:0] remainder_next;
+
+    // Combinational final-result variants using *_next (last running-iter) values,
+    // used when asserting valid_out on the final iteration of ST_RUNNING so we
+    // can skip the extra ST_DONE cycle.
+    wire [63:0] final_quo_c   = negate_quo_r ? (~quotient_next + 64'd1) : quotient_next;
+    wire [63:0] final_rem_c   = negate_rem_r ? (~remainder_next + 64'd1) : remainder_next;
+    wire [63:0] final_quo_w_c = {{32{final_quo_c[31]}}, final_quo_c[31:0]};
+    wire [63:0] final_rem_w_c = {{32{final_rem_c[31]}}, final_rem_c[31:0]};
+
+    always_comb begin
+        quotient_next  = quotient_r;
+        remainder_next = remainder_r;
+
+        for (int k = 0; k < DIV_BITS_PER_CYCLE; k++) begin
+            logic [5:0]  bit_pos_step;
+            logic [63:0] shifted_rem_step;
+
+            bit_pos_step = (is_w_r ? 6'd31 : 6'd63)
+                         - (iter_r * 6'(DIV_BITS_PER_CYCLE))
+                         - 6'(k);
+            shifted_rem_step = {remainder_next[62:0], dividend_r[bit_pos_step]};
+
+            if (shifted_rem_step >= divisor_r) begin
+                remainder_next = shifted_rem_step - divisor_r;
+                quotient_next[bit_pos_step] = 1'b1;
+            end else begin
+                remainder_next = shifted_rem_step;
+                quotient_next[bit_pos_step] = 1'b0;
+            end
+        end
+    end
 
     // =========================================================================
     // Main state machine
@@ -90,7 +123,9 @@ module divider
                     if (valid_in) begin
                         is_rem_r <= is_rem_op;
                         is_w_r   <= is_w_op;
-                        max_iter <= is_w_op ? 6'd32 : 6'd64;
+                        max_iter <= is_w_op
+                                  ? 6'(32 / DIV_BITS_PER_CYCLE)
+                                  : 6'(64 / DIV_BITS_PER_CYCLE);
 
                         // Division by zero
                         if (in_b == 64'd0) begin
@@ -131,20 +166,27 @@ module divider
 
                 // ---------------------------------------------------------
                 ST_RUNNING: begin
-                    if (shifted_rem >= divisor_r) begin
-                        remainder_r         <= shifted_rem - divisor_r;
-                        quotient_r[bit_pos] <= 1'b1;
-                    end else begin
-                        remainder_r         <= shifted_rem;
-                        quotient_r[bit_pos] <= 1'b0;
-                    end
+                    remainder_r <= remainder_next;
+                    quotient_r  <= quotient_next;
 
-                    if (iter_r == max_iter - 6'd1)
-                        state_r <= ST_DONE;
-                    iter_r <= iter_r + 6'd1;
+                    if (iter_r == max_iter - 6'd1) begin
+                        // Final iteration: output result combinationally and
+                        // skip the extra ST_DONE cycle.  Saves 1 cycle of
+                        // latency for every non-special-case division.
+                        valid_out <= 1'b1;
+                        if (!is_rem_r)
+                            result <= is_w_r ? final_quo_w_c : final_quo_c;
+                        else
+                            result <= is_w_r ? final_rem_w_c : final_rem_c;
+                        state_r <= ST_IDLE;
+                    end else begin
+                        iter_r <= iter_r + 6'd1;
+                    end
                 end
 
                 // ---------------------------------------------------------
+                // Reached only for special cases (div-by-zero, signed
+                // overflow) where ST_IDLE transitions directly to ST_DONE.
                 ST_DONE: begin
                     valid_out <= 1'b1;
 

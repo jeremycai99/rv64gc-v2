@@ -568,16 +568,36 @@ module decode_slice
                         F3_REMU: begin decoded.fu_type = FU_DIV; decoded.is_div = 1'b1; decoded.div_op = DIV_REMU; end
                         default: begin decoded.has_exception = 1'b1; decoded.exc_code = EXC_ILLEGAL_INSN; end
                     endcase
+                end else if (funct7 == F7_ZEXTH && funct3 == F3_ZEXTH && rs2_f == 5'd0) begin
+                    // Zbb: ZEXT.H.
+                    decoded.fu_type = FU_ALU;
+                    decoded.alu_op  = ALU_AND;
+                    decoded.rs2_valid  = 1'b0;
+                    decoded.is_unsigned = 1'b0;
+                    decoded.imm        = 64'h0000_0000_0000_FFFF;
+                    decoded.use_imm    = 1'b1;
                 end else if (funct7 == F7_ZBA_UW) begin
-                    // Zba: add.uw / sh1add.uw / sh2add.uw / sh3add.uw
+                    // Zba: add.uw
                     decoded.fu_type    = FU_ALU;
                     decoded.is_unsigned = 1'b1;
+                    if (funct3 == F3_ADD_SUB)
+                        decoded.alu_op = ALU_ADD;    // ADD.UW
+                    else begin
+                        decoded.has_exception = 1'b1;
+                        decoded.exc_code      = EXC_ILLEGAL_INSN;
+                    end
+                end else if (funct7 == F7_ZBA) begin
+                    // Zba: sh1add.uw / sh2add.uw / sh3add.uw
+                    decoded.fu_type     = FU_ALU;
+                    decoded.is_unsigned = 1'b1;
                     case (funct3)
-                        F3_ADD_SUB: decoded.alu_op = ALU_ADD;    // ADD.UW
-                        F3_SH1ADD:  decoded.alu_op = ALU_SH1ADD; // SH1ADD.UW
-                        F3_SH2ADD:  decoded.alu_op = ALU_SH2ADD; // SH2ADD.UW
-                        F3_SH3ADD:  decoded.alu_op = ALU_SH3ADD; // SH3ADD.UW
-                        default: begin decoded.has_exception = 1'b1; decoded.exc_code = EXC_ILLEGAL_INSN; end
+                        F3_SH1ADD: decoded.alu_op = ALU_SH1ADD;
+                        F3_SH2ADD: decoded.alu_op = ALU_SH2ADD;
+                        F3_SH3ADD: decoded.alu_op = ALU_SH3ADD;
+                        default: begin
+                            decoded.has_exception = 1'b1;
+                            decoded.exc_code      = EXC_ILLEGAL_INSN;
+                        end
                     endcase
                 end else if (funct7 == F7_ZBB_ROT) begin
                     // Zbb: ROLW / RORW
@@ -587,16 +607,6 @@ module decode_slice
                         F3_SRL_SRA: decoded.alu_op = ALU_ROR; // RORW
                         default: begin decoded.has_exception = 1'b1; decoded.exc_code = EXC_ILLEGAL_INSN; end
                     endcase
-                end else if (funct7 == F7_ZEXTH && funct3 == F3_ZEXTH && rs2_f == 5'd0) begin
-                    // Zbb: ZEXT.H
-                    decoded.fu_type = FU_ALU;
-                    decoded.alu_op  = ALU_AND;
-                    // ZEXT.H is pack rd, rs1, zero with mask = 0xFFFF
-                    // Implement as AND with immediate 0xFFFF; re-use ALU_AND
-                    // but set imm and use_imm
-                    decoded.rs2_valid  = 1'b0;
-                    decoded.imm        = 64'h0000_0000_0000_FFFF;
-                    decoded.use_imm    = 1'b1;
                 end else begin
                     // Base integer W-type R-format
                     decoded.fu_type = FU_ALU;

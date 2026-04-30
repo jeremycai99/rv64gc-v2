@@ -25,10 +25,14 @@ module dispatch_queue
     output logic [1:0]    deq_iq_target [0:PIPE_WIDTH-1],  // 0,1,2 = int IQ; 3 = mem IQ
     input  logic [NUM_INT_IQS-1:0] iq_full,                // per-IQ backpressure
     input  logic [5:0]    iq_occ [0:NUM_INT_IQS-1],        // per-IQ occupancy (for load-balanced routing)
+    input  logic [1:0]    load_iq_credit,                  // load IQ free slots, capped at 2
+    input  logic [1:0]    store_iq_credit,                 // STA/STD paired store credits, capped at 2
 
     // Flush
     input  logic          flush_valid,
-    input  logic          flush_full
+    input  logic          flush_full,
+    input  logic [ROB_IDX_BITS-1:0] flush_rob_tail,
+    input  logic [ROB_IDX_BITS-1:0] rob_head
 );
 
     // =========================================================================
@@ -163,8 +167,9 @@ module dispatch_queue
         else
             candidate_mem = mem_count[2:0];
 
-        // Cap mem releases: at most 2 stores AND 2 loads per cycle
-        // (both IQs have NUM_ENQUEUE=2).
+        // Cap mem releases by target IQ credits. The dispatch queue owns the
+        // memory FIFO head, so it must not release a load/store unless the
+        // corresponding downstream IQ(s) can accept it this cycle.
         begin : mem_cap
             logic stopped_m;
             logic [2:0] load_cnt;
@@ -176,14 +181,16 @@ module dispatch_queue
                 mem_cap_rd_a[i] = mem_head + MEM_IDX_BITS'(i);
                 if (!stopped_m && 3'(i) < candidate_mem) begin
                     if (mem_fifo[mem_cap_rd_a[i]].base.is_store) begin
-                        if (store_cnt < 3'd2) begin
+                        if ((store_cnt < 3'd2) &&
+                            (store_cnt < 3'(store_iq_credit))) begin
                             max_mem   = 3'(i) + 3'd1;
                             store_cnt = store_cnt + 3'd1;
                         end else begin
                             stopped_m = 1'b1;
                         end
                     end else begin
-                        if (load_cnt < 3'd2) begin
+                        if ((load_cnt < 3'd2) &&
+                            (load_cnt < 3'(load_iq_credit))) begin
                             max_mem  = 3'(i) + 3'd1;
                             load_cnt = load_cnt + 3'd1;
                         end else begin
@@ -370,16 +377,101 @@ module dispatch_queue
     end
 
     // =========================================================================
+    // Partial-flush compaction
+    // =========================================================================
+    localparam int ROB_AGE_BITS = ROB_IDX_BITS + 1;
+
+    logic [ROB_AGE_BITS-1:0] dq_flush_tail_age;
+    logic [ROB_AGE_BITS-1:0] dq_int_entry_age [0:INT_DEPTH-1];
+    logic [ROB_AGE_BITS-1:0] dq_mem_entry_age [0:MEM_DEPTH-1];
+    logic [INT_IDX_BITS-1:0] int_flush_src [0:INT_DEPTH-1];
+    logic [MEM_IDX_BITS-1:0] mem_flush_src [0:MEM_DEPTH-1];
+    logic [INT_CNT_BITS-1:0] int_flush_count;
+    logic [MEM_CNT_BITS-1:0] mem_flush_count;
+
+    always_comb begin
+        dq_flush_tail_age = (flush_rob_tail >= rob_head)
+            ? ({1'b0, flush_rob_tail} - {1'b0, rob_head})
+            : ((ROB_AGE_BITS)'(ROB_DEPTH) - {1'b0, rob_head} +
+               {1'b0, flush_rob_tail});
+
+        int_flush_count = '0;
+        for (int i = 0; i < INT_DEPTH; i++) begin
+            int_flush_src[i] = '0;
+            dq_int_entry_age[i] = '0;
+        end
+        for (int i = 0; i < INT_DEPTH; i++) begin
+            logic [INT_IDX_BITS-1:0] rd_idx;
+            rd_idx = int_head + INT_IDX_BITS'(i);
+            if (INT_CNT_BITS'(i) < int_count) begin
+                dq_int_entry_age[i] =
+                    (int_fifo[rd_idx].rob_idx >= rob_head)
+                        ? ({1'b0, int_fifo[rd_idx].rob_idx} -
+                           {1'b0, rob_head})
+                        : ((ROB_AGE_BITS)'(ROB_DEPTH) - {1'b0, rob_head} +
+                           {1'b0, int_fifo[rd_idx].rob_idx});
+                if (dq_int_entry_age[i] < dq_flush_tail_age) begin
+                    int_flush_src[int_flush_count] = rd_idx;
+                    int_flush_count = int_flush_count + 1'b1;
+                end
+            end
+        end
+
+        mem_flush_count = '0;
+        for (int i = 0; i < MEM_DEPTH; i++) begin
+            mem_flush_src[i] = '0;
+            dq_mem_entry_age[i] = '0;
+        end
+        for (int i = 0; i < MEM_DEPTH; i++) begin
+            logic [MEM_IDX_BITS-1:0] rd_idx;
+            rd_idx = mem_head + MEM_IDX_BITS'(i);
+            if (MEM_CNT_BITS'(i) < mem_count) begin
+                dq_mem_entry_age[i] =
+                    (mem_fifo[rd_idx].rob_idx >= rob_head)
+                        ? ({1'b0, mem_fifo[rd_idx].rob_idx} -
+                           {1'b0, rob_head})
+                        : ((ROB_AGE_BITS)'(ROB_DEPTH) - {1'b0, rob_head} +
+                           {1'b0, mem_fifo[rd_idx].rob_idx});
+                if (dq_mem_entry_age[i] < dq_flush_tail_age) begin
+                    mem_flush_src[mem_flush_count] = rd_idx;
+                    mem_flush_count = mem_flush_count + 1'b1;
+                end
+            end
+        end
+    end
+
+    // =========================================================================
     // Sequential: FIFO updates and pointer maintenance
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || flush_valid) begin
+        if (!rst_n || (flush_valid && flush_full)) begin
             int_head  <= '0;
             int_tail  <= '0;
             int_count <= '0;
             mem_head  <= '0;
             mem_tail  <= '0;
             mem_count <= '0;
+            rr_ptr    <= 2'd0;
+        end else if (flush_valid) begin
+            for (int i = 0; i < INT_DEPTH; i++) begin
+                if (INT_CNT_BITS'(i) < int_flush_count)
+                    int_fifo_flat[i] <= int_fifo_flat[int_flush_src[i]];
+                else
+                    int_fifo_flat[i] <= '0;
+            end
+            for (int i = 0; i < MEM_DEPTH; i++) begin
+                if (MEM_CNT_BITS'(i) < mem_flush_count)
+                    mem_fifo_flat[i] <= mem_fifo_flat[mem_flush_src[i]];
+                else
+                    mem_fifo_flat[i] <= '0;
+            end
+
+            int_head  <= '0;
+            int_tail  <= INT_IDX_BITS'(int_flush_count);
+            int_count <= int_flush_count;
+            mem_head  <= '0;
+            mem_tail  <= MEM_IDX_BITS'(mem_flush_count);
+            mem_count <= mem_flush_count;
             rr_ptr    <= 2'd0;
         end else begin
             // -------------------------------------------------------------------

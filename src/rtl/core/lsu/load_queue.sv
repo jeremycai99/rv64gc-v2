@@ -16,6 +16,7 @@ module load_queue
 
     // Allocate (from rename)
     input logic [2:0] alloc_count,
+    input logic [ROB_IDX_BITS-1:0] alloc_rob_idx [0:PIPE_WIDTH-1],
     output logic [LQ_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],
     output logic full,
 
@@ -26,6 +27,17 @@ module load_queue
     input logic [63:0] exec_addr,
     input logic [1:0] exec_size,
     input logic exec_is_unsigned,
+
+    // Second load execution/address fill port.  Port 1 exists so a dual-load
+    // cache issue records both executed load addresses in the LQ in the same
+    // cycle; delaying port 1 can hide a younger executed load from a later STA
+    // ordering check.
+    input logic exec1_valid,
+    input logic [LQ_IDX_BITS-1:0] exec1_idx,
+    input logic [ROB_IDX_BITS-1:0] exec1_rob_idx,
+    input logic [63:0] exec1_addr,
+    input logic [1:0] exec1_size,
+    input logic exec1_is_unsigned,
 
     // Load result (from D-cache or store forwarding)
     input logic result_valid,
@@ -46,6 +58,7 @@ module load_queue
 
     // Flush
     input logic flush_valid,
+    input logic [ROB_IDX_BITS-1:0] flush_rob_tail,
     input logic flush_full
 );
 
@@ -95,6 +108,15 @@ module load_queue
     //   3. Its ROB index is younger than the store's ROB index.
     //
     localparam int ROB_AGE_BITS = ROB_IDX_BITS + 1;
+
+    function automatic logic [ROB_AGE_BITS-1:0] rob_age_from_head(
+        input logic [ROB_IDX_BITS-1:0] idx
+    );
+        if (idx >= rob_head)
+            rob_age_from_head = {1'b0, idx} - {1'b0, rob_head};
+        else
+            rob_age_from_head = ROB_DEPTH[ROB_AGE_BITS-1:0] - {1'b0, rob_head} + {1'b0, idx};
+    endfunction
 
     logic [LQ_DEPTH-1:0]        viol_mask;
     logic [7:0]                 ld_bmask [0:LQ_DEPTH-1];
@@ -159,6 +181,45 @@ module load_queue
 
     assign ordering_violation = any_viol;
     assign violation_rob_idx  = best_rob_idx;
+
+    // =========================================================================
+    // Partial flush survivor map
+    // =========================================================================
+    logic [LQ_IDX_BITS-1:0] partial_flush_head;
+    logic [LQ_IDX_BITS-1:0] partial_flush_tail;
+    logic [LQ_IDX_BITS:0]   partial_flush_base_count;
+    logic [LQ_IDX_BITS:0]   partial_flush_count;
+    logic [LQ_DEPTH-1:0]    partial_flush_keep;
+
+    always_comb begin
+        logic [ROB_AGE_BITS-1:0] flush_tail_age;
+        logic [ROB_AGE_BITS-1:0] entry_age;
+        logic [LQ_IDX_BITS-1:0]  scan_idx;
+
+        partial_flush_head       = LQ_IDX_BITS'(head_r + LQ_IDX_BITS'(commit_count));
+        partial_flush_tail       = partial_flush_head;
+        partial_flush_base_count = '0;
+        partial_flush_count      = '0;
+        partial_flush_keep       = '0;
+
+        if (count_r >= (LQ_IDX_BITS+1)'(commit_count))
+            partial_flush_base_count = count_r - (LQ_IDX_BITS+1)'(commit_count);
+
+        flush_tail_age = rob_age_from_head(flush_rob_tail);
+
+        for (int step = 0; step < LQ_DEPTH; step++) begin
+            if (step < int'(partial_flush_base_count)) begin
+                scan_idx  = LQ_IDX_BITS'(partial_flush_head + LQ_IDX_BITS'(step));
+                entry_age = rob_age_from_head(queue[scan_idx].rob_idx);
+                if (queue[scan_idx].valid && (entry_age < flush_tail_age)) begin
+                    partial_flush_keep[scan_idx] = 1'b1;
+                    partial_flush_count          = partial_flush_count + (LQ_IDX_BITS+1)'(1);
+                end
+            end
+        end
+
+        partial_flush_tail = LQ_IDX_BITS'(partial_flush_head + LQ_IDX_BITS'(partial_flush_count));
+    end
 
 `ifndef SYNTHESIS
     logic trace_ordv_int_en;
@@ -226,6 +287,39 @@ module load_queue
                 queue[i].valid    <= 1'b0;
                 queue[i].executed <= 1'b0;
             end
+        end else if (flush_valid) begin
+            // Partial flush: retire same-cycle committed loads, then keep
+            // only entries older than the ROB flush tail. Allocation is
+            // intentionally suppressed on the flush cycle.
+            head_r  <= partial_flush_head;
+            tail_r  <= partial_flush_tail;
+            count_r <= partial_flush_count;
+
+            for (int i = 0; i < LQ_DEPTH; i++) begin
+                if (!partial_flush_keep[i])
+                    queue[i] <= '0;
+            end
+
+            if (exec_valid && partial_flush_keep[exec_idx]) begin
+                queue[exec_idx].rob_idx     <= exec_rob_idx;
+                queue[exec_idx].addr        <= exec_addr;
+                queue[exec_idx].size        <= exec_size;
+                queue[exec_idx].is_unsigned <= exec_is_unsigned;
+                queue[exec_idx].addr_valid  <= 1'b1;
+                queue[exec_idx].executed    <= 1'b1;
+            end
+            if (exec1_valid && partial_flush_keep[exec1_idx]) begin
+                queue[exec1_idx].rob_idx     <= exec1_rob_idx;
+                queue[exec1_idx].addr        <= exec1_addr;
+                queue[exec1_idx].size        <= exec1_size;
+                queue[exec1_idx].is_unsigned <= exec1_is_unsigned;
+                queue[exec1_idx].addr_valid  <= 1'b1;
+                queue[exec1_idx].executed    <= 1'b1;
+            end
+            if (result_valid && partial_flush_keep[result_idx]) begin
+                queue[result_idx].data       <= result_data;
+                queue[result_idx].has_result <= 1'b1;
+            end
         end else begin
             // --- Commit: advance head ---
             for (int c = 0; c < PIPE_WIDTH; c++) begin
@@ -249,6 +343,14 @@ module load_queue
                 queue[exec_idx].addr_valid  <= 1'b1;
                 queue[exec_idx].executed    <= 1'b1;
             end
+            if (exec1_valid) begin
+                queue[exec1_idx].rob_idx     <= exec1_rob_idx;
+                queue[exec1_idx].addr        <= exec1_addr;
+                queue[exec1_idx].size        <= exec1_size;
+                queue[exec1_idx].is_unsigned <= exec1_is_unsigned;
+                queue[exec1_idx].addr_valid  <= 1'b1;
+                queue[exec1_idx].executed    <= 1'b1;
+            end
 
             // --- Result fill: record loaded data ---
             if (result_valid) begin
@@ -260,6 +362,7 @@ module load_queue
             for (int a = 0; a < PIPE_WIDTH; a++) begin
                 if (a < int'(alloc_count)) begin
                     queue[LQ_IDX_BITS'(tail_r + LQ_IDX_BITS'(a))].valid      <= 1'b1;
+                    queue[LQ_IDX_BITS'(tail_r + LQ_IDX_BITS'(a))].rob_idx    <= alloc_rob_idx[a];
                     queue[LQ_IDX_BITS'(tail_r + LQ_IDX_BITS'(a))].addr_valid <= 1'b0;
                     queue[LQ_IDX_BITS'(tail_r + LQ_IDX_BITS'(a))].executed   <= 1'b0;
                     queue[LQ_IDX_BITS'(tail_r + LQ_IDX_BITS'(a))].has_result <= 1'b0;

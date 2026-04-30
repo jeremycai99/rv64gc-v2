@@ -27,6 +27,11 @@ module committed_store_buffer
     input  logic [1:0]  fwd_size,
     output logic        fwd_hit,
     output logic [63:0] fwd_data,
+    input  logic        fwd1_valid,
+    input  logic [63:0] fwd1_addr,
+    input  logic [1:0]  fwd1_size,
+    output logic        fwd1_hit,
+    output logic [63:0] fwd1_data,
     // Full signal
     output logic        full
 );
@@ -46,6 +51,20 @@ module committed_store_buffer
     logic [IDX_BITS-1:0] tail_r;   // next free slot (enq side)
     logic [IDX_BITS:0]   count_r;  // one extra bit to distinguish full/empty
 
+`ifndef SYNTHESIS
+    bit     sim_perf_profile;
+    integer sim_deq_valid_cyc;
+    integer sim_deq_ack_cyc;
+    integer sim_deq_wait_cyc;
+    integer sim_enq_stall_cyc;
+    integer sim_full_cyc;
+    integer sim_wait_run_cur;
+    integer sim_wait_run_max;
+    logic [63:0] sim_wait_addr_r;
+    logic [63:0] sim_wait_data_r;
+    logic [7:0]  sim_wait_mask_r;
+`endif
+
     // =========================================================================
     // Status
     // =========================================================================
@@ -64,85 +83,84 @@ module committed_store_buffer
     // =========================================================================
     // Store-to-load forwarding
     // =========================================================================
-    // Compute the byte mask for the load request
-    logic [7:0] fwd_req_bmask;
-    logic [2:0] fwd_req_off;
-    assign fwd_req_off = fwd_addr[2:0];
+    task automatic forward_lookup(
+        input  logic        req_valid,
+        input  logic [63:0] req_addr,
+        input  logic [1:0]  req_size,
+        output logic        hit,
+        output logic [63:0] data
+    );
+        logic [7:0] req_bmask;
+        logic [7:0] cover_mask;
+        logic [2:0] req_off;
 
-    always_comb begin
-        case (fwd_size)
-            2'd0:    fwd_req_bmask = 8'h01 << fwd_req_off;
-            2'd1:    fwd_req_bmask = 8'h03 << fwd_req_off;
-            2'd2:    fwd_req_bmask = 8'h0F << fwd_req_off;
-            default: fwd_req_bmask = 8'hFF;
+        req_off = req_addr[2:0];
+        case (req_size)
+            2'd0:    req_bmask = 8'h01 << req_off;
+            2'd1:    req_bmask = 8'h03 << req_off;
+            2'd2:    req_bmask = 8'h0F << req_off;
+            default: req_bmask = 8'hFF;
         endcase
-    end
 
-    // Per-entry match/overlap signals
-    logic [DEPTH-1:0] ent_full_cover;
-    logic [7:0]       ent_overlap [0:DEPTH-1];
-    logic [63:0]      ent_fwd_data [0:DEPTH-1];
+        data       = '0;
+        cover_mask = '0;
 
-    genvar fi;
-    generate
-        for (fi = 0; fi < DEPTH; fi++) begin : gen_fwd_cam
-            logic [7:0] ent_bmask;
-            logic [2:0] ent_off;
-            assign ent_off = buf_q[fi].addr[2:0];
+        // Walk oldest to youngest in circular queue order.  Younger matching
+        // stores overwrite older byte positions, while cover_mask records
+        // whether all requested bytes can be supplied from the CSB.
+        for (int step = 0; step < DEPTH; step++) begin
+            if (step < int'(count_r)) begin
+                logic [IDX_BITS-1:0] scan_idx;
+                logic [7:0]          ent_bmask;
+                logic [7:0]          overlap;
+                int                  idx_int;
 
-            always_comb begin
-                case (buf_q[fi].size)
-                    2'd0:    ent_bmask = 8'h01 << ent_off;
-                    2'd1:    ent_bmask = 8'h03 << ent_off;
-                    2'd2:    ent_bmask = 8'h0F << ent_off;
+                idx_int = int'(head_r) + step;
+                if (idx_int >= DEPTH)
+                    idx_int = idx_int - DEPTH;
+                scan_idx = IDX_BITS'(idx_int);
+
+                case (buf_q[scan_idx].size)
+                    2'd0:    ent_bmask = 8'h01 << buf_q[scan_idx].addr[2:0];
+                    2'd1:    ent_bmask = 8'h03 << buf_q[scan_idx].addr[2:0];
+                    2'd2:    ent_bmask = 8'h0F << buf_q[scan_idx].addr[2:0];
                     default: ent_bmask = 8'hFF;
                 endcase
-            end
 
-            logic addr_match;
-            assign addr_match = fwd_valid
-                              & buf_q[fi].valid
-                              & (buf_q[fi].addr[63:3] == fwd_addr[63:3]);
+                overlap = (req_valid &&
+                           buf_q[scan_idx].valid &&
+                           (buf_q[scan_idx].addr[63:3] == req_addr[63:3]))
+                        ? (ent_bmask & req_bmask)
+                        : 8'h00;
 
-            assign ent_overlap[fi]    = addr_match ? (ent_bmask & fwd_req_bmask) : 8'h00;
-            assign ent_full_cover[fi] = addr_match & ((ent_bmask & fwd_req_bmask) == fwd_req_bmask);
-
-            // Per-entry forwarding data.  buf_q[fi].data is LSB-aligned to
-            // the store's effective address; byte 0 corresponds to memory
-            // byte buf_q[fi].addr[2:0].  Select buf_q[fi].data[b - addr[2:0]]
-            // for each output dword byte `b` that the store covers.
-            always_comb begin
-                ent_fwd_data[fi] = '0;
                 for (int b = 0; b < 8; b++) begin
-                    if (ent_overlap[fi][b] && (b >= int'(buf_q[fi].addr[2:0]))) begin
-                        ent_fwd_data[fi][b*8 +: 8] =
-                            buf_q[fi].data[(b - int'(buf_q[fi].addr[2:0])) * 8 +: 8];
+                    if (overlap[b] && (b >= int'(buf_q[scan_idx].addr[2:0]))) begin
+                        data[b*8 +: 8] =
+                            buf_q[scan_idx].data[
+                                (b - int'(buf_q[scan_idx].addr[2:0])) * 8 +: 8
+                            ];
                     end
                 end
+
+                cover_mask = cover_mask | overlap;
             end
         end
-    endgenerate
 
-    // Merge: later-written (younger) entries overwrite older byte slots.
-    // Scan in reverse age order so youngest wins — scan from tail-1 downward
-    // using modular arithmetic would be complex; instead we do a simple linear
-    // scan letting each matching entry override previous bytes.
+        hit = req_valid && (cover_mask == req_bmask);
+    endtask
+
     always_comb begin
-        fwd_data = '0;
-        for (int e = 0; e < DEPTH; e++) begin
-            for (int b = 0; b < 8; b++) begin
-                if (ent_overlap[e][b]) begin
-                    fwd_data[b*8 +: 8] = ent_fwd_data[e][b*8 +: 8];
-                end
-            end
-        end
+        forward_lookup(fwd_valid,  fwd_addr,  fwd_size,  fwd_hit,  fwd_data);
+        forward_lookup(fwd1_valid, fwd1_addr, fwd1_size, fwd1_hit, fwd1_data);
     end
-
-    assign fwd_hit = |ent_full_cover;
 
     // =========================================================================
     // Sequential logic
     // =========================================================================
+`ifndef SYNTHESIS
+    initial sim_perf_profile = $test$plusargs("PERF_PROFILE");
+`endif
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             head_r  <= '0;
@@ -151,7 +169,49 @@ module committed_store_buffer
             for (int i = 0; i < DEPTH; i++) begin
                 buf_q[i] <= '0;
             end
+`ifndef SYNTHESIS
+            sim_deq_valid_cyc <= 0;
+            sim_deq_ack_cyc   <= 0;
+            sim_deq_wait_cyc  <= 0;
+            sim_enq_stall_cyc <= 0;
+            sim_full_cyc      <= 0;
+            sim_wait_run_cur  <= 0;
+            sim_wait_run_max  <= 0;
+            sim_wait_addr_r   <= '0;
+            sim_wait_data_r   <= '0;
+            sim_wait_mask_r   <= '0;
+`endif
         end else begin
+`ifndef SYNTHESIS
+            if (sim_perf_profile) begin
+                if (deq_valid)
+                    sim_deq_valid_cyc <= sim_deq_valid_cyc + 1;
+                if (deq_valid && deq_ack)
+                    sim_deq_ack_cyc <= sim_deq_ack_cyc + 1;
+                if (enq_valid && !enq_ready)
+                    sim_enq_stall_cyc <= sim_enq_stall_cyc + 1;
+                if (full)
+                    sim_full_cyc <= sim_full_cyc + 1;
+
+                if (deq_valid && !deq_ack) begin
+                    sim_deq_wait_cyc <= sim_deq_wait_cyc + 1;
+                    if ((buf_q[head_r].addr == sim_wait_addr_r) &&
+                        (buf_q[head_r].data == sim_wait_data_r) &&
+                        (buf_q[head_r].byte_mask == sim_wait_mask_r)) begin
+                        sim_wait_run_cur <= sim_wait_run_cur + 1;
+                    end else begin
+                        sim_wait_run_cur <= 1;
+                        sim_wait_addr_r  <= buf_q[head_r].addr;
+                        sim_wait_data_r  <= buf_q[head_r].data;
+                        sim_wait_mask_r  <= buf_q[head_r].byte_mask;
+                    end
+                    if (sim_wait_run_cur >= sim_wait_run_max)
+                        sim_wait_run_max <= sim_wait_run_cur + 1;
+                end else begin
+                    sim_wait_run_cur <= 0;
+                end
+            end
+`endif
             // Dequeue (head consumed by D-cache)
             if (deq_valid && deq_ack) begin
                 buf_q[head_r].valid <= 1'b0;
@@ -180,5 +240,19 @@ module committed_store_buffer
                 count_r <= count_r - (IDX_BITS+1)'(1);
         end
     end
+
+`ifndef SYNTHESIS
+    final begin
+        if (sim_perf_profile) begin
+            $display("CSB summary:");
+            $display("  deq_valid / ack cycles     : %0d / %0d",
+                     sim_deq_valid_cyc, sim_deq_ack_cyc);
+            $display("  deq_wait / enq_stall / full: %0d / %0d / %0d",
+                     sim_deq_wait_cyc, sim_enq_stall_cyc, sim_full_cyc);
+            $display("  max same-head wait run     : %0d",
+                     sim_wait_run_max);
+        end
+    end
+`endif
 
 endmodule

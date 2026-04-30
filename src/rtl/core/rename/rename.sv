@@ -345,17 +345,23 @@ module rename
                 work_insn[i].rd_arch != 5'd0 &&
                 work_insn[i].fu_type == FU_ALU) begin
 
-                // Move/zero elimination is DISABLED: the current pipeline
-                // does not have the reference counting or IQ-enqueue-time
-                // CDB snoop needed to safely alias physical registers across
-                // architectural registers.  All eligible patterns (mv, li 0,
-                // xor rd,rd,rd) now flow through the normal ALU path, which
-                // is correct but uses an extra cycle and a free-list entry.
-                //
-                // Patterns kept as comments for future re-enablement:
-                //   mv rd, rs    = ALU_ADD, use_imm=1, imm==0, rs1!=x0
-                //   li rd, 0     = ALU_ADD, use_imm=1, imm==0, rs1==x0
-                //   xor rd,rd,rd = ALU_XOR, !use_imm, rs1==rs2
+                // Keep move elimination disabled: aliasing a destination to
+                // an arbitrary source physical register needs lifetime/refcount
+                // support that this pipeline does not yet have.  Zero-only
+                // elimination is safe because it maps the destination to p0,
+                // the hardwired-zero register, and consumes no new preg.
+                if (work_insn[i].alu_op == ALU_ADD &&
+                    work_insn[i].use_imm &&
+                    work_insn[i].imm == 64'd0 &&
+                    work_insn[i].rs1_arch == 5'd0) begin
+                    is_zero_elim[i] = 1'b1; // li rd, 0
+                end else if (work_insn[i].alu_op == ALU_XOR &&
+                             !work_insn[i].use_imm &&
+                             work_insn[i].rs1_valid &&
+                             work_insn[i].rs2_valid &&
+                             (work_insn[i].rs1_arch == work_insn[i].rs2_arch)) begin
+                    is_zero_elim[i] = 1'b1; // xor rd, rs, rs
+                end
             end
         end
     end
@@ -779,6 +785,8 @@ module rename
     integer cycle_full_stall;
     integer cycle_any_valid;
     integer cycle_rename_stall_out;
+    integer zero_elim_cnt;
+    integer move_elim_cnt;
 
     initial rn_stat_en = ($test$plusargs("STAT_DUMP") ? 1'b1 : 1'b0);
 
@@ -797,6 +805,8 @@ module rename
             cycle_full_stall           <= 0;
             cycle_any_valid            <= 0;
             cycle_rename_stall_out     <= 0;
+            zero_elim_cnt              <= 0;
+            move_elim_cnt              <= 0;
         end else begin
             rn_leak_cyc <= rn_leak_cyc + 1;
 
@@ -805,6 +815,8 @@ module rename
                     total_work_slot_cycles <= total_work_slot_cycles + 1;
                     if (slot_can_advance[i]) begin
                         total_advanced_slot_cycles <= total_advanced_slot_cycles + 1;
+                        if (is_zero_elim[i]) zero_elim_cnt <= zero_elim_cnt + 1;
+                        if (is_move_elim[i]) move_elim_cnt <= move_elim_cnt + 1;
                     end else begin
                         if (slot_needs_preg[i] && !has_preg[i]) stall_preg_cnt <= stall_preg_cnt + 1;
                         if (!has_rob[i])                        stall_rob_cnt  <= stall_rob_cnt + 1;
@@ -843,6 +855,9 @@ module rename
         $display("  has_lq=0:   %0d", stall_lq_cnt);
         $display("  has_sq=0:   %0d", stall_sq_cnt);
         $display("  has_dq=0:   %0d", stall_dq_cnt);
+        $display("Eliminated at rename:");
+        $display("  zero:       %0d", zero_elim_cnt);
+        $display("  move:       %0d", move_elim_cnt);
     end
 `endif
 

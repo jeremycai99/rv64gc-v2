@@ -12,9 +12,11 @@ module tage_sc_l
 
     // Predict (combinational lookup)
     input  logic [63:0] pc,
+    input  logic [63:0] target,
     output logic        pred_taken,
     output logic        pred_confident,   // high confidence -> no checkpoint needed
     input  logic [63:0] aux_pc,
+    input  logic [63:0] aux_target,
     input  logic [GHR_BITS-1:0] aux_ghr,
     output logic        aux_pred_taken,
     output logic        aux_pred_confident,
@@ -22,6 +24,7 @@ module tage_sc_l
     // Update (from commit — actual branch outcome)
     input  logic        update_valid,
     input  logic [63:0] update_pc,
+    input  logic [63:0] update_target,
     input  logic        update_taken,
     input  logic        update_mispredict,
     input  logic [GHR_BITS-1:0] update_ghr,
@@ -29,6 +32,8 @@ module tage_sc_l
     // GHR management
     input  logic        spec_update_valid,  // speculatively shift GHR on prediction
     input  logic        spec_taken,
+    input  logic [63:0] spec_pc,
+    input  logic [63:0] spec_target,
     input  logic        ghr_restore_valid,  // restore GHR on mispredict
     input  logic [GHR_BITS-1:0] ghr_restore_val,
     output logic [GHR_BITS-1:0] ghr_out,   // current GHR for checkpoint save
@@ -51,6 +56,25 @@ module tage_sc_l
     localparam int LOOP_TAG_BITS   = 12;
     localparam int LOOP_CNT_BITS   = 14;
     localparam int LOOP_CONF_BITS  = 2;
+    localparam int LOCAL_IDX_BITS  = 9;
+    localparam int LOCAL_HIST_BITS = 1;
+    localparam int LOCAL_PHT_BITS  = LOCAL_IDX_BITS + LOCAL_HIST_BITS;
+    localparam int LOCAL_HIST_ENTRIES = (1 << LOCAL_IDX_BITS);
+    localparam int LOCAL_PHT_ENTRIES  = (1 << LOCAL_PHT_BITS);
+
+`ifdef SIMULATION
+    logic sim_disable_local_pred;
+    logic sim_enable_local_pht_override;
+
+    initial begin
+        sim_disable_local_pred = $test$plusargs("DISABLE_LOCAL_PRED");
+        sim_enable_local_pht_override =
+            $test$plusargs("ENABLE_LOCAL_PHT_OVERRIDE");
+    end
+`else
+    localparam logic sim_disable_local_pred = 1'b0;
+    localparam logic sim_enable_local_pht_override = 1'b0;
+`endif
 
     // Geometric history lengths for the 4 tagged tables
     // (individual params for iverilog compatibility — no unpacked array params)
@@ -297,11 +321,102 @@ module tage_sc_l
     end
 
     // =========================================================================
+    //  3b. Local-history direction component
+    //
+    // Dhrystone has a hot forward conditional at 0x8000216a with an alternating
+    // not-taken/taken pattern. A commit-trained local PHT sees stale history
+    // when the same branch is fetched twice before the older copy resolves, so
+    // add a forward-branch alternation detector with speculative last-outcome
+    // state. Backward loop branches remain owned by the loop predictor.
+    // =========================================================================
+    logic [LOCAL_HIST_BITS-1:0] local_hist [LOCAL_HIST_ENTRIES];
+    logic [BASE_CTR_BITS-1:0]   local_pht  [LOCAL_PHT_ENTRIES];
+    logic                       local_last_actual [LOCAL_HIST_ENTRIES];
+    logic                       local_last_spec   [LOCAL_HIST_ENTRIES];
+    logic [1:0]                 local_alt_conf    [LOCAL_HIST_ENTRIES];
+
+    logic [LOCAL_IDX_BITS-1:0]  local_idx;
+    logic [LOCAL_IDX_BITS-1:0]  aux_local_idx;
+    logic [LOCAL_IDX_BITS-1:0]  upd_local_idx;
+    logic [LOCAL_IDX_BITS-1:0]  spec_local_idx;
+    logic [LOCAL_PHT_BITS-1:0]  local_pht_idx;
+    logic [LOCAL_PHT_BITS-1:0]  aux_local_pht_idx;
+    logic [LOCAL_PHT_BITS-1:0]  upd_local_pht_idx;
+    logic [LOCAL_HIST_BITS-1:0] local_hist_val;
+    logic [LOCAL_HIST_BITS-1:0] aux_local_hist_val;
+    logic [LOCAL_HIST_BITS-1:0] upd_local_hist_val;
+    logic [BASE_CTR_BITS-1:0]   local_ctr_val;
+    logic [BASE_CTR_BITS-1:0]   aux_local_ctr_val;
+    logic                       local_pred;
+    logic                       local_strong;
+    logic                       local_forward;
+    logic                       local_override;
+    logic                       local_alt_pred;
+    logic                       local_alt_strong;
+    logic                       aux_local_pred;
+    logic                       aux_local_strong;
+    logic                       aux_local_forward;
+    logic                       aux_local_override;
+    logic                       aux_local_alt_pred;
+    logic                       aux_local_alt_strong;
+    logic                       upd_local_forward;
+    logic                       upd_local_alternates;
+
+    assign local_idx = pc[LOCAL_IDX_BITS+1:2] ^
+                       LOCAL_IDX_BITS'(pc[20:12]);
+    assign aux_local_idx = aux_pc[LOCAL_IDX_BITS+1:2] ^
+                           LOCAL_IDX_BITS'(aux_pc[20:12]);
+    assign upd_local_idx = update_pc[LOCAL_IDX_BITS+1:2] ^
+                           LOCAL_IDX_BITS'(update_pc[20:12]);
+    assign spec_local_idx = spec_pc[LOCAL_IDX_BITS+1:2] ^
+                            LOCAL_IDX_BITS'(spec_pc[20:12]);
+
+    assign local_hist_val = local_hist[local_idx];
+    assign aux_local_hist_val = local_hist[aux_local_idx];
+    assign upd_local_hist_val = local_hist[upd_local_idx];
+
+    assign local_pht_idx = {local_idx, local_hist_val};
+    assign aux_local_pht_idx = {aux_local_idx, aux_local_hist_val};
+    assign upd_local_pht_idx = {upd_local_idx, upd_local_hist_val};
+
+    assign local_ctr_val = local_pht[local_pht_idx];
+    assign aux_local_ctr_val = local_pht[aux_local_pht_idx];
+    assign local_alt_pred = ~local_last_spec[local_idx];
+    assign aux_local_alt_pred = ~local_last_spec[aux_local_idx];
+    assign local_alt_strong = (local_alt_conf[local_idx] == 2'd3);
+    assign aux_local_alt_strong = (local_alt_conf[aux_local_idx] == 2'd3);
+    assign local_pred = local_alt_strong ? local_alt_pred
+                                         : local_ctr_val[BASE_CTR_BITS-1];
+    assign aux_local_pred = aux_local_alt_strong ? aux_local_alt_pred
+                                                 : aux_local_ctr_val[BASE_CTR_BITS-1];
+    assign local_strong = local_alt_strong ||
+                          (local_ctr_val == 2'd0) ||
+                          (local_ctr_val == 2'd3);
+    assign aux_local_strong = aux_local_alt_strong ||
+                              (aux_local_ctr_val == 2'd0) ||
+                              (aux_local_ctr_val == 2'd3);
+    assign local_forward = (target != 64'd0) && (target > pc);
+    assign aux_local_forward = (aux_target != 64'd0) && (aux_target > aux_pc);
+    assign local_override =
+        !sim_disable_local_pred &&
+        local_forward &&
+        (local_alt_strong ||
+         (sim_enable_local_pht_override && local_strong));
+    assign aux_local_override =
+        !sim_disable_local_pred &&
+        aux_local_forward &&
+        (aux_local_alt_strong ||
+         (sim_enable_local_pht_override && aux_local_strong));
+    assign upd_local_forward = (update_target != 64'd0) && (update_target > update_pc);
+    assign upd_local_alternates = update_taken != local_last_actual[upd_local_idx];
+
+    // =========================================================================
     //  4. Loop Predictor — 64 entries
     //     {tag[11:0], count[13:0], limit[13:0], confidence[1:0], dir}
     // =========================================================================
     logic [LOOP_TAG_BITS-1:0]  loop_tags  [LOOP_PRED_ENTRIES];
     logic [LOOP_CNT_BITS-1:0]  loop_count [LOOP_PRED_ENTRIES];
+    logic [LOOP_CNT_BITS-1:0]  loop_spec_count [LOOP_PRED_ENTRIES];
     logic [LOOP_CNT_BITS-1:0]  loop_limit [LOOP_PRED_ENTRIES];
     logic [LOOP_CONF_BITS-1:0] loop_conf  [LOOP_PRED_ENTRIES];
     logic                      loop_dir   [LOOP_PRED_ENTRIES];
@@ -319,11 +434,34 @@ module tage_sc_l
     logic                      aux_loop_pred;
     logic                      aux_loop_confident;
     logic                      aux_loop_override;
+    logic [LOOP_CNT_BITS-1:0]  loop_lookup_count;
+    logic [LOOP_CNT_BITS-1:0]  aux_loop_lookup_count;
+
+`ifdef SIMULATION
+    logic sim_disable_loop_spec_count;
+
+    initial begin
+        sim_disable_loop_spec_count =
+            $test$plusargs("NO_LOOP_SPEC_COUNT") ? 1'b1 : 1'b0;
+    end
+`else
+    localparam logic sim_disable_loop_spec_count = 1'b0;
+`endif
 
     assign loop_lkp_idx = pc[LOOP_IDX_BITS+1:2];
     assign loop_lkp_tag = pc[LOOP_TAG_BITS+1:2];
     assign aux_loop_lkp_idx = aux_pc[LOOP_IDX_BITS+1:2];
     assign aux_loop_lkp_tag = aux_pc[LOOP_TAG_BITS+1:2];
+
+    always_comb begin
+        if (!sim_disable_loop_spec_count) begin
+            loop_lookup_count = loop_spec_count[loop_lkp_idx];
+            aux_loop_lookup_count = loop_spec_count[aux_loop_lkp_idx];
+        end else begin
+            loop_lookup_count = loop_count[loop_lkp_idx];
+            aux_loop_lookup_count = loop_count[aux_loop_lkp_idx];
+        end
+    end
 
     always_comb begin
         loop_hit       = loop_valid[loop_lkp_idx] &&
@@ -334,7 +472,7 @@ module tage_sc_l
 
         if (loop_hit) begin
             loop_confident = (loop_conf[loop_lkp_idx] == {LOOP_CONF_BITS{1'b1}});
-            if (loop_count[loop_lkp_idx] < loop_limit[loop_lkp_idx]) begin
+            if (loop_lookup_count < loop_limit[loop_lkp_idx]) begin
                 loop_pred = 1'b1;  // stay in loop
             end else begin
                 loop_pred = 1'b0;  // exit loop
@@ -351,7 +489,7 @@ module tage_sc_l
 
         if (aux_loop_hit) begin
             aux_loop_confident = (loop_conf[aux_loop_lkp_idx] == {LOOP_CONF_BITS{1'b1}});
-            if (loop_count[aux_loop_lkp_idx] < loop_limit[aux_loop_lkp_idx]) begin
+            if (aux_loop_lookup_count < loop_limit[aux_loop_lkp_idx]) begin
                 aux_loop_pred = 1'b1;
             end else begin
                 aux_loop_pred = 1'b0;
@@ -366,27 +504,33 @@ module tage_sc_l
     always_comb begin
         if (loop_override) begin
             pred_taken = loop_pred;
+        end else if (local_override) begin
+            pred_taken = local_pred;
         end else begin
             pred_taken = sc_pred;
         end
 
         // Confidence: high if loop overrides, or if TAGE was strong and SC agreed
-        pred_confident = loop_override || (!tage_pred_weak && !sc_override);
+        pred_confident = loop_override ||
+                         local_override ||
+                         (!tage_pred_weak && !sc_override);
 
         if (aux_loop_override) begin
             aux_pred_taken = aux_loop_pred;
+        end else if (aux_local_override) begin
+            aux_pred_taken = aux_local_pred;
         end else begin
             aux_pred_taken = aux_sc_pred;
         end
 
-        aux_pred_confident = aux_loop_override || (!aux_tage_pred_weak && !aux_sc_override);
+        aux_pred_confident = aux_loop_override ||
+                             aux_local_override ||
+                             (!aux_tage_pred_weak && !aux_sc_override);
     end
 
     // =========================================================================
-    //  Update path — all sequential on update_valid
+    //  Update path hash signals
     // =========================================================================
-
-    // Recompute update hashes
     logic [BASE_IDX_BITS-1:0] upd_base_idx;
     logic [TAGE_IDX_BITS-1:0] upd_tage_idx [TAGE_NUM_TABLES];
     logic [TAGE_TAG_BITS-1:0] upd_tage_tag [TAGE_NUM_TABLES];
@@ -397,12 +541,434 @@ module tage_sc_l
     logic [LOOP_IDX_BITS-1:0] upd_loop_idx;
     logic [LOOP_TAG_BITS-1:0] upd_loop_tag;
     logic                     upd_loop_hit;
+    logic                     upd_loop_backward;
+    logic [LOOP_IDX_BITS-1:0] spec_loop_idx;
+    logic [LOOP_TAG_BITS-1:0] spec_loop_tag;
+    logic                     spec_loop_hit;
+    logic                     spec_loop_backward;
 
+`ifdef SIMULATION
+    // Hot-PC loop-predictor diagnostics. These are observational only and are
+    // enabled by +TRACE_LOOPPRED, +PERF_PROFILE, or +STAT_DUMP.
+    localparam int SIM_LOOPPRED_HOT_PCS = 8;
+    localparam int SIM_BPU_HOT_PCS = 10;
+
+    logic sim_looppred_en;
+    logic sim_trace_looppred_en;
+    logic sim_bpu_hot_en;
+    integer sim_lp_primary_lookup      [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_primary_hit         [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_primary_override    [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_primary_pred_taken  [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_aux_lookup          [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_aux_hit             [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_aux_override        [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_aux_pred_taken      [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_update              [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_update_taken        [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_update_not_taken    [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_update_misp         [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_update_backward     [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_update_hit          [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_exit_limit_match    [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_exit_limit_update   [0:SIM_LOOPPRED_HOT_PCS-1];
+    integer sim_lp_conf_hist           [0:SIM_LOOPPRED_HOT_PCS-1][0:3];
+    integer sim_bpu_primary_lookup     [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_primary_taken      [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_primary_confident  [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_primary_loop_hit   [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_primary_loop_ovr   [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_primary_local_ovr  [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_primary_tage_hit   [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_primary_tage_weak  [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_primary_sc_ovr     [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_lookup         [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_taken          [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_confident      [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_loop_hit       [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_loop_ovr       [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_local_ovr      [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_tage_hit       [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_tage_weak      [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_aux_sc_ovr         [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_update             [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_update_taken       [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_update_not_taken   [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_update_misp        [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_update_loop_hit    [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_update_tage_hit    [0:SIM_BPU_HOT_PCS-1];
+    integer sim_bpu_update_provider    [0:SIM_BPU_HOT_PCS-1][0:3];
+
+    function automatic int sim_looppred_hot_idx(input logic [63:0] hot_pc);
+        begin
+            unique case (hot_pc)
+                64'h0000_0000_8000_3176: sim_looppred_hot_idx = 0; // matrix_mul_matrix inner loop
+                64'h0000_0000_8000_31ec: sim_looppred_hot_idx = 1; // matrix bitextract inner loop
+                64'h0000_0000_8000_3aea: sim_looppred_hot_idx = 2; // crc16 byte0 loop
+                64'h0000_0000_8000_3b12: sim_looppred_hot_idx = 3; // crc16 byte1 loop
+                64'h0000_0000_8000_2446: sim_looppred_hot_idx = 4; // list reverse loop
+                64'h0000_0000_8000_36b4: sim_looppred_hot_idx = 5; // state digit loop
+                64'h0000_0000_8000_23ae: sim_looppred_hot_idx = 6; // mergesort compare select
+                64'h0000_0000_8000_3710: sim_looppred_hot_idx = 7; // state exponent loop
+                default:                 sim_looppred_hot_idx = -1;
+            endcase
+        end
+    endfunction
+
+    function automatic logic [63:0] sim_looppred_hot_pc(input int idx);
+        begin
+            unique case (idx)
+                0: sim_looppred_hot_pc = 64'h0000_0000_8000_3176;
+                1: sim_looppred_hot_pc = 64'h0000_0000_8000_31ec;
+                2: sim_looppred_hot_pc = 64'h0000_0000_8000_3aea;
+                3: sim_looppred_hot_pc = 64'h0000_0000_8000_3b12;
+                4: sim_looppred_hot_pc = 64'h0000_0000_8000_2446;
+                5: sim_looppred_hot_pc = 64'h0000_0000_8000_36b4;
+                6: sim_looppred_hot_pc = 64'h0000_0000_8000_23ae;
+                7: sim_looppred_hot_pc = 64'h0000_0000_8000_3710;
+                default: sim_looppred_hot_pc = 64'd0;
+            endcase
+        end
+    endfunction
+
+    function automatic int sim_bpu_hot_idx(input logic [63:0] hot_pc);
+        begin
+            unique case (hot_pc)
+                64'h0000_0000_8000_36b4: sim_bpu_hot_idx = 0; // state comma branch
+                64'h0000_0000_8000_3176: sim_bpu_hot_idx = 1; // matrix inner loop
+                64'h0000_0000_8000_31ec: sim_bpu_hot_idx = 2; // matrix bitextract inner loop
+                64'h0000_0000_8000_3710: sim_bpu_hot_idx = 3; // state exponent branch
+                64'h0000_0000_8000_23ae: sim_bpu_hot_idx = 4; // mergesort compare select
+                64'h0000_0000_8000_2446: sim_bpu_hot_idx = 5; // list reverse loop
+                64'h0000_0000_8000_36bc: sim_bpu_hot_idx = 6; // state decimal branch
+                64'h0000_0000_8000_2380: sim_bpu_hot_idx = 7; // mergesort loop
+                64'h0000_0000_8000_3b12: sim_bpu_hot_idx = 8; // crc16 byte1 loop
+                64'h0000_0000_8000_3aea: sim_bpu_hot_idx = 9; // crc16 byte0 loop
+                default:                 sim_bpu_hot_idx = -1;
+            endcase
+        end
+    endfunction
+
+    function automatic logic [63:0] sim_bpu_hot_pc(input int idx);
+        begin
+            unique case (idx)
+                0: sim_bpu_hot_pc = 64'h0000_0000_8000_36b4;
+                1: sim_bpu_hot_pc = 64'h0000_0000_8000_3176;
+                2: sim_bpu_hot_pc = 64'h0000_0000_8000_31ec;
+                3: sim_bpu_hot_pc = 64'h0000_0000_8000_3710;
+                4: sim_bpu_hot_pc = 64'h0000_0000_8000_23ae;
+                5: sim_bpu_hot_pc = 64'h0000_0000_8000_2446;
+                6: sim_bpu_hot_pc = 64'h0000_0000_8000_36bc;
+                7: sim_bpu_hot_pc = 64'h0000_0000_8000_2380;
+                8: sim_bpu_hot_pc = 64'h0000_0000_8000_3b12;
+                9: sim_bpu_hot_pc = 64'h0000_0000_8000_3aea;
+                default: sim_bpu_hot_pc = 64'd0;
+            endcase
+        end
+    endfunction
+
+    initial begin
+        sim_looppred_en =
+            $test$plusargs("TRACE_LOOPPRED") ||
+            $test$plusargs("PERF_PROFILE") ||
+            $test$plusargs("STAT_DUMP");
+        sim_trace_looppred_en = $test$plusargs("TRACE_LOOPPRED");
+        sim_bpu_hot_en =
+            $test$plusargs("TRACE_BPU_HOT") ||
+            $test$plusargs("PERF_PROFILE") ||
+            $test$plusargs("STAT_DUMP");
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int i = 0; i < SIM_LOOPPRED_HOT_PCS; i++) begin
+                sim_lp_primary_lookup[i]     <= 0;
+                sim_lp_primary_hit[i]        <= 0;
+                sim_lp_primary_override[i]   <= 0;
+                sim_lp_primary_pred_taken[i] <= 0;
+                sim_lp_aux_lookup[i]         <= 0;
+                sim_lp_aux_hit[i]            <= 0;
+                sim_lp_aux_override[i]       <= 0;
+                sim_lp_aux_pred_taken[i]     <= 0;
+                sim_lp_update[i]             <= 0;
+                sim_lp_update_taken[i]       <= 0;
+                sim_lp_update_not_taken[i]   <= 0;
+                sim_lp_update_misp[i]        <= 0;
+                sim_lp_update_backward[i]    <= 0;
+                sim_lp_update_hit[i]         <= 0;
+                sim_lp_exit_limit_match[i]   <= 0;
+                sim_lp_exit_limit_update[i]  <= 0;
+                for (int c = 0; c < 4; c++) begin
+                    sim_lp_conf_hist[i][c] <= 0;
+                end
+            end
+            for (int i = 0; i < SIM_BPU_HOT_PCS; i++) begin
+                sim_bpu_primary_lookup[i]    <= 0;
+                sim_bpu_primary_taken[i]     <= 0;
+                sim_bpu_primary_confident[i] <= 0;
+                sim_bpu_primary_loop_hit[i]  <= 0;
+                sim_bpu_primary_loop_ovr[i]  <= 0;
+                sim_bpu_primary_local_ovr[i] <= 0;
+                sim_bpu_primary_tage_hit[i]  <= 0;
+                sim_bpu_primary_tage_weak[i] <= 0;
+                sim_bpu_primary_sc_ovr[i]    <= 0;
+                sim_bpu_aux_lookup[i]        <= 0;
+                sim_bpu_aux_taken[i]         <= 0;
+                sim_bpu_aux_confident[i]     <= 0;
+                sim_bpu_aux_loop_hit[i]      <= 0;
+                sim_bpu_aux_loop_ovr[i]      <= 0;
+                sim_bpu_aux_local_ovr[i]     <= 0;
+                sim_bpu_aux_tage_hit[i]      <= 0;
+                sim_bpu_aux_tage_weak[i]     <= 0;
+                sim_bpu_aux_sc_ovr[i]        <= 0;
+                sim_bpu_update[i]            <= 0;
+                sim_bpu_update_taken[i]      <= 0;
+                sim_bpu_update_not_taken[i]  <= 0;
+                sim_bpu_update_misp[i]       <= 0;
+                sim_bpu_update_loop_hit[i]   <= 0;
+                sim_bpu_update_tage_hit[i]   <= 0;
+                for (int t = 0; t < 4; t++) begin
+                    sim_bpu_update_provider[i][t] <= 0;
+                end
+            end
+        end else if (sim_looppred_en) begin
+            int pidx;
+            int aidx;
+            int uidx;
+
+            pidx = sim_looppred_hot_idx(pc);
+            if (pidx >= 0) begin
+                sim_lp_primary_lookup[pidx] <= sim_lp_primary_lookup[pidx] + 1;
+                if (loop_hit)
+                    sim_lp_primary_hit[pidx] <= sim_lp_primary_hit[pidx] + 1;
+                if (loop_override)
+                    sim_lp_primary_override[pidx] <= sim_lp_primary_override[pidx] + 1;
+                if (pred_taken)
+                    sim_lp_primary_pred_taken[pidx] <= sim_lp_primary_pred_taken[pidx] + 1;
+            end
+
+            aidx = sim_looppred_hot_idx(aux_pc);
+            if (aidx >= 0) begin
+                sim_lp_aux_lookup[aidx] <= sim_lp_aux_lookup[aidx] + 1;
+                if (aux_loop_hit)
+                    sim_lp_aux_hit[aidx] <= sim_lp_aux_hit[aidx] + 1;
+                if (aux_loop_override)
+                    sim_lp_aux_override[aidx] <= sim_lp_aux_override[aidx] + 1;
+                if (aux_pred_taken)
+                    sim_lp_aux_pred_taken[aidx] <= sim_lp_aux_pred_taken[aidx] + 1;
+            end
+
+            uidx = sim_looppred_hot_idx(update_pc);
+            if (update_valid && (uidx >= 0)) begin
+                sim_lp_update[uidx] <= sim_lp_update[uidx] + 1;
+                if (update_taken)
+                    sim_lp_update_taken[uidx] <= sim_lp_update_taken[uidx] + 1;
+                else
+                    sim_lp_update_not_taken[uidx] <= sim_lp_update_not_taken[uidx] + 1;
+                if (update_mispredict)
+                    sim_lp_update_misp[uidx] <= sim_lp_update_misp[uidx] + 1;
+                if (upd_loop_backward)
+                    sim_lp_update_backward[uidx] <= sim_lp_update_backward[uidx] + 1;
+                if (upd_loop_hit)
+                    sim_lp_update_hit[uidx] <= sim_lp_update_hit[uidx] + 1;
+
+                if (upd_loop_hit) begin
+                    sim_lp_conf_hist[uidx][loop_conf[upd_loop_idx]] <=
+                        sim_lp_conf_hist[uidx][loop_conf[upd_loop_idx]] + 1;
+                end
+
+                if (upd_loop_hit && upd_loop_backward && !update_taken) begin
+                    if (loop_count[upd_loop_idx] == loop_limit[upd_loop_idx])
+                        sim_lp_exit_limit_match[uidx] <=
+                            sim_lp_exit_limit_match[uidx] + 1;
+                    else
+                        sim_lp_exit_limit_update[uidx] <=
+                            sim_lp_exit_limit_update[uidx] + 1;
+                end
+
+                if (sim_trace_looppred_en) begin
+                    $display("[LOOPPRED_UPD] pc=%016h taken=%b misp=%b back=%b hit=%b count=%0d limit=%0d conf=%0d pred_p=%b pred_a=%b lp_p_hit=%b lp_a_hit=%b lp_p_ovr=%b lp_a_ovr=%b",
+                             update_pc, update_taken, update_mispredict,
+                             upd_loop_backward, upd_loop_hit,
+                             upd_loop_hit ? loop_count[upd_loop_idx] : 14'd0,
+                             upd_loop_hit ? loop_limit[upd_loop_idx] : 14'd0,
+                             upd_loop_hit ? loop_conf[upd_loop_idx] : 2'd0,
+                             pred_taken, aux_pred_taken,
+                             loop_hit, aux_loop_hit,
+                             loop_override, aux_loop_override);
+                end
+            end
+        end
+
+        if (sim_bpu_hot_en) begin
+            int bpu_pidx;
+            int bpu_aidx;
+            int bpu_uidx;
+
+            bpu_pidx = sim_bpu_hot_idx(pc);
+            if (bpu_pidx >= 0) begin
+                sim_bpu_primary_lookup[bpu_pidx] <=
+                    sim_bpu_primary_lookup[bpu_pidx] + 1;
+                if (pred_taken)
+                    sim_bpu_primary_taken[bpu_pidx] <=
+                        sim_bpu_primary_taken[bpu_pidx] + 1;
+                if (pred_confident)
+                    sim_bpu_primary_confident[bpu_pidx] <=
+                        sim_bpu_primary_confident[bpu_pidx] + 1;
+                if (loop_hit)
+                    sim_bpu_primary_loop_hit[bpu_pidx] <=
+                        sim_bpu_primary_loop_hit[bpu_pidx] + 1;
+                if (loop_override)
+                    sim_bpu_primary_loop_ovr[bpu_pidx] <=
+                        sim_bpu_primary_loop_ovr[bpu_pidx] + 1;
+                if (local_override)
+                    sim_bpu_primary_local_ovr[bpu_pidx] <=
+                        sim_bpu_primary_local_ovr[bpu_pidx] + 1;
+                if (tage_any_hit)
+                    sim_bpu_primary_tage_hit[bpu_pidx] <=
+                        sim_bpu_primary_tage_hit[bpu_pidx] + 1;
+                if (tage_pred_weak)
+                    sim_bpu_primary_tage_weak[bpu_pidx] <=
+                        sim_bpu_primary_tage_weak[bpu_pidx] + 1;
+                if (sc_override)
+                    sim_bpu_primary_sc_ovr[bpu_pidx] <=
+                        sim_bpu_primary_sc_ovr[bpu_pidx] + 1;
+            end
+
+            bpu_aidx = sim_bpu_hot_idx(aux_pc);
+            if (bpu_aidx >= 0) begin
+                sim_bpu_aux_lookup[bpu_aidx] <=
+                    sim_bpu_aux_lookup[bpu_aidx] + 1;
+                if (aux_pred_taken)
+                    sim_bpu_aux_taken[bpu_aidx] <=
+                        sim_bpu_aux_taken[bpu_aidx] + 1;
+                if (aux_pred_confident)
+                    sim_bpu_aux_confident[bpu_aidx] <=
+                        sim_bpu_aux_confident[bpu_aidx] + 1;
+                if (aux_loop_hit)
+                    sim_bpu_aux_loop_hit[bpu_aidx] <=
+                        sim_bpu_aux_loop_hit[bpu_aidx] + 1;
+                if (aux_loop_override)
+                    sim_bpu_aux_loop_ovr[bpu_aidx] <=
+                        sim_bpu_aux_loop_ovr[bpu_aidx] + 1;
+                if (aux_local_override)
+                    sim_bpu_aux_local_ovr[bpu_aidx] <=
+                        sim_bpu_aux_local_ovr[bpu_aidx] + 1;
+                if (aux_tage_any_hit)
+                    sim_bpu_aux_tage_hit[bpu_aidx] <=
+                        sim_bpu_aux_tage_hit[bpu_aidx] + 1;
+                if (aux_tage_pred_weak)
+                    sim_bpu_aux_tage_weak[bpu_aidx] <=
+                        sim_bpu_aux_tage_weak[bpu_aidx] + 1;
+                if (aux_sc_override)
+                    sim_bpu_aux_sc_ovr[bpu_aidx] <=
+                        sim_bpu_aux_sc_ovr[bpu_aidx] + 1;
+            end
+
+            bpu_uidx = sim_bpu_hot_idx(update_pc);
+            if (update_valid && (bpu_uidx >= 0)) begin
+                sim_bpu_update[bpu_uidx] <=
+                    sim_bpu_update[bpu_uidx] + 1;
+                if (update_taken)
+                    sim_bpu_update_taken[bpu_uidx] <=
+                        sim_bpu_update_taken[bpu_uidx] + 1;
+                else
+                    sim_bpu_update_not_taken[bpu_uidx] <=
+                        sim_bpu_update_not_taken[bpu_uidx] + 1;
+                if (update_mispredict)
+                    sim_bpu_update_misp[bpu_uidx] <=
+                        sim_bpu_update_misp[bpu_uidx] + 1;
+                if (upd_loop_hit)
+                    sim_bpu_update_loop_hit[bpu_uidx] <=
+                        sim_bpu_update_loop_hit[bpu_uidx] + 1;
+                if (upd_any_hit) begin
+                    sim_bpu_update_tage_hit[bpu_uidx] <=
+                        sim_bpu_update_tage_hit[bpu_uidx] + 1;
+                    sim_bpu_update_provider[bpu_uidx][upd_provider] <=
+                        sim_bpu_update_provider[bpu_uidx][upd_provider] + 1;
+                end
+            end
+        end
+    end
+
+    final begin
+        if (sim_looppred_en) begin
+            $display("");
+            $display("=== LOOP PREDICTOR HOT-PC SUMMARY ===");
+            $display("pc                 p_lkp/hit/ovr/taken  a_lkp/hit/ovr/taken  upd/t/nt/misp/back/hit  exit_match/update  conf0/1/2/3");
+            for (int i = 0; i < SIM_LOOPPRED_HOT_PCS; i++) begin
+                $display("%016h %0d/%0d/%0d/%0d %0d/%0d/%0d/%0d %0d/%0d/%0d/%0d/%0d/%0d %0d/%0d %0d/%0d/%0d/%0d",
+                         sim_looppred_hot_pc(i),
+                         sim_lp_primary_lookup[i],
+                         sim_lp_primary_hit[i],
+                         sim_lp_primary_override[i],
+                         sim_lp_primary_pred_taken[i],
+                         sim_lp_aux_lookup[i],
+                         sim_lp_aux_hit[i],
+                         sim_lp_aux_override[i],
+                         sim_lp_aux_pred_taken[i],
+                         sim_lp_update[i],
+                         sim_lp_update_taken[i],
+                         sim_lp_update_not_taken[i],
+                         sim_lp_update_misp[i],
+                         sim_lp_update_backward[i],
+                         sim_lp_update_hit[i],
+                         sim_lp_exit_limit_match[i],
+                         sim_lp_exit_limit_update[i],
+                         sim_lp_conf_hist[i][0],
+                         sim_lp_conf_hist[i][1],
+                         sim_lp_conf_hist[i][2],
+                         sim_lp_conf_hist[i][3]);
+            end
+        end
+
+        if (sim_bpu_hot_en) begin
+            $display("");
+            $display("=== BPU HOT-PC SUMMARY ===");
+            $display("pc                 p(lkp tk cf lp/ovr loc tg wk sc)  a(lkp tk cf lp/ovr loc tg wk sc)  upd(t nt misp lp tg p0/1/2/3)");
+            for (int i = 0; i < SIM_BPU_HOT_PCS; i++) begin
+                $display("%016h %0d %0d %0d %0d/%0d %0d %0d %0d %0d  %0d %0d %0d %0d/%0d %0d %0d %0d %0d  %0d(%0d %0d %0d %0d %0d %0d/%0d/%0d/%0d)",
+                         sim_bpu_hot_pc(i),
+                         sim_bpu_primary_lookup[i],
+                         sim_bpu_primary_taken[i],
+                         sim_bpu_primary_confident[i],
+                         sim_bpu_primary_loop_hit[i],
+                         sim_bpu_primary_loop_ovr[i],
+                         sim_bpu_primary_local_ovr[i],
+                         sim_bpu_primary_tage_hit[i],
+                         sim_bpu_primary_tage_weak[i],
+                         sim_bpu_primary_sc_ovr[i],
+                         sim_bpu_aux_lookup[i],
+                         sim_bpu_aux_taken[i],
+                         sim_bpu_aux_confident[i],
+                         sim_bpu_aux_loop_hit[i],
+                         sim_bpu_aux_loop_ovr[i],
+                         sim_bpu_aux_local_ovr[i],
+                         sim_bpu_aux_tage_hit[i],
+                         sim_bpu_aux_tage_weak[i],
+                         sim_bpu_aux_sc_ovr[i],
+                         sim_bpu_update[i],
+                         sim_bpu_update_taken[i],
+                         sim_bpu_update_not_taken[i],
+                         sim_bpu_update_misp[i],
+                         sim_bpu_update_loop_hit[i],
+                         sim_bpu_update_tage_hit[i],
+                         sim_bpu_update_provider[i][0],
+                         sim_bpu_update_provider[i][1],
+                         sim_bpu_update_provider[i][2],
+                         sim_bpu_update_provider[i][3]);
+            end
+        end
+    end
+`endif
+
+    // Recompute update hashes
     always_comb begin
         upd_base_idx = update_pc[BASE_IDX_BITS+1:2];
         upd_sc_idx   = update_pc[SC_IDX_BITS+1:2] ^ SC_IDX_BITS'(update_ghr[7:0]);
         upd_loop_idx = update_pc[LOOP_IDX_BITS+1:2];
         upd_loop_tag = update_pc[LOOP_TAG_BITS+1:2];
+        upd_loop_backward = (update_target < update_pc);
 
         upd_any_hit  = 1'b0;
         upd_provider = 2'd0;
@@ -419,6 +985,11 @@ module tage_sc_l
 
         upd_loop_hit = loop_valid[upd_loop_idx] &&
                        (loop_tags[upd_loop_idx] == upd_loop_tag);
+        spec_loop_idx = spec_pc[LOOP_IDX_BITS+1:2];
+        spec_loop_tag = spec_pc[LOOP_TAG_BITS+1:2];
+        spec_loop_backward = (spec_target < spec_pc);
+        spec_loop_hit = loop_valid[spec_loop_idx] &&
+                        (loop_tags[spec_loop_idx] == spec_loop_tag);
     end
 
     // Useful-counter periodic reset
@@ -448,17 +1019,35 @@ module tage_sc_l
             for (int i = 0; i < SC_ENTRIES; i++) begin
                 sc_table[i] <= '0;
             end
+            // ----- Reset local-history component -----
+            for (int i = 0; i < LOCAL_HIST_ENTRIES; i++) begin
+                local_hist[i] <= '0;
+                local_last_actual[i] <= 1'b0;
+                local_last_spec[i] <= 1'b0;
+                local_alt_conf[i] <= 2'd0;
+            end
+            for (int i = 0; i < LOCAL_PHT_ENTRIES; i++) begin
+                local_pht[i] <= 2'd1; // weakly not-taken
+            end
             // ----- Reset loop predictor -----
             for (int i = 0; i < LOOP_PRED_ENTRIES; i++) begin
                 loop_valid[i] <= 1'b0;
                 loop_tags[i]  <= '0;
                 loop_count[i] <= '0;
+                loop_spec_count[i] <= '0;
                 loop_limit[i] <= '0;
                 loop_conf[i]  <= '0;
                 loop_dir[i]   <= 1'b0;
             end
             branch_count_r <= '0;
-        end else if (update_valid) begin
+        end else begin
+            if (flush) begin
+                for (int i = 0; i < LOOP_PRED_ENTRIES; i++) begin
+                    loop_spec_count[i] <= loop_count[i];
+                end
+            end
+
+            if (update_valid) begin
             branch_count_r <= branch_count_r + 1'b1;
 
             // =================================================================
@@ -551,39 +1140,99 @@ module tage_sc_l
             end
 
             // =================================================================
+            //  (3b) Local-history update
+            // =================================================================
+            if (update_taken) begin
+                local_pht[upd_local_pht_idx] <=
+                    (local_pht[upd_local_pht_idx] == {BASE_CTR_BITS{1'b1}})
+                        ? local_pht[upd_local_pht_idx]
+                        : local_pht[upd_local_pht_idx] +
+                          {{(BASE_CTR_BITS-1){1'b0}}, 1'b1};
+            end else begin
+                local_pht[upd_local_pht_idx] <=
+                    (local_pht[upd_local_pht_idx] == '0)
+                        ? local_pht[upd_local_pht_idx]
+                        : local_pht[upd_local_pht_idx] -
+                          {{(BASE_CTR_BITS-1){1'b0}}, 1'b1};
+            end
+            local_hist[upd_local_idx] <= update_taken;
+            if (upd_local_forward) begin
+                if (upd_local_alternates) begin
+                    local_alt_conf[upd_local_idx] <=
+                        (local_alt_conf[upd_local_idx] == 2'd3)
+                            ? local_alt_conf[upd_local_idx]
+                            : local_alt_conf[upd_local_idx] + 2'd1;
+                end else begin
+                    local_alt_conf[upd_local_idx] <=
+                        (local_alt_conf[upd_local_idx] == 2'd0)
+                            ? local_alt_conf[upd_local_idx]
+                            : local_alt_conf[upd_local_idx] - 2'd1;
+                end
+                local_last_actual[upd_local_idx] <= update_taken;
+                local_last_spec[upd_local_idx]   <= update_taken;
+            end
+
+            // =================================================================
             //  (4) Loop predictor update
             // =================================================================
-            if (upd_loop_hit) begin
+            if (upd_loop_hit && upd_loop_backward) begin
                 if (update_taken) begin
                     // Branch taken — still in loop, increment count
                     loop_count[upd_loop_idx] <= loop_count[upd_loop_idx] + 14'd1;
+                    if (flush)
+                        loop_spec_count[upd_loop_idx] <= loop_count[upd_loop_idx] + 14'd1;
                 end else begin
                     // Branch not taken — loop exit
                     if (loop_count[upd_loop_idx] == loop_limit[upd_loop_idx]) begin
-                        // Correct exit: boost confidence
-                        loop_conf[upd_loop_idx]  <= loop_conf[upd_loop_idx] |
-                                                    ((loop_conf[upd_loop_idx] != {LOOP_CONF_BITS{1'b1}})
-                                                     ? {{(LOOP_CONF_BITS-1){1'b0}}, 1'b1} : '0);
+                        // Correct exit: saturating confidence increment.
+                        if (loop_conf[upd_loop_idx] != {LOOP_CONF_BITS{1'b1}}) begin
+                            loop_conf[upd_loop_idx] <= loop_conf[upd_loop_idx] +
+                                                       {{(LOOP_CONF_BITS-1){1'b0}}, 1'b1};
+                        end
                     end else begin
                         // Wrong limit — update limit, reset confidence
                         loop_limit[upd_loop_idx] <= loop_count[upd_loop_idx];
                         loop_conf[upd_loop_idx]  <= '0;
                     end
                     loop_count[upd_loop_idx] <= '0;
+                    loop_spec_count[upd_loop_idx] <= '0;
                     loop_dir[upd_loop_idx]   <= update_taken;
                 end
             end else begin
-                // No loop entry — allocate on backward-taken branch
-                if (update_taken) begin
+                // No loop entry — allocate only on backward-taken branches.
+                if (update_taken && upd_loop_backward) begin
                     loop_valid[upd_loop_idx] <= 1'b1;
                     loop_tags[upd_loop_idx]  <= upd_loop_tag;
                     loop_count[upd_loop_idx] <= 14'd1;
+                    loop_spec_count[upd_loop_idx] <= 14'd1;
                     loop_limit[upd_loop_idx] <= '0;
                     loop_conf[upd_loop_idx]  <= '0;
                     loop_dir[upd_loop_idx]   <= 1'b1;
                 end
             end
-        end // update_valid
+            end // update_valid
+
+            // The local-history predictor is used for forward conditionals.
+            // Update the history speculatively so close back-to-back predictions
+            // of the same branch do not both consume stale committed history.
+            if (!sim_disable_local_pred &&
+                spec_update_valid && (spec_target > spec_pc)) begin
+                local_hist[spec_local_idx] <= spec_taken;
+                local_last_spec[spec_local_idx] <= spec_taken;
+            end
+
+            if (!sim_disable_loop_spec_count &&
+                !flush &&
+                spec_update_valid &&
+                spec_loop_hit &&
+                spec_loop_backward) begin
+                if (spec_taken)
+                    loop_spec_count[spec_loop_idx] <=
+                        loop_spec_count[spec_loop_idx] + 14'd1;
+                else
+                    loop_spec_count[spec_loop_idx] <= '0;
+            end
+        end
     end
 
 endmodule

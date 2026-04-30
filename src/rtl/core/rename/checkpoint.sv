@@ -50,17 +50,32 @@ module checkpoint
     logic [NUM_CHECKPOINTS-1:0] occupied;
 
     // -------------------------------------------------------------------------
-    // save_avail: at least one slot is free
+    // Save allocation observes same-cycle checkpoint releases.  This matters
+    // when the file is full and commit frees a slot in the same cycle rename
+    // wants to allocate a new branch checkpoint.
     // -------------------------------------------------------------------------
-    assign save_avail = (occupied != {NUM_CHECKPOINTS{1'b1}});
+    logic [NUM_CHECKPOINTS-1:0] release_mask;
+    logic [NUM_CHECKPOINTS-1:0] occupied_after_release;
+
+    always_comb begin
+        release_mask = '0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if (release_valid[i]) begin
+                release_mask[release_id[i]] = 1'b1;
+            end
+        end
+    end
+
+    assign occupied_after_release = occupied & ~release_mask;
+    assign save_avail = (occupied_after_release != {NUM_CHECKPOINTS{1'b1}});
 
     // -------------------------------------------------------------------------
-    // save_id: lowest-numbered free slot (priority encoder on ~occupied)
+    // save_id: lowest-numbered slot free after same-cycle releases.
     // -------------------------------------------------------------------------
     always_comb begin
         save_id = '0;
         for (int i = NUM_CHECKPOINTS-1; i >= 0; i--) begin
-            if (!occupied[i]) begin
+            if (!occupied_after_release[i]) begin
                 save_id = CHECKPOINT_BITS'(i);
             end
         end
@@ -121,5 +136,97 @@ module checkpoint
             slot_rob_tail[save_id]  <= rob_tail_snapshot;
         end
     end
+
+`ifdef SIMULATION
+    logic ckpt_stat_en;
+    integer ckpt_cyc;
+    integer ckpt_save_req_cnt;
+    integer ckpt_save_success_cnt;
+    integer ckpt_save_block_full_cnt;
+    integer ckpt_release_cnt;
+    integer ckpt_full_pre_release_cyc;
+    integer ckpt_full_after_release_cyc;
+    integer ckpt_release_when_full_cyc;
+    integer ckpt_max_occupied;
+    integer ckpt_occupied_now;
+    integer ckpt_occupied_after_release_now;
+    integer ckpt_release_count_now;
+
+    initial ckpt_stat_en =
+        ($test$plusargs("PERF_PROFILE") || $test$plusargs("STAT_DUMP")) ? 1'b1 : 1'b0;
+
+    function automatic integer ckpt_popcount(input logic [NUM_CHECKPOINTS-1:0] bits);
+        integer count;
+        begin
+            count = 0;
+            for (int i = 0; i < NUM_CHECKPOINTS; i++) begin
+                if (bits[i]) count++;
+            end
+            ckpt_popcount = count;
+        end
+    endfunction
+
+    always_comb begin
+        ckpt_occupied_now = ckpt_popcount(occupied);
+        ckpt_occupied_after_release_now = ckpt_popcount(occupied_after_release);
+        ckpt_release_count_now = 0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if (release_valid[i])
+                ckpt_release_count_now++;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ckpt_cyc                    <= 0;
+            ckpt_save_req_cnt           <= 0;
+            ckpt_save_success_cnt       <= 0;
+            ckpt_save_block_full_cnt    <= 0;
+            ckpt_release_cnt            <= 0;
+            ckpt_full_pre_release_cyc   <= 0;
+            ckpt_full_after_release_cyc <= 0;
+            ckpt_release_when_full_cyc  <= 0;
+            ckpt_max_occupied           <= 0;
+        end else if (ckpt_stat_en) begin
+            ckpt_cyc <= ckpt_cyc + 1;
+
+            if (ckpt_occupied_now > ckpt_max_occupied)
+                ckpt_max_occupied <= ckpt_occupied_now;
+
+            if (occupied == {NUM_CHECKPOINTS{1'b1}})
+                ckpt_full_pre_release_cyc <= ckpt_full_pre_release_cyc + 1;
+            if (occupied_after_release == {NUM_CHECKPOINTS{1'b1}})
+                ckpt_full_after_release_cyc <= ckpt_full_after_release_cyc + 1;
+
+            if ((occupied == {NUM_CHECKPOINTS{1'b1}}) && (release_mask != '0))
+                ckpt_release_when_full_cyc <= ckpt_release_when_full_cyc + 1;
+
+            if (save_valid) begin
+                ckpt_save_req_cnt <= ckpt_save_req_cnt + 1;
+                if (save_avail)
+                    ckpt_save_success_cnt <= ckpt_save_success_cnt + 1;
+                else
+                    ckpt_save_block_full_cnt <= ckpt_save_block_full_cnt + 1;
+            end
+
+            ckpt_release_cnt <= ckpt_release_cnt + ckpt_release_count_now;
+        end
+    end
+
+    final begin
+        if (ckpt_stat_en) begin
+            $display("");
+            $display("=== CHECKPOINT SUMMARY ===");
+            $display("Cycles sampled:             %0d", ckpt_cyc);
+            $display("Max occupied:               %0d / %0d", ckpt_max_occupied, NUM_CHECKPOINTS);
+            $display("Full cycles pre-release:    %0d", ckpt_full_pre_release_cyc);
+            $display("Full cycles after-release:  %0d", ckpt_full_after_release_cyc);
+            $display("Release while full cycles:  %0d", ckpt_release_when_full_cyc);
+            $display("Save req/success/blocked:   %0d / %0d / %0d",
+                     ckpt_save_req_cnt, ckpt_save_success_cnt, ckpt_save_block_full_cnt);
+            $display("Release count:              %0d", ckpt_release_cnt);
+        end
+    end
+`endif
 
 endmodule

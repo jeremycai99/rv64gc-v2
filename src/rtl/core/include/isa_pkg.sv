@@ -202,7 +202,7 @@ package isa_pkg;
     localparam logic [2:0] F3_SH2ADD    = 3'b100;
     localparam logic [2:0] F3_SH3ADD    = 3'b110;
 
-    // add.uw, sh*add.uw on OP_OP_32
+    // add.uw on OP_OP_32.  sh*add.uw uses F7_ZBA on OP_OP_32.
     localparam logic [6:0] F7_ZBA_UW    = 7'b0000100;
 
     // slli.uw on OP_OP_IMM_32, funct7 = 0000100

@@ -12,6 +12,7 @@ module alu
     input  logic [63:0] operand_b,   // rs2 value or immediate
     input  alu_op_e     op,
     input  logic        is_w_op,     // 1 = 32-bit W suffix operation
+    input  logic        is_unsigned, // 1 = Zba unsigned-word variant
     output logic [63:0] result
 );
 
@@ -56,7 +57,11 @@ module alu
     // For W variants (add.uw, sh*add.uw): zero-extend rs1[31:0] before shift
     // =========================================================================
     logic [63:0] zba_src;
-    assign zba_src = is_w_op ? {32'b0, a32} : operand_a;
+    logic [63:0] adduw_res;
+    logic [63:0] slliuw_res;
+    assign zba_src    = is_w_op ? {32'b0, a32} : operand_a;
+    assign adduw_res  = {32'b0, a32} + operand_b;
+    assign slliuw_res = {32'b0, a32} << operand_b[5:0];
 
     logic [63:0] sh1add_res, sh2add_res, sh3add_res;
     assign sh1add_res = (zba_src << 1) + operand_b;
@@ -177,7 +182,8 @@ module alu
             // Base RV64I
             // -----------------------------------------------------------------
             ALU_ADD: begin
-                full_result = is_w_op ? sext_add32
+                full_result = (is_w_op && is_unsigned) ? adduw_res
+                                      : is_w_op ? sext_add32
                                       : (operand_a + operand_b);
             end
 
@@ -194,7 +200,8 @@ module alu
             ALU_SLTU: full_result = {63'd0, operand_a < operand_b};
 
             ALU_SLL: begin
-                full_result = is_w_op ? sext_sll32
+                full_result = (is_w_op && is_unsigned) ? slliuw_res
+                                      : is_w_op ? sext_sll32
                                       : (operand_a << shamt);
             end
 
