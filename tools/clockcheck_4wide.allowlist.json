@@ -1,0 +1,25 @@
+{
+  "_comment": "Clockcheck allowlist for the 4-wide refactor. Describes intentional refactor effects so rtl_clockcheck.py does not flag them as unexplained divergence. See doc/4wide_refactor_checklist.md and doc/4wide_pivot_plan_2026-04-25.md.",
+  "expected": {
+    "pipe_width":      {"old": 6,   "new": 4},
+    "fetch_bytes":     {"old": 24,  "new": 16},
+    "rob_depth":       {"old": 192, "new": 128},
+    "rob_idx_bits":    {"old": 8,   "new": 7},
+    "int_prf_depth":   {"old": 256, "new": 160},
+    "fp_prf_depth":    {"old": 128, "new": 96},
+    "lq_depth":        {"old": 64,  "new": 32},
+    "sq_depth":        {"old": 64,  "new": 32},
+    "lq_sq_idx_bits":  {"old": 6,   "new": 5},
+    "iq_int_depth":    {"old": 32,  "new": 24},
+    "num_alu":         {"old": 4,   "new": 3},
+    "cdb_width":       {"old": 6,   "new": 4},
+    "num_bypass_srcs": {"old": 6,   "new": 4},
+    "l1d_banks":       {"old": 4,   "new": 2}
+  },
+  "ignore_fields": ["rob_tail", "iq2_count"],
+  "max_cycle_delta_by_seq": 50,
+  "_notes": [
+    "iq2_count is in ignore_fields in case Stage 2 drops NUM_INT_IQS to 2; remove from ignore list if Stage 2 keeps 3 IQs (current default).",
+    "max_cycle_delta_by_seq=50 allows for normal microarchitectural variance per committed instruction; tighten if false-positive resolution is needed."
+  ]
+}
