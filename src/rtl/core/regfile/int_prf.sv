@@ -1,5 +1,5 @@
 /* file: int_prf.sv
- Description: 256x64 integer PRF with 12 read and 6 write ports.
+ Description: 160x64 integer PRF with 12 read and 6 write ports.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
@@ -35,8 +35,8 @@ module int_prf
     // Synchronous writes – all 6 write ports broadcast to all 6 copies.
     //
     // ASIC-CORRECT RESET DISCIPLINE:
-    // In silicon, PRF entries must NOT be reset.  256 entries x 6 copies x
-    // 64 bits = 98,304 flops sharing one reset net — vastly exceeds the
+    // In silicon, PRF entries must NOT be reset.  160 entries x 6 copies x
+    // 64 bits = 61,440 flops sharing one reset net — vastly exceeds the
     // ~20-30 fanout budget at modern nodes.  The PRF's contents are
     // irrelevant at power-on because the rename logic's committed_rat and
     // free-list bitmap control which entries are architecturally live; any
@@ -86,12 +86,7 @@ module int_prf
     // p0 (physical register 0) always reads as zero.
     // -------------------------------------------------------------------------
 
-    // Helper function: resolve bypass for one read address
-    // Returns the data to forward, or 64'hX sentinel (handled per-port below)
-
-    // We compute bypass inline for each read port.
     // Base read values (from the copy assigned to this read port pair):
-
     logic [63:0] base_rdata [0:11];
 
     assign base_rdata[0]  = regfile_copy0[raddr[0]];

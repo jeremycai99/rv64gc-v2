@@ -1,5 +1,5 @@
 /* file: rob.sv
- Description: 192-entry circular reorder buffer with 6-wide alloc/commit.
+ Description: 128-entry circular reorder buffer with 4-wide alloc/commit.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
@@ -115,9 +115,12 @@ module rob
 );
 
     // =========================================================================
-    // Constants for modular arithmetic (ROB_DEPTH=192 is not power of 2)
+    // Constants for modular arithmetic (ROB_DEPTH=128 is power of 2)
+    // ROB_DEPTH_U8 is one bit wider than ROB_IDX_BITS so that ROB_DEPTH=128
+    // (= 2^ROB_IDX_BITS) fits without overflow: 7'(128)=0 is wrong;
+    // 8'(128)=8'b1000_0000 = 128 is correct.
     // =========================================================================
-    localparam logic [7:0] ROB_DEPTH_U8 = 8'(ROB_DEPTH);
+    localparam logic [ROB_IDX_BITS:0] ROB_DEPTH_U8 = (ROB_IDX_BITS+1)'(ROB_DEPTH);
     localparam int LOAD_CDB_FIRST = 4;
 
     // =========================================================================
@@ -129,43 +132,45 @@ module rob
     // index is FATAL in xsim.  The reset path below still drives '0 on
     // rst_n deassertion, so synthesis sees only the reset-write path.
     // =========================================================================
-    reg [7:0] head_r  = 8'd0;
-    reg [7:0] tail_r  = 8'd0;
-    reg [7:0] count_r = 8'd0;
+    reg [ROB_IDX_BITS-1:0] head_r  = '0;
+    reg [ROB_IDX_BITS-1:0] tail_r  = '0;
+    reg [ROB_IDX_BITS-1:0] count_r = '0;
 
     assign head_idx = head_r;
     assign tail_idx = tail_r;
-    assign empty    = (count_r == 8'd0);
-    assign full     = (count_r + 8'd6 > ROB_DEPTH_U8);
+    assign empty    = (count_r == ROB_IDX_BITS'(0));
+    assign full     = ({1'b0, count_r} + (ROB_IDX_BITS+1)'(PIPE_WIDTH) > ROB_DEPTH_U8);
 
     // alloc_ready: true when free entries >= PIPE_WIDTH
-    wire [7:0] free_count = ROB_DEPTH_U8 - count_r;
-    assign alloc_ready = (free_count >= 8'd6);
+    // free_count is one bit wider to hold ROB_DEPTH_U8 without truncation.
+    wire [ROB_IDX_BITS:0] free_count = ROB_DEPTH_U8 - {1'b0, count_r};
+    assign alloc_ready = (free_count >= (ROB_IDX_BITS+1)'(PIPE_WIDTH));
 
     // =========================================================================
     // Allocation indices: combinational output (inline wrap-add)
+    // ROB_DEPTH=128 is power-of-2, so wrap is just truncation to ROB_IDX_BITS.
     // =========================================================================
-    logic [8:0] alloc_sum [0:PIPE_WIDTH-1];
+    logic [ROB_IDX_BITS:0] alloc_sum [0:PIPE_WIDTH-1];
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            alloc_sum[i] = {1'b0, tail_r} + 9'(i);
-            alloc_idx[i] = (alloc_sum[i] >= 9'(ROB_DEPTH))
-                           ? alloc_sum[i][7:0] - ROB_DEPTH_U8
-                           : alloc_sum[i][7:0];
+            alloc_sum[i] = {1'b0, tail_r} + (ROB_IDX_BITS+1)'(i);
+            alloc_idx[i] = (alloc_sum[i] >= (ROB_IDX_BITS+1)'(ROB_DEPTH))
+                           ? alloc_sum[i][ROB_IDX_BITS-1:0] - ROB_DEPTH_U8
+                           : alloc_sum[i][ROB_IDX_BITS-1:0];
         end
     end
 
     // =========================================================================
     // Head read indices: combinational (inline wrap-add)
     // =========================================================================
-    logic [8:0] head_sum_w [0:PIPE_WIDTH-1];
-    logic [7:0] head_idx_w [0:PIPE_WIDTH-1];
+    logic [ROB_IDX_BITS:0] head_sum_w [0:PIPE_WIDTH-1];
+    logic [ROB_IDX_BITS-1:0] head_idx_w [0:PIPE_WIDTH-1];
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            head_sum_w[i] = {1'b0, head_r} + 9'(i);
-            head_idx_w[i] = (head_sum_w[i] >= 9'(ROB_DEPTH))
-                            ? head_sum_w[i][7:0] - ROB_DEPTH_U8
-                            : head_sum_w[i][7:0];
+            head_sum_w[i] = {1'b0, head_r} + (ROB_IDX_BITS+1)'(i);
+            head_idx_w[i] = (head_sum_w[i] >= (ROB_IDX_BITS+1)'(ROB_DEPTH))
+                            ? head_sum_w[i][ROB_IDX_BITS-1:0] - ROB_DEPTH_U8
+                            : head_sum_w[i][ROB_IDX_BITS-1:0];
         end
     end
 
@@ -248,7 +253,7 @@ module rob
         head_ready_head_load_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w >= LOAD_CDB_FIRST) &&
-                (count_r != 8'd0) &&
+                (count_r != ROB_IDX_BITS'(0)) &&
                 valid_r[head_idx_w[0]] &&
                 !ready_r[head_idx_w[0]] &&
                 is_load_r[head_idx_w[0]] &&
@@ -276,7 +281,7 @@ module rob
         head_ready_head_arith_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w < LOAD_CDB_FIRST) &&
-                (count_r != 8'd0) &&
+                (count_r != ROB_IDX_BITS'(0)) &&
                 valid_r[head_idx_w[0]] &&
                 !ready_r[head_idx_w[0]] &&
                 !is_load_r[head_idx_w[0]] &&
@@ -313,7 +318,7 @@ module rob
         head_ready_slot1_load_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w >= LOAD_CDB_FIRST) &&
-                (count_r > 8'd1) &&
+                (count_r > ROB_IDX_BITS'(1)) &&
                 valid_r[head_idx_w[1]] &&
                 !ready_r[head_idx_w[1]] &&
                 is_load_r[head_idx_w[1]] &&
@@ -335,7 +340,7 @@ module rob
         head_ready_slot1_arith_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w < LOAD_CDB_FIRST) &&
-                (count_r > 8'd1) &&
+                (count_r > ROB_IDX_BITS'(1)) &&
                 valid_r[head_idx_w[1]] &&
                 !ready_r[head_idx_w[1]] &&
                 !is_load_r[head_idx_w[1]] &&
@@ -370,7 +375,7 @@ module rob
         head_ready_slot2_load_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w >= LOAD_CDB_FIRST) &&
-                (count_r > 8'd2) &&
+                (count_r > ROB_IDX_BITS'(2)) &&
                 valid_r[head_idx_w[2]] &&
                 !ready_r[head_idx_w[2]] &&
                 is_load_r[head_idx_w[2]] &&
@@ -392,7 +397,7 @@ module rob
         head_ready_slot2_arith_wb_bypass = 1'b0;
         for (int w = 0; w < CDB_WIDTH; w++) begin
             if ((w < LOAD_CDB_FIRST) &&
-                (count_r > 8'd2) &&
+                (count_r > ROB_IDX_BITS'(2)) &&
                 valid_r[head_idx_w[2]] &&
                 !ready_r[head_idx_w[2]] &&
                 !is_load_r[head_idx_w[2]] &&
@@ -450,7 +455,7 @@ module rob
     // =========================================================================
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            head_valid[i]            = valid_r[head_idx_w[i]] && (count_r > 8'(i));
+            head_valid[i]            = valid_r[head_idx_w[i]] && (count_r > ROB_IDX_BITS'(i));
             head_ready[i]            = ready_r[head_idx_w[i]];
             if (i == 0)
                 head_ready[i] = head_ready[i] |
@@ -496,35 +501,37 @@ module rob
     // rob_in_range[i] = 1 when entry i is in [flush_rob_tail, tail_r)
     // =========================================================================
     logic [ROB_DEPTH-1:0] rob_in_range;
-    logic [7:0] flush_prev_idx;
+    logic [ROB_IDX_BITS-1:0] flush_prev_idx;
     always_comb begin
         for (int i = 0; i < ROB_DEPTH; i++) begin
             if (flush_rob_tail == tail_r)
                 rob_in_range[i] = 1'b0;
             else if (flush_rob_tail < tail_r)
-                rob_in_range[i] = (8'(i) >= flush_rob_tail) && (8'(i) < tail_r);
+                rob_in_range[i] = (ROB_IDX_BITS'(i) >= flush_rob_tail) && (ROB_IDX_BITS'(i) < tail_r);
             else
-                rob_in_range[i] = (8'(i) >= flush_rob_tail) || (8'(i) < tail_r);
+                rob_in_range[i] = (ROB_IDX_BITS'(i) >= flush_rob_tail) || (ROB_IDX_BITS'(i) < tail_r);
         end
     end
-    assign flush_prev_idx = (flush_rob_tail == 8'd0)
-                            ? (ROB_DEPTH_U8 - 8'd1)
-                            : (flush_rob_tail - 8'd1);
+    assign flush_prev_idx = (flush_rob_tail == ROB_IDX_BITS'(0))
+                            ? (ROB_DEPTH_U8 - ROB_IDX_BITS'(1))
+                            : (flush_rob_tail - ROB_IDX_BITS'(1));
 
     // =========================================================================
     // Combinational signals replacing automatic variables in always_ff
     // =========================================================================
 
     // --- Next-head computation (commit pointer advance) ---
-    logic [8:0] nh_sum;
-    logic [7:0] nh;
-    assign nh_sum = {1'b0, head_r} + {6'd0, commit_count};
-    assign nh     = (nh_sum >= 9'(ROB_DEPTH)) ? nh_sum[7:0] - ROB_DEPTH_U8 : nh_sum[7:0];
+    logic [ROB_IDX_BITS:0] nh_sum;
+    logic [ROB_IDX_BITS-1:0] nh;
+    assign nh_sum = {1'b0, head_r} + {(ROB_IDX_BITS-2)'(0), commit_count};
+    assign nh     = (nh_sum >= (ROB_IDX_BITS+1)'(ROB_DEPTH))
+                    ? nh_sum[ROB_IDX_BITS-1:0] - ROB_DEPTH_U8
+                    : nh_sum[ROB_IDX_BITS-1:0];
 
     // --- Flush count recomputation (partial flush + commit) ---
-    logic [7:0] max_valid;
-    logic [7:0] raw_count;
-    assign max_valid = count_r - {5'd0, commit_count};
+    logic [ROB_IDX_BITS-1:0] max_valid;
+    logic [ROB_IDX_BITS-1:0] raw_count;
+    assign max_valid = count_r - {(ROB_IDX_BITS-3)'(0), commit_count};
     always_comb begin
         if (flush_rob_tail >= nh)
             raw_count = flush_rob_tail - nh;
@@ -533,20 +540,22 @@ module rob
     end
 
     // --- Next-tail computation (alloc pointer advance) ---
-    logic [8:0] nt_sum;
-    logic [7:0] nt;
-    assign nt_sum = {1'b0, tail_r} + {6'd0, alloc_count};
-    assign nt     = (nt_sum >= 9'(ROB_DEPTH)) ? nt_sum[7:0] - ROB_DEPTH_U8 : nt_sum[7:0];
+    logic [ROB_IDX_BITS:0] nt_sum;
+    logic [ROB_IDX_BITS-1:0] nt;
+    assign nt_sum = {1'b0, tail_r} + {(ROB_IDX_BITS-2)'(0), alloc_count};
+    assign nt     = (nt_sum >= (ROB_IDX_BITS+1)'(ROB_DEPTH))
+                    ? nt_sum[ROB_IDX_BITS-1:0] - ROB_DEPTH_U8
+                    : nt_sum[ROB_IDX_BITS-1:0];
 
     // --- Per-slot alloc index (inside for loop) ---
-    logic [8:0] ai_sum_w [0:PIPE_WIDTH-1];
-    logic [7:0] ai_w    [0:PIPE_WIDTH-1];
+    logic [ROB_IDX_BITS:0] ai_sum_w [0:PIPE_WIDTH-1];
+    logic [ROB_IDX_BITS-1:0] ai_w    [0:PIPE_WIDTH-1];
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            ai_sum_w[i] = {1'b0, tail_r} + 9'(i);
-            ai_w[i]     = (ai_sum_w[i] >= 9'(ROB_DEPTH))
-                          ? ai_sum_w[i][7:0] - ROB_DEPTH_U8
-                          : ai_sum_w[i][7:0];
+            ai_sum_w[i] = {1'b0, tail_r} + (ROB_IDX_BITS+1)'(i);
+            ai_w[i]     = (ai_sum_w[i] >= (ROB_IDX_BITS+1)'(ROB_DEPTH))
+                          ? ai_sum_w[i][ROB_IDX_BITS-1:0] - ROB_DEPTH_U8
+                          : ai_sum_w[i][ROB_IDX_BITS-1:0];
         end
     end
 
@@ -670,7 +679,7 @@ module rob
             if (raw_count <= max_valid) begin
                 count_r <= raw_count;
             end else begin
-                count_r <= 8'd0;
+                count_r <= ROB_IDX_BITS'(0);
                 head_r  <= flush_rob_tail;  // head=tail when empty
             end
 
@@ -864,7 +873,7 @@ module rob
                 head_r <= nh;
 
             // Update count
-            count_r <= count_r + {5'd0, alloc_count} - {5'd0, commit_count};
+            count_r <= count_r + {(ROB_IDX_BITS-3)'(0), alloc_count} - {(ROB_IDX_BITS-3)'(0), commit_count};
         end
     end
 

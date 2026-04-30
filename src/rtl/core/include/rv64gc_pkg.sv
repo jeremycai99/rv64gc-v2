@@ -17,34 +17,34 @@ package rv64gc_pkg;
     localparam int ARCH_REG_BITS  = 5;
 
     // =========================================================================
-    // Pipeline widths (6-wide superscalar)
+    // Pipeline widths (4-wide superscalar)
     // =========================================================================
-    localparam int PIPE_WIDTH     = 6;   // fetch/decode/rename/dispatch/commit
+    localparam int PIPE_WIDTH     = 4;   // fetch/decode/rename/dispatch/commit
     localparam int FETCH_WIDTH    = PIPE_WIDTH;
     localparam int DECODE_WIDTH   = PIPE_WIDTH;
     localparam int RENAME_WIDTH   = PIPE_WIDTH;
     localparam int DISPATCH_WIDTH = PIPE_WIDTH;
     localparam int COMMIT_WIDTH   = PIPE_WIDTH;
-    localparam int FETCH_BYTES    = FETCH_WIDTH * 4;  // 24 bytes
+    localparam int FETCH_BYTES    = FETCH_WIDTH * 4;  // 16 bytes
 
     // =========================================================================
     // Physical register file
     // =========================================================================
-    localparam int INT_PRF_DEPTH  = 256;
-    localparam int PHYS_REG_BITS  = 8;   // $clog2(256) = 8
-    localparam int FP_PRF_DEPTH   = 128;
+    localparam int INT_PRF_DEPTH  = 160;
+    localparam int PHYS_REG_BITS  = 8;   // $clog2(160) <= 8
+    localparam int FP_PRF_DEPTH   = 96;
 
     // =========================================================================
     // Reorder buffer
     // =========================================================================
-    localparam int ROB_DEPTH      = 192;
-    localparam int ROB_IDX_BITS   = 8;   // ceil(log2(192)) = 8
+    localparam int ROB_DEPTH      = 128;
+    localparam int ROB_IDX_BITS   = 7;   // $clog2(128) = 7
 
     // =========================================================================
     // Free list
     // =========================================================================
-    localparam int INT_FREE_LIST_DEPTH = INT_PRF_DEPTH - ARCH_REGS; // 224
-    localparam int FP_FREE_LIST_DEPTH  = FP_PRF_DEPTH - ARCH_REGS;  // 96
+    localparam int INT_FREE_LIST_DEPTH = INT_PRF_DEPTH - ARCH_REGS; // 128
+    localparam int FP_FREE_LIST_DEPTH  = FP_PRF_DEPTH - ARCH_REGS;  // 64
 
     // =========================================================================
     // Checkpoints (branch snapshots)
