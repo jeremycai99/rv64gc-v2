@@ -1,7 +1,8 @@
 # 6-wide rv64gc-v2 Baseline — OBSOLETE design, archive only
 
 **Captured:** 2026-04-30
-**RTL HEAD:** `fb2d9cc` (doc: rename CLAUDE.md to AGENTS.md)
+**RTL HEAD at measurement:** `fb2d9cc` (doc-only; the on-disk RTL state actually corresponded to the in-flight 6-wide IPC bundle that has since been committed as `4f28619`).
+**RTL state actually measured:** `4f28619` (`feat(core): 6-wide IPC bundle — uop cache gen-2 + LB exit predictor + BPU update-path split + ROB commit bypass + MUL/DIV latency cut`).
 **Simulator:** DSim 2026.0.0
 **Plusargs:** `+PERF_PROFILE`
 
@@ -50,7 +51,7 @@ refactor must clear at sign-off.
 
 ---
 
-## Measurement (current 6-wide, fb2d9cc)
+## Measurement (current 6-wide, 4f28619)
 
 | Workload | RTL cycles | instret | IPC | iterations | metric |
 |---|---:|---:|---:|---:|---|
