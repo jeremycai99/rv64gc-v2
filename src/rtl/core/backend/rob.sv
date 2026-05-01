@@ -54,6 +54,15 @@ module rob
     input  logic                              std_wb_valid,
     input  logic [ROB_IDX_BITS-1:0]           std_wb_rob_idx,
 
+    // Load writeback sideband (separate from CDB[0:CDB_WIDTH-1]; loads use
+    // speculative wakeup so they do not need a CDB broadcast slot but still
+    // need to mark the ROB entry complete and report exceptions).
+    // 2 load ports: load_wb_valid[0]=Load0, load_wb_valid[1]=Load1.
+    input  logic [1:0]               load_wb_valid_r,
+    input  logic [ROB_IDX_BITS-1:0]  load_wb_idx_r    [0:1],
+    input  logic [1:0]               load_wb_has_exception_r,
+    input  logic [3:0]               load_wb_exc_code_r [0:1],
+
     // Memory ordering violation: a younger load executed before an older
     // store with overlapping bytes was visible.  Mark the violating load
     // ready with the special replay exception (exc_code=15) so commit
@@ -251,18 +260,16 @@ module rob
     logic head_ready_head_load_wb_bypass;
     always_comb begin
         head_ready_head_load_wb_bypass = 1'b0;
-        for (int w = 0; w < CDB_WIDTH; w++) begin
-            if ((w >= LOAD_CDB_FIRST) &&
+        // Stage 2: loads use sideband load_wb_valid_r instead of CDB slots.
+        for (int lw = 0; lw < 2; lw++) begin
+            if (load_wb_valid_r[lw] &&
                 (count_r != (ROB_IDX_BITS+1)'(0)) &&
                 valid_r[head_idx_w[0]] &&
                 !ready_r[head_idx_w[0]] &&
                 is_load_r[head_idx_w[0]] &&
                 !has_exc_r[head_idx_w[0]] &&
-                wb_valid[w] &&
-                (wb_idx[w] == head_idx_w[0][ROB_IDX_BITS-1:0]) &&
-                !wb_has_exception[w] &&
-                !wb_is_branch[w] &&
-                !wb_csr_we[w] &&
+                !load_wb_has_exception_r[lw] &&
+                (load_wb_idx_r[lw] == head_idx_w[0][ROB_IDX_BITS-1:0]) &&
                 !(ordering_violation_valid &&
                   (ordering_violation_rob_idx == head_idx_w[0][ROB_IDX_BITS-1:0]))) begin
                 head_ready_head_load_wb_bypass = 1'b1;
@@ -316,18 +323,15 @@ module rob
     logic head_ready_slot1_load_wb_bypass;
     always_comb begin
         head_ready_slot1_load_wb_bypass = 1'b0;
-        for (int w = 0; w < CDB_WIDTH; w++) begin
-            if ((w >= LOAD_CDB_FIRST) &&
+        for (int lw = 0; lw < 2; lw++) begin
+            if (load_wb_valid_r[lw] &&
                 (count_r > (ROB_IDX_BITS+1)'(1)) &&
                 valid_r[head_idx_w[1]] &&
                 !ready_r[head_idx_w[1]] &&
                 is_load_r[head_idx_w[1]] &&
                 !has_exc_r[head_idx_w[1]] &&
-                wb_valid[w] &&
-                (wb_idx[w] == head_idx_w[1][ROB_IDX_BITS-1:0]) &&
-                !wb_has_exception[w] &&
-                !wb_is_branch[w] &&
-                !wb_csr_we[w] &&
+                !load_wb_has_exception_r[lw] &&
+                (load_wb_idx_r[lw] == head_idx_w[1][ROB_IDX_BITS-1:0]) &&
                 !(ordering_violation_valid &&
                   (ordering_violation_rob_idx == head_idx_w[1][ROB_IDX_BITS-1:0]))) begin
                 head_ready_slot1_load_wb_bypass = 1'b1;
@@ -373,18 +377,15 @@ module rob
     logic head_ready_slot2_load_wb_bypass;
     always_comb begin
         head_ready_slot2_load_wb_bypass = 1'b0;
-        for (int w = 0; w < CDB_WIDTH; w++) begin
-            if ((w >= LOAD_CDB_FIRST) &&
+        for (int lw = 0; lw < 2; lw++) begin
+            if (load_wb_valid_r[lw] &&
                 (count_r > (ROB_IDX_BITS+1)'(2)) &&
                 valid_r[head_idx_w[2]] &&
                 !ready_r[head_idx_w[2]] &&
                 is_load_r[head_idx_w[2]] &&
                 !has_exc_r[head_idx_w[2]] &&
-                wb_valid[w] &&
-                (wb_idx[w] == head_idx_w[2][ROB_IDX_BITS-1:0]) &&
-                !wb_has_exception[w] &&
-                !wb_is_branch[w] &&
-                !wb_csr_we[w] &&
+                !load_wb_has_exception_r[lw] &&
+                (load_wb_idx_r[lw] == head_idx_w[2][ROB_IDX_BITS-1:0]) &&
                 !(ordering_violation_valid &&
                   (ordering_violation_rob_idx == head_idx_w[2][ROB_IDX_BITS-1:0]))) begin
                 head_ready_slot2_load_wb_bypass = 1'b1;
@@ -720,6 +721,17 @@ module rob
                     ready_r[std_wb_rob_idx] <= 1'b1;
             end
 
+            // Load writeback sideband on flush path (surviving entries only).
+            for (int lw = 0; lw < 2; lw++) begin
+                if (load_wb_valid_r[lw]) begin
+                    ready_r[load_wb_idx_r[lw]] <= 1'b1;
+                    if (load_wb_has_exception_r[lw]) begin
+                        has_exc_r[load_wb_idx_r[lw]] <= 1'b1;
+                        exc_code_packed[load_wb_idx_r[lw]*4 +: 4] <= load_wb_exc_code_r[lw];
+                    end
+                end
+            end
+
             // Ordering violation: see comment in normal-path block below.
             if (ordering_violation_valid) begin
                 ready_r[ordering_violation_rob_idx]                <= 1'b1;
@@ -809,6 +821,18 @@ module rob
                 if (store_addr_done_r[std_wb_rob_idx] ||
                     (sta_wb_valid && (sta_wb_rob_idx == std_wb_rob_idx)))
                     ready_r[std_wb_rob_idx] <= 1'b1;
+            end
+
+            // Load writeback sideband (Stage 2: loads removed from CDB broadcast).
+            // Marks load ROB entries complete and forwards exception status.
+            for (int lw = 0; lw < 2; lw++) begin
+                if (load_wb_valid_r[lw]) begin
+                    ready_r[load_wb_idx_r[lw]] <= 1'b1;
+                    if (load_wb_has_exception_r[lw]) begin
+                        has_exc_r[load_wb_idx_r[lw]] <= 1'b1;
+                        exc_code_packed[load_wb_idx_r[lw]*4 +: 4] <= load_wb_exc_code_r[lw];
+                    end
+                end
             end
 
             // Ordering violation: mark the violating load as ready, flag it

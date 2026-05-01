@@ -56,7 +56,7 @@ package rv64gc_pkg;
     // Issue queues
     // =========================================================================
     localparam int NUM_INT_IQS    = 3;
-    localparam int IQ_INT_DEPTH   = 32;
+    localparam int IQ_INT_DEPTH   = 24;
     localparam int IQ_SELECT_PORTS = 2;  // select ports per IQ
     localparam int IQ_MEM_DEPTH   = 32;
     localparam int IQ_FP_DEPTH    = 32;
@@ -86,10 +86,13 @@ package rv64gc_pkg;
     // =========================================================================
     // Functional units
     // =========================================================================
-    localparam int NUM_ALU        = 4;
+    localparam int NUM_ALU        = 3;
     localparam int MUL_LATENCY    = 3;
-    localparam int CDB_WIDTH      = 6;
-    localparam int NUM_BYPASS_SRCS = 6;
+    localparam int CDB_WIDTH      = 4;
+    localparam int NUM_BYPASS_SRCS = 4;
+    // PRF write port count is kept at 6 (4 ALU/DIV/CSR + 2 load writeback)
+    // independent of CDB_WIDTH (wakeup broadcast width).
+    localparam int PRF_WRITE_PORTS = 6;
 
     // =========================================================================
     // Loop buffer

@@ -1,5 +1,5 @@
 /* file: fusion_detector.sv
- Description: Macro-op fusion detector for 6-wide decode stage.
+ Description: Macro-op fusion detector for PIPE_WIDTH-wide decode stage (4-wide refactor).
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
@@ -51,18 +51,19 @@ module fusion_detector
     // Pass 1: determine which adjacent pairs fuse
     // =========================================================================
     // fusable[k] => pair (k, k+1) can fuse.
-    // fusable[4] covers pair (4,5) — 5 pairs total for 6-wide decode.
-    logic [4:0] fusable;
+    // For 4-wide (PIPE_WIDTH=4): 3 pairs — (0,1), (1,2), (2,3).
+    localparam int NUM_FUSE_PAIRS = PIPE_WIDTH - 1;  // 3 for 4-wide
+    logic [NUM_FUSE_PAIRS-1:0] fusable;
 
     // fused_uop[k] holds the merged uop when fusable[k] is asserted.
-    decoded_insn_t fused_uop [0:4];
+    decoded_insn_t fused_uop [0:NUM_FUSE_PAIRS-1];
 
     // Precomputed same-cacheline check for each adjacent pair
-    logic same_line [0:4];
+    logic same_line [0:NUM_FUSE_PAIRS-1];
 
     genvar k;
     generate
-        for (k = 0; k < 5; k++) begin : gen_same_line
+        for (k = 0; k < NUM_FUSE_PAIRS; k++) begin : gen_same_line
             assign same_line[k] = (dec_in[k].pc[63:6] == dec_in[k+1].pc[63:6]);
         end
     endgenerate
@@ -73,12 +74,12 @@ module fusion_detector
     // For ADDIW (is_w_op=1): sum modulo 2^32 then sign-extend bit 31.
     // Inline always_comb replaces the former function automatic.
     // =========================================================================
-    logic [63:0] lui_add_imm_result [0:4];
-    logic [63:0] lui_add_sum64     [0:4];
-    logic [31:0] lui_add_sum32     [0:4];
+    logic [63:0] lui_add_imm_result [0:NUM_FUSE_PAIRS-1];
+    logic [63:0] lui_add_sum64     [0:NUM_FUSE_PAIRS-1];
+    logic [31:0] lui_add_sum32     [0:NUM_FUSE_PAIRS-1];
 
     always_comb begin
-        for (int p = 0; p < 5; p++) begin
+        for (int p = 0; p < NUM_FUSE_PAIRS; p++) begin
             lui_add_sum64[p] = dec_in[p].imm + dec_in[p+1].imm;
             lui_add_sum32[p] = lui_add_sum64[p][31:0];
             if (dec_in[p+1].is_w_op)
@@ -839,475 +840,7 @@ module fusion_detector
         end
     end : pair_2_3
 
-    // ---------- pair 3,4 ----------
-    always_comb begin : pair_3_4
-        fusable[3]   = 1'b0;
-        fused_uop[3] = dec_in[3];
 
-        // Blocked if pair (2,3) consumed slot 3
-        if (!fusable[2] &&
-            dec_in[3].valid && dec_in[4].valid && same_line[3] &&
-            (dec_in[3].rd_arch != 5'd0)) begin
-
-            if (w_is_lui[3] && w_is_addi[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[3].rd_arch == dec_in[4].rd_arch)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].imm        = lui_add_imm_result[3];
-                fused_uop[3].is_w_op    = 1'b0;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[3] && w_is_jalr[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_JALR;
-                fused_uop[3].is_jalr    = 1'b1;
-                fused_uop[3].rd_arch    = dec_in[4].rd_arch;
-                fused_uop[3].rd_valid   = dec_in[4].rd_valid;
-                fused_uop[3].imm        = dec_in[3].imm + dec_in[4].imm;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].use_imm    = 1'b1;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[3] && w_is_addi[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[3].rd_arch == dec_in[4].rd_arch)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].imm        = dec_in[3].imm + dec_in[4].imm;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[3] && w_is_load_insn[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[4];
-                fused_uop[3].pc         = dec_in[3].pc;
-                fused_uop[3].imm        = dec_in[3].imm + dec_in[4].imm;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].rs1_arch   = dec_in[3].rs1_arch;
-                fused_uop[3].rs1_valid  = 1'b0;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[3] && w_is_store_insn[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[4];
-                fused_uop[3].pc         = dec_in[3].pc;
-                fused_uop[3].imm        = dec_in[3].imm + dec_in[4].imm;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].rs1_arch   = dec_in[3].rs1_arch;
-                fused_uop[3].rs1_valid  = 1'b0;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd0;
-
-            end else if (w_is_slt[3] && w_is_bne[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_NE;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd0;
-
-            end else if (w_is_sltu[3] && w_is_bne[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_NE;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd1;
-
-            end else if (w_is_slt[3] && w_is_beq[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_EQ;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd2;
-
-            end else if (w_is_sltu[3] && w_is_beq[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_EQ;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd3;
-
-            end else if (w_is_slti[3] && w_is_bne[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_NE;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].fused_imm  = 32'(dec_in[3].imm);
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd4;
-
-            end else if (w_is_slti[3] && w_is_beq[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_EQ;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].fused_imm  = 32'(dec_in[3].imm);
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd4;
-
-            end else if (w_is_sltiu[3] && w_is_bne[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_NE;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].fused_imm  = 32'(dec_in[3].imm);
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd5;
-
-            end else if (w_is_sltiu[3] && w_is_beq[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_EQ;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].fused_imm  = 32'(dec_in[3].imm);
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd5;
-
-            // ---------------------------------------------------------------
-            // Tier 3a: SEXT.W rd + BNE rd, x0  => fused word-nonzero branch
-            // ---------------------------------------------------------------
-            end else if (w_is_sextw[3] && w_is_bne[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_NE;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd6;  // SEXT.W+BNE
-
-            // ---------------------------------------------------------------
-            // Tier 3b: SEXT.W rd + BEQ rd, x0  => fused word-zero branch
-            // ---------------------------------------------------------------
-            end else if (w_is_sextw[3] && w_is_beq[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch) &&
-                (dec_in[4].rs2_arch == 5'd0)) begin
-                fusable[3]              = 1'b1;
-                fused_uop[3]            = dec_in[3];
-                fused_uop[3].fu_type    = FU_BRU;
-                fused_uop[3].br_op      = BR_EQ;
-                fused_uop[3].is_branch  = 1'b1;
-                fused_uop[3].rd_valid   = 1'b0;
-                fused_uop[3].imm        = dec_in[4].imm;
-                fused_uop[3].is_fused   = 1'b1;
-                fused_uop[3].fusion_type = 3'd7;  // SEXT.W+BEQ
-            end
-        end
-
-        if (fusable[3] && (fused_uop[3].fu_type == FU_BRU)) begin
-            fused_uop[3].bp_taken  = dec_in[4].bp_taken;
-            fused_uop[3].bp_target = dec_in[4].bp_target;
-            fused_uop[3].bp_owner  = dec_in[4].bp_owner;
-            fused_uop[3].bp_from_subgroup = dec_in[4].bp_from_subgroup;
-            fused_uop[3].bp_lookup_pc = dec_in[4].bp_lookup_pc;
-            fused_uop[3].bp_ras_tos = dec_in[4].bp_ras_tos;
-            fused_uop[3].bp_ras_top = dec_in[4].bp_ras_top;
-            fused_uop[3].bp_ghr   = dec_in[4].bp_ghr;
-            fused_uop[3].pc        = dec_in[4].pc;
-            fused_uop[3].is_rvc    = dec_in[4].is_rvc;
-
-            if (w_is_auipc[3] && w_is_jalr[4] &&
-                (dec_in[3].rd_arch == dec_in[4].rs1_arch)) begin
-                fused_uop[3].imm = dec_in[3].pc + dec_in[3].imm + dec_in[4].imm;
-            end
-        end
-    end : pair_3_4
-
-    // ---------- pair 4,5 ----------
-    always_comb begin : pair_4_5
-        fusable[4]   = 1'b0;
-        fused_uop[4] = dec_in[4];
-
-        // Blocked if pair (3,4) consumed slot 4
-        if (!fusable[3] &&
-            dec_in[4].valid && dec_in[5].valid && same_line[4] &&
-            (dec_in[4].rd_arch != 5'd0)) begin
-
-            if (w_is_lui[4] && w_is_addi[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[4].rd_arch == dec_in[5].rd_arch)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].imm        = lui_add_imm_result[4];
-                fused_uop[4].is_w_op    = 1'b0;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[4] && w_is_jalr[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_JALR;
-                fused_uop[4].is_jalr    = 1'b1;
-                fused_uop[4].rd_arch    = dec_in[5].rd_arch;
-                fused_uop[4].rd_valid   = dec_in[5].rd_valid;
-                fused_uop[4].imm        = dec_in[4].imm + dec_in[5].imm;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].use_imm    = 1'b1;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[4] && w_is_addi[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[4].rd_arch == dec_in[5].rd_arch)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].imm        = dec_in[4].imm + dec_in[5].imm;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[4] && w_is_load_insn[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[5];
-                fused_uop[4].pc         = dec_in[4].pc;
-                fused_uop[4].imm        = dec_in[4].imm + dec_in[5].imm;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].rs1_arch   = dec_in[4].rs1_arch;
-                fused_uop[4].rs1_valid  = 1'b0;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[4] && w_is_store_insn[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[5];
-                fused_uop[4].pc         = dec_in[4].pc;
-                fused_uop[4].imm        = dec_in[4].imm + dec_in[5].imm;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].rs1_arch   = dec_in[4].rs1_arch;
-                fused_uop[4].rs1_valid  = 1'b0;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd0;
-
-            end else if (w_is_slt[4] && w_is_bne[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_NE;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd0;
-
-            end else if (w_is_sltu[4] && w_is_bne[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_NE;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd1;
-
-            end else if (w_is_slt[4] && w_is_beq[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_EQ;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd2;
-
-            end else if (w_is_sltu[4] && w_is_beq[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_EQ;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].fused_imm  = 32'(dec_in[5].imm);
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd3;
-
-            end else if (w_is_slti[4] && w_is_bne[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_NE;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd4;
-
-            end else if (w_is_slti[4] && w_is_beq[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_EQ;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd4;
-
-            end else if (w_is_sltiu[4] && w_is_bne[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_NE;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd5;
-
-            end else if (w_is_sltiu[4] && w_is_beq[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_EQ;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].fused_imm  = 32'(dec_in[4].imm);
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd5;
-
-            // ---------------------------------------------------------------
-            // Tier 3a: SEXT.W rd + BNE rd, x0  => fused word-nonzero branch
-            // ---------------------------------------------------------------
-            end else if (w_is_sextw[4] && w_is_bne[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_NE;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd6;  // SEXT.W+BNE
-
-            // ---------------------------------------------------------------
-            // Tier 3b: SEXT.W rd + BEQ rd, x0  => fused word-zero branch
-            // ---------------------------------------------------------------
-            end else if (w_is_sextw[4] && w_is_beq[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch) &&
-                (dec_in[5].rs2_arch == 5'd0)) begin
-                fusable[4]              = 1'b1;
-                fused_uop[4]            = dec_in[4];
-                fused_uop[4].fu_type    = FU_BRU;
-                fused_uop[4].br_op      = BR_EQ;
-                fused_uop[4].is_branch  = 1'b1;
-                fused_uop[4].rd_valid   = 1'b0;
-                fused_uop[4].imm        = dec_in[5].imm;
-                fused_uop[4].is_fused   = 1'b1;
-                fused_uop[4].fusion_type = 3'd7;  // SEXT.W+BEQ
-            end
-        end
-
-        if (fusable[4] && (fused_uop[4].fu_type == FU_BRU)) begin
-            fused_uop[4].bp_taken  = dec_in[5].bp_taken;
-            fused_uop[4].bp_target = dec_in[5].bp_target;
-            fused_uop[4].bp_owner  = dec_in[5].bp_owner;
-            fused_uop[4].bp_from_subgroup = dec_in[5].bp_from_subgroup;
-            fused_uop[4].bp_lookup_pc = dec_in[5].bp_lookup_pc;
-            fused_uop[4].bp_ras_tos = dec_in[5].bp_ras_tos;
-            fused_uop[4].bp_ras_top = dec_in[5].bp_ras_top;
-            fused_uop[4].bp_ghr   = dec_in[5].bp_ghr;
-            fused_uop[4].pc        = dec_in[5].pc;
-            fused_uop[4].is_rvc    = dec_in[5].is_rvc;
-
-            if (w_is_auipc[4] && w_is_jalr[5] &&
-                (dec_in[4].rd_arch == dec_in[5].rs1_arch)) begin
-                fused_uop[4].imm = dec_in[4].pc + dec_in[4].imm + dec_in[5].imm;
-            end
-        end
-    end : pair_4_5
 
     // =========================================================================
     // Pass 2: Compaction network
@@ -1315,7 +848,7 @@ module fusion_detector
     // Build an intermediate array that removes the consumed "second" slot of
     // each fused pair, then count how many fusions occurred.
     //
-    // Strategy: walk the input slots 0..5 in order.  Each slot is either:
+    // Strategy: walk the input slots 0..PIPE_WIDTH-1 in order.  Each slot is either:
     //   - A first-of-fused-pair  → emit fused_uop[k]
     //   - A second-of-fused-pair → skip (consumed)
     //   - Unfused               → emit dec_in[i] as-is
@@ -1325,7 +858,8 @@ module fusion_detector
 
     // Intermediate: which input slot is "consumed" (second of fused pair)
     // consumed[i] = 1 means input slot i was the second member of a fused pair.
-    logic consumed [0:5];
+    // For 4-wide (PIPE_WIDTH=4): 4 slots, 3 pairs.
+    logic consumed [0:PIPE_WIDTH-1];
 
     always_comb begin : gen_consumed
         // Slot 0 is never consumed (no pair (-1,0))
@@ -1333,8 +867,6 @@ module fusion_detector
         consumed[1] = fusable[0];        // pair (0,1) consumed slot 1
         consumed[2] = fusable[1];        // pair (1,2) consumed slot 2
         consumed[3] = fusable[2];        // pair (2,3) consumed slot 3
-        consumed[4] = fusable[3];        // pair (3,4) consumed slot 4
-        consumed[5] = fusable[4];        // pair (4,5) consumed slot 5
     end : gen_consumed
 
     // What to output for input slot i when it is NOT consumed:
@@ -1348,12 +880,10 @@ module fusion_detector
     // Compaction: shift valid (non-consumed) slots to fill the array.
     // We unroll this combinationally.  Output slots are filled sequentially.
 
-    // Number of fusions = popcount(fusable)
+    // Number of fusions = popcount(fusable) — 3 pairs for 4-wide
     logic [2:0] num_fused;
     always_comb begin
-        num_fused = 3'(fusable[0]) + 3'(fusable[1]) +
-                    3'(fusable[2]) + 3'(fusable[3]) +
-                    3'(fusable[4]);
+        num_fused = 3'(fusable[0]) + 3'(fusable[1]) + 3'(fusable[2]);
     end
 
     assign dec_count_out = (dec_count_in >= num_fused)
@@ -1361,14 +891,14 @@ module fusion_detector
                            : 3'd0;
 
     // Compaction: purely combinational priority-encode non-consumed slots
-    // into output positions.  We unroll across all 6 input/output slots.
+    // into output positions.  We unroll across all PIPE_WIDTH input/output slots.
 
     // Use a fixed-size candidate array: slot indices in input order,
     // skipping consumed ones.
-    // Since PIPE_WIDTH=6 is a compile-time constant, fully unroll.
+    // For 4-wide (PIPE_WIDTH=4): fully unrolled over 4 slots.
 
     // out_src[j] = index into dec_in[] (or fused_uop[]) for output slot j
-    // We fill out_src by scanning input slots 0..5, skipping consumed ones.
+    // We fill out_src by scanning input slots 0..PIPE_WIDTH-1, skipping consumed ones.
 
     decoded_insn_t compact [0:PIPE_WIDTH-1];
     logic          compact_v [0:PIPE_WIDTH-1]; // whether this compacted slot is used
@@ -1387,7 +917,7 @@ module fusion_detector
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             if (!consumed[i]) begin
                 // This slot is either a fused uop (i is first of pair) or passthru
-                if ((i < 5) && fusable[i])
+                if ((i < NUM_FUSE_PAIRS) && fusable[i])
                     compact[wr] = fused_uop[i];
                 else
                     compact[wr] = dec_in[i];

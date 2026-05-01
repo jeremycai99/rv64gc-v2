@@ -38,6 +38,14 @@ module issue_queue
     input  logic [PHYS_REG_BITS-1:0] spec_cancel_tag,
     input  logic                     spec_cancel_valid1,
     input  logic [PHYS_REG_BITS-1:0] spec_cancel_tag1,
+    // Definitive load writeback wakeup (Stage 2: loads removed from CDB).
+    // Fires on the cycle the load data is available (combinational, matches
+    // the PRF write).  Two ports for the 2 load writeback lanes.  Unlike
+    // spec_wk, this is non-speculative: no cancel path needed.
+    input  logic                     load_wb_wk_valid0,
+    input  logic [PHYS_REG_BITS-1:0] load_wb_wk_tag0,
+    input  logic                     load_wb_wk_valid1,
+    input  logic [PHYS_REG_BITS-1:0] load_wb_wk_tag1,
 
     // PRF ready table: lets enqueue see "already-broadcast" producers even
     // when the entry arrives several cycles after the CDB pulse.
@@ -175,6 +183,25 @@ module issue_queue
                     next_src1_spec[e]  = 1'b0;
                 end
                 if (rs2_cdb_hit[e] && !src2_ready[e]) begin
+                    next_src2_ready[e] = 1'b1;
+                    next_src2_spec[e]  = 1'b0;
+                end
+
+                // -- Definitive load writeback wakeup (Stage 2: loads off CDB)
+                // Fires combinationally on the cycle load data is written to
+                // PRF.  Treated exactly like CDB wakeup: definitive, clears
+                // spec bit, no cancel path needed.  Allows instructions that
+                // depend on load results to see the definitive wake even when
+                // a cache miss cancelled the earlier speculative wakeup.
+                if (!src1_ready[e] && !rs1_cdb_hit[e] &&
+                    ((load_wb_wk_valid0 && (load_wb_wk_tag0 == rs1_phys_r[e])) ||
+                     (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs1_phys_r[e])))) begin
+                    next_src1_ready[e] = 1'b1;
+                    next_src1_spec[e]  = 1'b0;
+                end
+                if (!src2_ready[e] && !rs2_cdb_hit[e] &&
+                    ((load_wb_wk_valid0 && (load_wb_wk_tag0 == rs2_phys_r[e])) ||
+                     (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs2_phys_r[e])))) begin
                     next_src2_ready[e] = 1'b1;
                     next_src2_spec[e]  = 1'b0;
                 end
@@ -466,6 +493,17 @@ module issue_queue
                     if (cdb_tag[c] == enq_data[q].rs2_phys)
                         enq_s2_rdy[q] = 1'b1;
                 end
+            end
+            // Check load_wb sideband for source match at enqueue time.
+            // Handles instructions enqueued on the same cycle a load writes
+            // back (preg_ready_table may not yet be updated).
+            if (load_wb_wk_valid0) begin
+                if (load_wb_wk_tag0 == enq_data[q].rs1_phys) enq_s1_rdy[q] = 1'b1;
+                if (load_wb_wk_tag0 == enq_data[q].rs2_phys) enq_s2_rdy[q] = 1'b1;
+            end
+            if (load_wb_wk_valid1) begin
+                if (load_wb_wk_tag1 == enq_data[q].rs1_phys) enq_s1_rdy[q] = 1'b1;
+                if (load_wb_wk_tag1 == enq_data[q].rs2_phys) enq_s2_rdy[q] = 1'b1;
             end
         end
     end

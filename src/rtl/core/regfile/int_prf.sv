@@ -1,5 +1,8 @@
 /* file: int_prf.sv
- Description: 160x64 integer PRF with 12 read and 6 write ports.
+ Description: 160x64 integer PRF with 12 read and PRF_WRITE_PORTS write ports.
+ Stage 2 (4-wide refactor): PRF_WRITE_PORTS=6 retained (see rv64gc_core_top.sv
+ comment for port-count analysis).  Read ports remain 12R (4 FU pairs × 2 srcs
+ + 2 load AGU + STA rs1 + STD rs2 = 12 structurally required).
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
@@ -15,10 +18,10 @@ module int_prf
     // 12 read ports (6 pairs)
     input  logic [PHYS_REG_BITS-1:0] raddr [0:11],
     output logic [63:0]              rdata [0:11],
-    // 6 write ports
-    input  logic [5:0]               wen,
-    input  logic [PHYS_REG_BITS-1:0] waddr [0:5],
-    input  logic [63:0]              wdata [0:5]
+    // PRF_WRITE_PORTS write ports
+    input  logic [PRF_WRITE_PORTS-1:0] wen,
+    input  logic [PHYS_REG_BITS-1:0]   waddr [0:PRF_WRITE_PORTS-1],
+    input  logic [63:0]                 wdata [0:PRF_WRITE_PORTS-1]
 );
 
     // -------------------------------------------------------------------------
@@ -61,7 +64,7 @@ module int_prf
 `endif
 
     always_ff @(posedge clk) begin
-        for (int wp = 0; wp < 6; wp++) begin
+        for (int wp = 0; wp < PRF_WRITE_PORTS; wp++) begin
             if (wen[wp]) begin
                 regfile_copy0[waddr[wp]] <= wdata[wp];
                 regfile_copy1[waddr[wp]] <= wdata[wp];

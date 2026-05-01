@@ -3890,7 +3890,7 @@ module tb_top
                         iqld_watch_ent = iq_entry_t'(u_core.u_iq_load.payload_r[e]);
                         if (u_core.u_iq_load.entry_valid[e] &&
                             (u_core.u_iq_load.rob_idx_r[e] == ROB_IDX_BITS'(trace_iqld_watch_rob))) begin
-                            $display("[IQLD_WATCH] cyc=%0d idx=%0d rob=%0d pc=%016h pdst=%0d rs1p=%0d rs2p=%0d s1=%b s2=%b n1=%b n2=%b sp1=%b sp2=%b elig=%b age=%0d count=%0d preg1=%b cdb4=%b/%0d cdb5=%b/%0d spec_wk=%b/%0d cancel=%b/%0d flush=%b full=%b rem=%b",
+                            $display("[IQLD_WATCH] cyc=%0d idx=%0d rob=%0d pc=%016h pdst=%0d rs1p=%0d rs2p=%0d s1=%b s2=%b n1=%b n2=%b sp1=%b sp2=%b elig=%b age=%0d count=%0d preg1=%b lwb0=%b/%0d lwb1=%b/%0d spec_wk=%b/%0d cancel=%b/%0d flush=%b full=%b rem=%b",
                                 trace_cycle,
                                 e,
                                 u_core.u_iq_load.rob_idx_r[e],
@@ -3908,10 +3908,10 @@ module tb_top
                                 u_core.u_iq_load.entry_age[e],
                                 u_core.u_iq_load.count_r,
                                 u_core.preg_ready_table[u_core.u_iq_load.rs1_phys_r[e]],
-                                u_core.cdb_valid[4],
-                                u_core.cdb_tag[4],
-                                u_core.cdb_valid[5],
-                                u_core.cdb_tag[5],
+                                u_core.load_wb_valid[0],
+                                u_core.load_wb_pdst[0],
+                                u_core.load_wb_valid[1],
+                                u_core.load_wb_pdst[1],
                                 u_core.lsu_spec_wakeup_valid[0],
                                 u_core.lsu_spec_wakeup_tag[0],
                                 u_core.lsu_spec_cancel_valid[0],
