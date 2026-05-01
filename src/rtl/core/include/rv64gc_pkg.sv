@@ -138,10 +138,10 @@ package rv64gc_pkg;
     localparam int L1I_SET_BITS   = $clog2(L1I_SETS);     // 7
     localparam int L1I_TAG_BITS   = XLEN - L1I_SET_BITS - LINE_BITS;   // 51
 
-    // L1 D-Cache: 64 KB, 4-way, 4-bank, 64B lines
+    // L1 D-Cache: 64 KB, 4-way, 2-bank, 64B lines
     localparam int L1D_SIZE       = 65536;
     localparam int L1D_WAYS       = 4;
-    localparam int L1D_BANKS      = 4;
+    localparam int L1D_BANKS      = 2;
     localparam int L1D_SETS       = L1D_SIZE / (L1D_WAYS * LINE_SIZE);  // 256
     localparam int L1D_SET_BITS   = $clog2(L1D_SETS);     // 8
     localparam int L1D_TAG_BITS   = XLEN - L1D_SET_BITS - LINE_BITS;   // 50
