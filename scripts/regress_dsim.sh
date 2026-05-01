@@ -84,13 +84,16 @@ run_test() {
     elif grep -q "PASS at cycle"       "$log" 2>/dev/null; then status="PASS"
     elif grep -q "TIMEOUT after"       "$log" 2>/dev/null; then status="TIMEOUT"
     elif grep -q "FAIL at cycle"       "$log" 2>/dev/null; then status="FAIL"
-    # CoreMark writes tohost with magic value on normal exit (no PASS/FAIL text)
-    elif grep -q "^TOHOST="           "$log" 2>/dev/null; then status="PASS"
+    # Magic TOHOST= without PASS message is suspicious (e.g., HTIF syscall, BPU
+    # mistraining cascade, etc.) — flag explicitly instead of treating as PASS.
+    elif grep -q "^TOHOST="           "$log" 2>/dev/null; then status="TOHOST_MAGIC"
     else                                                       status="UNKNOWN(rc=$rc)"
     fi
+    # STOP-OK requires either a proper [BENCH_RESULT] control=2 or a real
+    # PASS at tohost=1. Magic TOHOST values (no PASS line) are NOT STOP-OK.
     if grep -qE '\[BENCH_RESULT\].*field=control value=2' "$log" 2>/dev/null; then
         stop_seen="STOP-OK"
-    elif grep -q "^TOHOST=" "$log" 2>/dev/null; then
+    elif grep -q "PASS at cycle" "$log" 2>/dev/null; then
         stop_seen="STOP-OK"
     fi
     ipc=$(grep -E '^IPC: ' "$log" 2>/dev/null | tail -1 | sed -E 's/.*IPC=([0-9.eE+-]+).*/\1/')

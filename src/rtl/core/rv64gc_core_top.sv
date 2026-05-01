@@ -139,8 +139,8 @@ module rv64gc_core_top
     logic [3:0]               load_wb_exc_code_r [0:1];
 
     // =========================================================================
-    // Bypass sources (NUM_BYPASS_SRCS=4: ALU0/BRU, ALU1/BRU1, ALU2/MUL, Load0)
-    // ALU3/DIV/CSR and Load1 are not bypassed; consumers fall back to PRF.
+    // Bypass sources (NUM_BYPASS_SRCS=5: ALU0/BRU, ALU1/BRU1, ALU2/MUL, Load0, Load1)
+    // ALU3/DIV/CSR is not bypassed; consumers fall back to PRF.
     // =========================================================================
     logic [NUM_BYPASS_SRCS-1:0]    bypass_valid;
     logic [PHYS_REG_BITS-1:0]      bypass_tag  [0:NUM_BYPASS_SRCS-1];
@@ -2986,11 +2986,12 @@ module rv64gc_core_top
     assign prf_wdata[5] = load_wb_data[1];
 
     // =========================================================================
-    // Bypass source wiring (4-wide: NUM_BYPASS_SRCS=4)
+    // Bypass source wiring (4-wide: NUM_BYPASS_SRCS=5)
     //   [0]: ALU0/BRU (registered CDB[0])
     //   [1]: ALU1/BRU1 (registered CDB[1])
     //   [2]: ALU2/MUL (registered CDB[2])
-    //   [3]: Load0 (combinational CDB[4] — 2-cycle load latency)
+    //   [3]: Load0 (combinational load_wb[0] — 2-cycle load latency)
+    //   [4]: Load1 (combinational load_wb[1] — 2-cycle load latency)
     //
     // Dropped vs 6-wide:
     //   - ALU3/DIV/CSR (CDB[3]): DIV is multi-cycle, bypass rarely fires;
@@ -3014,7 +3015,8 @@ module rv64gc_core_top
     //
     // Suppress bypass for p0 (hardwired zero register) — CDB may carry
     // non-zero data for instructions with pdst=p0 (e.g., JAL x0).
-    assign bypass_valid = {load_wb_valid[0] && (load_wb_pdst[0]  != '0),  // [3] Load0
+    assign bypass_valid = {load_wb_valid[1] && (load_wb_pdst[1]  != '0),  // [4] Load1
+                           load_wb_valid[0] && (load_wb_pdst[0]  != '0),  // [3] Load0
                            cdb_valid_r[2]   && (cdb_tag_r[2]    != '0),  // [2] ALU2/MUL
                            cdb_valid_r[1]   && (cdb_tag_r[1]    != '0),  // [1] ALU1/BRU1
                            cdb_valid_r[0]   && (cdb_tag_r[0]    != '0)}; // [0] ALU0/BRU
@@ -3022,10 +3024,12 @@ module rv64gc_core_top
     assign bypass_tag[1]  = cdb_tag_r[1];
     assign bypass_tag[2]  = cdb_tag_r[2];
     assign bypass_tag[3]  = load_wb_pdst[0];    // Load0 combinational
+    assign bypass_tag[4]  = load_wb_pdst[1];    // Load1 combinational
     assign bypass_data[0] = cdb_data_r[0];
     assign bypass_data[1] = cdb_data_r[1];
     assign bypass_data[2] = cdb_data_r[2];
     assign bypass_data[3] = load_wb_data[0];    // Load0 combinational
+    assign bypass_data[4] = load_wb_data[1];    // Load1 combinational
 
     // =========================================================================
     // PRF Ready Table

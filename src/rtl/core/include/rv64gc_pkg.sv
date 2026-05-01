@@ -89,7 +89,11 @@ package rv64gc_pkg;
     localparam int NUM_ALU        = 3;
     localparam int MUL_LATENCY    = 3;
     localparam int CDB_WIDTH      = 4;
-    localparam int NUM_BYPASS_SRCS = 4;
+    // Bypass slots: 3 CDB-registered (CDB[0..2]) + 2 load_wb combinational (Load0, Load1).
+    // Both load ports MUST have a bypass slot — spec_wakeup wakes consumers at T+2 but
+    // PRF write doesn't latch until T+3, so missing-load-bypass = stale-PRF-read = wrong
+    // operand to BRU = spurious mis-flag (see Stage 2 cm bug fix on master).
+    localparam int NUM_BYPASS_SRCS = 5;
     // PRF write port count is kept at 6 (4 ALU/DIV/CSR + 2 load writeback)
     // independent of CDB_WIDTH (wakeup broadcast width).
     localparam int PRF_WRITE_PORTS = 6;
