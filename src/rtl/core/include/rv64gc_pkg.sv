@@ -103,13 +103,13 @@ package rv64gc_pkg;
     // µop cache (gen-2, replaces loop buffer when proven; parallel during
     // bring-up behind +UOC_ENABLE plusarg).
     //
-    // Geometry: 32 sets × 8 ways × 6 µops per entry = 1,536 µop slots.
+    // Geometry: 32 sets × 8 ways × 4 µops per entry = 1,024 µop slots.
     // Indexed by fetch-group start PC: PC[5:1] (RVC 2-byte alignment).
     // Modeled after Intel DSB / AMD Zen op-cache / ARM Mop-cache.
     // =========================================================================
     localparam int UOC_SETS        = 32;
     localparam int UOC_WAYS        = 8;
-    localparam int UOC_PER_ENTRY   = PIPE_WIDTH;          // 6 µops/entry
+    localparam int UOC_PER_ENTRY   = PIPE_WIDTH;          // 4 µops/entry
     localparam int UOC_INDEX_BITS  = $clog2(UOC_SETS);    // 5
     localparam int UOC_WAY_BITS    = $clog2(UOC_WAYS);    // 3
     localparam int UOC_OFFSET_BITS = 1;                   // PC[0] ignored (RVC 2B align)

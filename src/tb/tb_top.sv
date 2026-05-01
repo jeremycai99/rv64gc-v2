@@ -1796,7 +1796,7 @@ module tb_top
             if (trace_lb_en) begin
                 automatic logic hot_lb_window;
                 hot_lb_window = 1'b0;
-                for (int i = 0; i < 6; i++) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (u_core.fused_insn[i].valid &&
                         (((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2000) &&
                           (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_202a)) ||
@@ -1832,7 +1832,7 @@ module tb_top
                         u_core.bru_target,
                         u_core.flush_out.valid,
                         u_core.flush_out.redirect_pc);
-                    for (int i = 0; i < 6; i++) begin
+                    for (int i = 0; i < PIPE_WIDTH; i++) begin
                         automatic decoded_insn_t trace_insn;
                         automatic logic trace_valid;
                         automatic logic trace_from_lb;
@@ -2468,7 +2468,7 @@ module tb_top
                 end
             end
             if (trace_coremark_progress_en && (u_core.commit_count > 3'd0)) begin
-                for (int i = 0; i < 6; i++) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
                     automatic int cm_idx;
                     cm_idx = tb_coremark_progress_index(u_core.rob_head_pc[i]);
                     if (u_core.commit_out[i].valid && (cm_idx >= 0)) begin
@@ -2984,7 +2984,7 @@ module tb_top
                 end
             end
             if (trace_commit_hotspots_en && (u_core.commit_count > 3'd0)) begin
-                for (int i = 0; i < 6; i++) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (u_core.commit_out[i].valid &&
                         (u_core.rob_head_pc[i] >= COMMIT_HOTSPOT_BASE) &&
                         (((u_core.rob_head_pc[i] - COMMIT_HOTSPOT_BASE) >> 1) < COMMIT_HOTSPOT_BINS)) begin
@@ -2996,7 +2996,7 @@ module tb_top
             if ((trace_commit_en || trace_dep_en) && (u_core.commit_count > 3'd0)) begin
                 automatic int dep_seq_off; // slot-local seq offset within this cycle
                 dep_seq_off = 0;
-                for (int i = 0; i < 6; i++) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (u_core.commit_out[i].valid) begin
                         // ty bitfield (hex):
                         //   bit0=is_branch, bit1=is_jal,    bit2=is_jalr,
@@ -3176,7 +3176,7 @@ module tb_top
                     // mispredict, classify as branch mispredict.  Otherwise
                     // treat as watchdog/other.
                     pipe_reason = 3; // default to watchdog/other full flush
-                    for (int i = 0; i < 6; i++) begin
+                    for (int i = 0; i < PIPE_WIDTH; i++) begin
                         if (u_core.commit_out[i].valid &&
                             u_core.rob_head_branch_mispredict[i]) begin
                             pipe_reason = 1;
@@ -3282,7 +3282,7 @@ module tb_top
             // that is currently in committed_rat for some arch, log it
             // as that's the bug signature.
             if (trace_commit_en) begin
-                for (int s = 0; s < 6; s++) begin
+                for (int s = 0; s < PIPE_WIDTH; s++) begin
                     if ((3'(s) < u_core.ren_count_w)
                         && u_core.ren_insn[s].base.rd_valid
                         && u_core.ren_insn[s].pdst != 8'd0) begin
@@ -3389,7 +3389,7 @@ module tb_top
             end
             // Also trace when a store is dispatched but NOT enqueued to store IQ
             // (indicates the "dropped" path we're hunting)
-            for (int s = 0; s < 6; s++) begin
+            for (int s = 0; s < PIPE_WIDTH; s++) begin
                 if (trace_commit_en && (s < int'(u_core.dq_deq_count))
                     && u_core.dq_deq_data[s].base.valid
                     && u_core.dq_deq_data[s].base.is_store
@@ -3509,7 +3509,7 @@ module tb_top
             // entry that's waiting on rs2 — captures the moment wakeup should
             // have happened (if it happens at all)
             if (trace_commit_en) begin
-                for (int c = 0; c < 6; c++) begin
+                for (int c = 0; c < CDB_WIDTH; c++) begin
                     if (u_core.cdb_valid[c]) begin
                         for (int e = 0; e < 32; e++) begin
                             if (u_core.u_iq_store.entry_valid[e]
@@ -3971,7 +3971,7 @@ module tb_top
                     end
                 end
                 // Trace dq_iq_entry (raw output of dispatch_queue with iq routing)
-                for (int dqi = 0; dqi < 6; dqi++) begin
+                for (int dqi = 0; dqi < PIPE_WIDTH; dqi++) begin
                     if ((dqi < int'(u_core.dq_deq_count)) &&
                         u_core.dq_deq_data[dqi].base.valid &&
                         u_core.dq_deq_data[dqi].base.is_load) begin
@@ -3992,7 +3992,7 @@ module tb_top
                 end
                 // Trace fetcher output (decode input)
                 if (u_core.u_fetch_unit.fetch_count > 0) begin
-                    for (int fi = 0; fi < 6; fi++) begin
+                    for (int fi = 0; fi < PIPE_WIDTH; fi++) begin
                         if (fi < int'(u_core.u_fetch_unit.fetch_count)) begin
                             $display("[FETCH%0d] cyc=%0d pc=%016h insn=%08h is_rvc=%b",
                                 fi,

@@ -974,7 +974,7 @@ module fetch_unit
     // F2: Instruction extraction from cache line
     //
     // The I-cache returns a full 512-bit (64-byte) line. We extract up to
-    // PIPE_WIDTH=6 instructions starting at the byte offset indicated by
+    // PIPE_WIDTH=4 instructions starting at the byte offset indicated by
     // f2_pc_r[5:0]. Each instruction is either 16-bit compressed (bits[1:0]
     // != 2'b11) or 32-bit.
     // =========================================================================
