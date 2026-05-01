@@ -30,6 +30,11 @@ module rob
     input  logic [PIPE_WIDTH-1:0]   alloc_is_sfence_vma,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_ecall,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_wfi,
+    // Sub-classification of the head-stall "other" bucket
+    // (perf-instr only; sim-only path uses these arrays).
+    input  logic [PIPE_WIDTH-1:0]   alloc_is_mul,
+    input  logic [PIPE_WIDTH-1:0]   alloc_is_div,
+    input  logic [PIPE_WIDTH-1:0]   alloc_is_bru,
 
     // Writeback: CDB marks entries as complete (up to 6 per cycle)
     input  logic [CDB_WIDTH-1:0]              wb_valid,
@@ -210,6 +215,12 @@ module rob
     reg [ROB_DEPTH-1:0]          is_sfence_vma_r;
     reg [ROB_DEPTH-1:0]          is_ecall_r;
     reg [ROB_DEPTH-1:0]          is_wfi_r;
+    // Per-uop FU-type tags used only by SIMULATION head-stall
+    // sub-classification (decompose the "other" bucket into
+    // mul/div/csr/bru/unknown).  Not used by functional logic.
+    reg [ROB_DEPTH-1:0]          is_mul_r;
+    reg [ROB_DEPTH-1:0]          is_div_r;
+    reg [ROB_DEPTH-1:0]          is_bru_r;
     reg [ROB_DEPTH-1:0]          branch_taken_r;
     reg [64*ROB_DEPTH-1:0]       branch_target_packed;
     reg [64*ROB_DEPTH-1:0]       branch_taken_target_packed;
@@ -587,6 +598,9 @@ module rob
             is_sfence_vma_r  <= '0;
             is_ecall_r       <= '0;
             is_wfi_r         <= '0;
+            is_mul_r         <= '0;
+            is_div_r         <= '0;
+            is_bru_r         <= '0;
             branch_taken_r       <= '0;
             branch_mispredict_r  <= '0;
             csr_we_r             <= '0;
@@ -620,6 +634,9 @@ module rob
             is_sfence_vma_r  <= '0;
             is_ecall_r       <= '0;
             is_wfi_r         <= '0;
+            is_mul_r         <= '0;
+            is_div_r         <= '0;
+            is_bru_r         <= '0;
             branch_taken_r       <= '0;
             branch_mispredict_r  <= '0;
             csr_we_r             <= '0;
@@ -643,6 +660,9 @@ module rob
                     is_sfence_vma_r[i] <= 1'b0;
                     is_ecall_r[i]      <= 1'b0;
                     is_wfi_r[i]        <= 1'b0;
+                    is_mul_r[i]        <= 1'b0;
+                    is_div_r[i]        <= 1'b0;
+                    is_bru_r[i]        <= 1'b0;
                     has_exc_r[i]       <= 1'b0;
                     branch_taken_r[i]      <= 1'b0;
                     branch_mispredict_r[i] <= 1'b0;
@@ -670,6 +690,9 @@ module rob
                     is_sfence_vma_r[head_idx_w[i]] <= 1'b0;
                     is_ecall_r[head_idx_w[i]]   <= 1'b0;
                     is_wfi_r[head_idx_w[i]]     <= 1'b0;
+                    is_mul_r[head_idx_w[i]]     <= 1'b0;
+                    is_div_r[head_idx_w[i]]     <= 1'b0;
+                    is_bru_r[head_idx_w[i]]     <= 1'b0;
                 end
             end
             if (commit_count > 0)
@@ -770,6 +793,9 @@ module rob
                     is_sfence_vma_r[ai_w[i]]  <= alloc_is_sfence_vma[i];
                     is_ecall_r[ai_w[i]]       <= alloc_is_ecall[i];
                     is_wfi_r[ai_w[i]]         <= alloc_is_wfi[i];
+                    is_mul_r[ai_w[i]]         <= alloc_is_mul[i];
+                    is_div_r[ai_w[i]]         <= alloc_is_div[i];
+                    is_bru_r[ai_w[i]]         <= alloc_is_bru[i];
                     branch_taken_r[ai_w[i]]       <= 1'b0;
                     branch_target_packed[ai_w[i]*64 +: 64] <= 64'd0;
                     branch_taken_target_packed[ai_w[i]*64 +: 64] <= 64'd0;
@@ -891,6 +917,9 @@ module rob
                     is_sfence_vma_r[head_idx_w[i]] <= 1'b0;
                     is_ecall_r[head_idx_w[i]]   <= 1'b0;
                     is_wfi_r[head_idx_w[i]]     <= 1'b0;
+                    is_mul_r[head_idx_w[i]]     <= 1'b0;
+                    is_div_r[head_idx_w[i]]     <= 1'b0;
+                    is_bru_r[head_idx_w[i]]     <= 1'b0;
                 end
             end
             if (commit_count > 0)
@@ -911,6 +940,13 @@ module rob
     integer rob_head_not_ready_branch_cyc;
     integer rob_head_not_ready_serial_cyc;
     integer rob_head_not_ready_other_cyc;
+    // Sub-decomposition of "other" head-stall bucket (Phase A.2).
+    // mul/div/csr/bru/unknown sum to rob_head_not_ready_other_cyc.
+    integer rob_head_not_ready_mul_cyc;
+    integer rob_head_not_ready_div_cyc;
+    integer rob_head_not_ready_csr_cyc;
+    integer rob_head_not_ready_bru_cyc;
+    integer rob_head_not_ready_unknown_cyc;
     integer rob_wdog_fire_cnt;
     integer rob_wdog_load_cnt;
     integer rob_wdog_store_cnt;
@@ -964,6 +1000,11 @@ module rob
             rob_head_not_ready_branch_cyc  <= 0;
             rob_head_not_ready_serial_cyc  <= 0;
             rob_head_not_ready_other_cyc   <= 0;
+            rob_head_not_ready_mul_cyc     <= 0;
+            rob_head_not_ready_div_cyc     <= 0;
+            rob_head_not_ready_csr_cyc     <= 0;
+            rob_head_not_ready_bru_cyc     <= 0;
+            rob_head_not_ready_unknown_cyc <= 0;
             rob_wdog_fire_cnt              <= 0;
             rob_wdog_load_cnt              <= 0;
             rob_wdog_store_cnt             <= 0;
@@ -1084,8 +1125,24 @@ module rob
                     rob_head_not_ready_branch_cyc <= rob_head_not_ready_branch_cyc + 1;
                 else if (rob_head_serial)
                     rob_head_not_ready_serial_cyc <= rob_head_not_ready_serial_cyc + 1;
-                else
+                else begin
+                    // Catch-all: increment total "other" AND decompose into
+                    // mul/div/csr/bru/unknown sub-buckets (sub-counters sum
+                    // back to other_cyc).  CSR is already absorbed by the
+                    // serial path above so the csr sub-counter is expected
+                    // to remain 0 in practice; kept for symmetry.
                     rob_head_not_ready_other_cyc <= rob_head_not_ready_other_cyc + 1;
+                    if (is_mul_r[head_r])
+                        rob_head_not_ready_mul_cyc <= rob_head_not_ready_mul_cyc + 1;
+                    else if (is_div_r[head_r])
+                        rob_head_not_ready_div_cyc <= rob_head_not_ready_div_cyc + 1;
+                    else if (is_csr_r[head_r])
+                        rob_head_not_ready_csr_cyc <= rob_head_not_ready_csr_cyc + 1;
+                    else if (is_bru_r[head_r])
+                        rob_head_not_ready_bru_cyc <= rob_head_not_ready_bru_cyc + 1;
+                    else
+                        rob_head_not_ready_unknown_cyc <= rob_head_not_ready_unknown_cyc + 1;
+                end
 
                 if (rob_head_wb_bypass_cand) begin
                     rob_head_wb_bypass_cand_cnt <= rob_head_wb_bypass_cand_cnt + 1;
@@ -1166,6 +1223,12 @@ module rob
                 rob_head_not_ready_branch_cyc,
                 rob_head_not_ready_serial_cyc,
                 rob_head_not_ready_other_cyc);
+            $display("  other-class: mul/div/csr/bru/unknown: %0d / %0d / %0d / %0d / %0d",
+                rob_head_not_ready_mul_cyc,
+                rob_head_not_ready_div_cyc,
+                rob_head_not_ready_csr_cyc,
+                rob_head_not_ready_bru_cyc,
+                rob_head_not_ready_unknown_cyc);
             $display("Max contiguous head wait:   %0d", rob_head_wait_max);
             $display("Same-cycle WB ready bypass candidates: %0d", rob_head_wb_bypass_cand_cnt);
             $display("  load/store/branch/serial/other: %0d / %0d / %0d / %0d / %0d",

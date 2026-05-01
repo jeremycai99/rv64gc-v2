@@ -1264,6 +1264,11 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_sfence_vma;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_ecall;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_wfi;
+    // Per-uop FU-type tags driven into the ROB to support sub-classification
+    // of the SIMULATION-only "other" head-stall bucket (mul/div/bru).
+    logic [PIPE_WIDTH-1:0]  rob_alloc_is_mul;
+    logic [PIPE_WIDTH-1:0]  rob_alloc_is_div;
+    logic [PIPE_WIDTH-1:0]  rob_alloc_is_bru;
     logic [2:0]             rob_alloc_bpu_type [0:PIPE_WIDTH-1];
 
     always_comb begin
@@ -1311,6 +1316,9 @@ module rv64gc_core_top
             rob_alloc_is_sfence_vma[i] = ren_insn[i].base.is_sfence_vma;
             rob_alloc_is_ecall[i]    = ren_insn[i].base.is_ecall;
             rob_alloc_is_wfi[i]      = ren_insn[i].base.is_wfi;
+            rob_alloc_is_mul[i]      = ren_insn[i].base.is_mul;
+            rob_alloc_is_div[i]      = ren_insn[i].base.is_div;
+            rob_alloc_is_bru[i]      = (ren_insn[i].base.fu_type == FU_BRU);
         end
     end
 
@@ -1359,6 +1367,9 @@ module rv64gc_core_top
         .alloc_is_sfence_vma    (rob_alloc_is_sfence_vma),
         .alloc_is_ecall         (rob_alloc_is_ecall),
         .alloc_is_wfi           (rob_alloc_is_wfi),
+        .alloc_is_mul           (rob_alloc_is_mul),
+        .alloc_is_div           (rob_alloc_is_div),
+        .alloc_is_bru           (rob_alloc_is_bru),
         .wb_valid               (cdb_valid_r),
         .wb_idx                 (cdb_rob_idx_r),
         .wb_has_exception       (cdb_has_exception_r),
