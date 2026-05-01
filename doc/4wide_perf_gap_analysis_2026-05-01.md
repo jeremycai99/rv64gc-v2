@@ -7,347 +7,336 @@
 **Companion docs:**
 - `doc/4wide_signoff_2026-04-30.md` — structural-refactor sign-off (PARTIAL; numbers stale, see Background)
 - `doc/4wide_refactor_checklist.md` — execution checklist (all 90 items complete)
-- `doc/baseline_6wide_obsolete_2026-04-30.md` — 6-wide archive
+- `doc/baseline_6wide_obsolete_2026-04-30.md` — 6-wide archive (cross-width comparison rejected for sign-off)
 
 > ## What this doc IS and IS NOT
 >
-> **IS:** A 5-phase methodology for closing the 4-wide CM/MHz and DMIPS/MHz gaps versus
-> the MegaBoom 4-wide sign-off floor — purely data-driven, with falsifiable predictions
-> attached to every proposed RTL change.
+> **IS:** A 4-wide-absolute, data-driven methodology for closing the CM/MHz and DMIPS/MHz
+> gaps versus the MegaBoom 4-wide sign-off floor. Bubbles and stalls are measured directly
+> on the 4-wide machine; no 6-wide reference is required because sign-off is external.
 >
 > **IS NOT:** An implementation plan, a commitment to specific RTL edits, or a replacement
 > for the structural sign-off doc. The implementation plan comes from
 > `superpowers:writing-plans` invoked after this doc is approved. Specific RTL edits come
-> out of Phase E, only after Phase A–D produce a confirmed bucket-level hypothesis.
+> out of Phase D, only after Phase A–C produce a confirmed bucket-level hypothesis.
 
 ---
 
 ## 1. Background
 
-The 5-stage 4-wide refactor (Stage 1 Rename+ROB → Stage 5 Frontend+TB) merged to master
-at `aca1f33` with all functional and clockcheck gates green but with both performance
-floors missed. The CoreMark functional bug discovered post-merge (Load1 bypass slot was
-silently dropped in Stage 2) was resolved at `cd54cf1` by restoring `bypass[4]` for Load1
-and bumping `NUM_BYPASS_SRCS` 4 → 5. After the fix, the previously-reported sign-off
-numbers were exposed as inflated by an 11× BPU mistraining cascade. The real measurements
-on `cd54cf1` are:
+The 5-stage 4-wide refactor merged at `aca1f33` with all functional and clockcheck gates
+green but with both performance floors missed. The CoreMark functional bug discovered
+post-merge (Load1 bypass slot was silently dropped in Stage 2) was resolved at `cd54cf1`
+by restoring `bypass[4]` for Load1 and bumping `NUM_BYPASS_SRCS` 4 → 5. After the fix,
+the previously-reported sign-off numbers were exposed as inflated by an 11× BPU
+mistraining cascade. Real measurements on `cd54cf1`:
 
 | Workload | Cycles | Instret | IPC | Metric | MegaBoom floor | Gap |
 |---|---:|---:|---:|---|---:|---:|
 | dhrystone (100 iter) | 23,514 | 47,670 | 2.027 | **2.42 DMIPS/MHz** | 4.00 | **−39.5%** |
 | coremark iter1 | 199,452 | 332,110 | 1.665 | **5.01 CM/MHz** | 6.2 | **−19.2%** |
 | coremark iter10 | 1,860,512 | 3,197,342 | 1.719 | **5.37 CM/MHz** | 6.2 | **−13.3%** |
-| bench_loop_100 | 237 | 709 | 2.992 | (microbench) | — | — |
 
-Functional 21/21 PASS, clockcheck 3/3 PASS, all benches reach `PASS at tohost=1` under
-the tightened STOP-OK detection (also landed at `cd54cf1`).
+Functional 21/21 PASS, clockcheck 3/3 PASS, all benches reach `PASS at tohost=1`.
 
 `doc/4wide_signoff_2026-04-30.md` still cites the inflated 6.05 CM/MHz figure and needs
-a separate post-fix correction pass — that is a documentation cleanup task tracked
-separately and **out of scope for this analysis methodology**.
+a separate post-fix correction pass — out of scope for this analysis methodology.
 
 ---
 
-## 2. Problem statement
+## 2. Problem statement & framing
 
-The two open gaps have non-overlapping profiles and likely require different attributions:
+### 2.1 Why 4-wide-absolute, not 6-wide-diff
 
-- **CoreMark** — uniform narrowing penalty: 6-wide IPC 1.81 → 4-wide IPC 1.665 (−8%) on
-  the same iter1 binary. The penalty is plausibly diffuse — CDB bandwidth contention,
-  shorter bypass network on ALU dependency chains, narrower issue per cycle.
-- **Dhrystone** — acute IPC drop: 6-wide IPC 2.597 → 4-wide IPC 2.027 (−22% IPC, −20%
-  DMIPS). The drop is plausibly concentrated on the procedure-call hotpath
-  (`main → Proc_1..Proc_7 → return`, repeated per loop iteration), which Stage 2's
-  `load_wb` sideband architectural fix did not touch.
+Sign-off is external (MegaBoom 4-wide floor, Cortex-A72 stretch). `doc/baseline_6wide_obsolete_2026-04-30.md`
+explicitly rejects cross-width cycle comparison for sign-off purposes. To close the gap
+we need to **eliminate bubbles in 4-wide**, not match a different machine's behavior. In
+fact, 4-wide must *beat* 6-wide IPC on cm to clear the MegaBoom floor (need IPC ≈ 2.06;
+6-wide had 1.81), so 6-wide-matching is not even sufficient.
 
-Without per-cycle bucket-level attribution, the only options are blind RTL tweaks. That
-is the exact failure mode that produced the reflexive 3a/3b/3c "revert to make symptom go
-away" options during the cm bug investigation. **The Load1 bypass fix worked because we
-waited for trace data; the same discipline applies to closing these performance gaps.**
+Bubble/stall counters are intrinsically meaningful in 4-wide alone:
+- "ROB head was waiting Y% of cycles" — absolute fact about 4-wide
+- "Issue picked < 4 uops in Z% of cycles" — absolute fact about 4-wide
+- "Cycle-class N% of total" — absolute fact about 4-wide
+
+These tell us where the *closable* bubbles are. A 6-wide diff would only tell us "this
+machine is different from that machine" — not actionable for hitting the external floor.
+
+### 2.2 Two distinct gap profiles
+
+Initial PERF_PROFILE captures (Section 3) show the two workloads have **different**
+bottleneck signatures, requiring different attributions:
+
+- **CoreMark** — BPU mispredict-driven. 8.0% conditional-branch mispredict rate, 4343
+  flushes in 199k cycles, top mispredict PC at 100% (`0x8000235a`, in `core_list_mergesort`).
+  All structure-full counters zero. The bottleneck is in front-end recovery /
+  branch-resolution latency, not in narrowing.
+- **Dhrystone** — issue/execute bubble-dominated. BPU healthy (1.6% cond mispredict),
+  all structures non-full, but commit-count distribution skews to 2 (41% of cycles) with
+  only 6% reaching peak 4. The bottleneck is downstream of issue.
+
+Without per-cycle bubble attribution, we'd be reduced to blind RTL tweaks (the failure
+mode that produced 3a/3b/3c). The Load1 bypass fix worked because we waited for trace
+data; same discipline applies here.
 
 ---
 
-## 3. Methodology overview
+## 3. Existing 4-wide instrumentation inventory
 
-Five sequential phases. **No phase short-cuts the previous one.** Each phase is gated on
-the prior phase's deliverable. RTL changes appear only in Phase E, only after a hypothesis
-is confirmed in Phase D.
+Stage 5's `+PERF_PROFILE` plusarg already exposes a comprehensive bubble/stall picture in
+`tb_top.sv`. Phase A leverages what's already there before adding any new counters.
+
+### 3.1 What's already exposed (categorized for the 6-bucket framework)
+
+| Bucket | Existing counters |
+|---|---|
+| **Cycle-class distribution** | `commit_hist[0..6]` — cycles where commit_count = N (0–6); printed as `commit=N: count (pct%)`. **This is the bubble distribution.** |
+| **Frontend** | `flush_cyc`; loop-buffer summary (replay/body-length/forward-progress/exit-pred); committed PC diversity windows; uop-cache miss/replay/exit reasons; LB `commit_no_load` cycles |
+| **Rename + Dispatch** | `rename_stall_cyc`, `backend_stall_cyc`, `rob_full_cyc`, `dq_full_cyc`, `lq_full_cyc`, `sq_full_cyc`, `iq{0,1,2}_full_cyc`; rename slot-attribution `stall_{preg,ckpt,rob,dq,other}_cyc`; rename slot-advance summary |
+| **Issue** | `iq{0,1,2}_avg` (occupancy of 32) and `iq{0,1,2}_cnt_sum` |
+| **Execute / LSU** | `ld{0,1}_{candidate,issue,suppress}`; `sq_fwd_wait`; storeIQ blocking; p0/p1 forwarding (full/partial/wait-only/conflict); spec wake p0/p1; std IQ spec match p0/p1; sta/std/store_req issue; SQ addr-only pending avg/max + addr-to-data lag histogram |
+| **Load latency** | `load_lat_{issue,reissue,wb,untracked}`; pending avg/max; latency histogram (10 buckets: 0/1/2/3/4/5/6-7/8-15/16-31/32+); source breakdown (dchit/fwd/lmb/misalign/unknown); top-N PCs |
+| **Branch / control** | committed cond/jal/jalr/call/ret + mispredict per-type + top mispredict PCs (with taken/not-taken split); GHR + RAS restore counts; BRU early-redirect recovery |
+| **Free-list** | total allocs/releases/commits/flushes; min free/committed bitmap popcount |
+
+### 3.2 What's MISSING (Phase A.2 minimal additive instrumentation)
+
+The 6-bucket framework needs three additional counter classes that Stage 5 does not yet
+expose. These are pure additive instrumentation (counters only, no RTL logic change):
+
+1. **ROB head-stall classification.** When `commit_count < commit_count_max` AND ROB head
+   is non-empty, classify what the head is waiting on:
+   - `head_wait_load_wb_cyc` — load writeback pending
+   - `head_wait_mul_cyc` — MUL writeback pending
+   - `head_wait_div_cyc` — DIV writeback pending
+   - `head_wait_csr_cyc` — CSR serialization
+   - `head_wait_bru_cyc` — BRU resolution pending
+   - `head_wait_other_cyc` — fallthrough
+2. **Issue-stall classification.** When IQ has eligible entries AND issue_count < 4,
+   classify why:
+   - `issue_stall_operand_cyc` — operands not ready
+   - `issue_stall_fu_cyc` — functional unit contention
+   - `issue_stall_arb_cyc` — issue-port arbitration loss
+3. **Rename slot-count distribution.** `rename_slots_hist[0..4]` — cycles where N rename
+   slots were valid this cycle. (Symmetric to `commit_hist`, gives front-end bubble shape.)
+
+These counters live in `tb_top.sv` alongside existing PERF_PROFILE infrastructure. Each
+is a single integer + a single increment in the same `always_ff` block as existing
+counters. Estimated: ~80 lines added to `tb_top.sv`, no RTL logic change.
+
+### 3.3 Initial findings (already visible from existing counters)
+
+These are observations from running PERF_PROFILE on `cd54cf1` for both workloads. They
+inform the Phase B/C/D work but are NOT yet confirmed hypotheses.
+
+**CoreMark cm iter1:**
+- Commit-count distribution heavily skewed: commit=0 (23%), commit=1 (20%), commit=2 (30%),
+  commit=3 (14%), commit=4 (10%). Average commit ≈ 1.62 ≈ measured IPC 1.665. ✓
+- IQ occupancy avg: iq0=2.41, iq1=1.21, iq2=1.01 (out of 32) — IQs are barely utilized
+- Conditional-branch mispredict rate: **4256 / 52946 = 8.0%** (high for a TAGE-equipped BPU)
+- Top mispredict PC: `0x8000235a` at **103/103 = 100% mispredict rate** (in `core_list_mergesort`,
+  the same PC that surfaced in the Load1 bypass bug trace-divergence point)
+- Total flushes: 4343 ⇒ one flush every 46 cycles
+- Load latency: 99% of loads wb at 1 cycle (57107 of 57722); pending avg 0.29 — LSU healthy
+- All structure-full / rename-stall counters: 0 (or near-zero: iq0_full=20)
+
+**Dhrystone:**
+- Commit-count distribution: commit=0 (9%), commit=1 (16%), commit=2 (41%), commit=3 (25%),
+  commit=4 (6%). Average ≈ 1.97 ≈ measured IPC 2.027. ✓
+- Conditional-branch mispredict rate: **123 / 7532 = 1.6%** (BPU healthy)
+- Total flushes: 128 ⇒ one flush every 184 cycles
+- Load latency: 94% of loads wb at 1 cycle (10677 of 11385); pending avg 0.51 — LSU healthy
+- All structure-full / rename-stall counters: 0
+- Single hot mispredict PC `0x80002028` at 100/100 (likely a loop exit; intrinsic to the
+  workload at iter=100 boundary)
+
+**Implications for hypothesis ranking:**
+- *cm:* the dominant bottleneck is **BPU mispredict + flush recovery**, not narrowing. The
+  4343 flushes recover at ~5–7 cycles each ≈ 21k–30k lost cycles, accounting for 10–15% of
+  total cm cycles. The narrowing penalty (CDB/bypass/IQ) appears secondary.
+- *dhry:* the dominant bottleneck is **issue or commit-side bubbles** with no structure
+  pressure. The data lacks the head-stall classification (Phase A.2 #1) needed to
+  attribute this; that's the highest-priority Phase A.2 addition.
+
+---
+
+## 4. Methodology — 4 phases (4-wide-only)
 
 ```
-        ┌── 6-wide rebuild (commit 4f28619, ~3 min)
-        ▼
-Phase A ──► Phase B ──► Phase C ──► Phase D ──► Phase E
-counters    bucket      hypothesis  microbench  RTL changes
-collected   attribution enumeration probes      (writing-plans)
-~1 hr       ~30 min     ~30 min     ~1 hr       per-iteration
+Phase A ──► Phase B ──► Phase C ──► Phase D
+counter      bottleneck    hypothesis    RTL changes
+inventory +  ranking       enumeration   (writing-plans)
+minimal      from absolute with predicted output)
+add'l        4-wide        counter
+instr        bubble %      signature
 ```
 
-**Total Phase A–D wallclock estimate:** ~3 hours active work (excludes DSim license
-release waits and rebuild time).
+**Total wallclock estimate:** ~2 hours active work for Phases A–C (excludes DSim license
+release waits and the ~80-line counter-add patch which is its own commit cycle).
 
----
+### 4.1 Phase A — 4-wide bubble/stall inventory + minimal instrumentation
 
-## 4. Phase A — Same-binary counter collection
+**Goal:** Make the 4-wide bubble picture complete enough that Phase B can attribute every
+non-peak commit cycle to a bucket.
 
-**Goal:** Capture every existing `dsim_run.log` counter on both 6-wide (`4f28619`) and
-4-wide (`cd54cf1`) for the same binaries. No RTL changes. Pure data collection.
+**Steps:**
 
-### Steps
+1. **A.1 — capture existing counters.** Run cm iter1 + cm iter10 + dhry on `cd54cf1` with
+   `+PERF_PROFILE`. Save full dsim_run.log to
+   `benchmark_results/perf_baseline_4wide_<workload>.log`.
+2. **A.2 — add missing counters** (Section 3.2 list): head-stall classification (6
+   buckets), issue-stall classification (3 buckets), rename slot-count distribution (5
+   buckets). All in `tb_top.sv`, all gated on existing `+PERF_PROFILE`. ~80 lines.
+3. **A.3 — rebuild + re-run** all three workloads. Save logs to
+   `benchmark_results/perf_full_4wide_<workload>.log`.
+4. **A.4 — produce the bubble inventory table** at
+   `benchmark_results/perf_inventory_2026-05-01.md`: per workload, every counter as
+   absolute value AND as percentage of `mcycle`.
 
-1. **Capture 4-wide counters** at `cd54cf1` (current master). Already partially done in
-   Section 1; re-run to ensure fresh logs.
-   ```bash
-   export LD_LIBRARY_PATH=
-   for hex in dhrystone coremark coremark_iter10; do
-       bash run_dsim.sh tests/hex/${hex}.hex 5000000 +PERF_PROFILE \
-           > /tmp/4wide_${hex}.log 2>&1
-       cp dsim_run.log benchmark_results/perf_gap_4wide_${hex}.log
-   done
-   ```
+**Deliverable:** `perf_inventory_2026-05-01.md` — flat markdown table with every counter
+bucketed into one of the 6 buckets, normalized to %-of-mcycle. No interpretation yet
+(that's Phase B).
 
-2. **Rebuild 6-wide** at `4f28619` in a worktree (avoid disturbing master HEAD):
-   ```bash
-   git worktree add /tmp/rv64gc-v2-6wide 4f28619
-   cd /tmp/rv64gc-v2-6wide
-   export LD_LIBRARY_PATH=
-   bash build_dsim.sh                    # ~2-3 min
-   ```
+**Gate to Phase B:**
+- Three workloads completed at PASS+tohost=1 with PERF_PROFILE active.
+- All 6 buckets have at least one counter feeding them.
+- Sum of bucket-attributed cycles ≈ `mcycle - peak_retire_cycles` within ±10%.
 
-3. **Capture 6-wide counters** on the same binaries (these binaries pre-date the refactor
-   and have not changed):
-   ```bash
-   for hex in dhrystone coremark coremark_iter10; do
-       bash run_dsim.sh tests/hex/${hex}.hex 5000000 +PERF_PROFILE \
-           > /tmp/6wide_${hex}.log 2>&1
-       cp dsim_run.log /tmp/perf_gap_6wide_${hex}.log
-   done
-   ```
+### 4.2 Phase B — Bottleneck ranking from absolute 4-wide bubbles
 
-4. **Inventory existing counters.** Stage 5 added per-PC PERF_PROFILE buckets in
-   `tb_top.sv`; LSU/BPU/ROB summaries already emit at end of run. Catalog every counter
-   block and confirm both 6-wide and 4-wide emit the same set (or document any missing).
+**Goal:** Rank the top-3 bubble buckets per workload from absolute 4-wide percentages.
 
-5. **Produce side-by-side counter diff table** at
-   `benchmark_results/counter_diff_2026-05-01.md` covering:
-   - `IPC: mcycle / minstret / IPC`
-   - LSU LMB summary, LSU P1 conflict
-   - BPU mispredict counters (per-direction + per-type if available)
-   - ROB head stall summary
-   - CSB / D-cache store / D-cache load-miss summaries
-   - Free-list / IQ-full counters (if exposed; document if not)
-   - Per-PC PERF_PROFILE buckets (load / store / branch / serial / other)
+**Method:** For each workload:
+1. `peak_retire_cycles = ceil(minstret / PIPE_WIDTH)` — theoretical floor for the workload.
+2. `gap_cycles = mcycle - peak_retire_cycles` — the bubble budget to be attributed.
+3. Attribute `gap_cycles` to the 6 buckets:
+   - **Frontend** — flush recovery + LB miss + uop-cache miss + frontend-bubble (rename slot=0)
+   - **Rename + Dispatch** — `rename_stall_cyc` + structure-full (`*_full_cyc`)
+   - **Issue** — `issue_stall_*_cyc` (Phase A.2 addition)
+   - **Execute (non-LSU)** — MUL/DIV serial latency + BRU resolution latency
+   - **LSU** — pending-load latency × pending count + sq_fwd_wait + storeIQ block + p1 conflict
+   - **Commit** — `head_wait_*_cyc` (Phase A.2 addition, excluding LSU which is bucket 5)
+4. Compute residual; if >10%, identify what counter is missing and iterate Phase A.2.
 
-### Phase A deliverable
+**Deliverable:** `bottleneck_ranking_2026-05-01.md` — per workload, 6-bucket ranked table
+with %-of-gap attribution + top-3 callout.
 
-`benchmark_results/counter_diff_2026-05-01.md` — flat markdown table, 6-wide column +
-4-wide column + delta column for every counter, per workload. **No interpretation in this
-deliverable.** Interpretation is Phase B.
+**Gate to Phase C:**
+- Both workloads have ranked bucket attribution.
+- Residual <10% per workload.
+- Top-3 per workload identified and consistent with raw counter inspection.
 
-### Phase A gate to Phase B
-
-- Both designs successfully completed all three workloads at PASS+tohost=1.
-- Counter diff table covers all five counter blocks.
-- Any counter present in one design but not the other is documented.
-
----
-
-## 5. Phase B — Bucket attribution
-
-**Goal:** Convert raw counter deltas into per-bucket cycle attribution that explains the
-IPC gap.
-
-### Buckets (6 total)
-
-Per Section 2 design discussion, LSU is its own bucket (it spans Execute and Commit, and
-its bottlenecks are architecturally distinct from non-memory FU contention).
-
-1. **Frontend** — fetch / IFU / BPU mispredict flush / uop cache miss / loop buffer miss.
-   Cycles in which fetch was unable to deliver a full bundle to dispatch.
-2. **Rename + Dispatch** — free list empty / ROB full / IQ full / dispatch-to-IQ port
-   conflict. Cycles in which dispatch could not enqueue a renamed uop.
-3. **Issue** — IQ entries present but no ready entry / functional-unit contention /
-   issue-port arbitration loss. Cycles in which the IQ couldn't pick an eligible uop.
-4. **Execute (non-LSU)** — MUL/DIV serial latency / BRU mispredict flush penalty / CSR
-   serialization. Cycles in flight on a non-LSU FU but not making forward progress.
-5. **LSU** — LMB stall / dcache miss serialization / P1 port conflict / store-forward
-   block / store-buffer full. Separated from buckets 4 and 6 because LSU bottlenecks
-   span Execute and Commit and respond to different RTL knobs (LQ/SQ depth, MSHR count,
-   bank parallelism).
-6. **Commit (non-LSU)** — ROB head waiting on writeback for a uop on a non-LSU FU.
-
-### Method
-
-For each workload:
-1. Compute `total_cycles = mcycle`. Compute `peak_retire_cycles = ceil(minstret / PIPE_WIDTH)`.
-2. `gap_cycles = total_cycles - peak_retire_cycles`.
-3. Attribute `gap_cycles` to the 6 buckets using the available counters. The sum of
-   bucket gaps should approximate `gap_cycles` within ±10%; document any unattributed
-   residual.
-4. Compute `delta_per_bucket = bucket_gap_4wide - bucket_gap_6wide`.
-
-### Phase B deliverable
-
-A per-workload bucket gap table (6 buckets × {6-wide, 4-wide, delta}) plus a top-3
-ranked list of which buckets dominate the IPC delta. This deliverable lives in
-`benchmark_results/bucket_attribution_2026-05-01.md`.
-
-### Phase B gate to Phase C
-
-- Both workloads have a bucket attribution table.
-- Sum-of-buckets residual is documented (target ±10% of `gap_cycles`).
-- The top-3 buckets per workload are identified and not contradicted by the raw counter
-  diff.
-
----
-
-## 6. Phase C — Hypothesis enumeration
+### 4.3 Phase C — Hypothesis enumeration
 
 **Goal:** For each top-3 bucket per workload, enumerate concrete RTL hypotheses with
 predicted counter signatures.
 
-### Hypothesis template
+**Hypothesis template:**
 
 | Field | Content |
 |---|---|
 | ID | e.g., `cm-H1` |
 | Bucket | which Phase B bucket this hypothesis explains |
-| Description | one-sentence mechanism in narrowed RTL |
-| Why | specific Stage 2/3/4/5 narrowing decision that introduced the bottleneck |
-| Predicted signature | which counter elevates / regresses if hypothesis is correct |
-| Discrimination | which Phase D microbench would isolate it |
+| Description | one-sentence mechanism in narrowed 4-wide RTL |
+| Predicted signature | which counter would change (and direction) if hypothesis is correct |
+| Discrimination | which microbench would isolate it (Phase D) |
+| Expected fix shape | what RTL change family would address it (NOT the change itself) |
 
-### Initial seed hypotheses (refine or replace based on Phase B output)
-
-These are *seeds* — Phase B may invalidate any of them or surface unanticipated
-hypotheses. Do not start Phase D against this list; start Phase D against whatever
-Phase C produces *after* Phase B data lands.
+**Initial seed hypotheses** (informed by Section 3.3 findings; refine after Phase B):
 
 | ID | Bucket | Hypothesis |
 |---|---|---|
-| cm-H1 | Issue/Execute | CDB shrink 6 → 4 causes BRU/ALU writeback contention on dense cycles |
-| cm-H2 | Issue | Bypass network only covers 5 sources (3 CDB + 2 load); ALU3/DIV/CSR consumers wait an extra cycle for PRF read |
-| cm-H3 | LSU | LQ/SQ shrunk 64 → 32; cache-miss bursts may saturate LQ |
-| dhry-H1 | Issue | NUM_ALU=3 saturates on procedure-entry instruction burst (call/save-regs/argload pattern) |
-| dhry-H2 | Frontend / Rename | Checkpoint allocation back-pressure on procedure-call PUSH; restore latency on RET |
-| dhry-H3 | Frontend | BPU return-address-stack hit rate degraded for nested calls in narrowed frontend |
-| dhry-H4 | Rename+Dispatch | IQ_INT_DEPTH=24 (was 32 in 6-wide) too small for procedure-entry rename burst |
+| cm-H1 | Frontend (flush) | `0x8000235a` (data-dependent compare in mergesort) is intrinsically hard for TAGE; mispredicts at high rate, drives flush recovery |
+| cm-H2 | Frontend (flush) | TAGE training pipeline narrowed in Stage 5 trains slower than 6-wide; iter1 doesn't reach steady-state hit rate |
+| cm-H3 | Issue | NUM_ALU=3 causes ALU contention on dense cycles |
+| dhry-H1 | Commit (head wait) | ROB head waits on load WB during procedure entry (need Phase A.2 #1 to confirm) |
+| dhry-H2 | Issue | NUM_ALU=3 saturates on procedure-entry instruction burst (need Phase A.2 #2 to confirm) |
+| dhry-H3 | Frontend | BPU return-stack hit rate degraded for nested calls in narrowed frontend |
+| dhry-H4 | Issue | IQ_INT_DEPTH=24 too small for procedure-entry rename burst (would manifest as iq*_full > 0; currently 0 → likely refute) |
 
-### Phase C deliverable
+**Deliverable:** `hypothesis_table_2026-05-01.md` — one row per hypothesis, every field
+filled. Every hypothesis cites its Phase B bucket and predicted counter signature.
 
-A hypothesis table at `benchmark_results/hypothesis_table_2026-05-01.md` with one row
-per hypothesis, every field filled. Each hypothesis MUST cite the Phase B bucket it
-explains and the predicted counter signature.
-
-### Phase C gate to Phase D
-
+**Gate to Phase D:**
 - Every top-3 bucket has at least one hypothesis.
-- Every hypothesis has a predicted counter signature and a microbench-discrimination
-  pointer.
+- Every hypothesis has predicted counter signature + microbench-discrimination pointer +
+  expected-fix shape.
 - No hypothesis is "we don't know" — if a bucket dominates and we have no hypothesis,
-  return to Phase A and capture additional counters before continuing.
+  return to Phase A.2 with a more targeted counter.
 
----
+### 4.4 Phase D — Microbench probes + RTL change proposals
 
-## 7. Phase D — Microbench probes
+**Goal:** Confirm or refute hypotheses with synthetic workloads, then propose RTL changes.
 
-**Goal:** Confirm or refute hypotheses with synthetic workloads that isolate one bucket
-each.
+**Probes (5 initial; refine based on Phase B/C):**
 
-### Probe set (5 initial; add as Phase C reveals more)
-
-| Probe | Stress target | Expected isolation |
+| Probe | Stress target | Hypotheses isolated |
 |---|---|---|
-| `alu_chain_8.S` | 8-deep ALU dependency chain in tight loop | bypass + CDB (cm-H1, cm-H2) |
-| `dhry_call_mimic.S` | RV64 .S that mimics dhrystone Proc_1..Proc_7 call pattern: 4–7 nested calls per outer-loop iter, mixed-arg signatures, return-value chained into next call. **NOT a generic call_burst** — designed to reproduce dhry's specific call topology. | dhry-H1, dhry-H2, dhry-H3, dhry-H4 |
-| `load_dep_alu.S` | load → 6 dependent ALU ops, repeated | Load bypass + IQ wakeup |
-| `mixed_branch_dense.S` | 1 branch per 4 instructions, mixed taken/not-taken | BPU + flush penalty |
-| `independent_quad.S` | 4 independent ALU ops per cycle, sustained loop | Sanity check that 4-wide actually achieves IPC=4 under ideal conditions; baseline for "what's the theoretical ceiling" |
+| `alu_chain_8.S` | 8-deep ALU dependency chain | cm-H3 (issue contention) |
+| `dhry_call_mimic.S` | Dhrystone Proc_1..Proc_7 call topology mimic: 4–7 nested calls per outer-loop iter, mixed-arg, return-value chained. **Specifically modeled on dhry, not generic** | dhry-H1, H2, H3, H4 |
+| `bpu_data_dep_branch.S` | Random data-dependent branch in tight loop; mimics `0x8000235a` profile | cm-H1 (intrinsic) vs cm-H2 (training speed) |
+| `mixed_branch_dense.S` | 1 branch per 4 instructions, mixed taken/not-taken | BPU + flush penalty broadly |
+| `independent_quad.S` | 4 independent ALU per cycle, sustained loop | Sanity ceiling — does 4-wide hit IPC=4? |
 
-### Method
+**Method per probe:**
+1. Build hex via `scripts/elf2hex.py`.
+2. Run with `+PERF_PROFILE` on `cd54cf1`.
+3. Confirm: predicted bucket counter responds in predicted direction.
+4. Refute: counter doesn't respond → hypothesis is incorrect; return to Phase B.
 
-For each probe:
-1. Build hex via existing assembly toolchain (`scripts/elf2hex.py` flow).
-2. Run on **both** 6-wide (`4f28619` worktree) and 4-wide (`cd54cf1` master).
-3. Measure: cycles, instret, IPC, **and** the predicted bucket counter from Phase C.
-4. Hypothesis is *confirmed* if 4-wide bucket counter regresses vs 6-wide in the
-   direction predicted; *refuted* if not.
+**Phase D RTL change rule (formalized):**
 
-### Phase D deliverable
+Each Phase D RTL change proposal MUST include:
 
-`benchmark_results/microbench_probes_2026-05-01.md` — per-probe IPC comparison,
-predicted-vs-observed bucket counter, and per-hypothesis confirm/refute verdict.
-
-### Phase D gate to Phase E
-
-- Every Phase C hypothesis has a confirm or refute verdict.
-- At least one hypothesis per workload is confirmed (else iterate Phase B/C with more
-  data).
-- For confirmed hypotheses, predicted-vs-measured counter agreement is documented.
-
----
-
-## 8. Phase E — RTL change proposals
-
-**Out of scope for this design doc.** Phase E is the deliverable of
-`superpowers:writing-plans` invoked after this design is approved.
-
-### Phase E rule (formalized — applies to every RTL change in gap-closure work)
-
-Each RTL change proposal MUST include:
-
-1. **Files:lines** to touch (concrete, not abstract).
+1. **Files:lines** to touch (concrete).
 2. **Predicted IPC delta** on cm iter1, cm iter10, dhrystone, **and** the relevant
-   Phase D microbench. Predictions are committed to git **before** measurement, in the
-   commit message or an associated planning doc. This blocks post-hoc rationalization.
-3. **Confirmation criterion** — which counter must improve, by how much, to declare the
-   change successful.
-4. **Refutation criterion** — what observation would invalidate the underlying
-   hypothesis.
-5. **Neutral-or-better verification** — post-change, the OTHER workload (cm if dhry
-   change, dhry if cm change) must show no regression beyond ±2% IPC. Functional 21/21
-   and clockcheck 3/3 must remain PASS.
+   microbench. Predictions committed to git **before** measurement (in commit message or
+   plan doc). Blocks post-hoc rationalization.
+3. **Confirmation criterion** — which counter must improve, by how much.
+4. **Refutation criterion** — what observation would invalidate the hypothesis.
+5. **Neutral-or-better verification** — the OTHER workload (cm if dhry change, dhry if
+   cm change) must show no regression beyond ±2% IPC. Functional 21/21 + clockcheck 3/3
+   stay PASS.
 
-**The 30% rule:** if the predicted IPC delta and the measured IPC delta diverge by more
-than 30% (in either direction), the underlying hypothesis is unsound. Record the
-prediction and the actual; do not revise the prediction; return to Phase B/C with the
-new data point.
+**The 30% rule:** if predicted IPC delta and measured IPC delta diverge by >30% in either
+direction, the hypothesis is unsound. Record prediction and actual; do NOT revise the
+prediction; return to Phase B/C with the new data point.
 
-This rule binds future sessions, not just the current one. The point is to make the
-methodology falsifiable rather than narratively self-confirming.
+**Deliverable:** `microbench_probes_2026-05-01.md` (Phase D output) + per-iteration RTL
+change proposals (in writing-plans output).
 
 ---
 
-## 9. Constraints (do NOT do)
+## 5. Constraints (do NOT do)
 
-1. **No RTL changes before Phase D.** The Load1 bypass fix worked because we waited for
-   trace data; same discipline applies here. The reflexive-revert reflex (3a/3b/3c) is
-   the failure mode this methodology exists to prevent.
-2. **No cross-width raw cycle deltas alone.** Cycle counts vary with binary alignment
-   and BPU warm-up. Always normalize to bucket counters before drawing conclusions.
-3. **No single-workload optimization.** Every Phase E proposal must show neutral-or-better
-   on the other workload (per Phase E rule #5).
-4. **No new RTL counters until existing are exhausted.** Stage 5 added per-PC PROFILE;
-   Phase A inventories what's available before any instrumentation work.
-5. **No re-derivation of the cm functional bug.** RESOLVED at `cd54cf1`. Do not
-   re-investigate, re-bisect, or revisit Approach 3a/3b/3c.
-6. **No reactivation of `../rv64gc-perf-model/`.** The perf model is paused on a
-   structural toolchain dead-end (see that repo's `doc/phase_2_5_signoff.md`). Only
-   `rtl_clockcheck.py` from that repo is in active use; the rest must not be referenced.
-7. **No CDB widening as a bandage.** If Phase B/C/D points at CDB bandwidth as the cm
-   bottleneck, the Phase E proposal must be a targeted narrowing-preserving fix (e.g.,
-   smarter arbitration, additional bypass slot for ALU3, dedicated MUL writeback port),
-   NOT "restore CDB_WIDTH=6". The 4-wide design must remain 4-wide on writeback.
+1. **No RTL changes (other than Phase A.2 instrumentation) before Phase D.** The Load1
+   bypass fix worked because we waited for trace data; same discipline applies. The
+   reflexive-revert reflex (3a/3b/3c) is the failure mode this methodology prevents.
+2. **No 6-wide rebuild for sign-off comparison.** Sign-off is external (MegaBoom/A72).
+   `doc/baseline_6wide_obsolete_2026-04-30.md` already records why cross-width comparison
+   is rejected.
+3. **No single-workload optimization.** Every Phase D proposal must show neutral-or-better
+   on the other workload (Phase D rule #5).
+4. **No new RTL counters until Phase A.2 list is exhausted.** Section 3.2 enumerates the
+   minimal additive set; if Phase B residual is still >10% after those land, revisit.
+5. **No re-derivation of cm functional bug.** RESOLVED at `cd54cf1`. Do not re-investigate.
+6. **No reactivation of `../rv64gc-perf-model/`.** Paused on toolchain dead-end. Only
+   `rtl_clockcheck.py` remains in active use.
+7. **No CDB widening as a bandage.** If Phase B/C points at CDB bandwidth as the cm
+   bottleneck, the Phase D proposal must be a targeted narrowing-preserving fix (e.g.,
+   smarter arbitration, additional bypass slot, dedicated MUL writeback port) NOT
+   "restore CDB_WIDTH=6". The 4-wide design must remain 4-wide on writeback.
 
 ---
 
-## 10. Sign-off bar (re-stated for clarity)
+## 6. Sign-off bar (re-stated)
 
 | Tier | CM/MHz | DMIPS/MHz | Source |
-|---|---:|---:|---|
+|---|---:|---:|---:|---|
 | Floor — must match | ≥ 6.2 | ≥ 4.00 | MegaBoom (4-wide OoO) |
 | Stretch — must beat | ≥ 8.24 | ≥ 4.72 | ARM Cortex-A72 (3-wide OoO) |
 
-After Phase E iterations, sign-off requires **both** workloads at floor, **and**
+After Phase D iterations, sign-off requires **both** workloads at floor, **and**
 functional 21/21 + clockcheck 3/3 still PASS, **and** the post-change measurement is
 captured in a refreshed sign-off doc that supersedes `doc/4wide_signoff_2026-04-30.md`.
 
@@ -355,29 +344,22 @@ Stretch target is desired but not blocking.
 
 ---
 
-## 11. Out of scope
-
-Recorded so we don't accidentally pull them in:
+## 7. Out of scope
 
 - Reverting any narrowing decision speculatively (3a/3b/3c style).
-- Adding new architectural features unrelated to gap closure (e.g., a second LSU port,
-  new BPU table, new prefetcher class).
+- Adding new architectural features unrelated to gap closure.
 - Re-tuning 6-wide to "see what changed".
 - ASIC sign-off / synthesis QoR — separate workplan in `doc/asic_signoff_workplan.md`.
 - Cleanup of `doc/4wide_signoff_2026-04-30.md` to reflect post-fix numbers — separate
-  documentation task; should land before the gap-closure work but is independent of
-  this methodology.
+  task.
 
 ---
 
-## 12. Companion deliverable (after Phase E execution)
+## 8. Companion deliverable (after Phase D execution)
 
 A results doc `doc/4wide_perf_gap_results_<final-date>.md` will pair this design with:
 
-- Counter diff table (Phase A output)
-- Bucket attribution per workload (Phase B output)
-- Confirmed hypotheses with predicted-vs-measured IPC delta (Phase D + E output)
+- Counter inventory + bottleneck ranking (Phase A + B output)
+- Confirmed hypotheses with predicted-vs-measured IPC delta (Phase D output)
 - RTL changes landed with measured cm + dhry + clockcheck deltas
 - Refreshed sign-off table (replaces stale 6.05 number in 2026-04-30 sign-off doc)
-
-The results doc is written incrementally as each Phase E iteration completes.
