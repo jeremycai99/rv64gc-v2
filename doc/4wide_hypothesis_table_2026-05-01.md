@@ -1,6 +1,6 @@
 # 4-Wide Phase C Hypothesis Table — 2026-05-01
 
-**Source:** `benchmark_results/bottleneck_ranking_2026-05-01.md` (Phase B output)
+**Source:** `doc/4wide_bottleneck_ranking_2026-05-01.md` (Phase B output)
 **Repo HEAD:** `master @ 4a78605`
 
 This table enumerates the active hypotheses that survived Phase B's data-driven elimination. Each row is paired with a Phase D probe and an RTL fix shape (NOT a specific edit — that comes from Phase D measurement).

@@ -1,10 +1,7 @@
 # 4-Wide Performance Counter Inventory — 2026-05-01
 
 **Repo HEAD:** `master @ 4a78605` (post Task 1+2+3 instrumentation top-up)
-**Source logs:**
-- `benchmark_results/perf_full_4wide_cm_iter1.log`
-- `benchmark_results/perf_full_4wide_cm_iter10.log`
-- `benchmark_results/perf_full_4wide_dhrystone.log`
+**Source logs:** `benchmark_results/perf_full_4wide_*.log` (transient, gitignored — regenerate via `bash run_dsim.sh tests/hex/{coremark,coremark_iter10,dhrystone}.hex 5000000 +PERF_PROFILE`)
 
 **Headline numbers:**
 

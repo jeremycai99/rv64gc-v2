@@ -1,6 +1,6 @@
 # 4-Wide Bottleneck Ranking — 2026-05-01
 
-**Source:** `benchmark_results/perf_inventory_2026-05-01.md` (Phase A output)
+**Source:** `doc/4wide_perf_inventory_2026-05-01.md` (Phase A output)
 **Repo HEAD:** `master @ 4a78605`
 
 ---
