@@ -36,7 +36,7 @@
 6. **Do NOT use the 6-wide baseline (`doc/baseline_6wide_obsolete_2026-04-30.md`) as a forward comparison target.** Cross-width cycle deltas are not meaningful; sign-off is against MegaBoom + A72 only.
 7. **Do NOT touch the ~30 pre-existing uncommitted housekeeping files** (.gitignore, Makefile, build_dsim.bat, deleted *.log files). That cleanup is separate work.
 8. **Do NOT skip a stage's gate.** The whole methodology is "build + clockcheck + regress before continuing." Compounding edits across un-validated stages is exactly the failure mode the staging is designed to prevent.
-9. **Do NOT add new optimisations during the refactor.** Pure narrowing pass first; opts can be considered later, after the 4-wide baseline measures against MegaBoom.
+9. **Do NOT add new optimisations during the refactor.** Pure narrowing pass first; opts can be considered later, after the 4-wide baseline measures against MegaBoom. **Exception:** an architectural change is allowed if it is a *fix required to keep regression alive* — e.g., Stage 2's `load_wb` sideband was necessary because CDB shrink (6→4) removed the slots loads had been using for definitive wakeup, causing cache-miss ROB deadlock. Document any such exception in the commit message + here in the plan.
 
 ---
 
@@ -437,13 +437,16 @@ For each file:
 
 - [ ] **Step 2: Build**
 
-### Task 2.4: IQ depth + bypass network rewrite + int_prf port reduction
+### Task 2.4: IQ depth + bypass network rewrite + int_prf parameterization + load_wb sideband
 
-**Files:**
-- Modify: the IQ module(s) — locate via `grep -rn "NUM_INT_IQS\|issue_queue" src/rtl/core/ --include='*.sv' | head` (likely `src/rtl/core/issue/issue_queue.sv` or similar).
-- Modify: the bypass network module — locate via `grep -rn "bypass_network\|NUM_BYPASS_SRCS" src/rtl/core/ --include='*.sv' | head` (likely `src/rtl/core/execute/bypass_network.sv` or instantiated inside `core_top`).
-- Modify: `src/rtl/core/regfile/int_prf.sv` — port-list reduction 12R6W → 8R4W (deferred from Stage 1 Task 1.3 Step 2 — see deferral note there).
-- Modify: `src/rtl/core/rv64gc_core_top.sv` — int_prf instantiation port reduction (drives only 4 write ports / 8 read ports after this stage).
+**Files (locations confirmed during Stage 2 execution):**
+- Modify: `src/rtl/core/issue/issue_queue.sv` — IQ depth cascade + new `load_wb_wk_*` definitive wakeup ports (load_wb sideband fix).
+- Modify: `src/rtl/core/bypass_network.sv` — fully parametric on NUM_BYPASS_SRCS (6→4 srcs).
+- Modify: `src/rtl/core/regfile/int_prf.sv` — `PRF_WRITE_PORTS=6` made explicit; **port count NOT reduced** (12R6W is the correct target with load_wb sideband — see Task 1.3 Step 2 resolution).
+- Modify: `src/rtl/core/backend/rob.sv` — load_wb sideband ports replace the old LOAD_CDB_FIRST pattern.
+- Modify: `src/rtl/core/decode/fusion_detector.sv` — 5 fusion pairs → 3 (PIPE_WIDTH-1 max pairs across 4 dispatch slots).
+- Modify: `src/rtl/core/rv64gc_core_top.sv` — full stitching with load_wb sideband + 4-source bypass + load_wb_wk wired to all IQs.
+- Modify: `src/tb/tb_top.sv` — replaced out-of-bounds `cdb_valid[4:5]` with `load_wb_valid[0:1]` (Stage 5 file touched out-of-scope; necessary to avoid TB compile error from CDB shrink).
 
 - [ ] **Step 1: IQ depth cascade**
 
@@ -453,12 +456,14 @@ For each file:
 
   Effort: M. The mux array is the visible cost of dropping CDB_WIDTH and NUM_BYPASS_SRCS.
 
-- [ ] **Step 2b: int_prf port-list reduction 12R6W → 8R4W (deferred from Stage 1)**
+- [x] **Step 2b: ~~int_prf port-list reduction 12R6W → 8R4W~~ — RESOLVED: 12R6W is the correct steady-state target.**
 
-  - `src/rtl/core/regfile/int_prf.sv`: drop ports `read[8..11]` and `write[4..5]`; renumber if needed; loops `for (wp = 0; wp < 6; wp++)` → `< NUM_BYPASS_SRCS` or `< CDB_WIDTH`.
-  - `src/rtl/core/rv64gc_core_top.sv`: int_prf instantiation drives only 4 write ports + 8 read ports (consistent with `NUM_ALU=3 + NUM_BRU=2 = 5 FUs × 2 srcs = 10` — wait, that's 10 reads; 8R supports 4 ALU × 2srcs only.  RECONFIRM port count vs FU read demand before reducing to 8R.  May need 10R; planning doc says 8R but that assumed NUM_ALU=3 + ports/FU < 2; verify against the actual FU-to-PRF read connections).
+  Outcome from Stage 2 (commit `d566919`): the planning doc's 8R4W target was based on the assumption that loads write through CDB. With the load_wb sideband architecture (added in Stage 2 to fix cache-miss deadlock), loads write through 2 dedicated ports separate from CDB. So:
 
-  **Note:** the planning doc said 8R4W, but verify the actual minimum read-port count needed by the new FU mix (NUM_ALU=3, NUM_BRU=2, plus LSU AGU srcs).  If the analysis shows 10R or 12R is required, keep the higher count — sign-off on a port-starved PRF is not the goal.
+  - **Read-port demand:** NUM_ALU=3 × 2 srcs + NUM_BRU=2 × 2 srcs = 10 reads minimum, plus LSU AGU srcs. **12R kept** — meets demand with margin.
+  - **Write-port demand:** CDB_WIDTH=4 (ALU/BRU) + load_wb sideband=2 = 6 writes. **6W kept** — exact fit.
+
+  No port reduction in Stage 2; the deferral note in Task 1.3 Step 2 is now superseded by this architectural reality. `int_prf.sv` was given a new `PRF_WRITE_PORTS=6` parameter to make the count explicit; depth was already reduced to 160 in Stage 1.
 
 - [ ] **Step 3: Build**
 
