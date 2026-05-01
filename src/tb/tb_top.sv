@@ -436,6 +436,11 @@ module tb_top
     integer iq1_full_cyc;
     integer iq2_full_cyc;
     integer iq0_cnt_sum, iq1_cnt_sum, iq2_cnt_sum;
+    // Issue-stall classification (Phase A.2): per-cycle bucketing of why
+    // issued count was less than peak. OR semantics across all 3 IQs.
+    integer issue_stall_operand_cyc;   // entries valid but no src ready
+    integer issue_stall_fu_cyc;        // operands ready but FU suppress dropped grant
+    integer issue_stall_arb_cyc;       // eligible_count > NUM_SELECT (selection ceiling)
     integer backend_stall_cyc;
     integer flush_cyc;
     integer perf_total_cyc;
@@ -827,6 +832,9 @@ module tb_top
             stall_rob_cyc      <= 0;
             stall_dq_cyc       <= 0;
             stall_other_cyc    <= 0;
+            issue_stall_operand_cyc <= 0;
+            issue_stall_fu_cyc      <= 0;
+            issue_stall_arb_cyc     <= 0;
             prev_p1_retry_valid <= 1'b0;
         end else if (pp_en) begin
             automatic int frontend_bin;
@@ -882,6 +890,47 @@ module tb_top
             iq0_cnt_sum <= iq0_cnt_sum + u_core.u_iq0.count_r;
             iq1_cnt_sum <= iq1_cnt_sum + u_core.u_iq1.count_r;
             iq2_cnt_sum <= iq2_cnt_sum + u_core.u_iq2.count_r;
+            // Per-IQ issue-stall classification (Phase A.2). Cycle-OR semantics:
+            // a cycle counts toward a bucket if ANY IQ matches that bucket.
+            // NUM_SELECT: u_iq0=2, u_iq1=1, u_iq2=1.
+            begin
+                automatic logic any_iq_operand_stall;
+                automatic logic any_iq_fu_stall;
+                automatic logic any_iq_arb_stall;
+                automatic int   elig_cnt, issue_cnt, valid_cnt;
+
+                any_iq_operand_stall = 1'b0;
+                any_iq_fu_stall      = 1'b0;
+                any_iq_arb_stall     = 1'b0;
+
+                // IQ0 (NUM_SELECT=2)
+                elig_cnt  = $countones(u_core.u_iq0.eligible);
+                issue_cnt = $countones(u_core.u_iq0.issue_valid);
+                valid_cnt = u_core.u_iq0.count_r;
+                if (valid_cnt > 0 && elig_cnt == 0) any_iq_operand_stall = 1'b1;
+                if (elig_cnt > 0 && issue_cnt < elig_cnt && issue_cnt < 2) any_iq_fu_stall = 1'b1;
+                if (elig_cnt > 2) any_iq_arb_stall = 1'b1;
+
+                // IQ1 (NUM_SELECT=1)
+                elig_cnt  = $countones(u_core.u_iq1.eligible);
+                issue_cnt = $countones(u_core.u_iq1.issue_valid);
+                valid_cnt = u_core.u_iq1.count_r;
+                if (valid_cnt > 0 && elig_cnt == 0) any_iq_operand_stall = 1'b1;
+                if (elig_cnt > 0 && issue_cnt < elig_cnt && issue_cnt < 1) any_iq_fu_stall = 1'b1;
+                if (elig_cnt > 1) any_iq_arb_stall = 1'b1;
+
+                // IQ2 (NUM_SELECT=1)
+                elig_cnt  = $countones(u_core.u_iq2.eligible);
+                issue_cnt = $countones(u_core.u_iq2.issue_valid);
+                valid_cnt = u_core.u_iq2.count_r;
+                if (valid_cnt > 0 && elig_cnt == 0) any_iq_operand_stall = 1'b1;
+                if (elig_cnt > 0 && issue_cnt < elig_cnt && issue_cnt < 1) any_iq_fu_stall = 1'b1;
+                if (elig_cnt > 1) any_iq_arb_stall = 1'b1;
+
+                if (any_iq_operand_stall) issue_stall_operand_cyc <= issue_stall_operand_cyc + 1;
+                if (any_iq_fu_stall)      issue_stall_fu_cyc      <= issue_stall_fu_cyc + 1;
+                if (any_iq_arb_stall)     issue_stall_arb_cyc     <= issue_stall_arb_cyc + 1;
+            end
             if (u_core.backend_stall)   backend_stall_cyc <= backend_stall_cyc + 1;
             if (u_core.flush_out.valid) flush_cyc         <= flush_cyc + 1;
             if (u_core.lb_active &&
@@ -1512,6 +1561,10 @@ module tb_top
             $display("  stall_rob    : %0d", stall_rob_cyc);
             $display("  stall_dq     : %0d", stall_dq_cyc);
             $display("  stall_other  : %0d", stall_other_cyc);
+            $display("Issue-stall classification (cycle-based, OR across all IQs):");
+            $display("  operand_not_ready: %0d", issue_stall_operand_cyc);
+            $display("  fu_contention   : %0d", issue_stall_fu_cyc);
+            $display("  arb_loss        : %0d", issue_stall_arb_cyc);
             $display("Average IQ occupancy (of 32):");
             $display("  iq0_avg: %0d.%02d", iq0_cnt_sum / perf_total_cyc,
                      ((iq0_cnt_sum * 100) / perf_total_cyc) % 100);
