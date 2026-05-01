@@ -129,15 +129,22 @@ Closing requires multiple small accretive wins or a structural change.
 
 ### DHRY (2.42 DMIPS/MHz, target 4.00; 65% improvement needed)
 
-- 6-wide pre-pivot was at 3.04 DMIPS/MHz on the same binary — also 24%
-  short of the 4.00 floor. **Half of the dhry gap is binary-related**,
-  not RTL-related.
-- 4-wide loses 0.62 DMIPS vs 6-wide (~20% IPC drop on dhry), driven
-  primarily by the procedure-call hot-path's load-at-head behavior
-  (top 2 PCs `0x80002002`, `0x80002022` account for 71% of all load
-  head-wait cycles).
-- Even with full RTL gap-closure, the binary-bound ceiling is ~3.04
-  DMIPS unless compiler/binary work is also done.
+The gap is essentially all RTL-side. Composition:
+- **4-wide narrowing penalty: ~20%** (4-wide vs 6-wide on same binary;
+  6-wide hit 3.04, 4-wide hits 2.42). Driven primarily by the
+  procedure-call hot-path's load-at-head behavior — top 2 PCs
+  `0x80002002`, `0x80002022` account for 71% of all load head-wait.
+- **Design gap to MegaBoom: ~23%** — even our 6-wide at 3.04 was short
+  of MegaBoom's 3.93 DMIPS/MHz (the "4.00" is a round-up; canonical
+  source SonicBOOM paper, Zhao et al., CARRV 2020) on the same
+  `riscv-tests` dhrystone convention. MegaBoom's advantages are
+  architectural: SFB (short-forward-branch fold-into-predication),
+  better BTB/uBTB, TAGE-L loop predictor.
+- **Binary contribution: 1–3%** (negligible). Both rv64gc-v2 (`-O2
+  -march=rv64gc_zba_zbb_zbs_zicond -mabi=lp64d`) and BOOM/Chipyard
+  (`-O2 -ffast-math -DPREALLOCATE=1` + `#pragma no-inline` driver)
+  are convention-equivalent. Bitmanip/Zicond have near-zero impact
+  on dhrystone. The 2.42 → 4.00 gap is **>95% RTL-side**.
 
 ---
 
@@ -148,16 +155,28 @@ clean (21/21, clockcheck 3/3), the architectural narrowing is correct
 (5 stages landed cleanly), and the cm functional bug introduced by
 narrowing was diagnosed and fixed.
 
-**Track follow-up work in three separate streams:**
+**Follow-up RTL candidates** (each its own brainstorm + plan cycle),
+ranked by predicted IPC win × ease × confidence:
 
-1. **Flush-recovery latency narrowing** (RTL — small win ~5% on cm)
-2. **Dcache hit-latency reduction** (RTL — major architectural change,
-   targets ~17% load-wait reduction)
-3. **dhry compiler/binary investigation** (out of RTL scope — targets
-   ~24% binary-bound gap)
+1. **Short-Forward-Branch (SFB) fold-into-predication.** SonicBOOM
+   paper credits this with up to 1.7× IPC on branch-dense sequences.
+   Predicted: 5–15% on dhry, 3–8% on cm. Touches decode + rename +
+   ALU predicate handling. Invasive but bounded.
+2. **TAGE-L loop predictor verification.** Confirm rv64gc-v2's loop
+   predictor matches MegaBoom's TAGE-L (with loop-length tracking).
+   Predicted: 2–5% on cm.
+3. **uBTB / next-line predictor sizing.** Compare entry counts vs
+   MegaBoom; easy parameter tweaks if undersized. Predicted: 1–3%.
+4. **Flush-recovery latency narrowing.** ~5% cm if reducible.
+5. **Speculative wakeup at issue (more aggressive).** Risk: spec failure
+   recovery cost.
 
-Each stream warrants its own brainstorm + plan cycle, gated by the same
-data-driven discipline that produced this analysis.
+**Explicitly OUT of follow-up consideration** (per BOOM research):
+- Dcache hit latency 2→1: structural (VIPT + way-prediction), NOT
+  minimal; rv64gc-v2 already faster than BOOM here (BOOM 4-cycle
+  load-to-use vs ours ~3-cycle).
+- dhry compiler/binary investigation: 1–3% contribution, won't move
+  the needle.
 
 **Reference for follow-up sessions:**
 - Methodology + plan: `doc/4wide_perf_gap_{analysis,plan}_2026-05-01.md`

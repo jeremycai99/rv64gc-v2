@@ -32,17 +32,38 @@ as the design allows.
      inefficiencies rather than concentrated in one fixable bottleneck.
 
 2. **dhry gap (currently 2.42 DMIPS/MHz vs floor 4.00; −39.5%) is
-   partially binary-side** — 6-wide pre-pivot was at 3.04 DMIPS/MHz
-   (also 24% short of floor). The 4-wide design loses 0.62 DMIPS
-   (~20%) vs the 6-wide on the same binary; the remaining ~24% gap
-   is intrinsic to the binary/compiler. Closing this gap purely via
-   RTL is unlikely.
+   essentially all RTL-side** (compiler/binary contribution ≤ 3%).
+   Composition:
+   - **4-wide narrowing penalty: ~20%** (4-wide vs 6-wide on same binary;
+     6-wide hit 3.04 DMIPS, 4-wide hits 2.42)
+   - **Design gap to MegaBoom: ~23%** — even our 6-wide at 3.04 was
+     short of MegaBoom's 3.93 DMIPS/MHz on the same `riscv-tests`
+     dhrystone convention (`-O2`, `#pragma no-inline`). MegaBoom's
+     advantages per the SonicBOOM paper (Zhao et al., CARRV 2020) are
+     architectural: SFB (short-forward-branch fold-into-predication,
+     claimed up to 1.7× IPC on some sequences), better BTB/uBTB,
+     TAGE-L loop predictor, dual-load LSU.
 
-**Recommendation:** PARTIAL-FLOOR sign-off (current state) plus a
-separate compiler/binary track for dhry. Specific architectural changes
-(e.g., flush recovery latency narrowing, dcache hit latency reduction)
-are listed below as follow-up candidates but each would be its own
-investigation, not gap-closure-by-iteration.
+**Recommendation:** PARTIAL-FLOOR sign-off (current state). Both gaps
+are RTL-side and concentrated in known mechanisms; closing requires
+architectural feature additions (SFB, better BTB, etc.), each its own
+brainstorm + plan cycle.
+
+**CORRECTION TO PRIOR DRAFT (2026-05-01 17:00):** An earlier draft of
+this doc attributed ~24% of the dhry gap to "binary/compiler" and
+listed "dcache hit latency reduction (2 → 1 cycle)" as a follow-up
+candidate. Both claims were wrong:
+- BOOM/Chipyard dhrystone convention is `-O2 -ffast-math -DPREALLOCATE=1`
+  with `#pragma GCC optimize("no-inline")`. Our build (`-O2
+  -march=rv64gc_zba_zbb_zbs_zicond -mabi=lp64d`) is convention-equivalent;
+  Zbb/Zicond have near-zero impact on dhry. Binary contribution is
+  1–3%, not 24%.
+- BOOM's dcache is a 3-stage pipeline (S0/S1/S2) with 4-cycle
+  load-to-use (MegaBoom config) or 5-cycle (LargeBoom). rv64gc-v2's
+  2-cycle hit / ~3-cycle load-to-use is *already faster than BOOM*.
+  Industry convention (A72 = 4, A73 = 3, M1 = 3–4, BOOM = 4–5,
+  U74 = 2) puts 1-cycle outside the field — it requires VIPT + way
+  prediction, a structural rework, not a parameter flip.
 
 ---
 
@@ -134,20 +155,44 @@ Load1 bypass fix landing).
 ## Follow-up RTL candidates (out of scope for this methodology;
 each would require its own brainstorm + plan cycle)
 
-1. **Flush recovery latency narrowing.** Currently each cm mispredict
-   costs ~5-7 cycles of recovery. If reduced to 3-4 cycles via a
-   shorter flush pipe, ~5% of cm gap recoverable. Investigation
-   needed: trace flush-to-redirect cycle path in core_top.
-2. **Dcache hit latency reduction (2 → 1 cycle).** Would tighten
-   load-at-head intrinsic cost by ~50%. Risk: cycle time / area trade.
-   Major architectural change; would require RTL refactor of dcache
-   tag-check pipeline.
-3. **Speculative wakeup at issue (not at WB).** Already partially
+Ranked by predicted IPC win × ease × confidence (sourced from the
+SonicBOOM paper and BOOM v4 source — see references):
+
+1. **Short-Forward-Branch (SFB) fold-into-predication** — biggest
+   expected win for both cm and dhry. The BOOM team credits this with
+   up to 1.7× IPC on branch-dense sequences. Mechanism: detect short
+   forward branches at decode, fold the branch + small target block
+   into a predicated micro-op, eliminating the branch entirely (no
+   prediction needed → no mispredict). Touches: decode, rename, ALU
+   predicate handling. Invasive but bounded. Predicted: 5–15% IPC win
+   on dhry (procedure-call-heavy), 3–8% on cm.
+2. **TAGE-L loop predictor verification.** Confirm rv64gc-v2's loop
+   predictor is TAGE-L equivalent (with loop length tracking). If it's
+   simpler TAGE without loop tagging, MegaBoom's loop-handling advantage
+   may explain part of cm's mispredict-rate gap on regular loops.
+   Predicted: 2–5% on cm if upgrade needed.
+3. **uBTB / next-line predictor sizing.** Compare entry counts vs
+   MegaBoom (uBTB 64+ entries, NLP 32+ entries). Easy parameter
+   adjustments if undersized. Predicted: 1–3% on both workloads.
+4. **Flush recovery latency narrowing.** Each cm mispredict costs
+   ~5–7 cycles of recovery. If reduced to 3–4 cycles via shorter flush
+   pipe, ~5% of cm gap recoverable. Investigation needed: trace
+   flush-to-redirect cycle path in core_top.
+5. **Speculative wakeup at issue (not at WB).** Already partially
    present (`spec_wake_p0/p1` counters non-zero), but could be more
    aggressive. Risk: recovery cost on speculation failure.
-4. **Compiler/binary investigation for dhry.** Build dhrystone with
-   different `-O` levels and compare instret + IPC. The 6-wide-also-
-   misses-floor data point suggests binary contribution.
+
+**Explicitly OUT of follow-up consideration (per BOOM research findings):**
+- Dcache hit latency 2→1: structural, NOT minimal; rv64gc-v2 already
+  faster than BOOM on this axis
+- dhry compiler/binary investigation: contribution is 1–3%, won't move
+  the needle on the −39.5% gap
+
+**References:**
+- SonicBOOM paper: Zhao et al., CARRV 2020 — https://carrv.github.io/2020/papers/CARRV2020_paper_15_Zhao.pdf
+- BOOM v4 LSU source: https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/lsu/lsu.scala
+- BOOM Memory System docs: https://docs.boom-core.org/en/latest/sections/memory-system.html
+- riscv-tests dhrystone: https://github.com/riscv-software-src/riscv-tests/tree/master/benchmarks/dhrystone
 
 ---
 
