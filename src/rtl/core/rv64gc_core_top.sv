@@ -69,7 +69,9 @@ module rv64gc_core_top
     logic [INT_PRF_DEPTH-1:0] preg_ready_table_comb;
 
     // =========================================================================
-    // CDB signals (6 writeback buses)
+    // CDB signals (CDB_WIDTH=4 wakeup broadcast buses: ALU0,ALU1,ALU2,ALU3/DIV)
+    // Load writeback is separate: loads use speculative wakeup, so they do not
+    // need a CDB broadcast slot; they write PRF via prf_wen[4:5] directly.
     // =========================================================================
     logic [CDB_WIDTH-1:0]     cdb_valid;
     logic [PHYS_REG_BITS-1:0] cdb_tag  [0:CDB_WIDTH-1];
@@ -87,6 +89,21 @@ module rv64gc_core_top
     logic [11:0]              cdb_csr_addr     [0:CDB_WIDTH-1];
     logic [63:0]              cdb_csr_wdata    [0:CDB_WIDTH-1];
     logic [1:0]               cdb_csr_op       [0:CDB_WIDTH-1];
+
+    // =========================================================================
+    // Load writeback signals (separate from CDB wakeup broadcast)
+    // Loads use speculative wakeup (spec_wk) for IQ wake-up, so they do not
+    // need slots in the CDB broadcast array.  These signals drive:
+    //   - PRF write ports [4:5] (load result writeback)
+    //   - ROB writeback (load completion + exception status)
+    //   - Bypass network source [3] (Load0 combinational, for 2-cycle load)
+    // =========================================================================
+    logic [1:0]               load_wb_valid;      // [0]=Load0, [1]=Load1
+    logic [PHYS_REG_BITS-1:0] load_wb_pdst  [0:1];
+    logic [ROB_IDX_BITS-1:0]  load_wb_rob_idx [0:1];
+    logic [63:0]              load_wb_data  [0:1];
+    logic [1:0]               load_wb_has_exception;
+    logic [3:0]               load_wb_exc_code [0:1];
 
     // =========================================================================
     // Registered CDB (1-cycle delayed) for wakeup / ROB writeback / preg_ready
@@ -112,11 +129,22 @@ module rv64gc_core_top
     logic [1:0]               cdb_csr_op_r       [0:CDB_WIDTH-1];
 
     // =========================================================================
-    // Bypass sources (6 sources: ALU0, ALU1, ALU2, ALU3, MUL, Load0)
+    // Registered load writeback sideband (1-cycle delay for ROB writeback).
+    // Combinational load_wb_* declared below (after load_wb_valid assignment block).
     // =========================================================================
-    logic [5:0]               bypass_valid;
-    logic [PHYS_REG_BITS-1:0] bypass_tag  [0:5];
-    logic [63:0]              bypass_data [0:5];
+    logic [1:0]               load_wb_valid_r;
+    logic [PHYS_REG_BITS-1:0] load_wb_pdst_r   [0:1];
+    logic [ROB_IDX_BITS-1:0]  load_wb_rob_idx_r [0:1];
+    logic [1:0]               load_wb_has_exception_r;
+    logic [3:0]               load_wb_exc_code_r [0:1];
+
+    // =========================================================================
+    // Bypass sources (NUM_BYPASS_SRCS=4: ALU0/BRU, ALU1/BRU1, ALU2/MUL, Load0)
+    // ALU3/DIV/CSR and Load1 are not bypassed; consumers fall back to PRF.
+    // =========================================================================
+    logic [NUM_BYPASS_SRCS-1:0]    bypass_valid;
+    logic [PHYS_REG_BITS-1:0]      bypass_tag  [0:NUM_BYPASS_SRCS-1];
+    logic [63:0]                    bypass_data [0:NUM_BYPASS_SRCS-1];
 
     // =========================================================================
     // 1. FETCH UNIT
@@ -1348,6 +1376,10 @@ module rv64gc_core_top
         .sta_wb_rob_idx         (lsu_sta_wb_rob_idx_r),
         .std_wb_valid           (lsu_std_wb_valid_r),
         .std_wb_rob_idx         (lsu_std_wb_rob_idx_r),
+        .load_wb_valid_r        (load_wb_valid_r),
+        .load_wb_idx_r          (load_wb_rob_idx_r),
+        .load_wb_has_exception_r (load_wb_has_exception_r),
+        .load_wb_exc_code_r     (load_wb_exc_code_r),
         .ordering_violation_valid   (lsu_ordering_violation),
         .ordering_violation_rob_idx (lsu_violation_rob_idx),
         .replay_valid               (replay_valid),
@@ -1729,6 +1761,10 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
+        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_tag0  (load_wb_pdst[0]),
+        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq0_issue_valid),
@@ -1765,6 +1801,10 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
+        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_tag0  (load_wb_pdst[0]),
+        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq1_issue_valid_s),
@@ -1801,6 +1841,10 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
+        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_tag0  (load_wb_pdst[0]),
+        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq2_issue_valid_s),
@@ -1838,6 +1882,10 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
+        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_tag0  (load_wb_pdst[0]),
+        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(iq_load_issue_candidate_valid),
         .issue_valid     (iq_load_issue_valid),
@@ -1871,6 +1919,10 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
+        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_tag0  (load_wb_pdst[0]),
+        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq_store_issue_valid_s),
@@ -1909,6 +1961,10 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
+        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_tag0  (load_wb_pdst[0]),
+        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
         .issue_valid     (iq_std_issue_valid_s),
@@ -1946,12 +2002,22 @@ module rv64gc_core_top
 
     // =========================================================================
     // 8. INTEGER PRF (12R6W)
+    // 12 read ports: 4 IQ pairs × 2 operands + 2 load AGU + 2 store (AGU+data)
+    // 6 write ports: CDB[0:3] (ALU/MUL/DIV/CSR) + 2 load writeback
+    //   PRF_WRITE_PORTS=6 is kept independent of CDB_WIDTH=4 because:
+    //   - The CDB_WIDTH=4 broadcast covers ALU0/BRU, ALU1/BRU1, ALU2/MUL,
+    //     ALU3/DIV/CSR (wakeup broadcast reduced to 4 tags/cycle).
+    //   - Load0 and Load1 writeback through separate prf_wen[4:5] signals
+    //     (loads use speculative wakeup, not the main CDB broadcast path).
+    //   - Read count: IQ0×2+IQ1×1+IQ2×1=4 FU slots × 2 srcs=8R for ALU/BRU,
+    //     plus 2 load AGU reads + STA rs1 + STD rs2 = 12R structurally required.
+    //   Planning-doc target of 8R was incorrect; 12R kept to avoid port starvation.
     // =========================================================================
     logic [PHYS_REG_BITS-1:0] prf_raddr [0:11];
     logic [63:0]              prf_rdata [0:11];
-    logic [5:0]               prf_wen;
-    logic [PHYS_REG_BITS-1:0] prf_waddr [0:5];
-    logic [63:0]              prf_wdata [0:5];
+    logic [PRF_WRITE_PORTS-1:0] prf_wen;
+    logic [PHYS_REG_BITS-1:0] prf_waddr [0:PRF_WRITE_PORTS-1];
+    logic [63:0]              prf_wdata [0:PRF_WRITE_PORTS-1];
 
     int_prf u_int_prf (
         .clk   (clk),
@@ -2779,42 +2845,21 @@ module rv64gc_core_top
         cdb_branch_mispredict[3] = 1'b0;
     end
 
-    // CDB[4]: Load 0
+    // Load writeback: separate from CDB wakeup broadcast (loads use spec_wk)
+    // These drive PRF write ports [4:5] and ROB completion directly.
     always_comb begin
-        cdb_valid[4]            = lsu_load_wb_valid[0];
-        cdb_tag[4]              = lsu_load_wb_pdst[0];
-        cdb_rob_idx[4]          = lsu_load_wb_rob_idx[0];
-        cdb_data[4]             = lsu_load_wb_data[0];
-        cdb_has_exception[4]    = lsu_load_wb_has_exception[0];
-        cdb_exc_code[4]         = lsu_load_wb_exc_code[0];
-        cdb_is_branch[4]       = 1'b0;
-        cdb_branch_taken[4]    = 1'b0;
-        cdb_branch_target[4]   = 64'd0;
-        cdb_branch_taken_target[4] = 64'd0;
-        cdb_branch_mispredict[4] = 1'b0;
-        cdb_csr_we[4]          = 1'b0;
-        cdb_csr_addr[4]        = 12'd0;
-        cdb_csr_wdata[4]       = 64'd0;
-        cdb_csr_op[4]          = 2'd0;
-    end
-
-    // CDB[5]: Load 1
-    always_comb begin
-        cdb_valid[5]            = lsu_load_wb_valid[1];
-        cdb_tag[5]              = lsu_load_wb_pdst[1];
-        cdb_rob_idx[5]          = lsu_load_wb_rob_idx[1];
-        cdb_data[5]             = lsu_load_wb_data[1];
-        cdb_has_exception[5]    = lsu_load_wb_has_exception[1];
-        cdb_exc_code[5]         = lsu_load_wb_exc_code[1];
-        cdb_is_branch[5]       = 1'b0;
-        cdb_branch_taken[5]    = 1'b0;
-        cdb_branch_target[5]   = 64'd0;
-        cdb_branch_taken_target[5] = 64'd0;
-        cdb_branch_mispredict[5] = 1'b0;
-        cdb_csr_we[5]          = 1'b0;
-        cdb_csr_addr[5]        = 12'd0;
-        cdb_csr_wdata[5]       = 64'd0;
-        cdb_csr_op[5]          = 2'd0;
+        load_wb_valid[0]         = lsu_load_wb_valid[0];
+        load_wb_pdst[0]          = lsu_load_wb_pdst[0];
+        load_wb_rob_idx[0]       = lsu_load_wb_rob_idx[0];
+        load_wb_data[0]          = lsu_load_wb_data[0];
+        load_wb_has_exception[0] = lsu_load_wb_has_exception[0];
+        load_wb_exc_code[0]      = lsu_load_wb_exc_code[0];
+        load_wb_valid[1]         = lsu_load_wb_valid[1];
+        load_wb_pdst[1]          = lsu_load_wb_pdst[1];
+        load_wb_rob_idx[1]       = lsu_load_wb_rob_idx[1];
+        load_wb_data[1]          = lsu_load_wb_data[1];
+        load_wb_has_exception[1] = lsu_load_wb_has_exception[1];
+        load_wb_exc_code[1]      = lsu_load_wb_exc_code[1];
     end
 
     // =========================================================================
@@ -2884,13 +2929,37 @@ module rv64gc_core_top
     end
 
     // =========================================================================
-    // PRF Write Port Assignment
-    //   Write[0]: ALU0/BRU
-    //   Write[1]: ALU1
-    //   Write[2]: ALU2/MUL
-    //   Write[3]: ALU3/DIV
-    //   Write[4]: Load 0
-    //   Write[5]: Load 1
+    // Load writeback sideband register (1-cycle delay, for ROB writeback)
+    // Stage 2: loads use load_wb sideband instead of CDB broadcast.
+    // Combinational load_wb feeds: bypass network, PRF writes, preg_ready_table.
+    // Registered load_wb_r feeds: ROB ready-bit updates.
+    // =========================================================================
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_out.valid) begin
+            load_wb_valid_r         <= 2'b00;
+            load_wb_has_exception_r <= 2'b00;
+        end else begin
+            load_wb_valid_r[0]         <= load_wb_valid[0];
+            load_wb_pdst_r[0]          <= load_wb_pdst[0];
+            load_wb_rob_idx_r[0]       <= load_wb_rob_idx[0];
+            load_wb_has_exception_r[0] <= load_wb_has_exception[0];
+            load_wb_exc_code_r[0]      <= load_wb_exc_code[0];
+            load_wb_valid_r[1]         <= load_wb_valid[1];
+            load_wb_pdst_r[1]          <= load_wb_pdst[1];
+            load_wb_rob_idx_r[1]       <= load_wb_rob_idx[1];
+            load_wb_has_exception_r[1] <= load_wb_has_exception[1];
+            load_wb_exc_code_r[1]      <= load_wb_exc_code[1];
+        end
+    end
+
+    // =========================================================================
+    // PRF Write Port Assignment (PRF_WRITE_PORTS=6)
+    //   Write[0]: ALU0/BRU         (CDB[0])
+    //   Write[1]: ALU1/BRU1        (CDB[1])
+    //   Write[2]: ALU2/MUL         (CDB[2])
+    //   Write[3]: ALU3/DIV/CSR     (CDB[3])
+    //   Write[4]: Load 0           (load_wb[0] — separate from CDB broadcast)
+    //   Write[5]: Load 1           (load_wb[1] — separate from CDB broadcast)
     // =========================================================================
     assign prf_wen[0]   = cdb_valid[0] && (cdb_tag[0] != '0);
     assign prf_waddr[0] = cdb_tag[0];
@@ -2908,58 +2977,55 @@ module rv64gc_core_top
     assign prf_waddr[3] = cdb_tag[3];
     assign prf_wdata[3] = cdb_data[3];
 
-    assign prf_wen[4]   = cdb_valid[4] && (cdb_tag[4] != '0);
-    assign prf_waddr[4] = cdb_tag[4];
-    assign prf_wdata[4] = cdb_data[4];
+    assign prf_wen[4]   = load_wb_valid[0] && (load_wb_pdst[0] != '0);
+    assign prf_waddr[4] = load_wb_pdst[0];
+    assign prf_wdata[4] = load_wb_data[0];
 
-    assign prf_wen[5]   = cdb_valid[5] && (cdb_tag[5] != '0);
-    assign prf_waddr[5] = cdb_tag[5];
-    assign prf_wdata[5] = cdb_data[5];
+    assign prf_wen[5]   = load_wb_valid[1] && (load_wb_pdst[1] != '0);
+    assign prf_waddr[5] = load_wb_pdst[1];
+    assign prf_wdata[5] = load_wb_data[1];
 
     // =========================================================================
-    // Bypass source wiring
-    //   [0]: ALU0/BRU  [1]: ALU1  [2]: ALU2/MUL  [3]: ALU3/DIV
-    //   [4]: Load 0    [5]: Load 1
-    // =========================================================================
-    // For ALU sources [0..3]: use REGISTERED CDB.  ALU producers wake their
+    // Bypass source wiring (4-wide: NUM_BYPASS_SRCS=4)
+    //   [0]: ALU0/BRU (registered CDB[0])
+    //   [1]: ALU1/BRU1 (registered CDB[1])
+    //   [2]: ALU2/MUL (registered CDB[2])
+    //   [3]: Load0 (combinational CDB[4] — 2-cycle load latency)
+    //
+    // Dropped vs 6-wide:
+    //   - ALU3/DIV/CSR (CDB[3]): DIV is multi-cycle, bypass rarely fires;
+    //     CSR is infrequent and serialised; consumers fall back to PRF read.
+    //   - Load1 (CDB[5]): second load port consumers fall back to PRF read
+    //     (adds 1 cycle latency on load-use for the second load port only).
+    //
+    // For ALU sources [0..2]: use REGISTERED CDB.  ALU producers wake their
     // consumers via the registered cdb_r path (1 cycle after compute), and
     // by then the PRF write has already latched, so bypass-from-cdb_r is
     // semantically equivalent to PRF read but cuts the read mux.  No
     // combinational loop because cdb_r is registered.
     //
-    // For LOAD sources [4..5]: use COMBINATIONAL CDB.  A load AGU at T+0
+    // For LOAD source [3]: use COMBINATIONAL CDB.  A load AGU at T+0
     // sets spec_wakeup at T+1 (load _r stage), the IQ latches src1_ready at
     // T+2 (next clock edge), and the consumer issues at T+2 — exactly the
     // cycle the load result is on the combinational CDB (load_wb fires at
     // the _rr stage = T+2).  The PRF write does not latch until T+3, so
     // the consumer's PRF read at T+2 still returns the OLD value; the
-    // combinational bypass is the only path that delivers the load value
-    // to the consumer at T+2.  No combinational loop because loads do not
-    // chain into a same-cycle producer (the load result drives consumers,
-    // and consumer ALUs only feed cdb_r the next cycle).
+    // combinational bypass is the only path that delivers the load value.
     //
     // Suppress bypass for p0 (hardwired zero register) — CDB may carry
     // non-zero data for instructions with pdst=p0 (e.g., JAL x0).
-    // Bypass sources [0..3] (ALU): REGISTERED CDB.
-    // Bypass sources [4..5] (Load): COMBINATIONAL CDB for 2-cycle latency.
-    assign bypass_valid = {cdb_valid[5]   && (cdb_tag[5]   != '0),
-                           cdb_valid[4]   && (cdb_tag[4]   != '0),
-                           cdb_valid_r[3] && (cdb_tag_r[3] != '0),
-                           cdb_valid_r[2] && (cdb_tag_r[2] != '0),
-                           cdb_valid_r[1] && (cdb_tag_r[1] != '0),
-                           cdb_valid_r[0] && (cdb_tag_r[0] != '0)};
-    assign bypass_tag[0] = cdb_tag_r[0];
-    assign bypass_tag[1] = cdb_tag_r[1];
-    assign bypass_tag[2] = cdb_tag_r[2];
-    assign bypass_tag[3] = cdb_tag_r[3];
-    assign bypass_tag[4] = cdb_tag[4];
-    assign bypass_tag[5] = cdb_tag[5];
+    assign bypass_valid = {load_wb_valid[0] && (load_wb_pdst[0]  != '0),  // [3] Load0
+                           cdb_valid_r[2]   && (cdb_tag_r[2]    != '0),  // [2] ALU2/MUL
+                           cdb_valid_r[1]   && (cdb_tag_r[1]    != '0),  // [1] ALU1/BRU1
+                           cdb_valid_r[0]   && (cdb_tag_r[0]    != '0)}; // [0] ALU0/BRU
+    assign bypass_tag[0]  = cdb_tag_r[0];
+    assign bypass_tag[1]  = cdb_tag_r[1];
+    assign bypass_tag[2]  = cdb_tag_r[2];
+    assign bypass_tag[3]  = load_wb_pdst[0];    // Load0 combinational
     assign bypass_data[0] = cdb_data_r[0];
     assign bypass_data[1] = cdb_data_r[1];
     assign bypass_data[2] = cdb_data_r[2];
-    assign bypass_data[3] = cdb_data_r[3];
-    assign bypass_data[4] = cdb_data[4];
-    assign bypass_data[5] = cdb_data[5];
+    assign bypass_data[3] = load_wb_data[0];    // Load0 combinational
 
     // =========================================================================
     // PRF Ready Table
@@ -2999,13 +3065,19 @@ module rv64gc_core_top
                     preg_ready_table[ren_insn[i].pdst] <= 1'b0;
                 end
             end
-            // Set on CDB writeback — use COMBINATIONAL CDB so the table
-            // is current when rename reads it next cycle. This path
+            // Set on CDB writeback (ALU/MUL/DIV/CSR) — use COMBINATIONAL CDB so
+            // the table is current when rename reads it next cycle. This path
             // (ready_table -> rename -> IQ) is one-way, not part of
             // the IQ -> ALU -> CDB -> IQ wakeup loop.
             for (int i = 0; i < CDB_WIDTH; i++) begin
                 if (cdb_valid[i] && cdb_tag[i] != '0) begin
                     preg_ready_table[cdb_tag[i]] <= 1'b1;
+                end
+            end
+            // Set on load writeback (Stage 2: loads removed from CDB broadcast).
+            for (int lw = 0; lw < 2; lw++) begin
+                if (load_wb_valid[lw] && load_wb_pdst[lw] != '0) begin
+                    preg_ready_table[load_wb_pdst[lw]] <= 1'b1;
                 end
             end
             // p0 always ready

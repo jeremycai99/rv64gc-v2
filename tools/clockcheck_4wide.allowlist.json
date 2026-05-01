@@ -1,0 +1,31 @@
+{
+  "_comment": "Clockcheck allowlist for the 4-wide refactor. Describes intentional refactor effects so rtl_clockcheck.py does not flag them as unexplained divergence. See doc/4wide_refactor_checklist.md and doc/4wide_pivot_plan_2026-04-25.md.",
+  "expected": {
+    "pipe_width":      {"old": 6,   "new": 4},
+    "fetch_bytes":     {"old": 24,  "new": 16},
+    "rob_depth":       {"old": 192, "new": 128},
+    "rob_idx_bits":    {"old": 8,   "new": 7},
+    "int_prf_depth":   {"old": 256, "new": 160},
+    "fp_prf_depth":    {"old": 128, "new": 96},
+    "lq_depth":        {"old": 64,  "new": 32},
+    "sq_depth":        {"old": 64,  "new": 32},
+    "lq_sq_idx_bits":  {"old": 6,   "new": 5},
+    "iq_int_depth":    {"old": 32,  "new": 24},
+    "num_alu":         {"old": 4,   "new": 3},
+    "cdb_width":       {"old": 6,   "new": 4},
+    "num_bypass_srcs": {"old": 6,   "new": 4},
+    "l1d_banks":       {"old": 4,   "new": 2}
+  },
+  "ignore_fields": ["rob_tail", "iq2_count", "flush", "replay", "reason",
+                   "free", "iq0", "iq1", "iq2", "lq", "sq", "ckpt"],
+  "max_cycle_delta_by_seq": 50,
+  "_notes": [
+    "iq2_count is in ignore_fields in case Stage 2 drops NUM_INT_IQS to 2; remove from ignore list if Stage 2 keeps 3 IQs (current default).",
+    "max_cycle_delta_by_seq=50 allows for normal microarchitectural variance per committed instruction; tighten if false-positive resolution is needed.",
+    "flush/replay/reason are in ignore_fields because with pipe_width 6->4, the exact cycle of flush/replay events changes as a direct consequence of different pipeline timing. Functional correctness is verified by the regression tests (Task 1.7). These fields cannot be cycle-aligned across a width change.",
+    "free is in ignore_fields because INT_PRF_DEPTH changed 256->160, so the free-list count is 128 vs 224 at all times. This is an expected and intended Stage 1 parameter change.",
+    "iq0/iq1/iq2 are in ignore_fields because dispatch distributes instructions across IQs differently with 4-wide vs 6-wide PIPE_WIDTH. The per-cycle IQ occupancy diverges naturally; correctness is verified by regression (Task 1.7).",
+    "lq/sq are in ignore_fields because LQ/SQ fill rates diverge with a narrower dispatch width. Functional LSU behavior is verified by regression.",
+    "ckpt is in ignore_fields because checkpoint allocation depends on how many branches are dispatched per cycle, which changes with PIPE_WIDTH 6->4."
+  ]
+}

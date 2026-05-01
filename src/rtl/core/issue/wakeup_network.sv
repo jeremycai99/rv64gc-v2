@@ -7,7 +7,7 @@
 module wakeup_network
     import rv64gc_pkg::*;
 (
-    // CDB broadcast (CDB_WIDTH = 6 sources)
+    // CDB broadcast (CDB_WIDTH sources, 4 in 4-wide config)
     input  logic [CDB_WIDTH-1:0]     cdb_valid,
     input  logic [PHYS_REG_BITS-1:0] cdb_tag [0:CDB_WIDTH-1],
 

@@ -1,8 +1,11 @@
 /* file: dcache.sv
- Description: 64 kB 4-way L1 D-Cache with 16-entry MSHR and PLRU.
+ Description: 64 KB 4-way 2-bank L1 D-Cache with 16-entry MSHR and PLRU.
+              Banking: 2 independent read ports (port A: load0/store, port B: load1).
+              RAMs are dual-ported (dcache_data_ram / dcache_tag_ram) — bank crossbar
+              is implicit in the dual-port structure; no explicit bank-select logic.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
- Version: 2.0
+ Version: 2.0 (stage4: L1D_BANKS 4->2, bank-select implicit in dual-port RAM)
 */
 /* verilator lint_off MULTITOP */
 module dcache

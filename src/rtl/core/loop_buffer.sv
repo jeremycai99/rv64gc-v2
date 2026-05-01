@@ -1225,15 +1225,13 @@ module loop_buffer
                 !invalidate &&
                 backward_branch_taken &&
                 backward_branch_found_c) begin
-                $display("[LBCAP] open target=%016h dec_count=%0d pc0=%016h pc1=%016h pc2=%016h pc3=%016h pc4=%016h pc5=%016h",
+                $display("[LBCAP] open target=%016h dec_count=%0d pc0=%016h pc1=%016h pc2=%016h pc3=%016h",
                          backward_branch_target_c,
                          dec_count,
                          dec_insn[0].pc,
                          dec_insn[1].pc,
                          dec_insn[2].pc,
-                         dec_insn[3].pc,
-                         dec_insn[4].pc,
-                         dec_insn[5].pc);
+                         dec_insn[3].pc);
             end
             if (sim_trace_capture_en &&
                 (state_r == CAPTURING) &&
@@ -1242,7 +1240,7 @@ module loop_buffer
                 backward_branch_found_c) begin
                 if (capture_target_mismatch_c &&
                     capture_target_mismatch_abort_c) begin
-                    $display("[LBCAP] abort old_target=%016h new_target=%016h cap_len=%0d close_len=%0d dec_count=%0d had_fwd=%0d pc0=%016h pc1=%016h pc2=%016h pc3=%016h pc4=%016h pc5=%016h",
+                    $display("[LBCAP] abort old_target=%016h new_target=%016h cap_len=%0d close_len=%0d dec_count=%0d had_fwd=%0d pc0=%016h pc1=%016h pc2=%016h pc3=%016h",
                              capture_target_pc_r,
                              backward_branch_target_c,
                              cap_len,
@@ -1252,11 +1250,9 @@ module loop_buffer
                              dec_insn[0].pc,
                              dec_insn[1].pc,
                              dec_insn[2].pc,
-                             dec_insn[3].pc,
-                             dec_insn[4].pc,
-                             dec_insn[5].pc);
+                             dec_insn[3].pc);
                 end else if (capture_target_mismatch_c) begin
-                    $display("[LBCAP] rearm old_target=%016h new_target=%016h cap_len=%0d close_len=%0d dec_count=%0d pc0=%016h pc1=%016h pc2=%016h pc3=%016h pc4=%016h pc5=%016h",
+                    $display("[LBCAP] rearm old_target=%016h new_target=%016h cap_len=%0d close_len=%0d dec_count=%0d pc0=%016h pc1=%016h pc2=%016h pc3=%016h",
                              capture_target_pc_r,
                              backward_branch_target_c,
                              cap_len,
@@ -1265,11 +1261,9 @@ module loop_buffer
                              dec_insn[0].pc,
                              dec_insn[1].pc,
                              dec_insn[2].pc,
-                             dec_insn[3].pc,
-                             dec_insn[4].pc,
-                             dec_insn[5].pc);
+                             dec_insn[3].pc);
                 end else begin
-                    $display("[LBCAP] close target=%016h cap_len=%0d close_len=%0d dec_count=%0d pc0=%016h pc1=%016h pc2=%016h pc3=%016h pc4=%016h pc5=%016h",
+                    $display("[LBCAP] close target=%016h cap_len=%0d close_len=%0d dec_count=%0d pc0=%016h pc1=%016h pc2=%016h pc3=%016h",
                              capture_target_pc_r,
                              cap_len,
                              cap_close_len,
@@ -1277,9 +1271,7 @@ module loop_buffer
                              dec_insn[0].pc,
                              dec_insn[1].pc,
                              dec_insn[2].pc,
-                             dec_insn[3].pc,
-                             dec_insn[4].pc,
-                             dec_insn[5].pc);
+                             dec_insn[3].pc);
                 end
             end
             if (exit_pred_learn_event_c)

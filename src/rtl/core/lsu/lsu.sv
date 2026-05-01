@@ -1667,7 +1667,7 @@ module lsu
     // Port-1 misalign-exception hold register (mirrors the port-0 fwd_hold
     // pattern). Original same-cycle path at the writeback mux was a
     // combinational leak: load_eff_addr[1] -> load_addr_misaligned[1] ->
-    // load_wb_pdst[1] -> cdb_tag[5] -> bypass[5] -> IQ readiness ->
+    // load_wb_pdst[1] -> load_wb sideband -> IQ readiness (via spec_wk) ->
     // load_issue_valid[1] -> back to load_eff_addr[1]. Loop-buffer-driven
     // dispatch pressure amplifies the transient into a non-converging
     // delta-cycle loop on dsim (CoreMark iter>=2 hits IterLimit at cyc 316,161).

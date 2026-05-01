@@ -92,7 +92,7 @@ module uop_cache
     logic [63:0] predicted_next_pc_r;
     logic [63:0] predicted_next_pc_c;          // combinational this-cycle update
 
-    // Compute the start-of-next-group PC from a 6-wide group of decoded µops
+    // Compute the start-of-next-group PC from a 4-wide group of decoded µops
     // and a count.  If the last µop is a taken branch, use its target; else
     // PC + (4 if non-RVC, 2 if RVC).  Fused µops still carry the original
     // first-half PC and is_rvc reflects the head insn; for fused control

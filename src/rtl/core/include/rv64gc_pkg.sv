@@ -17,34 +17,34 @@ package rv64gc_pkg;
     localparam int ARCH_REG_BITS  = 5;
 
     // =========================================================================
-    // Pipeline widths (6-wide superscalar)
+    // Pipeline widths (4-wide superscalar)
     // =========================================================================
-    localparam int PIPE_WIDTH     = 6;   // fetch/decode/rename/dispatch/commit
+    localparam int PIPE_WIDTH     = 4;   // fetch/decode/rename/dispatch/commit
     localparam int FETCH_WIDTH    = PIPE_WIDTH;
     localparam int DECODE_WIDTH   = PIPE_WIDTH;
     localparam int RENAME_WIDTH   = PIPE_WIDTH;
     localparam int DISPATCH_WIDTH = PIPE_WIDTH;
     localparam int COMMIT_WIDTH   = PIPE_WIDTH;
-    localparam int FETCH_BYTES    = FETCH_WIDTH * 4;  // 24 bytes
+    localparam int FETCH_BYTES    = FETCH_WIDTH * 4;  // 16 bytes
 
     // =========================================================================
     // Physical register file
     // =========================================================================
-    localparam int INT_PRF_DEPTH  = 256;
-    localparam int PHYS_REG_BITS  = 8;   // $clog2(256) = 8
-    localparam int FP_PRF_DEPTH   = 128;
+    localparam int INT_PRF_DEPTH  = 160;
+    localparam int PHYS_REG_BITS  = 8;   // $clog2(160) <= 8
+    localparam int FP_PRF_DEPTH   = 96;
 
     // =========================================================================
     // Reorder buffer
     // =========================================================================
-    localparam int ROB_DEPTH      = 192;
-    localparam int ROB_IDX_BITS   = 8;   // ceil(log2(192)) = 8
+    localparam int ROB_DEPTH      = 128;
+    localparam int ROB_IDX_BITS   = 7;   // $clog2(128) = 7
 
     // =========================================================================
     // Free list
     // =========================================================================
-    localparam int INT_FREE_LIST_DEPTH = INT_PRF_DEPTH - ARCH_REGS; // 224
-    localparam int FP_FREE_LIST_DEPTH  = FP_PRF_DEPTH - ARCH_REGS;  // 96
+    localparam int INT_FREE_LIST_DEPTH = INT_PRF_DEPTH - ARCH_REGS; // 128
+    localparam int FP_FREE_LIST_DEPTH  = FP_PRF_DEPTH - ARCH_REGS;  // 64
 
     // =========================================================================
     // Checkpoints (branch snapshots)
@@ -56,7 +56,7 @@ package rv64gc_pkg;
     // Issue queues
     // =========================================================================
     localparam int NUM_INT_IQS    = 3;
-    localparam int IQ_INT_DEPTH   = 32;
+    localparam int IQ_INT_DEPTH   = 24;
     localparam int IQ_SELECT_PORTS = 2;  // select ports per IQ
     localparam int IQ_MEM_DEPTH   = 32;
     localparam int IQ_FP_DEPTH    = 32;
@@ -75,21 +75,24 @@ package rv64gc_pkg;
     // Power-of-2 depths: pointer arithmetic wraps correctly with simple
     // bit truncation (idx mod 2^N).  Non-power-of-2 (original 48) caused
     // pointer wrap past physical entries → SQ count overflow after flush.
-    localparam int LQ_DEPTH       = 64;
-    localparam int SQ_DEPTH       = 64;
+    localparam int LQ_DEPTH       = 32;
+    localparam int SQ_DEPTH       = 32;
     localparam int CSB_DEPTH      = 32;  // committed store buffer (was 24)
 
-    localparam int LQ_IDX_BITS    = $clog2(LQ_DEPTH);   // 6
-    localparam int SQ_IDX_BITS    = $clog2(SQ_DEPTH);   // 6
+    localparam int LQ_IDX_BITS    = $clog2(LQ_DEPTH);   // 5
+    localparam int SQ_IDX_BITS    = $clog2(SQ_DEPTH);   // 5
     localparam int CSB_IDX_BITS   = $clog2(CSB_DEPTH);   // 5
 
     // =========================================================================
     // Functional units
     // =========================================================================
-    localparam int NUM_ALU        = 4;
+    localparam int NUM_ALU        = 3;
     localparam int MUL_LATENCY    = 3;
-    localparam int CDB_WIDTH      = 6;
-    localparam int NUM_BYPASS_SRCS = 6;
+    localparam int CDB_WIDTH      = 4;
+    localparam int NUM_BYPASS_SRCS = 4;
+    // PRF write port count is kept at 6 (4 ALU/DIV/CSR + 2 load writeback)
+    // independent of CDB_WIDTH (wakeup broadcast width).
+    localparam int PRF_WRITE_PORTS = 6;
 
     // =========================================================================
     // Loop buffer
@@ -100,13 +103,13 @@ package rv64gc_pkg;
     // µop cache (gen-2, replaces loop buffer when proven; parallel during
     // bring-up behind +UOC_ENABLE plusarg).
     //
-    // Geometry: 32 sets × 8 ways × 6 µops per entry = 1,536 µop slots.
+    // Geometry: 32 sets × 8 ways × 4 µops per entry = 1,024 µop slots.
     // Indexed by fetch-group start PC: PC[5:1] (RVC 2-byte alignment).
     // Modeled after Intel DSB / AMD Zen op-cache / ARM Mop-cache.
     // =========================================================================
     localparam int UOC_SETS        = 32;
     localparam int UOC_WAYS        = 8;
-    localparam int UOC_PER_ENTRY   = PIPE_WIDTH;          // 6 µops/entry
+    localparam int UOC_PER_ENTRY   = PIPE_WIDTH;          // 4 µops/entry
     localparam int UOC_INDEX_BITS  = $clog2(UOC_SETS);    // 5
     localparam int UOC_WAY_BITS    = $clog2(UOC_WAYS);    // 3
     localparam int UOC_OFFSET_BITS = 1;                   // PC[0] ignored (RVC 2B align)
@@ -135,10 +138,10 @@ package rv64gc_pkg;
     localparam int L1I_SET_BITS   = $clog2(L1I_SETS);     // 7
     localparam int L1I_TAG_BITS   = XLEN - L1I_SET_BITS - LINE_BITS;   // 51
 
-    // L1 D-Cache: 64 KB, 4-way, 4-bank, 64B lines
+    // L1 D-Cache: 64 KB, 4-way, 2-bank, 64B lines
     localparam int L1D_SIZE       = 65536;
     localparam int L1D_WAYS       = 4;
-    localparam int L1D_BANKS      = 4;
+    localparam int L1D_BANKS      = 2;
     localparam int L1D_SETS       = L1D_SIZE / (L1D_WAYS * LINE_SIZE);  // 256
     localparam int L1D_SET_BITS   = $clog2(L1D_SETS);     // 8
     localparam int L1D_TAG_BITS   = XLEN - L1D_SET_BITS - LINE_BITS;   // 50

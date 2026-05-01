@@ -10,10 +10,11 @@
 module bypass_network
     import rv64gc_pkg::*;
 (
-    // 6 bypass sources (ALU0-3, MUL, Load0)
-    input  logic [5:0]               bypass_valid,
-    input  logic [PHYS_REG_BITS-1:0] bypass_tag  [0:5],
-    input  logic [63:0]              bypass_data [0:5],
+    // NUM_BYPASS_SRCS bypass sources (ALU0-2, MUL/DIV/CSR, Load0, Load1
+    // for 4-wide: 4 sources total driven by CDB_WIDTH slots)
+    input  logic [NUM_BYPASS_SRCS-1:0]    bypass_valid,
+    input  logic [PHYS_REG_BITS-1:0]      bypass_tag  [0:NUM_BYPASS_SRCS-1],
+    input  logic [63:0]                    bypass_data [0:NUM_BYPASS_SRCS-1],
     // Operand to check
     input  logic [PHYS_REG_BITS-1:0] need_tag,
     input  logic [63:0]              prf_data,      // data from PRF read
@@ -23,7 +24,7 @@ module bypass_network
 );
 
     // Per-source match signals
-    logic [5:0] match;
+    logic [NUM_BYPASS_SRCS-1:0] match;
 
     always_comb begin
         for (int i = 0; i < NUM_BYPASS_SRCS; i++) begin
