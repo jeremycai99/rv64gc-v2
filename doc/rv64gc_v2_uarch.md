@@ -61,6 +61,8 @@
 
 ### 1.4 Top-Level Pipeline Diagram
 
+#### Front-End → Rename → Dispatch (4-wide)
+
 ```
                               FRONT-END (4-wide, ~5 stages incl. UOC bypass)
    ┌───────┐  ┌─────────────┐  ┌──────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
@@ -72,59 +74,142 @@
    └───────┘  └─────────────┘  └──────────┘  └─────────┘  └─────────┘  └─────────┘
                                                                             │
                                                                             ▼
-                                                                  ┌────────────────┐
-                                                                  │  DISPATCH (4w) │
-                                                                  │  per fu_type → │
-                                                                  │  6 IQs total   │
-                                                                  └────────────────┘
+                                              ┌─────────────────────────────────────────┐
+                                              │  DISPATCH (4w) — route per fu_type       │
+                                              │   ALU/BRU → INT IQs (per dispatch policy)│
+                                              │   MUL → u_iq1; DIV/CSR → u_iq2           │
+                                              │   LOAD → u_iq_ldst                       │
+                                              │   STA → u_iq_st_addr; STD → u_iq_st_data │
+                                              └─────────────────────────────────────────┘
                                                                             │
                                                                             ▼
-                                       BACK-END
-                            ┌───────────────────────────────────┐
-                            │  6 IQs total:                     │
-                            │   3 INT IQs (24 entries each)     │
-                            │   1 LD IQ  (32 entries)           │
-                            │   1 STA IQ (32 entries)           │
-                            │   1 STD IQ (32 entries)           │
-                            └────────────┬──────────────────────┘
-                                         │  4 INT issue ports + 2 LD + 1 STA + 1 STD
-                                         ▼
-                            ┌───────────────────────────────────┐
-                            │  EXECUTE                          │
-                            │   4× ALU (combinational, 1 cycle  │
-                            │       issue→cdb)                  │
-                            │   2× BRU (1 cycle)                │
-                            │   1× MUL (1 cycle hw latency)     │
-                            │   1× DIV (multi-cycle FSM)        │
-                            │   1× CSR (serializing)            │
-                            │   LSU: 2 LD AGU + 1 STA AGU + 1   │
-                            │       STD path; 2-stage dcache    │
-                            │       (S0/S1)                     │
-                            │  Bypass network: 5 sources        │
-                            │   [0..2] CDB[0..2] (registered)   │
-                            │   [3]    Load0 wb (combinational) │
-                            │   [4]    Load1 wb (combinational) │
-                            │   (NOTE: ALU3 was tested in       │
-                            │    Cycle E; REFUTED; reverted)    │
-                            └────────────┬──────────────────────┘
-                                         │
-                                         ▼ CDB_WIDTH=4 + load_wb 2-port sideband
-                            ┌───────────────────────────────────┐
-                            │  WRITEBACK + PRF                  │
-                            │   INT PRF: 160 × 64-bit           │
-                            │     12R6W (6 wr = 4 CDB + 2       │
-                            │     load_wb sideband)             │
-                            │   FP PRF:  96 × 64-bit            │
-                            └────────────┬──────────────────────┘
-                                         │
-                                         ▼
-                            ┌───────────────────────────────────┐
-                            │  ROB (128 entries) + COMMIT (4w)  │
-                            │   in-order, head-prefix commit    │
-                            │   head_wb_bypass: same-cycle      │
-                            │     wb→commit if head ready       │
-                            └───────────────────────────────────┘
 ```
+
+#### Issue Queues + Execution Units + CDB (separated per EU)
+
+Each EU is its own block; CDB-port sharing and bypass-coverage are explicit.
+
+```
+                                         ISSUE QUEUES (6 total)
+                                         + ISSUE PORTS (max 8/cyc theoretical, 4 commit-bound)
+   ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+   │ u_iq0     24 ent │    │ u_iq1     24 ent │    │ u_iq2     24 ent │
+   │ NUM_SELECT=2     │    │ NUM_SELECT=1     │    │ NUM_SELECT=1     │
+   │ FUs:             │    │ FUs:             │    │ FUs:             │
+   │  ALU0+BRU0 (p0)  │    │  ALU2 OR MUL     │    │  ALU3 OR DIV OR  │
+   │  ALU1+BRU1 (p1)  │    │   (single port)  │    │  CSR (1 port)    │
+   └─┬────────┬───────┘    └────┬─────────────┘    └────┬─────────────┘
+     │ port0  │ port1            │ port0                 │ port0
+     ▼        ▼                  ▼                       ▼
+  ┌─────┐ ┌─────┐         ┌──────┬─────┐         ┌──────┬─────┬─────┐
+  │ALU0 │ │ALU1 │         │ ALU2 │ MUL │         │ ALU3 │ DIV │ CSR │
+  │+BRU0│ │+BRU1│         │ comb │ 1cy │         │ comb │ FSM │ ser │
+  │comb │ │comb │         │      │ pip │         │      │30+cy│multi│
+  │/1cy │ │/1cy │         │      │     │         │      │     │ cy  │
+  └──┬──┘ └──┬──┘         └──┬───┴──┬──┘         └──┬───┴──┬──┴──┬──┘
+     │       │                │      │                 │      │      │
+     ▼       ▼                ▼      ▼                 ▼      ▼      ▼
+  ┌─────┐ ┌─────┐         ┌─────────────┐         ┌──────────────────┐
+  │CDB[0│ │CDB[1│         │   CDB[2]    │         │      CDB[3]      │
+  │ ALU0│ │ ALU1│         │   ALU2 OR   │         │   ALU3 OR DIV    │
+  │ /BRU0│ │/BRU1│         │   MUL       │         │      OR CSR     │
+  │ arb │ │ arb │         │   arbitrated│         │   arbitrated 3-way│
+  └──┬──┘ └──┬──┘         └──────┬──────┘         └─────────┬────────┘
+     │       │                   │                          │
+     │       │       (registered CDB outputs to PRF + bypass slots [0..2])
+     ▼       ▼                   ▼                          ▼
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  REGISTERED CDB → INT PRF write ports [0..3] (CDB_WIDTH=4) ║
+  ╚═══════════════════════════════════════════════════════════╝
+
+   ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+   │ u_iq_ldst  32 ent│    │u_iq_st_addr 32 ent│   │u_iq_st_data 32 ent│
+   │ NUM_SELECT=2     │    │ NUM_SELECT=1     │    │ NUM_SELECT=1     │
+   │ FUs:             │    │ FU:              │    │ FU:              │
+   │  Load0 AGU (p0)  │    │  Store-Addr AGU  │    │  Store-Data path │
+   │  Load1 AGU (p1)  │    │                  │    │                  │
+   └─┬────────┬───────┘    └────┬─────────────┘    └────┬─────────────┘
+     │ port0  │ port1            │                       │
+     ▼        ▼                  ▼                       ▼
+  ┌─────┐ ┌─────┐         ┌─────────────┐         ┌─────────────┐
+  │Load │ │Load │         │   STA AGU   │         │   STD path  │
+  │AGU0 │ │AGU1 │         │   addr-gen  │         │   data cap  │
+  │     │ │     │         │   → SQ enq  │         │   → SQ data │
+  └──┬──┘ └──┬──┘         └──────┬──────┘         └──────┬──────┘
+     │       │                   │                       │
+     │       │            (LSU paths to L1D / SQ — see §7)
+     ▼       ▼
+  ┌──────────────────────────────────────────┐
+  │  L1D 64 KB 4-way 2-bank dcache            │
+  │   2-stage pipeline (S0 issue, S1 wb)      │
+  │   16 MSHRs                                │
+  │   load_wb sideband: 2 wr ports (Load0/1)  │
+  │   → bypass slot [3]/[4] (combinational)   │
+  │   → INT PRF write ports [4]/[5]           │
+  └──────────────────────────────────────────┘
+```
+
+#### Bypass coverage map (5 slots)
+
+```
+      ┌─────────────────────────────────────────────────────────────┐
+      │  BYPASS NETWORK (NUM_BYPASS_SRCS = 5)                       │
+      │                                                             │
+      │   slot[0] ← cdb_data_r[0]   ALU0 / BRU0     REGISTERED      │
+      │   slot[1] ← cdb_data_r[1]   ALU1 / BRU1     REGISTERED      │
+      │   slot[2] ← cdb_data_r[2]   ALU2 / MUL      REGISTERED      │
+      │   slot[3] ← load_wb_data[0] Load0           COMBINATIONAL ★ │
+      │   slot[4] ← load_wb_data[1] Load1           COMBINATIONAL ★ │
+      │                                                             │
+      │   NOT BYPASSED: CDB[3] (ALU3, DIV, CSR)                     │
+      │     Cycle E tested adding bypass slot[5]; REFUTED (0% IPC). │
+      │     Consumers fall back to PRF read at T+3 (1 extra cycle). │
+      │                                                             │
+      │   ★ Combinational bypass is REQUIRED for loads:             │
+      │     spec_wakeup → consumer issues at T+2; PRF doesn't       │
+      │     latch until T+3, so bypass is the only data source.     │
+      └─────────────────────────────────────────────────────────────┘
+```
+
+#### Writeback → PRF → Commit
+
+```
+                             ┌───────────────────────────────────┐
+                             │  WRITEBACK + INT PRF              │
+                             │   PRF: 160 × 64-bit, 12R6W        │
+                             │   Write ports:                    │
+                             │     [0..3] CDB[0..3] (4)          │
+                             │     [4]    load_wb sideband Load0 │
+                             │     [5]    load_wb sideband Load1 │
+                             │   Read ports: 12 (3 ALU × 2 src + │
+                             │     2 BRU × 2 src + 1 MUL × 2 src)│
+                             │   FP PRF: 96 × 64-bit (separate)  │
+                             └────────────┬──────────────────────┘
+                                          │
+                                          ▼
+                             ┌───────────────────────────────────┐
+                             │  ROB (128 entries) + COMMIT (4w)  │
+                             │   in-order, head-prefix commit    │
+                             │   head_wb_bypass: same-cycle      │
+                             │     wb→commit if head ready       │
+                             │   Per-class wb_bypass instr:      │
+                             │     load/arith fires tracked      │
+                             └───────────────────────────────────┘
+```
+
+#### Key contention points (visible from the diagram)
+
+These are the structural constraint points that any optimization needs to be aware of:
+
+1. **Issue port count is 8 max** (4 INT + 4 LSU) but commit width is 4 → max 4 sustainable issues/cycle
+2. **u_iq1 NUM_SELECT=1**: ALU2 OR MUL per cycle — single issue port serializes them
+3. **u_iq2 NUM_SELECT=1**: ALU3 OR DIV OR CSR — single issue port serializes 3 FUs
+4. **CDB[2] is shared**: ALU2 and MUL writeback contend (arbitration logic in core_top)
+5. **CDB[3] is shared 3-way**: ALU3, DIV, CSR — heaviest arbitration contention
+6. **CDB[3] is NOT bypassed**: consumers of ALU3/DIV/CSR pay 1 extra cycle PRF-read latency
+7. **BRU is 1-cycle latency** (vs ALU 0-cycle combinational): branches add 1 cycle to chain
+8. **MUL is 1-cycle hw latency** but `MUL_LATENCY=3` in pkg.sv — stale parameter, may affect IQ wakeup scheduling
+9. **LSU: 2 load AGUs + 1 STA + 1 STD** = 4 LSU issue ports; load_wb sideband is independent of CDB
 
 ---
 
