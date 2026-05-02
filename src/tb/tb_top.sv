@@ -189,6 +189,7 @@ module tb_top
     // Enabled only when +TRACE_COMMIT is passed on the simulator command line.
     logic trace_commit_en;
     logic trace_dep_en;
+    logic trace_uoplife_en;
     logic trace_pipeline_en;
     logic trace_bru_en;
     logic trace_a0map_en;
@@ -212,6 +213,7 @@ module tb_top
     initial begin
         trace_commit_en = 0;
         trace_dep_en    = 0;
+        trace_uoplife_en = 0;
         trace_pipeline_en = 0;
         trace_bru_en    = 0;
         trace_a0map_en  = 0;
@@ -234,6 +236,7 @@ module tb_top
         trace_listptr_start = 0;
         if ($test$plusargs("TRACE_COMMIT")) trace_commit_en = 1;
         if ($test$plusargs("TRACE_DEP"))    trace_dep_en    = 1;
+        if ($test$plusargs("TRACE_UOPLIFE")) trace_uoplife_en = 1;
         if ($test$plusargs("TRACE_PIPELINE")) trace_pipeline_en = 1;
         if ($test$plusargs("TRACE_BRU"))    trace_bru_en    = 1;
         if ($test$plusargs("TRACE_A0MAP"))  trace_a0map_en  = 1;
@@ -1699,6 +1702,37 @@ module tb_top
     // Branch epoch: increments on each commit-side full-flush event.
     longint dep_epoch_counter;
 
+    // -------------------------------------------------------------------------
+    // UOPLIFE: per-uop lifecycle tracking (gated on +TRACE_UOPLIFE).
+    //
+    // Sim-only.  Captures a per-ROB-entry timestamp at each pipeline stage
+    // (rename, dispatch, issue, write-back) and emits one [UOPLIFE ...] line
+    // at commit, including total time-in-ROB and per-stage deltas.  All
+    // tracker arrays are indexed by ROB index (128 entries).
+    //
+    // Stage definitions:
+    //   rename_cyc   = trace_cycle when rename allocated rob_idx for the slot
+    //   dispatch_cyc = trace_cycle when uop dequeued from dispatch queue into
+    //                  an issue queue
+    //   issue_cyc    = trace_cycle when uop was selected by IQ scheduler and
+    //                  dispatched to its FU (or load/store address-gen pipe)
+    //   wb_cyc       = trace_cycle when CDB carried this rob_idx (or load_wb
+    //                  sideband fired for loads)
+    //   commit_cyc   = trace_cycle when ROB retired this entry
+    // -------------------------------------------------------------------------
+    integer     uoplife_rename_cyc   [0:ROB_DEPTH-1];
+    integer     uoplife_dispatch_cyc [0:ROB_DEPTH-1];
+    integer     uoplife_issue_cyc    [0:ROB_DEPTH-1];
+    integer     uoplife_wb_cyc       [0:ROB_DEPTH-1];
+    logic [63:0] uoplife_pc          [0:ROB_DEPTH-1];
+    logic [2:0]  uoplife_fu          [0:ROB_DEPTH-1];
+    logic        uoplife_is_load     [0:ROB_DEPTH-1];
+    logic        uoplife_is_store    [0:ROB_DEPTH-1];
+    logic        uoplife_is_branch   [0:ROB_DEPTH-1];
+    logic [PHYS_REG_BITS-1:0] uoplife_pdst [0:ROB_DEPTH-1];
+    logic       uoplife_valid        [0:ROB_DEPTH-1];
+    longint     uoplife_seq_counter;
+
     logic [7:0] trace_prev_rat_a0;
     logic [7:0] trace_prev_crat_a0;
     logic [7:0] trace_prev_rat_a5;
@@ -1784,6 +1818,21 @@ module tb_top
             end
             dep_seq_counter   <= 0;
             dep_epoch_counter <= 0;
+            // UOPLIFE tracker reset
+            for (int i = 0; i < ROB_DEPTH; i++) begin
+                uoplife_rename_cyc[i]   <= 0;
+                uoplife_dispatch_cyc[i] <= 0;
+                uoplife_issue_cyc[i]    <= 0;
+                uoplife_wb_cyc[i]       <= 0;
+                uoplife_pc[i]           <= 64'd0;
+                uoplife_fu[i]           <= 3'd0;
+                uoplife_is_load[i]      <= 1'b0;
+                uoplife_is_store[i]     <= 1'b0;
+                uoplife_is_branch[i]    <= 1'b0;
+                uoplife_pdst[i]         <= '0;
+                uoplife_valid[i]        <= 1'b0;
+            end
+            uoplife_seq_counter <= 0;
         end else begin
             trace_cycle <= trace_cycle + 1;
             // -----------------------------------------------------------------
@@ -1807,6 +1856,83 @@ module tb_top
             // Increment branch epoch on commit-side full flush.
             if (trace_dep_en && u_core.flush_out.valid && u_core.flush_out.full_flush) begin
                 dep_epoch_counter <= dep_epoch_counter + 1;
+            end
+            // UOPLIFE: invalidate all in-flight tracker entries on a full
+            // flush so squashed uops don't pollute future allocations at the
+            // same rob_idx.  (Commit retires happen prior to the flush in
+            // the same cycle, so cleared entries here are squashed-only.)
+            if (trace_uoplife_en && u_core.flush_out.valid && u_core.flush_out.full_flush) begin
+                for (int r = 0; r < ROB_DEPTH; r++) begin
+                    uoplife_valid[r]        <= 1'b0;
+                    uoplife_rename_cyc[r]   <= 0;
+                    uoplife_dispatch_cyc[r] <= 0;
+                    uoplife_issue_cyc[r]    <= 0;
+                    uoplife_wb_cyc[r]       <= 0;
+                end
+            end
+            // -----------------------------------------------------------------
+            // UOPLIFE: rename hook — capture rename_cyc + static fields when
+            // rename allocates a rob_idx for slot i.
+            // -----------------------------------------------------------------
+            if (trace_uoplife_en) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if (3'(i) < u_core.ren_count_w) begin
+                        uoplife_rename_cyc[u_core.ren_insn[i].rob_idx]   <= trace_cycle;
+                        uoplife_dispatch_cyc[u_core.ren_insn[i].rob_idx] <= 0;
+                        uoplife_issue_cyc[u_core.ren_insn[i].rob_idx]    <= 0;
+                        uoplife_wb_cyc[u_core.ren_insn[i].rob_idx]       <= 0;
+                        uoplife_pc[u_core.ren_insn[i].rob_idx]           <= u_core.ren_insn[i].base.pc;
+                        uoplife_fu[u_core.ren_insn[i].rob_idx]           <= u_core.ren_insn[i].base.fu_type;
+                        uoplife_is_load[u_core.ren_insn[i].rob_idx]      <= u_core.ren_insn[i].base.is_load;
+                        uoplife_is_store[u_core.ren_insn[i].rob_idx]     <= u_core.ren_insn[i].base.is_store;
+                        uoplife_is_branch[u_core.ren_insn[i].rob_idx]    <= u_core.ren_insn[i].base.is_branch;
+                        uoplife_pdst[u_core.ren_insn[i].rob_idx]         <= u_core.ren_insn[i].pdst;
+                        uoplife_valid[u_core.ren_insn[i].rob_idx]        <= 1'b1;
+                    end
+                end
+                // Dispatch hook: capture dispatch_cyc when uop dequeues from
+                // dispatch queue toward IQ array.
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if ((i < int'(u_core.dq_deq_count)) &&
+                        u_core.dq_deq_data[i].base.valid) begin
+                        if (uoplife_valid[u_core.dq_deq_data[i].rob_idx])
+                            uoplife_dispatch_cyc[u_core.dq_deq_data[i].rob_idx] <= trace_cycle;
+                    end
+                end
+                // Issue hook: capture issue_cyc when an IQ port issues.  Cover
+                // IQ0 (2 ports), IQ1 (1), IQ2 (1), load IQ (2), store IQ (1),
+                // and the std issue side (1).
+                for (int s = 0; s < 2; s++) begin
+                    if (u_core.iq0_issue_valid[s] &&
+                        uoplife_valid[u_core.iq0_issue_data[s].rob_idx])
+                        uoplife_issue_cyc[u_core.iq0_issue_data[s].rob_idx] <= trace_cycle;
+                end
+                if (u_core.iq1_issue_valid[0] &&
+                    uoplife_valid[u_core.iq1_issue_data[0].rob_idx])
+                    uoplife_issue_cyc[u_core.iq1_issue_data[0].rob_idx] <= trace_cycle;
+                if (u_core.iq2_issue_valid[0] &&
+                    uoplife_valid[u_core.iq2_issue_data[0].rob_idx])
+                    uoplife_issue_cyc[u_core.iq2_issue_data[0].rob_idx] <= trace_cycle;
+                for (int p = 0; p < 2; p++) begin
+                    if (u_core.iq_load_issue_valid[p] &&
+                        uoplife_valid[u_core.iq_load_issue_data[p].rob_idx])
+                        uoplife_issue_cyc[u_core.iq_load_issue_data[p].rob_idx] <= trace_cycle;
+                end
+                if (u_core.iq_store_issue_valid[0] &&
+                    uoplife_valid[u_core.iq_store_issue_data[0].rob_idx])
+                    uoplife_issue_cyc[u_core.iq_store_issue_data[0].rob_idx] <= trace_cycle;
+                // Writeback hook: CDB carries rob_idx + pdst; load_wb sideband
+                // covers load returns that go around the CDB-only pdst path.
+                for (int c = 0; c < CDB_WIDTH; c++) begin
+                    if (u_core.cdb_valid[c] &&
+                        uoplife_valid[u_core.cdb_rob_idx[c]])
+                        uoplife_wb_cyc[u_core.cdb_rob_idx[c]] <= trace_cycle;
+                end
+                for (int p = 0; p < 2; p++) begin
+                    if (u_core.lsu_load_wb_valid[p] &&
+                        uoplife_valid[u_core.lsu_load_wb_rob_idx[p]])
+                        uoplife_wb_cyc[u_core.lsu_load_wb_rob_idx[p]] <= trace_cycle;
+                end
             end
             if (trace_ordv_en && u_core.lsu_ordering_violation) begin
                 $display("[ORDV] cyc=%0d viol_rob=%0d replay_valid=%b flush=%b head=%0d tail=%0d count=%0d",
@@ -3046,9 +3172,11 @@ module tb_top
                     end
                 end
             end
-            if ((trace_commit_en || trace_dep_en) && (u_core.commit_count > 3'd0)) begin
+            if ((trace_commit_en || trace_dep_en || trace_uoplife_en) && (u_core.commit_count > 3'd0)) begin
                 automatic int dep_seq_off; // slot-local seq offset within this cycle
+                automatic int uoplife_seq_off;
                 dep_seq_off = 0;
+                uoplife_seq_off = 0;
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (u_core.commit_out[i].valid) begin
                         // ty bitfield (hex):
@@ -3177,6 +3305,61 @@ module tb_top
                                 dep_flush_b);
                             dep_seq_off = dep_seq_off + 1;
                         end
+                        // ----------------------------------------------------
+                        // UOPLIFE emit (commit-aligned, one line per slot)
+                        // ----------------------------------------------------
+                        // Emits a per-uop record with rename/dispatch/issue/wb
+                        // timestamps and computed deltas. Stage cyc=0 means
+                        // the stage was not observed (e.g., a side-effect-only
+                        // uop that never wrote a CDB tag).  Deltas are
+                        // computed only when both endpoints were observed; an
+                        // unobserved start prints -1.
+                        if (trace_uoplife_en) begin
+                            automatic logic [ROB_IDX_BITS-1:0] u_rob_idx;
+                            automatic int u_rn_cyc, u_dp_cyc, u_is_cyc, u_wb_cyc, u_cm_cyc;
+                            automatic int d_rn_dp, d_dp_is, d_is_wb, d_wb_cm, d_total;
+                            if ((u_core.rob_head_idx + ROB_IDX_BITS'(i)) >= ROB_IDX_BITS'(ROB_DEPTH))
+                                u_rob_idx = u_core.rob_head_idx + ROB_IDX_BITS'(i) - ROB_IDX_BITS'(ROB_DEPTH);
+                            else
+                                u_rob_idx = u_core.rob_head_idx + ROB_IDX_BITS'(i);
+                            u_rn_cyc = uoplife_rename_cyc[u_rob_idx];
+                            u_dp_cyc = uoplife_dispatch_cyc[u_rob_idx];
+                            u_is_cyc = uoplife_issue_cyc[u_rob_idx];
+                            u_wb_cyc = uoplife_wb_cyc[u_rob_idx];
+                            u_cm_cyc = trace_cycle;
+                            d_rn_dp = (u_dp_cyc != 0 && u_rn_cyc != 0) ? (u_dp_cyc - u_rn_cyc) : -1;
+                            d_dp_is = (u_is_cyc != 0 && u_dp_cyc != 0) ? (u_is_cyc - u_dp_cyc) : -1;
+                            d_is_wb = (u_wb_cyc != 0 && u_is_cyc != 0) ? (u_wb_cyc - u_is_cyc) : -1;
+                            d_wb_cm = (u_wb_cyc != 0) ? (u_cm_cyc - u_wb_cyc) : -1;
+                            d_total = (u_rn_cyc != 0) ? (u_cm_cyc - u_rn_cyc) : -1;
+                            $display("[UOPLIFE seq=%0d rob=%0d pc=%016h fu=%0d is_load=%0d is_store=%0d is_branch=%0d mis=%0d rename=%0d dispatch=%0d issue=%0d wb=%0d commit=%0d d_ren_to_disp=%0d d_disp_to_iss=%0d d_iss_to_wb=%0d d_wb_to_cmt=%0d d_total=%0d]",
+                                uoplife_seq_counter + uoplife_seq_off,
+                                u_rob_idx,
+                                uoplife_pc[u_rob_idx],
+                                uoplife_fu[u_rob_idx],
+                                uoplife_is_load[u_rob_idx],
+                                uoplife_is_store[u_rob_idx],
+                                uoplife_is_branch[u_rob_idx],
+                                u_core.rob_head_branch_mispredict[i],
+                                u_rn_cyc,
+                                u_dp_cyc,
+                                u_is_cyc,
+                                u_wb_cyc,
+                                u_cm_cyc,
+                                d_rn_dp,
+                                d_dp_is,
+                                d_is_wb,
+                                d_wb_cm,
+                                d_total);
+                            uoplife_seq_off = uoplife_seq_off + 1;
+                            // Clear the entry so a stale prev-life can't bleed
+                            // into the next allocation at this rob_idx.
+                            uoplife_valid[u_rob_idx]        <= 1'b0;
+                            uoplife_rename_cyc[u_rob_idx]   <= 0;
+                            uoplife_dispatch_cyc[u_rob_idx] <= 0;
+                            uoplife_issue_cyc[u_rob_idx]    <= 0;
+                            uoplife_wb_cyc[u_rob_idx]       <= 0;
+                        end
                     end
                 end
                 // Advance the global dep.v1 sequence number by the number of
@@ -3184,6 +3367,9 @@ module tb_top
                 // the perf model sees a contiguous seq stream).
                 if (trace_dep_en) begin
                     dep_seq_counter <= dep_seq_counter + 64'(dep_seq_off);
+                end
+                if (trace_uoplife_en) begin
+                    uoplife_seq_counter <= uoplife_seq_counter + 64'(uoplife_seq_off);
                 end
             end
             if (trace_commit_en && u_core.flush_out.valid) begin
