@@ -411,11 +411,30 @@ from checkpoint immediately; ROB clears in background.
 
 **Mispredict penalty:** ~6 cycles (v1: ~9 cycles).
 
-### 4.10 Loop Buffer — 64-Entry Decoded µop Cache
+### 4.10 Loop Buffer — 64-Entry Decoded µop FIFO (gen-1 design)
 
 64-entry µop FIFO. Captures hot loop body when backward taken branch
 detected and body fits. Feeds rename directly, bypassing fetch+decode.
 Delivers up to 6 µops/cycle. Clock-gates frontend during playback.
+
+**Status:** added as a perf bolt-on after the original spec; not in the
+gen-2 (µop cache) class used by Intel DSB / AMD Op Cache / ARM Mop cache.
+Known limitations measured on CoreMark (2026-04-25):
+
+- ~57% capture-abort rate — many hot regions never get cached because
+  they aren't shaped as a clean backedge loop (list walks, switch
+  state machines, function-call-bearing loop bodies).
+- Lifecycle (capture/arm/replay/abort/exit-pred) creates a large set
+  of combinational signals interacting with the bypass network. dsim
+  hits a structural CDB→bypass→AGU→fwd→CDB delta-cycle loop at
+  CoreMark iter ≥ 2 (cyc ≈ 316,161); raising `-iter-limit` doesn't
+  help because the loop is genuinely non-converging at that state.
+
+The current path is to surgically register the LB→bypass interface
+to break that loop class while keeping the LB engaged for the loops
+where it does work (see Section 9 "µop cache (gen-2)").  The strategic
+direction is to retire the LB entirely once the core is stable,
+replacing it with a real PC-indexed µop cache.
 
 ---
 
@@ -571,12 +590,64 @@ CoreMark due to cold caches, TLB walks, indirect branches. L1 I-cache
 
 | Innovation | Impact | When |
 |---|---|---|
-| µop cache (1K+ entries, replaces loop buffer) | +5–10% | If fetch_stall >2% on real code |
+| µop cache (gen-2, replaces loop buffer) | +0.3–0.6 IPC CoreMark | After v2 tapeout-stable; see § 9.1 |
 | Value prediction | +10–20% | If ROB-head load class stays high |
 | Clustered backend | Fmax improvement | If timing closure is the constraint |
 | Hardware prefetcher (stride/stream) | +5–15% on Linux | When targeting memory-heavy workloads |
 | RVV (vector extension) | +50–100% on data-parallel | v3 feature |
 | 8-wide pipeline | +5% scalar IPC | Only after 6-wide ceiling proven |
+
+### 9.1 µop Cache (gen-2) — replaces the gen-1 loop buffer
+
+**Trigger to start:** v2 core stable through tapeout signoff with the
+gen-1 LB and its current bug surface managed (see § 4.10).
+
+**Why replace, not extend:**
+The gen-1 LB and a gen-2 µop cache are different abstractions:
+
+- LB indexes implicitly by loop-body capture; uOC indexes explicitly by PC.
+- LB has a multi-state lifecycle (capture, arm, replay, exit-pred, abort);
+  uOC has only fill (write) and lookup (read).
+- LB only accelerates detected loops; uOC accelerates any decoded code
+  that re-executes (function calls, switch tables, indirect branches).
+- LB gives bimodal IPC (huge on captured loops, zero elsewhere); uOC
+  gives smooth IPC across workloads — important for tapeout guard-band.
+- LB lifecycle complexity is where the structural CDB→bypass loop lives;
+  uOC's two-operation interface (fill/lookup) does not have this bug class.
+
+The Sandy Bridge (2011) and Skylake (2015) generations of Intel ran the
+experiment publicly: shipped LSD (loop buffer) and DSB (uOC) side-by-side,
+then quietly atrophied LSD. AMD Zen and ARM A77+ went straight to uOC,
+no LB. The industry direction is settled.
+
+**Sketch of v3 µop cache design points** (gem5-study before committing):
+
+- Capacity target: 1.5K–2K µops (≈ 12–16 KB SRAM at 8 B/µop). Sandy
+  Bridge DSB 1.5K, Zen 4K, M-series ~3K. Size to CoreMark + Dhrystone
+  + Linux kernel boot footprint.
+- Indexing: by aligned fetch-group PC (probably 32 B or 64 B granularity);
+  4–8 way associative.
+- Fill: on first decode of a uop sequence; cache-line-sized µop blocks.
+- Lookup: parallel with icache; on hit, redirect dispatch to read from
+  uOC and clock-gate fetch+decode.
+- Eviction: LRU within set; flush-all on context switch / fence.i.
+- Interface to dispatch: same width as fetch-decode delivery (6 µops/cycle).
+- Interaction with macro-op fusion: cache the *post-fusion* µops so the
+  fusion detector also runs only on miss.
+- Replaces `loop_buffer.sv`; removes `lb_handoff_*`, `fwd_exit`,
+  `capture/abort/re-arm` plumbing entirely.
+
+**Migration plan from gen-1 LB to gen-2 µoC:**
+
+1. Tapeout v2 with LB option-1 fix (registered LB→bypass interface).
+2. Post-tapeout, gem5 sizing study: sweep uOC entry count 512 → 4K and
+   measure CoreMark/MHz, Dhrystone DMIPS/MHz, Linux boot IPC.
+3. Pick knee of the size/perf curve; design RTL.
+4. v3 RTL: implement uOC, delete `loop_buffer.sv`, retire all
+   `LB_*` plusargs, simplify rename input port to one path
+   (uOC-or-decode, no separate LB capture stream).
+5. Re-run regression suite. Expect smoother IPC across workloads
+   and elimination of the LB-class comb-loop bug surface.
 
 ---
 
