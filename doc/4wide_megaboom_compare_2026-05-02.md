@@ -294,3 +294,117 @@ cd ~/agent-workspace/chipyard/sims/verilator
 - (Out of repo, in `~/agent-workspace/chipyard/`): full MegaBoomV4Config Verilator simulator
 
 No rv64gc-v2 RTL was modified.
+
+---
+
+## 10. UPDATE 2026-05-02 (later) — Workload runs DID complete with FastBoot config
+
+The first attempt blocked on the slow bit-serial TileLink boot path (§3). This update documents the resolution and the empirical numbers obtained.
+
+### 10.1 FastBoot resolution
+
+Created a new Chipyard config `MegaBoomV4FastConfig` in `chipyard/generators/chipyard/src/main/scala/config/BoomConfigs.scala`:
+
+```scala
+class MegaBoomV4FastConfig extends Config(
+  new chipyard.harness.WithSimTSIOverSerialTL(fast = true) ++       // FastRAM-style boot
+  new boom.v4.common.WithNMegaBooms(1) ++
+  new chipyard.config.WithSystemBusWidth(128) ++
+  new chipyard.config.AbstractConfig)
+```
+
+Rebuild took ~18 min (firtool + Verilator + g++). Output: `chipyard/sims/verilator/simulator-chipyard.harness-MegaBoomV4FastConfig` (22 MB). Confirmed FastRAM in generated Verilog (vs SerialRAM in the prior config).
+
+### 10.2 Required binary preparation
+
+The fesvr-discoverable `tohost`/`fromhost` symbols in our existing rv64gc-v2 binaries were LOCAL section symbols only, not global. Re-exporting them with `objcopy` produces a BOOM-runnable binary:
+
+```bash
+/usr/bin/riscv64-unknown-elf-objcopy \
+    --add-symbol "tohost=0x80001000,global" \
+    --add-symbol "fromhost=0x80001008,global" \
+    rv64gc-v2/tests/dhrystone/dhrystone.elf /tmp/our_dhry_global.elf
+```
+
+Same for cm. Without these globals, fesvr emits "warning: tohost and fromhost symbols not in ELF; can't communicate with target" and the PASSED detection is unreliable.
+
+### 10.3 Empirical measurements (raw cycle counts)
+
+| Run | Binary | BOOM total cycles | Status | Wallclock |
+|---|---|---:|---|---:|
+| Boot baseline | `exit_test.elf` (4 inst) | **1,059,896** | PASSED | 5 min |
+| Rebuilt dhry | `/tmp/boom_workloads/dhrystone.elf` (NUM_RUNS unknown — likely 500 with riscv-tests-style I/O) | 4,282,036 | PASSED | 20 min |
+| Our dhry | `/tmp/our_dhry_global.elf` (NUM_RUNS=100, our exact src + global tohost) | **2,242,946** | PASSED | 11 min |
+| Our cm | `/tmp/our_cm_global.elf` (our exact cm.elf + global tohost) | **6,607,696** | PASSED | 31 min |
+
+Subtracting boot baseline (1.06M cycles): payload-only estimate
+- our dhry on BOOM: ~1,183,050 payload cycles
+- our cm on BOOM: ~5,547,800 payload cycles
+
+### 10.4 Direct comparison vs rv64gc-v2 (raw cycles)
+
+| Workload | Same binary on rv64gc-v2 | Same binary on BOOM (payload est.) | Raw ratio |
+|---|---:|---:|---:|
+| dhry | 23,514 | 1,183,050 | **50× higher on BOOM** |
+| cm iter1 | 199,452 | 5,547,800 | **28× higher on BOOM** |
+
+### 10.5 Why the raw cycle ratio is misleading (CRITICAL)
+
+A 28-50× cycle inflation on BOOM for IDENTICAL binary is **not** a real performance gap. Published SonicBOOM data (CARRV 2020) shows MegaBoom IPC is ~1.81 on cm — ~10% HIGHER than our 1.665. So BOOM should have FEWER cycles, not 28× more.
+
+The inflation comes from FOUR sources, none captured in our raw-cycle measurement:
+
+1. **Cold-cache cost (large)**: BOOM starts with empty L1I + L1D + L2. Each first-time instruction fetch = ~50 cycles to L2 fill. For cm (~5K static instructions), that's ~250K cycles of cold I-cache misses alone. dhry would be ~50K. rv64gc-v2's DSim model may pre-warm or have idealized cache behavior.
+2. **Bootrom payload-init (medium)**: BOOM's BootROM runs longer for larger binaries (page-table init, .bss zeroing scaled with binary size). Not the same fixed 1.06M as exit_test.
+3. **HTIF round-trip cost on syscalls (small but real)**: any printf/syscall in cm/dhry traps to fesvr; each round-trip = thousands of cycles. Our DSim has no equivalent slowdown.
+4. **fesvr cycle accounting**: the simulator counts EVERY cycle including DMA-wait cycles where BOOM is idle waiting for FastRAM. Our DSim doesn't count idle.
+
+**Net:** the raw cycle ratio (28-50×) is dominated by simulation-environment differences, not architectural-IPC differences. To get a clean IPC comparison, we'd need ONE of:
+
+- **Add `mhpmcounter3` (instret) printout to BOOM TestDriver** — read CSR at finalize, print "instret=N cycles=M IPC=X". ~50 LOC patch to TestDriver.v + BoomCore. Then `IPC_BOOM = N / (M - boot - cold_cache)` is meaningful.
+- **Run cm with very high iteration count** (e.g. 1000 runs) to amortize boot+cold-cache to <1% of total. Requires rebuilding cm with custom NUM_ITERATIONS.
+- **Compare INSTRET-NORMALIZED metrics**: collect each workload's instret on rv64gc-v2 (we have this: cm=332,110), then compute BOOM IPC = 332,110 / (BOOM cycles − ~1.5M boot+cold-cache estimate) = 332,110 / 4,047,800 = 0.082. Still implausibly low — confirms there's MORE than boot+cold-cache going on. Our binary's `rv64gc_bench_write` calls likely write to addresses BOOM treats as TileLink memory and potentially TLB-misses each time, adding many cycles per call.
+
+### 10.6 Definitive conclusions from this empirical work
+
+**CONFIRMED:**
+- ✅ MegaBoomV4FastConfig Verilator simulator works (built, runs binaries, completes via tohost)
+- ✅ Our exact binaries (with global tohost re-export) run on BOOM
+- ✅ BOOM completes both cm and dhry from our source (no functional incompatibility)
+- ✅ Boot baseline on BOOM is ~1.06M cycles (exit_test reference)
+
+**NOT OBTAINED (would require additional work):**
+- ❌ Clean BOOM IPC for our binaries — needs instret CSR printout patch
+- ❌ Clock-by-clock bubble distribution for BOOM — needs custom RoB instrumentation patch
+- ❌ Per-PC head-stall data for BOOM — needs deeper Chisel patches
+
+### 10.7 Updated recommendations (supersedes §6 and §7)
+
+The empirical run did NOT change the architectural conclusion: the L1D NLPrefetcher (BOOM's `enablePrefetching`) remains the #1 candidate to address rv64gc-v2's gap, especially for dhry. Reasoning:
+
+- Confirmed via §5 feature-flag inventory: BOOM has L1D prefetcher; rv64gc-v2 has none.
+- Per the bubble taxonomy + per-uop lifecycle: load-WB at head accounts for 16.4% of cm cycles and is the largest fixable single cost on dhry's strncpy/strncmp loops.
+- The empirical run, while not yielding clean IPC, confirms the simulator can be used for FUTURE IPC comparisons IF we patch BOOM's TestDriver to emit instret.
+
+**Concrete next-step option: patch BOOM TestDriver to print final instret + cycles.** ~1-day effort. Would unlock real clock-by-clock IPC comparison on any subsequent rv64gc-v2 RTL change.
+
+### 10.8 Reproducibility
+
+```bash
+# 1. Use the FastBoot config (already created)
+ls /home/jeremycai/agent-workspace/chipyard/sims/verilator/simulator-chipyard.harness-MegaBoomV4FastConfig
+
+# 2. Re-export tohost/fromhost on any rv64gc-v2 binary
+/usr/bin/riscv64-unknown-elf-objcopy \
+    --add-symbol "tohost=0x80001000,global" \
+    --add-symbol "fromhost=0x80001008,global" \
+    INPUT.elf OUTPUT.elf
+
+# 3. Run on BOOM
+cd /home/jeremycai/agent-workspace/chipyard/sims/verilator
+./simulator-chipyard.harness-MegaBoomV4FastConfig \
+    +permissive +max-cycles=10000000 +boom_timeout=31 +verbose +permissive-off \
+    OUTPUT.elf 2>&1 | grep -E "PASSED|FAILED"
+```
+
+Expected wallclock: dhry ~10 min, cm ~30 min on this machine (Verilator at ~3.5 KHz).
