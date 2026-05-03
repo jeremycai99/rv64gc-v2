@@ -365,6 +365,22 @@ The inflation comes from FOUR sources, none captured in our raw-cycle measuremen
 - **Run cm with very high iteration count** (e.g. 1000 runs) to amortize boot+cold-cache to <1% of total. Requires rebuilding cm with custom NUM_ITERATIONS.
 - **Compare INSTRET-NORMALIZED metrics**: collect each workload's instret on rv64gc-v2 (we have this: cm=332,110), then compute BOOM IPC = 332,110 / (BOOM cycles − ~1.5M boot+cold-cache estimate) = 332,110 / 4,047,800 = 0.082. Still implausibly low — confirms there's MORE than boot+cold-cache going on. Our binary's `rv64gc_bench_write` calls likely write to addresses BOOM treats as TileLink memory and potentially TLB-misses each time, adding many cycles per call.
 
+### 10.5b Verification probes added later (2026-05-02 post-7d425db)
+
+**Binary integrity checked.** Re-disassembled `/tmp/our_dhry_global.elf` and confirmed:
+- `NUM_RUNS=100` is baked in at build time (objdump shows three `li ..,100` constants — loop counter, comparison guard, and array bound).
+- `rv64gc_bench_begin/end` are called only at start/end of the 100-iter loop (not per-iter), so MMIO-snoop cost cannot account for the gap.
+
+**Per-iter cycle implication is implausible.** rv64gc-v2 dsim re-confirms 23,017 cyc / 47,033 instret for the 100-iter kernel (230 cyc/iter, IPC 2.03). Same binary on BOOM = 2,242,946 sim cyc; subtracting the exit_test boot baseline (1.06M) leaves 1.18M cyc → 11,800 cyc/iter. If BOOM executed the same instret (~47K), this implies BOOM IPC ≈ 0.04 — three orders of magnitude below MegaBoom's published numbers. **The cycle counts as printed are not interpretable as kernel cycles.** The actual cause is buried in chipyard simulation environment overhead (DTB-walk, BootROM-to-main transition, MMU/PMP setup, cold-cache fills on first iter) which is NOT captured by the simple exit_test baseline subtraction.
+
+**Why TestDriver patch is the only clean path.** I evaluated four alternatives this session:
+1. *Hierarchical reference into CSRFile.sv* — `mcycle`/`minstret` are stored in WideCounter modules referenced via `value_1`/`value_2`/etc. Names are obfuscated by Chisel-FIRRTL emit; stable hierarchical refs are brittle.
+2. *Encode cycles in tohost exit code* — fesvr exit code is consumed by fesvr only; BOOM TestDriver prints sim_cycles regardless and does not surface the exit code.
+3. *Self-instrumented binary printing via HTIF putchar* — requires HTIF syscall protocol support in rv64gc-v2 dsim (currently exit-code-only). ~50-100 LOC tb_verilator.cpp + DPI peek.
+4. *Build chipyard's stock dhrystone.riscv with newlib* — newlib not installed on `/usr/bin/riscv64-unknown-elf-` toolchain; would require building riscv-tools or installing newlib.
+
+The **TestDriver.v patch (option in §10.7)** remains the right move for any continued empirical work. ~1-day to wire `mcycle`/`minstret` out of CSRFile via a chisel BlackBox or `dontTouch`-pinned wire, plus the TestDriver print.
+
 ### 10.6 Definitive conclusions from this empirical work
 
 **CONFIRMED:**
