@@ -90,22 +90,22 @@ Minimum next empirical steps (sequential, each unlocks a tier):
 
 ## 0. Current state — read first
 
-**Last edit:** 2026-05-02 ~21:55 by Opus 4.7 (commit `80a1534`).
+**Last edit:** 2026-05-02 ~22:30 by Opus 4.7 (this commit). Methodology re-run added as §11; superseding earlier conclusions where they conflict.
 
-**What's done:**
-- BOOM Verilator simulator built and verified (`MegaBoomV4FastConfig` with `WithSimTSIOverSerialTL(fast=true)`).
-- Our exact rv64gc-v2 binaries run on BOOM after `objcopy --add-symbol` to re-export `tohost`/`fromhost` as global. See §8 for the exact command.
-- Empirical raw cycles captured (§10): exit_test 1.06M; our dhry 2.24M; our cm 6.6M.
-- Verified (§10.5b) that the implied per-iter cycle ratio (BOOM vs rv64gc-v2 = 50× for dhry) is **not interpretable as an IPC ratio** — chipyard sim env overhead (BootROM, DTB, MMU/PMP, cold-cache, fesvr idle) swamps kernel cycles for short benchmarks.
-- 5 BOOM feature flags absent in rv64gc-v2 catalogued (§5): `enablePrefetching`, `enableSuperscalarSnapshots`, `enableFastLoadUse`, `numDCacheBanks=4`, `lsuWidth=2`.
+**What's done (tier-tagged):**
+- (Tier B) BOOM Verilator simulator built and verified (`MegaBoomV4FastConfig` with `WithSimTSIOverSerialTL(fast=true)`); our binaries run to PASS via tohost. exit_test 1.06M / dhry 2.24M / cm 6.6M raw cycles (§10).
+- (Tier B) Per-iter cycle ratios are **functional only** — Rule 1 forbids reading them as IPC. §11.2 details which earlier "% gap" claims this invalidates.
+- (Tier C) 5 BOOM feature flags absent in rv64gc-v2 catalogued (§5); §11.3 re-ranks them by Rule 4 (only `enablePrefetching` clears the bar cleanly; `enableFastLoadUse` partially; the other three FAIL Rule 4 against our Tier-A data).
+- (Tier A on rv64gc-v2 only) Self-pipeline-behavior corpus complete for 4 workloads at `benchmark_results/pipeline_confirm_20260502_202117/`.
+- (Tier E partial) NaxRiscv pipeline-stage averages collected; XiangShan/RSD/OpenC910 pending.
 
-**What's blocked:** clean per-kernel IPC comparison on BOOM. Needs one of:
-- TestDriver.v patch to print `mcycle`/`minstret` at finish (~1 day; see §10.5b, §10.7).
-- HTIF syscall protocol added to rv64gc-v2 dsim (~50-100 LOC); enables stock chipyard benchmarks to print on both sims.
+**What's blocked (sequential, see Methodology "Minimum next empirical steps"):**
+1. Tier B → Tier A IPC: TestDriver.v patch to print `mcycle/minstret` at finish (~1 day).
+2. Tier A IPC → Tier A pipeline-behavior: per-cycle `[PIPE schema=pipe.v1]` emission on BOOM matching the corpus directory format (multi-week).
 
-**Open recommendation:** L1D NLPrefetcher RTL is the consensus #1 candidate (§6) regardless of whether the BOOM comparison gets unblocked.
+**Open recommendation under the Methodology:** Only **L1D NLPrefetcher** passes all 5 rules without further BOOM-side data — see §11.5 for the full rule-by-rule justification.
 
-**For the parallel session:** if you're working on the TestDriver patch path, append a §11 "TestDriver patch progress" with whatever you find. If you're pursuing a different angle, add a new top-level section after §10 — don't rewrite §1-§10.
+**For the parallel session:** if working on the TestDriver patch path, append a §12 "TestDriver patch progress." If pursuing a different angle, add a new top-level section after §11 — don't rewrite §1-§11.
 
 ---
 
@@ -524,3 +524,86 @@ cd /home/jeremycai/agent-workspace/chipyard/sims/verilator
 ```
 
 Expected wallclock: dhry ~10 min, cm ~30 min on this machine (Verilator at ~3.5 KHz).
+
+---
+
+## 11. Methodology re-run (2026-05-02 post-Methodology-section)
+
+This section re-evaluates every claim made earlier in this doc through the evidence ladder + 5 comparison rules added in the Methodology section. Earlier sections are kept for debug provenance; conclusions in §11 supersede those in §1-§10 wherever they conflict.
+
+### 11.1 Tier classification of evidence already in this doc
+
+| Evidence | Where | Tier | Status |
+|---|---|---|---|
+| BOOM Verilator simulator builds + runs our binaries (exit_test, dhry, cm) | §10.1-§10.4 | B | COMPLETE |
+| Raw BOOM cycles: exit_test 1.06M, dhry 2.24M, cm 6.6M | §10.4 | B | COMPLETE |
+| Per-iter cycle ratio (BOOM/rv64gc-v2 = 50× dhry, 28× cm) | §10.5, §10.5b | B-derived | INVALID per Rule 1 (see §11.2) |
+| BOOM has 5 features rv64gc-v2 lacks (`enablePrefetching`, `enableSuperscalarSnapshots`, `enableFastLoadUse`, `numDCacheBanks=4`, `lsuWidth=2`) | §5 | C | COMPLETE — re-ranked in §11.3 |
+| Published BOOM scores (6.2 CM/MHz, 1.8 DMIPS/MHz) | §1, §6 | D | COMPLETE — sanity-check only per Rule 5 |
+| rv64gc-v2 own pipeline-behavior corpus (bubble + headwait + frontend + pipe.v1 trace) for 4 workloads | `benchmark_results/pipeline_confirm_20260502_202117/` | A (rv64gc-v2 side only) | COMPLETE on our side; MISSING on BOOM side |
+| NaxRiscv pipeline-stage averages (gem5o3 format) | `benchmark_results/.../nax_add_o3pipe_summary.txt` | E | PARTIAL (only NaxRiscv collected; XiangShan/RSD/OpenC910 not yet) |
+| BOOM IPC for our binary | — | A | NOT STARTED |
+| BOOM per-cycle pipe.v1 emission for our binary | — | A | NOT STARTED |
+
+### 11.2 Conclusions that survive Rule 1 (separate harness from core time)
+
+**SURVIVES.** The exit_test 1.06M baseline + dhry 2.24M + cm 6.6M numbers prove BOOM **functionally** runs our binaries to PASS via tohost. This is Tier B and answers compatibility, nothing more.
+
+**FALLS.** The 50× dhry / 28× cm raw-cycle ratios cannot be interpreted as IPC ratios. §10.5b already noted this; the Methodology now makes it a hard rule. The implied "BOOM IPC = 0.04" reductio in §10.5b is pedagogical only; the correct statement is "we cannot compute BOOM IPC for these runs."
+
+**FALLS.** Old §1 claim "residual cm gap ~8.5% / dhry gap ~35%" is a Tier-D-vs-Tier-A comparison on differently-compiled binaries (BOOM uses chipyard-built standard riscv-bmarks dhry; ours is the bare-metal rv64gc-v2 dhry with `-march=rv64gc_zba_zbb_zbs_zicond` + `-DNUM_RUNS=100` + custom crt0). Per Rule 2, no architecture conclusion can be drawn until binary normalization. Demoting the gap claim to "hypothesis pending Tier A on BOOM."
+
+### 11.3 Conclusions that survive Rule 4 (map borrowed feature to a measured local stall class)
+
+The 5 missing BOOM features re-ranked against rv64gc-v2 Tier-A measurements (`benchmark_results/pipeline_confirm_20260502_202117/coremark_iter1.{bubble,headwait}.txt`):
+
+| Feature | Maps to which measured stall class? | Tier-A measurement (cm) | Verdict |
+|---|---|---|---|
+| **`enablePrefetching` (L1D NLP)** | Head-dwell=2 (load-WB latency at ROB head) | **16.4% of cm cycles** (16,396 heads × 2 cyc / 199,452) | ✓ ACTIONABLE — single largest single-cause Tier-A stall that is mechanically attackable |
+| **`enableFastLoadUse`** | Head-dwell=2 (load→use one-cycle improvement) | Subset of the same 16.4% above | ✓ ACTIONABLE — but partial; benefit is bounded by what NLP doesn't already cover |
+| **`enableSuperscalarSnapshots`** | Mispredict recovery cost (head-dwell=6-10) | 14.7% of cm cycles (3,933 heads × ~7.5 cyc) | △ MARGINAL per Rule 4. Snapshots reduce *recovery* cost, but our flush+drain is already only 2.18% of cycles per the bubble taxonomy. The 14.7% in head-dwell-6-10 is mostly *re-fill* of an empty pipeline, not snapshot-rollback time. Adopting this would be optimizing a non-dominant cost. |
+| **`numDCacheBanks=4`** | D-cache bank-conflict stalls | NOT IN rv64gc-v2 instrumentation; no measurement | ✗ FAILS Rule 4. We have no Tier-A signal that bank-conflicts exist. Cannot justify until measured. |
+| **`lsuWidth=2`** | LSU dispatch parallelism | rv64gc-v2 already has 3 LSU IQs; LQ avg occupancy 1.61 / cap 32 (5%); SQ 0.53 / 32 (1.6%) — LSU is not the binding resource | ✗ FAILS Rule 4. We are not LSU-throughput-bound. |
+
+**Net under Rule 4: only L1D NLPrefetcher is fully justified by current Tier-A measurement.** `enableFastLoadUse` is conditionally justified as a layered improvement on top of NLP. The other three should NOT be adopted on the strength of "BOOM has it."
+
+### 11.4 Tier ladder — current state vs target
+
+| Tier | Goal | Current state |
+|---|---|---|
+| A on BOOM | Same binary, in-window `mcycle/minstret`, per-cycle pipe.v1 | NOT STARTED. Both substeps in Methodology "Minimum next empirical steps" pending. |
+| B on BOOM | Same binary completes; raw sim cycles | DONE for cm/dhry/exit_test |
+| C on BOOM | Source/config audit | DONE (§5) |
+| D on BOOM | Published scores as floor | COLLECTED (§1) — usable as sanity check only |
+| A on rv64gc-v2 | Self-instrumented, all counters | DONE (4-workload corpus) |
+| E on other RV cores | Architectural reference | NaxRiscv DONE; XiangShan / RSD / OpenC910 not yet |
+
+### 11.5 What the Methodology authorises us to act on NOW
+
+Only one RTL action passes all five rules without needing more BOOM-side data:
+
+**ACTION 1 — L1D NLPrefetcher (next-line prefetcher) in rv64gc-v2's L1D.**
+- Rule 1: ✓ uses our own Tier-A measurement, no BOOM raw cycles involved
+- Rule 2: ✓ no binary normalization needed (we're testing on our own sim)
+- Rule 3: ✓ stall class is a pipeline counter (head-dwell=2 from Little's-law decomp)
+- Rule 4: ✓ maps to 16.4% of cm cycles, the largest single mechanically-attackable Tier-A stall
+- Rule 5: ✓ NLP is well-understood, present in nearly every modern OoO; not a clone of any BOOM-specific design choice
+
+Proposed scope: 4-entry next-line prefetch buffer feeding L1D refill on miss-confirmed addresses, gated by stride-detection on the load PC (mirrors BOOM's NLPrefetcher.scala minus the dynamic-degree controller). Predicted upper bound: ≤16.4% × hit-rate-on-prefetched-line × (1 − head-dwell-1-fraction-already-hidden) ≈ 5-10% of cm cycles, 5-15% of dhry (where head-wait is 88% of cycles).
+
+### 11.6 Claims this doc has made that the Methodology now blocks
+
+These cannot be reasserted until the corresponding tier is unlocked:
+
+- "BOOM is X% faster than us on cm/dhry" — needs BOOM Tier A IPC.
+- "Our remaining gap to BOOM is Y%" — needs BOOM Tier A IPC.
+- "Adding feature Z would close N% of the gap" — needs BOOM Tier A pipeline-behavior so we can see whether BOOM's stall distribution actually differs from ours where the feature would act.
+- "BOOM's bank-conflict pressure is high" / "BOOM is LSU-throughput bound" — needs BOOM Tier A pipeline-behavior; our own data says neither pressure exists in rv64gc-v2.
+- "We need to widen / deepen ROB / IQ" — fails Rule 4 on our own data: ROB avg 12.61/128 (10%), IQ_INT avg 4.64/72 (6%), LQ 1.61/32 (5%), SQ 0.53/32 (2%) — none of these are binding.
+
+### 11.7 Recommended sequencing under the Methodology
+
+1. **NOW (no BOOM dependency, Rule 4 cleared):** Build L1D NLPrefetcher in rv64gc-v2. Validate via the existing rv64gc-v2 Tier-A pipeline. Acceptance gate: head-dwell=2 cycles drop measurably without regressing other categories.
+2. **PARALLEL (unblocks future feature decisions):** Land the BOOM TestDriver `mcycle/minstret` patch (Methodology Step 1). This is the cheapest unlock and turns Tier D speculation into Tier A IPC numbers for our exact binaries.
+3. **FOLLOW-UP (after step 2 lands):** Decide whether to invest in Step 2 (per-cycle pipe.v1 emission on BOOM). Worth it only if step 2 IPC reveals a ≥10% residual gap that current Tier-C audit doesn't explain.
+4. **DEFER:** `enableSuperscalarSnapshots`, `numDCacheBanks=4`, `lsuWidth=2` adoption decisions. Re-evaluate after step 3 produces Tier A pipeline-behavior diff.
