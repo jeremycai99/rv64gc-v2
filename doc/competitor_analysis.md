@@ -1,11 +1,36 @@
-# Empirical MegaBoom Build + Architectural Cross-Compare — 2026-05-02
+# Competitor Analysis — rv64gc-v2 vs BOOM v4 (MegaBoom)
 
-**Date:** 2026-05-02
-**rv64gc-v2 HEAD:** `master @ 580b83e`
+> **Canonical, multi-session working doc.** Both the live session and any parallel session append here — do not fork into per-date or per-session copies. Read §0 (Current state) before working.
+>
+> **Initial source corpus:**
+> - `doc/4wide_megaboom_compare_2026-05-02.md` (renamed → this file; empirical build + run results)
+> - `doc/4wide_arch_diff_2026-05-02.md` (still active companion; source-only RTL audit)
+
+**Started:** 2026-05-02
+**rv64gc-v2 HEAD at start:** `master @ 580b83e` (now at `master @ 80a1534`)
 **BOOM HEAD:** `riscv-boom main @ af3023c` (BOOM v4)
 **Chipyard HEAD:** `main @ 48f904a`
-**Author:** subagent (deep-research investigation)
-**Companion doc:** `doc/4wide_arch_diff_2026-05-02.md` (the source-only audit; this doc adds the empirical-build attempt + a feature-flag inventory missing from the prior audit)
+
+---
+
+## 0. Current state — read first
+
+**Last edit:** 2026-05-02 ~21:55 by Opus 4.7 (commit `80a1534`).
+
+**What's done:**
+- BOOM Verilator simulator built and verified (`MegaBoomV4FastConfig` with `WithSimTSIOverSerialTL(fast=true)`).
+- Our exact rv64gc-v2 binaries run on BOOM after `objcopy --add-symbol` to re-export `tohost`/`fromhost` as global. See §8 for the exact command.
+- Empirical raw cycles captured (§10): exit_test 1.06M; our dhry 2.24M; our cm 6.6M.
+- Verified (§10.5b) that the implied per-iter cycle ratio (BOOM vs rv64gc-v2 = 50× for dhry) is **not interpretable as an IPC ratio** — chipyard sim env overhead (BootROM, DTB, MMU/PMP, cold-cache, fesvr idle) swamps kernel cycles for short benchmarks.
+- 5 BOOM feature flags absent in rv64gc-v2 catalogued (§5): `enablePrefetching`, `enableSuperscalarSnapshots`, `enableFastLoadUse`, `numDCacheBanks=4`, `lsuWidth=2`.
+
+**What's blocked:** clean per-kernel IPC comparison on BOOM. Needs one of:
+- TestDriver.v patch to print `mcycle`/`minstret` at finish (~1 day; see §10.5b, §10.7).
+- HTIF syscall protocol added to rv64gc-v2 dsim (~50-100 LOC); enables stock chipyard benchmarks to print on both sims.
+
+**Open recommendation:** L1D NLPrefetcher RTL is the consensus #1 candidate (§6) regardless of whether the BOOM comparison gets unblocked.
+
+**For the parallel session:** if you're working on the TestDriver patch path, append a §11 "TestDriver patch progress" with whatever you find. If you're pursuing a different angle, add a new top-level section after §10 — don't rewrite §1-§10.
 
 ---
 
