@@ -79,6 +79,7 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/cache/icache_tag_ram.sv \
      src/rtl/core/cache/icache_data_ram.sv \
      src/rtl/core/cache/icache.sv \
+     src/rtl/core/cache/icache_resp_queue.sv \
      src/rtl/core/fetch/next_line_prefetch_buffer.sv \
      src/rtl/core/fetch/ftq.sv \
      src/rtl/core/fetch/fetch_packet_buffer.sv \
