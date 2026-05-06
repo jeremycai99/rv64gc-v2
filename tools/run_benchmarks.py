@@ -1342,6 +1342,64 @@ def validate_run_class_args(args: argparse.Namespace) -> list[str]:
             "lookahead experiments; signoff must use FTQ/BPU-owned frontend "
             "mechanisms with decoded-op replay activity gated to zero."
         )
+
+    # Data-driven discipline (per feedback_perf_discipline.md):
+    # 1. Any RTL change vs HEAD invalidates --mechanism-class default_rtl
+    # 2. Non-default mechanism class must declare --targets-counter
+    # 3. The --targets-counter must have a matching --expect-counter-decrease
+    if not getattr(args, "skip_rtl_lock_check", False):
+        rtl_paths = ["src/rtl", "src/tb/tb_top.sv"]
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "--quiet", "HEAD", "--"] + rtl_paths,
+                cwd=REPO_ROOT,
+                check=False,
+                capture_output=True,
+            )
+            rtl_dirty = (diff.returncode != 0)
+        except Exception:
+            rtl_dirty = False
+        if rtl_dirty and mechanism_class == "default_rtl":
+            errors.append(
+                "data-driven-discipline: signoff with --mechanism-class default_rtl "
+                "rejects an unlocked RTL state. `git diff HEAD -- src/rtl/ src/tb/tb_top.sv` "
+                "shows uncommitted changes since last accepted commit. To proceed, "
+                "either: (a) commit the RTL baseline first and re-run, or (b) declare "
+                "a non-default --mechanism-class with --mechanism-name, --baseline-results, "
+                "--targets-counter NAME, and --expect-counter-decrease NAME:DELTA so the "
+                "harness can verify predicted vs measured counter movement. To bypass "
+                "(emergency only), pass --skip-rtl-lock-check."
+            )
+
+    targets_counter = getattr(args, "targets_counter", None)
+    if mechanism_class != "default_rtl" and not targets_counter:
+        errors.append(
+            "data-driven-discipline: --mechanism-class "
+            f"{mechanism_class!r} requires --targets-counter NAME identifying "
+            "which bottleneck counter the change is supposed to move. Run "
+            "`./tools/bottleneck_analysis.py <baseline_result.json>` against "
+            "the baseline first to pick a counter; the dominant bottleneck is "
+            "printed at the top."
+        )
+
+    if targets_counter:
+        normalized = normalize_counter_name(targets_counter)
+        declared = {
+            parse_counter_decrease_spec(spec)[0]
+            for spec in getattr(args, "expect_counter_decrease", [])
+        }
+        defaults = DEFAULT_COUNTER_EXPECTATIONS.get(
+            mechanism_class, {}
+        )
+        for c, _ in defaults.get("decrease", []):
+            declared.add(normalize_counter_name(c))
+        if normalized not in declared:
+            errors.append(
+                f"data-driven-discipline: --targets-counter {targets_counter!r} "
+                f"requires --expect-counter-decrease {targets_counter}:<predicted_delta> "
+                "so the harness can verify the targeted counter actually moves. The "
+                "predicted_delta is the minimum cycle reduction the change should produce."
+            )
     if forbidden_allowlisted:
         errors.append(
             "signoff plusarg allowlist cannot override unsafe frontend "
@@ -1409,6 +1467,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--require-loop-buffer-zero", action="store_true")
     parser.add_argument("--require-decoded-op-replay-zero", action="store_true")
+    parser.add_argument(
+        "--targets-counter",
+        default=None,
+        help=(
+            "Required for non-default --mechanism-class signoff. Names the "
+            "single bottleneck counter the change is designed to reduce. Pair "
+            "with --expect-counter-decrease NAME:DELTA so the harness can "
+            "verify the predicted movement materialized."
+        ),
+    )
+    parser.add_argument(
+        "--skip-rtl-lock-check",
+        action="store_true",
+        help=(
+            "Bypass the data-driven discipline check that rejects default_rtl "
+            "signoff when RTL has uncommitted changes vs HEAD. Use only in "
+            "emergencies; normal workflow is to commit baseline first or use "
+            "a non-default mechanism class."
+        ),
+    )
     parser.add_argument(
         "--baseline-results",
         type=Path,
