@@ -559,6 +559,78 @@ trip is the signal that the architectural assumption is wrong.
 | γ' phase 2 (FTQ alloc rate decoupled) | BLOCKED | Depends on γ' phase 1. The two FTQ alloc dedup gates (`req_pc_c != f2_pc_r` and `req_pc_c != ftq_last_alloc_req_pc_r` at lines 463-465) are correct given the current single-cycle-per-request stream; replacing them with `count_alloc_to_ifu < BP_RUNAHEAD_MAX` requires the F1 stream to actually produce distinct PCs faster than F2 pops them. |
 | γ'' (ICache prefetch by FTQ entry) | BLOCKED | Depends on γ' phase 2. |
 
+### γ' phase 0 infrastructure: icache_resp_queue.sv landed (2026-05-05, b97adb1)
+
+The FIFO module that will decouple F2 consumption from F1 request rate
+is now in master:
+
+- `src/rtl/core/cache/icache_resp_queue.sv` (144 LOC, depth-parameterized,
+  default 4)
+- Each entry carries `(data, hit, pc, ftq_valid, ftq_idx, ftq_epoch,
+  ftq_alloc_tag)` so F2 can consume in order with correct owner tracking
+  even when F1 fires ahead
+- `flush` clears all entries (used on backend redirect)
+- `full`/`empty`/`count` status outputs for backpressure gating
+- Compiles into dsim_work/tb_image.so (build rc=0); not yet wired
+
+### Integration plan (to be done in a focused next iteration)
+
+The wiring step changes the F2 data path from combinational ic_resp read
+to queue-deq, and is bigger than a single in-session edit because it
+requires coordinated retiming across F2's pc/btb/ftq tracking. Specific
+edits:
+
+1. `src/rtl/core/fetch/fetch_unit.sv`:
+   - Add a 1-cycle pipeline register that captures the (request_pc,
+     ftq_identity_at_request_time) when F1 fires `ic_req`. The register
+     output is what the icache response 1 cycle later "is for".
+   - Instantiate `icache_resp_queue` with the captured identity on enq
+     side and the existing `ic_resp_valid_comb`/`ic_resp_data_comb`
+     wires.
+   - Replace `assign f2_data_valid = ic_resp_valid;` (line 581) with
+     `assign f2_data_valid = queue.deq_valid_o;` Replace
+     `f2_data_line = ic_resp_data` (line 582) with `queue.deq_data_o`.
+   - Replace `f2_pc_r <= f1_pc` (line 1267, default case) with
+     `f2_pc_r <= queue.deq_pc_o` so F2's PC tracks the queue head, not
+     F1's live state. Similarly for `f2_ftq_*_r` — capture from
+     queue's deq side, not from `ftq_enq_*`.
+   - Drive `queue.deq_ready` from F2's consume-cycle gate: when F2 will
+     emit, deq_ready = 1.
+   - Drive `queue.flush` from `redirect_valid`.
+   - Plumb backpressure: when `queue.full`, gate `ic_req_valid` so F1
+     doesn't fire requests the queue can't hold.
+
+2. After 1 lands and signoff PASSes (no behavioral change beyond the
+   structural retime), THEN modify F1's next-PC selection to use
+   F1-stage BTB prediction even when F2 hasn't emitted, achieving the
+   actual runahead. Predicted counter movements (cm10, vs current
+   pre_alpha_baseline):
+   - `packet_empty_noemit_dup`: 725,222 → ≤ 100,000  (decrease ≥ 625k)
+   - `xs_dup_last_emit`: 783,583 → ≤ 100,000
+   - `xs_ftq_occ_max`: 1 → ≥ 4
+   - `packet_empty`: 827,933 → ≤ 200,000
+   - `timed cycles cm10`: 2,034,653 → ≤ 1,750,000 (Stage 1 close
+     possible if predictions hold)
+
+3. The harness-required signoff invocation (per
+   feedback_perf_discipline.md and the rules at
+   tools/run_benchmarks.py:1337-1396):
+   ```bash
+   python3 tools/run_benchmarks.py --runner dsim --run-class signoff \
+     --manifest tests/benchmarks/stage1_signoff.json \
+     --plusarg PERF_PROFILE --plusarg PERF_COUNTERS --plusarg STAT_DUMP \
+     --mechanism-class ftq_owned_delivery \
+     --mechanism-name f2_decoupled_via_icache_resp_queue \
+     --baseline-results benchmark_results/signoff_pre_alpha_baseline/results.json \
+     --targets-counter packet_empty \
+     --expect-counter-decrease packet_empty:500000 \
+     --run-id iter_gamma_phase0_queue_wired
+   ```
+
+The harness will reject the run if the predicted decrease did not
+materialize, and the golden PC scoreboard will trip on first
+architectural divergence. Both safety nets in place.
+
 ### γ'-test-1 result (2026-05-05)
 
 Tested change: drop `f2_pc_consumed_c` gate from `next_pc` selection at
