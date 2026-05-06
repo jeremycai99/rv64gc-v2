@@ -645,6 +645,102 @@ functionally a no-op because `f2_seq_valid` is itself computed from F2's
 byte-consumption state — the gate I removed was redundant, not the
 throttle. Reverted; tree at 8b30714 + α' (no further RTL changes).
 
+### Top-3 BACKEND_STALL sources + RTL recommendations (2026-05-05, c3e1305)
+
+`bubble_attribution.py --top-pcs 12` cross-correlated cm10's 230,971
+BACKEND_STALL cycles with [HEADSTALL] events:
+
+**Top sources (per-PC):**
+
+| Rank | PC | Cycles | % of run | Instruction | Function |
+|---:|---|---:|---:|---|---|
+| 1 | `0x80002440` | 56,951 | 2.78% | `ld a4,0(s0)` | core_list_mergesort linked-list chase |
+| 2 | `0x800031e6` | 26,184 | 1.28% | `mulw a5,a4,a5` | 32-bit multiply (matrix or CRC) |
+| 3 | `0x800036fc` | 12,627 | 0.62% | `beqz a5,...` | core_state_transition byte parser |
+| 4-12 | `0x800036*`, `0x80003704`, `0x8000363c`, `0x80003644`, `0x800036bc`, `0x80003b12`, `0x80002380`, `0x800037ac`, `0x800036b4` | ~85,000 | ~4.2% | branches | core_state_transition cluster |
+
+**By uop type:**
+
+| uop_type | Cycles | % of BS | RTL fix candidate |
+|---|---:|---:|---|
+| branch | 115,710 | 50.1% | Loop predictor (BOOM-style) or TAGE training fix |
+| load | 65,282 | 28.3% | Mostly intrinsic (3-cycle load-to-use); spec wakeup already in place |
+| alu_or_mul_div | 39,796 | 17.2% | Operand-chain stall; bypass coverage tuning |
+| store | 10,183 | 4.4% | SQ drain rate; minor |
+
+**Top-3 RTL recommendations with predicted counter movement:**
+
+#### Rec 1: Loop predictor + TAGE training tuning for branch cluster
+
+The 9 hottest branch PCs are all in `core_state_transition` (a byte
+parser with deterministic state-machine pattern) plus `crc16` /
+`crcu32` body branches. TAGE-SC-L should handle these but evidently
+mispredicts. BOOM v4's `LoopBranchPredictor` records observed trip
+counts per loop and flips at the boundary.
+
+- Mechanism class: `bpu_loop_exit_prediction`
+- Targets-counter: `xs_committed_mispredicts`
+- Predicted: branch BACKEND_STALL 115,710 → ~50,000 (decrease 65k+)
+- cm10 timed cycles: 2,034,653 → ~1,970,000 (Stage 1 close: needs ≤ 1,850,040)
+- Scope: ~200 LOC new module + tage_sc_l.sv integration
+- Risk: medium (mispredict-recovery cost if loop boundary tracking is wrong)
+- Time: 1-2 days
+
+#### Rec 2: Per-PC dcache prefetch for linked-list chase at 0x80002440
+
+`ld a4,0(s0)` at 56k stall cycles is a pointer-chase load where the
+address is the result of the previous load. Speculative wakeup for
+dependents already lands; the gap is the load-to-use latency itself
+(3-cycle hit). Two options:
+
+- (a) Per-PC dcache prefetch: when this PC fetches, issue a prefetch
+  for `*[result+offset]` to warm the next iteration's line.
+- (b) Pointer-chase predictor: BOOM-style PC-indexed predictor that
+  prefetches the address THIS load is likely to produce.
+
+- Mechanism class: `frontend_prefetch_fdip` (extension to dcache side)
+- Targets-counter: `xs_load_at_head_cycles_pc_top16` (new counter
+  needed; per-PC load-stall histogram)
+- Predicted: load BACKEND_STALL 65,282 → ~30,000 (decrease 35k+)
+- Risk: medium (prefetch pollution if prediction wrong)
+- Time: 2-3 days
+
+#### Rec 3: Operand-chain bypass widening for mulw at 0x800031e6
+
+The multiplier is already 1-cycle. The 26k stalls are operand chain:
+`mulw a5,a4,a5` self-depends on a5 from prior cycle. The CDB→bypass
+forwarding path adds 1 cycle (forwarding hold register, per AGENTS.md).
+If forwarded value can be used same-cycle in next mulw, chain throughput
+doubles.
+
+- Mechanism class: `ftq_owned_delivery` (close fit; or new `bypass_bypass_widening`)
+- Targets-counter: `issue_stall_operand_cyc`
+- Predicted: alu/mul BACKEND_STALL 39,796 → ~20,000 (decrease 20k+)
+- Risk: high (CDB→bypass→issue same-cycle creates timing closure pressure;
+  AGENTS.md notes the hold register exists specifically to avoid this loop)
+- Time: 2-3 days
+
+**Combined predicted Stage 1 close:**
+
+If all three land: -65k - 35k - 20k = -120k cycles. cm10: 2,034,653
+→ ~1,914,000. Still +64k from Stage 1 target (1,850,040).
+
+If we add a dhrystone-class loop-exit fix (also addresses dhrystone's
+strcpy at 0x8000200e): another ~10-20k.
+
+If we also reduce the 32k FRONTEND_BUBBLE via the F2-decoupling work
+(γ' phase 1+2): another ~30-50k.
+
+Combined: ~165-200k cycle reduction. **Stage 1 close achievable.**
+
+**The recommended order is (1) loop predictor + (3) bypass widening +
+(2) per-PC prefetch.** Loop predictor has highest leverage (50% of BS
+cycles) and is the best-understood mechanism (BOOM source available).
+
+Each must be a separate RTL session with proper harness gating:
+predict counter movement → implement → verify with bubble_attribution
++ counter_invariants + golden PC scoreboard.
+
 ### Bottleneck reframing (2026-05-05 evening): commit-stage view supersedes frontend-stage view
 
 After landing `tools/bubble_attribution.py` (commit 6b3301c) which classifies
