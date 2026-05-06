@@ -572,12 +572,93 @@ module fetch_unit
     // Pipeline alignment with sync-read icache:
     // The icache's internal s1 stage already provides 1-cycle SRAM latency,
     // so at cycle T the *_comb outputs correspond to the request presented
-    // at T-1 (= f1_pc at T-1 = f2_pc_r at T).  Adding a second register
-    // here would cause f2_pc_r to lead icache response by one cycle and F2
-    // would consume stale-PC data.
-    assign ic_resp_valid = merged_resp_valid_comb;
-    assign ic_resp_data  = merged_resp_data_comb;
-    assign ic_resp_hit   = ic_resp_hit_comb || nlpb_resp_match_c;
+    // at T-1 (= f1_pc at T-1 = f2_pc_r at T).
+    //
+    // Iteration gamma' phase 0 (2026-05-05): Route the icache response
+    // through icache_resp_queue, with bypass-when-empty so the steady-state
+    // F1/F2-lockstep case is functionally identical to the prior direct read.
+    // The queue carries the source PC + FTQ identity per entry, enabling
+    // future F1-stage runahead (where F1 fires ahead of F2 consumption and
+    // the queue absorbs the rate mismatch) without the F2-tracks-f1_pc
+    // architectural mismatch documented in fetch_unit.sv:1267.
+    //
+    // Pipeline register: capture (ic_req_addr, ftq identity at request) for
+    // 1 cycle so the queue's enq carries the source identity matched to
+    // the icache response that arrives at this cycle.
+    logic [63:0]                          ic_req_addr_pipe_r;
+    logic                                 ic_req_ftq_pipe_valid_r;
+    logic [FTQ_IDX_BITS-1:0]              ic_req_ftq_pipe_idx_r;
+    logic [FTQ_EPOCH_BITS-1:0]            ic_req_ftq_pipe_epoch_r;
+    logic [FTQ_ALLOC_TAG_BITS-1:0]        ic_req_ftq_pipe_alloc_tag_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ic_req_addr_pipe_r           <= '0;
+            ic_req_ftq_pipe_valid_r      <= 1'b0;
+            ic_req_ftq_pipe_idx_r        <= '0;
+            ic_req_ftq_pipe_epoch_r      <= '0;
+            ic_req_ftq_pipe_alloc_tag_r  <= '0;
+        end else if (redirect_valid) begin
+            ic_req_ftq_pipe_valid_r      <= 1'b0;
+        end else begin
+            ic_req_addr_pipe_r           <= ic_req_addr;
+            // FTQ identity at the cycle ic_req fires: when ftq_enq fires,
+            // capture the new entry's identity; otherwise carry whatever
+            // F1 had (for held cycles, the request still goes out for the
+            // already-allocated head).
+            if (ftq_enq_valid) begin
+                ic_req_ftq_pipe_valid_r      <= 1'b1;
+                ic_req_ftq_pipe_idx_r        <= ftq_enq_idx;
+                ic_req_ftq_pipe_epoch_r      <= ftq_enq_epoch;
+                ic_req_ftq_pipe_alloc_tag_r  <= ftq_enq_tag;
+            end
+        end
+    end
+
+    // Queue: depth 4. Bypass mode means functionally a wire when empty +
+    // enq_valid + deq_ready. F2 consumes from queue; deq_ready is gated on
+    // F2 needing data (here always 1 since F2 reads combinationally).
+    logic                                  icq_deq_valid;
+    logic [511:0]                          icq_deq_data;
+    logic                                  icq_deq_hit;
+    logic [63:0]                           icq_deq_pc;
+    logic                                  icq_deq_ftq_valid;
+    logic [FTQ_IDX_BITS-1:0]               icq_deq_ftq_idx;
+    logic [FTQ_EPOCH_BITS-1:0]             icq_deq_ftq_epoch;
+    logic [FTQ_ALLOC_TAG_BITS-1:0]         icq_deq_ftq_alloc_tag;
+    logic                                  icq_full;
+    logic                                  icq_empty;
+    logic [$clog2(4+1)-1:0]                icq_count;
+
+    icache_resp_queue #(.DEPTH(4)) u_icache_resp_queue (
+        .clk(clk),
+        .rst_n(rst_n),
+        .flush(redirect_valid),
+        .resp_valid_i(merged_resp_valid_comb),
+        .resp_data_i(merged_resp_data_comb),
+        .resp_hit_i(ic_resp_hit_comb || nlpb_resp_match_c),
+        .resp_pc_i(ic_req_addr_pipe_r),
+        .resp_ftq_valid_i(ic_req_ftq_pipe_valid_r),
+        .resp_ftq_idx_i(ic_req_ftq_pipe_idx_r),
+        .resp_ftq_epoch_i(ic_req_ftq_pipe_epoch_r),
+        .resp_ftq_alloc_tag_i(ic_req_ftq_pipe_alloc_tag_r),
+        .deq_ready_i(1'b1),
+        .deq_valid_o(icq_deq_valid),
+        .deq_data_o(icq_deq_data),
+        .deq_hit_o(icq_deq_hit),
+        .deq_pc_o(icq_deq_pc),
+        .deq_ftq_valid_o(icq_deq_ftq_valid),
+        .deq_ftq_idx_o(icq_deq_ftq_idx),
+        .deq_ftq_epoch_o(icq_deq_ftq_epoch),
+        .deq_ftq_alloc_tag_o(icq_deq_ftq_alloc_tag),
+        .full(icq_full),
+        .empty(icq_empty),
+        .count(icq_count)
+    );
+
+    assign ic_resp_valid = icq_deq_valid;
+    assign ic_resp_data  = icq_deq_data;
+    assign ic_resp_hit   = icq_deq_hit;
     assign f2_data_valid = f2_same_line_handoff_r ? 1'b1 : ic_resp_valid;
     assign f2_data_line  =
         f2_same_line_handoff_r ? f2_same_line_handoff_data_r : ic_resp_data;

@@ -81,12 +81,19 @@ module icache_resp_queue
     assign empty       = (count_r == '0);
     assign full        = (count_r == DEPTH);
     assign count       = count_r;
-    assign deq_valid_o = !empty;
 
-    assign enq_fire_c = resp_valid_i && !full;
-    assign deq_fire_c = deq_valid_o && deq_ready_i;
+    // Bypass: when empty + enq_valid + deq_ready, pass through combinationally
+    // so the queue acts like a wire for the steady-state F1/F2-lockstep case.
+    // Storage only fires for genuine buffering (decode backpressure or runahead).
+    logic bypass_path_c;
+    assign bypass_path_c = empty && resp_valid_i && deq_ready_i;
 
-    // Output the head entry (combinational read of mem_r[rd_ptr_r])
+    assign deq_valid_o = !empty || resp_valid_i;
+
+    assign enq_fire_c = resp_valid_i && !full && !bypass_path_c;
+    assign deq_fire_c = !empty && deq_ready_i;  // pop only from mem; bypass uses no slot
+
+    // Output the head entry (combinational, with bypass when empty)
     always_comb begin
         if (!empty) begin
             deq_data_o          = mem_r[rd_ptr_r].data;
@@ -96,6 +103,15 @@ module icache_resp_queue
             deq_ftq_idx_o       = mem_r[rd_ptr_r].ftq_idx;
             deq_ftq_epoch_o     = mem_r[rd_ptr_r].ftq_epoch;
             deq_ftq_alloc_tag_o = mem_r[rd_ptr_r].ftq_alloc_tag;
+        end else if (resp_valid_i) begin
+            // Bypass: empty queue passes the incoming response straight to F2
+            deq_data_o          = resp_data_i;
+            deq_hit_o           = resp_hit_i;
+            deq_pc_o            = resp_pc_i;
+            deq_ftq_valid_o     = resp_ftq_valid_i;
+            deq_ftq_idx_o       = resp_ftq_idx_i;
+            deq_ftq_epoch_o     = resp_ftq_epoch_i;
+            deq_ftq_alloc_tag_o = resp_ftq_alloc_tag_i;
         end else begin
             deq_data_o          = '0;
             deq_hit_o           = 1'b0;
