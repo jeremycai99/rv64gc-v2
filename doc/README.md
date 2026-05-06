@@ -9,11 +9,10 @@ under `doc/archive/`.
 - `reference_core_unified_audit_2026-05-03.md` - canonical competitor-core
   status, evidence tiers, and current performance-direction verdict.
 - `boom_pipeline_stats_2026-05-03.md` - active Stage 1 frontend signoff
-  status, rejected DSE evidence, and next evaluation direction. Sections
-  added 2026-05-05: harness updates (golden PC scoreboard, counter
-  invariants, image_diff tool) and the BPU-decoupling closure plan
-  (α' F2 backpressure → α'' delete dup suppressor → β' owner-tagged
-  packets → γ' FTQ-alloc decoupling → γ'' ICache prefetch).
+  status, current numbers, bottleneck analysis, and the
+  BOOM-grounded F1-proactive RTL plan. Slimmed 2026-05-05
+  (was 2078 lines, now ~190); detailed iteration history in
+  `archive/boom_pipeline_stats_history_2026-05-05.md`.
 - `rv64gc_v2_uarch.md` - current rv64gc-v2 microarchitecture specification.
 - `partial_replay_spec.md` - selective replay design note; keep here while LSU
   replay policy remains under evaluation.
