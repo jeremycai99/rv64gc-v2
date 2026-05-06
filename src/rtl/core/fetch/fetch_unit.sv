@@ -3587,14 +3587,17 @@ module fetch_unit
     logic trace_fetch_en;
     logic trace_fetch_split_en;
     logic trace_fetch_dup_en;
+    logic trace_fetch_owner_en;
     integer trace_fetch_cycle;
     initial begin
         trace_fetch_en = 1'b0;
         trace_fetch_split_en = 1'b0;
         trace_fetch_dup_en = 1'b0;
+        trace_fetch_owner_en = 1'b0;
         if ($test$plusargs("TRACE_FETCH")) trace_fetch_en = 1'b1;
         if ($test$plusargs("TRACE_FETCH_SPLIT")) trace_fetch_split_en = 1'b1;
         if ($test$plusargs("FETCH_DUP_TRACE")) trace_fetch_dup_en = 1'b1;
+        if ($test$plusargs("TRACE_FETCH_OWNER")) trace_fetch_owner_en = 1'b1;
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -3742,6 +3745,38 @@ module fetch_unit
                     fetch_pc[1],
                     fetch_pc[2],
                     fetch_pc[3]);
+            end
+            if (trace_fetch_owner_en &&
+                f2_owner_completion_candidate_c &&
+                !f2_ftq_owner_live_c) begin
+                $display("[FETCH_OWNER_TRACE] cyc=%0d pc=%016h seq=%016h final=%0d straddle=%b bp=%b bp_taken=%b bp_slot=%0d bp_type=%0d target=%016h work_idx=%0d work_tag=%0d wb_valid=%b wb_idx=%0d wb_tag=%0d ftq_cnt=%0d ftq_alloc_to_ifu=%0d ftq_ifu_to_wb=%0d ftq_ifu_to_commit=%0d icq_valid=%b icq_line=%014h line_reuse=%b pkt_valid=%b pkt_match=%b pkt_complete=%b fetch_out=%0d out_pc0=%016h",
+                    trace_fetch_cycle,
+                    f2_work_pc_c,
+                    f2_seq_next_pc,
+                    final_count,
+                    straddle_detected,
+                    bp_branch_found,
+                    bp_taken,
+                    bp_branch_slot,
+                    bp_type,
+                    bp_target_addr,
+                    f2_work_ftq_idx_c,
+                    f2_work_ftq_alloc_tag_c,
+                    ftq_ifu_wb_owner_valid,
+                    ftq_ifu_wb_owner_idx,
+                    ftq_ifu_wb_owner_tag,
+                    ftq_count,
+                    ftq_count_alloc_to_ifu,
+                    ftq_count_ifu_to_wb,
+                    ftq_count_ifu_to_commit,
+                    icq_deq_valid,
+                    icq_deq_line_addr,
+                    f2_line_state_use_c,
+                    packet_buf_valid,
+                    packet_buf_owner_match_c,
+                    packet_buf_head_owner_complete_c,
+                    fetch_count,
+                    fetch_pc[0]);
             end
             if (trace_fetch_split_en && subgroup_seed_load_c) begin
                 $display("[FETCH_SPLIT] cyc=%0d parent_pc=%016h split_pc=%016h split_tgt=%016h split_slot=%0d split_type=%0d reason=%s pre_pc=%016h pre_tgt=%016h second_pc=%016h second_tgt=%016h ftq_pred_v=%b ftq_pred_t=%b ftq_pred_slot=%0d ftq_pred_type=%0d owner_pred=%b bp_found=%b bp_taken=%b bp_slot=%0d final=%0d ext=%0d",

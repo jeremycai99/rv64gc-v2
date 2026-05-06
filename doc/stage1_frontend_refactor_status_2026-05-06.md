@@ -171,9 +171,10 @@ performance unproven**.
 
 Latest fresh profiled smoke:
 
-- Rebuild: `./build_dsim.sh` passed after the current `fetch_unit.sv` timestamp.
+- Rebuild: `./build_dsim.sh` passed after the current `fetch_unit.sv` timestamp,
+  including the simulation-only `+TRACE_FETCH_OWNER` diagnostic hook.
 - Run artifact:
-  `benchmark_results/20260506_profiled_current_rtl_smoke_seq/summary.md`.
+  `benchmark_results/20260506_fetch_owner_trace_smoke_seq/summary.md`.
 - Required plusargs were present in both command lines:
   `+FETCH_DELIVERY_CHECK +FETCH_DELIVERY_STRICT +FETCH_OWNER_CHECK
   +FETCH_OWNER_STRICT +PERF_PROFILE`.
@@ -259,6 +260,24 @@ Residual blocker: `xs_f2_owner_idx_mismatch` is still nonzero
 (Dhrystone 202, CoreMark iter1 138) and `xs_f2_owner_no_head` is still nonzero
 (Dhrystone 107, CoreMark iter1 2,977). This confirms the next RTL slice must
 remove wrong-owner packet production rather than only renaming counters.
+
+2026-05-06 non-live owner trace hook:
+
+| Workload | Status | Timed cycles | Timed instret | Trace count | Notes |
+|---|---|---:|---:|---:|---|
+| Dhrystone 100 | PASS | 26,394 | 48,436 | 309 | `TRACE_FETCH_OWNER` count equals `xs_f2_owner_no_head + xs_f2_owner_idx_mismatch` (`107 + 202`) |
+| CoreMark 1 | PASS | 207,775 | 318,379 | 3,115 | `TRACE_FETCH_OWNER` count equals `xs_f2_owner_no_head + xs_f2_owner_idx_mismatch` (`2,977 + 138`) |
+
+Accepted diagnostic artifact:
+`benchmark_results/20260506_fetch_owner_trace_diag_seq/summary.md`.
+The hook is simulation-only and prints only when a completed IFU work candidate
+is not live at the FTQ IFU-writeback owner. The first Dhrystone hit occurs at
+cycle 20 (`pc=0x8000004c`, `seq=0x80000058`) immediately after the prior
+same-owner packet popped the IFU-writeback owner. Later mismatch samples show
+`work_idx/tag` one owner behind the FTQ IFU-writeback owner. This narrows the
+blocker to the IFU-owner completion boundary: `f2_work_owner_complete_c` can
+complete an FTQ owner before all required same-owner packet PCs have been
+delivered. It is not a decode-side IBuffer dequeue problem.
 
 2026-05-06 owner-view smoke after adding the explicit IFU-writeback owner alias:
 
@@ -561,6 +580,7 @@ but none is a scoreable Stage 1 mechanism.
 | Split request credit from F2 hold | `benchmark_results/20260506_icq_line_hold_splitstall_smoke_seq/summary.md` | Strict delivery fails, e.g. non-contiguous owner stream after F2 starts consuming line state under the wrong owner. | Rejected. It removed the starvation symptom but exposed missing owner semantics. |
 | Explicit F2 line register | `benchmark_results/20260506_f2_line_register_smoke_seq/summary.md` | Strict delivery fails immediately: expected `0x80000042`, got `0x80000002` for the same FTQ owner stream. | Rejected. The current frontend can issue multiple same-line request/allocation events, so a naive line latch replays an earlier line position under a younger owner. |
 | Hold-only IFU cursor decoupling plus one-target conditional runahead | `benchmark_results/20260506_bpu_cond_runahead_smoke_seq/summary.md` | Dhrystone 100 TIMEOUT after 86 retired instructions; CoreMark fails strict delivery (`expected 0x800027d8`, got `0x80002056`); `xs bpu runahead fires` is `0`, while F2 owner-index mismatch dominates. | Rejected and backed out. The failure is not useful BPU runahead; it proves the cursor cannot be held independently unless it also advances from the FTQ IFU-writeback owner at the correct phase. |
+| Gate IBuffer dequeue on owner-ready | `benchmark_results/20260506_ibuffer_owner_ready_deq_smoke_seq` | Dhrystone/CoreMark abort quickly under strict owner checking with `fetch owner stream duplicate or skip`, e.g. expected `0x80000058` but replayed `0x8000004c`. | Rejected and backed out. Commit-side packet dequeue is the wrong control point; the owner has already been completed too early before this logic can repair the stream. |
 
 Root cause: line data and FTQ ownership are not the same object. The line fill
 may be physically shared across multiple same-line predicted owners, but packet
