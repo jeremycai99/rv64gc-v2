@@ -39,6 +39,24 @@ from pathlib import Path
 from collections import Counter
 
 
+HEADSTALL_RE = re.compile(
+    r"\[HEADSTALL\] cyc=(?P<cyc>\d+) "
+    r"head=(?P<head>\d+) "
+    r"pc=(?P<pc>[0-9a-fA-F]+) "
+    r"load=(?P<load>[01]) "
+    r"store=(?P<store>[01]) "
+    r"branch=(?P<branch>[01]) "
+    r"bpu_type=(?P<bpu_type>\d+) "
+    r"csr=(?P<csr>[01]) "
+    r"fence=(?P<fence>[01]) "
+    r"fencei=(?P<fencei>[01]) "
+    r"mret=(?P<mret>[01]) "
+    r"sret=(?P<sret>[01]) "
+    r"sfence=(?P<sfence>[01]) "
+    r"ecall=(?P<ecall>[01]) "
+    r"wfi=(?P<wfi>[01])"
+)
+
 PIPE_RE = re.compile(
     r"\[PIPE schema=pipe\.v1\] cyc=(?P<cyc>\d+) "
     r"rst=(?P<rst>[01]) "
@@ -97,23 +115,56 @@ def classify(rec: dict[str, int]) -> str:
     return "RAMP"
 
 
-def parse_trace(path: Path) -> list[dict[str, int]]:
+def parse_trace(path: Path) -> tuple[list[dict[str, int]], dict[int, dict]]:
+    """Parse pipe.v1 records and headstall records (keyed by cycle)."""
     records = []
+    headstall_by_cyc: dict[int, dict] = {}
     with path.open() as f:
         for line in f:
             m = PIPE_RE.search(line)
-            if not m:
+            if m:
+                d = m.groupdict()
+                rec = {k: int(v) for k, v in d.items()}
+                records.append(rec)
                 continue
-            d = m.groupdict()
-            rec = {
-                k: int(v)
-                for k, v in d.items()
-            }
-            records.append(rec)
-    return records
+            m = HEADSTALL_RE.search(line)
+            if m:
+                d = m.groupdict()
+                cyc = int(d["cyc"])
+                pc = int(d["pc"], 16)
+                headstall_by_cyc[cyc] = {
+                    "pc": pc,
+                    "load": int(d["load"]),
+                    "store": int(d["store"]),
+                    "branch": int(d["branch"]),
+                    "bpu_type": int(d["bpu_type"]),
+                    "csr": int(d["csr"]),
+                    "fence": int(d["fence"]) | int(d["fencei"]),
+                    "trap": (int(d["mret"]) | int(d["sret"]) | int(d["sfence"])
+                             | int(d["ecall"]) | int(d["wfi"])),
+                }
+    return records, headstall_by_cyc
 
 
-def render(records: list[dict[str, int]], top_runs: int) -> str:
+def classify_uop_type(hs: dict) -> str:
+    if hs["load"]:
+        return "load"
+    if hs["store"]:
+        return "store"
+    if hs["branch"]:
+        return "branch"
+    if hs["csr"]:
+        return "csr"
+    if hs["fence"]:
+        return "fence"
+    if hs["trap"]:
+        return "trap"
+    return "alu_or_mul_div"
+
+
+def render(records: list[dict[str, int]], top_runs: int,
+           headstall_by_cyc: dict[int, dict] | None = None,
+           top_pcs: int = 10) -> str:
     if not records:
         return "no [PIPE schema=pipe.v1] records found in trace"
 
@@ -175,6 +226,79 @@ def render(records: list[dict[str, int]], top_runs: int) -> str:
             out.append(f"| {r} | {length} | {cyc} | {cat} |")
         out.append("")
 
+    # Per-PC BACKEND_STALL attribution (requires +TRACE_HEAD_STALL)
+    if headstall_by_cyc:
+        backend_stall_cycs = [
+            records[i]["cyc"] for i, c in enumerate(cat_per_cycle)
+            if c == "BACKEND_STALL"
+        ]
+        # Cross-reference: for each BACKEND_STALL cycle, what was at head?
+        pc_counter: Counter = Counter()
+        type_counter: Counter = Counter()
+        pc_type_counter: Counter = Counter()  # (pc, uop_type)
+        for cyc in backend_stall_cycs:
+            hs = headstall_by_cyc.get(cyc)
+            if hs is None:
+                continue
+            pc = hs["pc"]
+            utype = classify_uop_type(hs)
+            pc_counter[pc] += 1
+            type_counter[utype] += 1
+            pc_type_counter[(pc, utype)] += 1
+
+        if pc_counter:
+            backend_stall_total = len(backend_stall_cycs)
+            attributed = sum(pc_counter.values())
+            out.append(f"**Per-PC BACKEND_STALL attribution** "
+                       f"({attributed:,} of {backend_stall_total:,} cycles "
+                       f"correlated with [HEADSTALL] events):")
+            out.append("")
+
+            out.append("Top PCs by BACKEND_STALL contribution:")
+            out.append("")
+            out.append("| Rank | PC | Cycles | % of bs cycles | % of run | uop_type |")
+            out.append("|---:|---|---:|---:|---:|---|")
+            total = len(records)
+            for r, ((pc, utype), c) in enumerate(
+                    pc_type_counter.most_common(top_pcs), 1):
+                out.append(f"| {r} | `0x{pc:x}` | {c:,} | "
+                           f"{100*c/backend_stall_total:.1f}% | "
+                           f"{100*c/total:.2f}% | {utype} |")
+            out.append("")
+
+            out.append("Stall by uop type:")
+            out.append("")
+            out.append("| uop_type | Cycles | % of bs cycles |")
+            out.append("|---|---:|---:|")
+            for utype, c in type_counter.most_common():
+                out.append(f"| {utype} | {c:,} | "
+                           f"{100*c/backend_stall_total:.1f}% |")
+            out.append("")
+
+            # Top-3 RTL action recommendations
+            out.append("**Top-3 BACKEND_STALL sources for RTL targeting:**")
+            out.append("")
+            top3 = pc_type_counter.most_common(3)
+            for r, ((pc, utype), c) in enumerate(top3, 1):
+                pct = 100 * c / total
+                out.append(f"{r}. PC `0x{pc:x}` ({utype}): {c:,} cycles, "
+                           f"{pct:.2f}% of run. RTL targets:")
+                if utype == "load":
+                    out.append(f"   - Load-to-use latency reduction at this PC")
+                    out.append(f"   - Speculative wakeup for dependents")
+                    out.append(f"   - Per-PC dcache prefetch")
+                elif utype == "branch":
+                    out.append(f"   - TAGE training improvement at this PC")
+                    out.append(f"   - Loop predictor if it's a loop branch")
+                    out.append(f"   - Earlier resolution path")
+                elif utype == "alu_or_mul_div":
+                    out.append(f"   - MUL/DIV pipelining if applicable")
+                    out.append(f"   - Operand-chain bypass widening")
+                    out.append(f"   - Per-PC speculative wakeup")
+                else:
+                    out.append(f"   - Investigate {utype} at this PC")
+            out.append("")
+
     # Pipeline-state hints for FRONTEND_BUBBLE cycles
     fe_bubble_cycles = [
         i for i, c in enumerate(cat_per_cycle) if c == "FRONTEND_BUBBLE"
@@ -198,14 +322,16 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("trace", type=Path, help="dsim.log or trace file with [PIPE schema=pipe.v1] lines")
     ap.add_argument("--top-runs", type=int, default=10, help="show top N longest non-productive runs")
+    ap.add_argument("--top-pcs", type=int, default=10,
+                    help="show top N PCs by BACKEND_STALL contribution (requires +TRACE_HEAD_STALL)")
     args = ap.parse_args(argv)
 
     if not args.trace.exists():
         print(f"error: {args.trace} does not exist", file=sys.stderr)
         return 2
 
-    records = parse_trace(args.trace)
-    print(render(records, args.top_runs))
+    records, headstall_by_cyc = parse_trace(args.trace)
+    print(render(records, args.top_runs, headstall_by_cyc, args.top_pcs))
     return 0
 
 
