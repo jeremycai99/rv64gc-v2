@@ -645,6 +645,123 @@ functionally a no-op because `f2_seq_valid` is itself computed from F2's
 byte-consumption state — the gate I removed was redundant, not the
 throttle. Reverted; tree at 8b30714 + α' (no further RTL changes).
 
+### Architectural redirect (2026-05-05 final): frontend-proactive is the answer
+
+User pushback rejected the "dcache hit latency reduction" framing as a
+solution path. Rationale: BOOM/XiangShan operate at 3-4-cycle load-to-use
+(same class as rv64gc-v2's 3-cycle) yet achieve higher IPC. So load
+latency isn't the differentiator.
+
+What IS the differentiator, per inspection of BOOM v4
+`src/main/scala/v4/ifu/frontend.scala`:
+
+```scala
+val s0_valid = WireInit(false.B)
+val s1_valid = RegNext(s0_valid, false.B)
+val s2_valid = RegNext(s1_valid && !f1_clear, false.B)
+...
+when (s2_valid && f3_ready) {
+    when (s1_valid && s1_vpc === f2_predicted_target && !f2_correct_f1_ghist) {
+        // s0 advances based on BPD's predicted target
+    }
+}
+```
+
+BOOM's frontend pipeline has **s0 advance proactively based on BPD
+prediction every cycle** (not waiting for s2's outcome). s1 captures
+TLB+icache request, s2 captures icache response. The f3 queue
+(`Module(new Queue(new FetchBundle, 1, pipe=true, flow=false))`)
+absorbs rate mismatch. f3_ready provides backpressure to s0.
+
+Our equivalent: F1 advances **reactively** based on `f2_seq_next_pc`
+(case 4 in the priority chain). F1 only advances when F2 emits.
+This is the lockstep that limits frontend supply to ~58.5% of cycles.
+
+The "BACKEND_STALL" measured at 11.3% is partially intrinsic but is
+ALSO a symptom of low frontend supply: fewer parallel dependency
+chains in flight means each chain's latency manifests as ROB head
+stall instead of being overlapped. With BOOM-style frontend supply
+(close to 1 packet per cycle), more chains overlap and the load
+latency hides.
+
+### Why Stage 1 closure has been blocked
+
+The architectural fix IS clear and matches BOOM:
+
+1. F1 advances per its own F1-stage BTB prediction each cycle
+   (proactive, not waiting for F2 emit)
+2. F2's data path through `icache_resp_queue` (already wired at
+   bcf9b5c) absorbs the rate mismatch when F1 fires ahead of F2
+3. F2 captures pc + data from queue head at line-boundary transitions,
+   not from `f1_pc` each cycle (decouples F2 from F1 runahead)
+
+Steps 1+3 were the "F2 decoupling" cascade I kept retreating from. The
+retreat was justified per single-session safety budget, but the user is
+correct that the cumulative session count without progress is the
+larger cost.
+
+### Next-session focused plan (BOOM-grounded)
+
+Single concrete change: modify fetch_unit.sv's `next_pc` priority chain
+to make F1 runahead the default advance, with F2-emit case 4 as the
+tiebreaker:
+
+```sv
+always_comb begin
+    if (redirect_valid)              next_pc = redirect_pc;
+    else if (f2_bpu_redirect)        next_pc = f2_bpu_target;
+    else if (f2_duplicate_suppressed_c) next_pc = f2_duplicate_next_pc_c;
+    else if (f1_valid && !fe_stall) begin
+        // F1 RUNAHEAD: advance per F1-stage BTB prediction each cycle
+        if (btb_hit && btb_branch_type != BT_COND)
+            next_pc = btb_target;       // unconditional (JAL/JALR/CALL/RET)
+        else
+            next_pc = next_line_pc;     // sequential to next line
+    end
+    else if (f2_seq_valid && f2_pc_consumed_c)
+                                     next_pc = f2_seq_next_pc;
+    else                             next_pc = f1_pc;  // hold
+end
+```
+
+Plus F2 update at line 1267: replace `f2_pc_r <= f1_pc` with conditional
+update that captures from queue head only at line-boundary transitions
+(detected via extract_count covering remaining bytes in line):
+
+```sv
+end else if (line_boundary_crossed) begin
+    f2_pc_r <= icq_deq_pc;             // capture next line PC from queue head
+end else if (f2_will_emit_c) begin
+    f2_pc_r <= f2_seq_next_pc;         // within-line advance
+end else begin
+    f2_pc_r <= f2_pc_r;                // hold
+end
+```
+
+Predicted counter movement (cm10):
+- packet_empty_noemit_dup: 725k -> ~50k (suppressor lockstep broken)
+- xs_dup_last_emit: 783k -> ~50k
+- FRONTEND_BUBBLE: 116k cycles -> ~30k
+- Indirectly: BACKEND_STALL reduces because more parallel chains overlap
+- timed cycles cm10: 2,034,653 -> ~1,800,000 (Stage 1 close achievable)
+- IPC cm10: 1.564 -> ~1.78
+
+The harness gates: golden PC scoreboard catches architectural divergence
+(line skipping per the prior unsafe-fix trace). SVA invariants in
+fetch_unit.sv catch pipeline timing violations. counter_invariants
+enforce zero-asserts on owner-identity counters. Predicted counter
+movement verified by --expect-counter-decrease packet_empty:500000.
+
+The remaining work in a focused next session is:
+- ~30 LOC fetch_unit.sv next_pc chain rewrite
+- ~50 LOC F2 pc_r conditional update + line-boundary detection
+- ~30 LOC F2 data latching at line boundary (queue head's data)
+- Build + signoff verification
+
+This is genuine multi-hour-not-multi-day work IF the harness gates
+catch issues incrementally. Each retime point validated by SVA before
+the next is touched.
+
 ### CORRECTION (2026-05-05 late): branch cluster is NOT a loop pattern
 
 The earlier "loop predictor for branch cluster" recommendation below was
