@@ -552,10 +552,44 @@ trip is the signal that the architectural assumption is wrong.
 | Iteration | Status | Result |
 |---|---|---|
 | α' (F2 emit backpressure on `!packet_buf_full`) | LANDED | PASS all 3 rows at baseline-identical numbers (dhry100 26913 mcycle / dhry300 77268 / cm10 2045171). No perf delta because `packet_buf_full` never asserts in the lockstep regime (`packet_buf_occ_max=1`); the change is structurally correct and is the prerequisite for the buf-fill regime that γ' will create. Mechanism class `default_rtl` retained because the change is a safety/correctness handshake, not an architectural mechanism on its own. |
-| α'' (delete dup suppressor) | NOT STARTED | Requires deeper F2-data-valid dynamics investigation. The α' gate alone does not make the suppressor vestigial because F2 can hold data for reasons beyond `packet_buf_full` (initial fill, icache miss, redirect glue cycles). |
-| β' (owner-tagged packets epoch-filter at decode pop) | PARTIALLY DONE | `fetch_packet_t` already carries `ftq_idx`/`ftq_epoch`/`ftq_alloc_tag` (lines 2453-2455 of fetch_unit.sv). Decode-pop epoch filter not yet wired. |
-| γ' (FTQ alloc decoupling + BP_RUNAHEAD_MAX gate) | NOT STARTED | Multi-day RTL effort. The current `ftq_need_alloc_c` blocks alloc on `req_pc_c == f2_pc_r` and `req_pc_c == ftq_last_alloc_req_pc_r`; replacing those with an alloc-when-`count_alloc_to_ifu < BP_RUNAHEAD_MAX` policy requires reworking how BPU produces predicted PCs (currently coupled to live `f1_pc`). |
-| γ'' (ICache prefetch by FTQ entry) | NOT STARTED | Depends on γ'. |
+| α'' (delete dup suppressor) | BLOCKED | Requires F2-data lifecycle change. `f2_data_valid` is combinational off `ic_resp_valid` (line 581 of fetch_unit.sv), not a register that clears on emit. A safe replacement mechanism (e.g., `f2_emitted_this_data_r` latch tracking ic_resp_valid edge) is structural cleanup, not a perf mover. Defer until the icache response queue (γ' phase 0) is in place. |
+| β' (owner-tagged packets epoch-filter at decode pop) | PARTIALLY DONE | `fetch_packet_t` already carries `ftq_idx`/`ftq_epoch`/`ftq_alloc_tag` (lines 2453-2455 of fetch_unit.sv). Decode-pop epoch filter not yet wired. Functionally a no-op until γ' creates a regime with cross-epoch packets in flight. |
+| γ' phase 0 (icache response queue) | DESIGN-PENDING | Newly identified prerequisite. The icache (`src/rtl/core/cache/icache.sv`) has a single request port and single response port (`req_valid`/`req_addr`/`resp_valid`/`resp_data`); F2's `f2_data_valid = ic_resp_valid` directly couples F2 to the icache's combinational response signal. For F1 to fire requests faster than F2 consumes data, an icache→F2 response queue must absorb the rate mismatch. Estimated scope: ~150-300 LOC for a new module + integration, plus careful handshake design (rate, depth, flush-on-redirect semantics, response-to-FTQ-entry mapping). 2-3 days. |
+| γ' phase 1 (F1 advance decoupled from F2 consumption) | BLOCKED | Depends on γ' phase 0. The current F1 next-PC selection at lines 170-187 of fetch_unit.sv has the priority chain `redirect > f2_bpu_redirect > f2_duplicate_suppressed > (f2_seq_valid && f2_pc_consumed_c) > hold`. The lockstep is at the 4th term: `f2_seq_valid` is itself computed from F2's byte-consumption state, so removing the explicit `f2_pc_consumed_c` gate (tested 2026-05-05 as iter γ'-test-1) is a no-op — the lockstep is structural, not gate-removable. Replacing this term with an F1-stage BTB-derived next-PC (using `btb_hit`/`btb_target` available at line 652-653) would let F1 advance on its own prediction, but would also produce icache responses that F2 can't immediately consume; hence the queue requirement. |
+| γ' phase 2 (FTQ alloc rate decoupled) | BLOCKED | Depends on γ' phase 1. The two FTQ alloc dedup gates (`req_pc_c != f2_pc_r` and `req_pc_c != ftq_last_alloc_req_pc_r` at lines 463-465) are correct given the current single-cycle-per-request stream; replacing them with `count_alloc_to_ifu < BP_RUNAHEAD_MAX` requires the F1 stream to actually produce distinct PCs faster than F2 pops them. |
+| γ'' (ICache prefetch by FTQ entry) | BLOCKED | Depends on γ' phase 2. |
+
+### γ'-test-1 result (2026-05-05)
+
+Tested change: drop `f2_pc_consumed_c` gate from `next_pc` selection at
+line 180 of fetch_unit.sv. Hypothesis: F1 sequential advance is held back
+by the consumption check; allowing advance on `f2_seq_valid` alone would
+let F1 fire ahead.
+
+Result: PASS at byte-identical numbers (dhry100 26913 mcycle, all
+counters identical including `xs_ftq_occ_max=1`, `xs_packet_buf_occ_max=1`,
+`xs_dup_last_emit=8990`, `xs_ftq_alloc_cycles=17029`). The change was
+functionally a no-op because `f2_seq_valid` is itself computed from F2's
+byte-consumption state — the gate I removed was redundant, not the
+throttle. Reverted; tree at 8b30714 + α' (no further RTL changes).
+
+### Architectural conclusion
+
+Stage 1 close requires γ' phase 0 (icache response queue) before any of
+phase 1, phase 2, or γ'' can land safely. The harness is correctly
+identifying this as a structural problem: every gate-removal experiment
+in fetch_unit.sv that doesn't address the icache→F2 single-response
+coupling is either a no-op (γ'-test-1) or trips golden PC (α as
+originally specified). The architectural unlock is:
+
+1. **icache response queue** (new module `src/rtl/core/cache/icache_resp_queue.sv` or extension of fetch_packet_buffer): FIFO of in-flight icache responses keyed by FTQ entry.
+2. **F1 predicts next-PC from F1-stage BTB** (already available at line 652-653, currently consumed only at F2): use `btb_hit && btb_target` to drive F1 advance independent of F2.
+3. **FTQ alloc decoupling**: replace `req_pc_c != f2_pc_r` and `req_pc_c != ftq_last_alloc_req_pc_r` with bounded runahead distance.
+4. **F2 dequeue from response queue** (replacing direct `ic_resp_valid` read): F2 pops one entry per emit cycle, processes it.
+5. **Owner mapping**: each queue entry carries the FTQ idx that requested it; F2 captures owner from queue entry, not from live BPU state.
+
+This is the deliberate RTL effort. The harness (golden PC, counter
+invariants, signoff manifest) is in place to gate it.
 
 The harness is operating correctly: golden PC scoreboard caught the
 α-as-originally-specified mistake instantly, counter_invariants hold
