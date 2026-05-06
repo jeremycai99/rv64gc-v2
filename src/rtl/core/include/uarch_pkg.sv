@@ -233,6 +233,8 @@ package uarch_pkg;
         logic                           ftq_owner_complete;
         logic [63:0]                    ftq_block_pc;
         logic [5:0]                     ftq_start_offset;
+        logic [63:LINE_BITS]            ifu_line_addr;
+        logic                           ifu_line_reused;
         logic [63:0]                    ftq_bp_lookup_pc;
         logic                           ftq_pred_valid;
         logic                           ftq_pred_taken;

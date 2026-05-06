@@ -1,23 +1,16 @@
 # RV64GC v2 Microarchitecture Specification
 
 **Status:** CURRENT (4-wide OoO implementation; supersedes original 6-wide spec)
-**Last revised:** 2026-05-02
+**Last revised:** 2026-05-06
 **Repo HEAD at revision:** `master @ a6a0443`
 **Authoritative sources:** `src/rtl/core/include/rv64gc_pkg.sv` (parameters); `src/rtl/core/rv64gc_core_top.sv` (top-level wiring); per-module RTL.
 
-> ## ⚠ Major revision history
+> ## Scope
 >
-> The original v2 spec described a **6-wide OoO** target. After the
-> 2026-04-25 design pivot (`doc/4wide_pivot_plan_2026-04-25.md`), the
-> design was narrowed to **4-wide** in 5 staged refactors. The
-> Stage-2 Load1-bypass functional bug was diagnosed and fixed at
-> commit `cd54cf1`. Five follow-up gap-closure cycles (A, C, B, E, F)
-> all REFUTED with data; design is structurally well-tuned for the
-> current parameter point.
->
-> **Final sign-off:** PARTIAL-FLOOR (`doc/4wide_signoff_2026-05-01.md`) —
-> functional 20/20 PASS, clockcheck 3/3 PASS, cm iter1 5.01 CM/MHz,
-> cm iter10 5.37 CM/MHz, dhrystone 2.42 DMIPS/MHz.
+> This document describes the implemented microarchitecture, intended
+> architectural contracts, and core/simulator boundary. Performance comparisons
+> and run reports belong in the evaluation docs and archives, not in this
+> specification.
 
 ---
 
@@ -51,26 +44,160 @@
 | `COMMIT_WIDTH` | 4 | in-order; in-window prefix of ready uops |
 | `FETCH_BYTES` | 16 | 4 × 4-byte ALIGN slots (RVC handled in decompress) |
 
-### 1.3 Performance Targets vs Achieved (current)
+### 1.2.1 Width Interpretation
 
-| Metric | Target (MegaBoom 4-wide floor) | Stretch (Cortex-A72) | Achieved |
-|---|---:|---:|---:|
-| CoreMark CM/MHz (iter1) | ≥ 6.2 | ≥ 8.24 | **5.01** |
-| CoreMark CM/MHz (iter10) | ≥ 6.2 | ≥ 8.24 | **5.37** |
-| Dhrystone DMIPS/MHz | ≥ 4.00 | ≥ 4.72 | **2.42** |
+Decode width is only one dimension of a core. Effective work delivered to the
+backend also depends on fetch width, fetch buffering, prediction quality, branch
+recovery, macro-op/uop treatment, issue topology, LSU provisioning, and commit
+policy. The local design should therefore describe each width independently
+instead of treating "4-wide" as a single property.
+
+| Dimension | rv64gc-v2 current RTL | Architectural implication |
+|---|---|---|
+| Fetch bytes | 16 B/cycle | Four aligned 32-bit slots per fetch group; RVC can increase instruction density. |
+| Decode / rename / dispatch / commit | 4 / 4 / 4 / 4 | Sustained architectural retirement is commit-bound at 4 uops/cycle. |
+| Issue topology | Distributed IQs with more issue ports than commit width | Short bursts can exceed commit bandwidth, but retirement remains in-order. |
+| Frontend ownership | FTQ-backed fetch blocks, with F1 still coupled to F2 packet progress | The intended direction is stronger BPU/FTQ ownership and packet buffering, not decode widening. |
+
+Local source anchors:
+
+- rv64gc-v2 widths: `src/rtl/core/include/rv64gc_pkg.sv`.
+- rv64gc-v2 distributed issue topology: `src/rtl/core/rv64gc_core_top.sv`.
+
+### 1.3 Frontend Ownership Model
+
+The frontend is moving toward a BPU-owned fetch-block contract, but the
+architectural owner remains the FTQ. The BPU may choose the next predicted PC;
+the FTQ owns the dynamic block identity, epoch, redirect lifetime, training
+metadata, and delivery accounting.
+
+Current default RTL:
+
+- F1 PC generation is still coupled to F2 packet progress and architectural
+  redirect priority.
+- `ftq.sv` tracks allocated-not-requested, requested-not-written-back, and
+  writeback-to-commit occupancy, plus current IFU request owner, current
+  IFU-writeback owner, next IFU-writeback owner, commit/training head, and
+  allocation tags. The requested-not-written-back occupancy is exposed as its
+  own count so future runahead limits can distinguish queued owner requests
+  from owners already delivered toward commit.
+- The IFU request owner and IFU-writeback owner are separate pointers. In the
+  current monolithic fetch unit, request-owner progress is driven by the normal
+  request allocation event; the FTQ handles same-cycle
+  allocation-to-IFU transfer when the owner has not yet reached the registered
+  allocation-to-request region. The local IFU request boundary is expressed as
+  valid/ready/fire; ready is gated by FTQ enqueue readiness, I-cache response
+  queue capacity, and IBuffer capacity so future runahead has a structural
+  backpressure point.
+- There is no FTQ-level prefetch pointer yet. The existing
+  `next_line_prefetch_buffer.sv` is a local line buffer and should not be treated
+  as XiangShan-style `pfPtr` ownership.
+- `icache_resp_queue.sv` is a line-response FIFO, not an architectural owner.
+  The IFU accepts a queue head only when its explicit response-line address
+  matches the current IFU work cursor line. Responses with invalid or stale FTQ
+  epoch metadata are drained by the FTQ flush/epoch rule and are never exposed
+  as instruction data. Same-line owners may consume the local F2 line-state
+  record without treating the queue head as the owner cursor.
+- `fetch_unit.sv` now has a stateful IFU work item carrying valid, PC,
+  FTQ idx/epoch/alloc-tag, FTQ entry, line identity, and completion fields.
+  This cursor is the single registered F2 work state; the previous raw F2
+  PC/FTQ mirror-register set has been retired. Line acceptance and
+  line-state matching use the cursor's active `line_addr`; extraction,
+  predecode, owner-live checks, packet metadata, and the named owner-completion
+  decision use the `f2_work_*` aliases sourced from this cursor. The FTQ
+  IFU-writeback owner remains the architectural completion owner, but it is not
+  a combinational substitute for the current in-owner PC. On a clean IFU-owner
+  completion, the cursor may take the next FTQ
+  IFU-writeback owner identity while keeping the cursor-computed next PC; the
+  FTQ entry start PC is request metadata, not a replacement for the in-owner PC.
+  Simulation trace/probe consumers that describe the active F2 PC or FTQ owner
+  also read the `f2_work_*` aliases, so they follow the same architectural
+  cursor rather than a legacy raw-F2 name.
+  The RTL names the cursor policy cases explicitly: redirect handoff, matching
+  redirect handoff through the FTQ next-owner view, FTQ next-owner completion
+  handoff, normal request-owner load, and remainder request-owner load.
+  Simulation invariants check that IFU request-pop is a real ready/enqueue
+  handshake, that selected FTQ next-owner handoffs load the cursor on the
+  following cycle, and that a wrong-owner IFU completion candidate cannot pop
+  the FTQ IFU-writeback owner. The profile counters distinguish architectural
+  completion-owner mismatches from diagnostic cursor-vs-writeback skew.
+  The next XiangShan-style split is to make this cursor-to-FTQ handoff more
+  complete under explicit owner/completion rules.
+- `fetch_packet_buffer.sv` is the decode-facing owner-aware IBuffer boundary.
+  It stores complete fetch packets with FTQ idx/epoch/alloc-tag and explicit
+  IFU line metadata (`ifu_line_addr`, `ifu_line_reused`), exposes
+  enqueue/dequeue fire events, and classifies the head packet as matching,
+  stale, or owner-complete against the FTQ commit owner. When empty, it may
+  flow an accepted IFU packet directly to decode in the same cycle; this
+  flow-through path is still owned by the IBuffer, so decode no longer consumes
+  the separate `packet_buf_in` direct-bypass path.
+
+Intended BPU/FTQ contract:
+
+1. F1 may issue the next predicted fetch block when a matching FTQ owner and
+   downstream packet-buffer slot can be reserved.
+2. Every request, I-cache response, extracted packet, redirect, and training
+   update carries FTQ idx/epoch/alloc-tag identity or is discarded by an
+   FTQ-defined flush/epoch rule.
+3. F2 consumes owned line state exactly once for each architecturally required
+   PC. The IFU work cursor tracks the current PC within the FTQ owner, while
+   the FTQ IFU-writeback pointer names the completion owner.
+4. The IBuffer stores complete fetch packets with owner identity, block PC,
+   per-slot PCs, IFU line identity, predicted-control metadata, and
+   owner-complete state.
+5. Duplicate suppression should become structurally unnecessary once packets
+   are produced and consumed under explicit owner identity.
+
+Same-line fetch ownership is explicit at the line-data boundary. The frontend
+can create multiple request/allocation events within the same I-cache line. F2
+may share the physical line data across those events only when the line-state
+address and epoch match the IFU work cursor, but it must not replay an earlier
+owner stream under a younger FTQ owner. Packet production remains per FTQ owner
+even when the line fill is shared.
+
+Non-architectural local recovery patterns:
+
+- F2 or `icache_resp_queue` must not recover correctness by dropping entries
+  based only on current queue head, last-emitted PC, or a local stale-entry
+  heuristic.
+- Standalone decoded-op replay, same-line handoff, same-FTQ tail carry, and
+  sequential lookahead are not part of the active frontend architecture because
+  they bypass the FTQ/BPU ownership contract. Their opt-in plusarg controls
+  have been retired from the active RTL control surface.
+- Verification hooks such as golden PC checking and owner-identity counter
+  invariants validate the contract; they are not pipeline mechanisms.
+
+### 1.3.1 ASIC-Clean Core Boundary
+
+The core must remain a general CPU core. Fixed
+`tohost` policy, test pass/fail encoding, and cross-suite ABI adaptation
+belong in the simulator platform or SoC wrapper, not in the architectural core.
+
+Current boundary:
+
+| Concern | Owner | Current state |
+|---|---|---|
+| Architectural CPU pipeline | `rv64gc_core_top.sv` and child RTL | No `tohost_addr` input and no `tohost_wr_*` outputs. |
+| L1D/store behavior | `dcache.sv` | No magic-address exemption for `0x80001xxx`; endpoint stores follow normal store-miss behavior. |
+| Simulation endpoint detection | `tb_top.sv` | Harness observes ordinary LSU store traffic to configurable `TOHOST_ADDR`. |
+| Workload image/ABI adaptation | `tools/sim_platform.py` | Prepares broad coverage manifests, adds per-row `SIM_ABI`, and derives `TOHOST_ADDR` from ELF symbols when available. |
+
+This mirrors the BOOM/Chipyard separation: the harness may understand HTIF,
+ELF symbols, and test exits, but the core itself should only expose normal
+architectural interfaces plus implementation counters needed for validation.
 
 ### 1.4 Top-Level Pipeline Diagram
 
 #### Front-End → Rename → Dispatch (4-wide)
 
 ```
-                              FRONT-END (4-wide, ~5 stages incl. UOC bypass)
+                              FRONT-END (4-wide, BPU/FTQ-owned contract)
    ┌───────┐  ┌─────────────┐  ┌──────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
-   │  PC   │  │  IF1 / IF2  │  │  PRED2   │  │  DECODE │  │ FUSION  │  │  RENAME │
-   │       │  │  L1I + ITLB │  │  TAGE-SC │  │         │  │ DETECT  │  │  + RAT  │
-   │ +BTB  │→ │  +UOC bypass│→ │  +RAS    │→ │ 4-wide  │→ │ + LB    │→ │  + free │
-   │ +TAGE │  │  +NLP fetch │  │  +update │  │ + RVC   │  │ + emit  │  │   list  │
-   │ +RAS  │  │             │  │          │  │ decomp  │  │         │  │ +ckpt   │
+   │  BPU  │  │  FTQ / IFU  │  │ PREDCHK  │  │  DECODE │  │ FUSION  │  │  RENAME │
+   │       │  │  L1I + ITLB │  │ + IBUF   │  │         │  │ DETECT  │  │  + RAT  │
+   │ +BTB  │→ │ fetch block │→ │ control  │→ │ 4-wide  │→ │ + emit  │→ │  + free │
+   │ +TAGE │  │ ownership   │  │ repair   │  │ + RVC   │  │         │  │   list  │
+   │ +RAS  │  │ + runahead  │  │ + queue  │  │ decomp  │  │         │  │ +ckpt   │
    └───────┘  └─────────────┘  └──────────┘  └─────────┘  └─────────┘  └─────────┘
                                                                             │
                                                                             ▼
@@ -162,7 +289,6 @@ Each EU is its own block; CDB-port sharing and bypass-coverage are explicit.
       │   slot[4] ← load_wb_data[1] Load1           COMBINATIONAL ★ │
       │                                                             │
       │   NOT BYPASSED: CDB[3] (ALU3, DIV, CSR)                     │
-      │     Cycle E tested adding bypass slot[5]; REFUTED (0% IPC). │
       │     Consumers fall back to PRF read at T+3 (1 extra cycle). │
       │                                                             │
       │   ★ Combinational bypass is REQUIRED for loads:             │
@@ -218,15 +344,74 @@ These are the structural constraint points that any optimization needs to be awa
 ### 2.1 Fetch Unit (`src/rtl/core/fetch/fetch_unit.sv`)
 
 - **Width:** 16 bytes/cycle (`FETCH_BYTES = 16`); up to 4 instructions (RVC: up to 8 if all compressed)
-- **Pipeline:** 2 stages (IF1: PC gen + L1I tag/data probe + BPU lookup; IF2: way mux + predecode)
+- **Current pipeline:** 2 stages (IF1: PC gen + L1I tag/data probe + BPU lookup; IF2: way mux + predecode).
 - **PC redirect sources** (priority order):
   1. Reset / external
   2. Commit-time flush (full architectural flush from ROB on mispredict reaching commit)
-  3. BRU early redirect (mechanism present but plusarg-gated OFF by default — Cycle C REFUTED enabling it)
+  3. BRU early redirect (mechanism present but plusarg-gated OFF by default)
   4. BPU redirect (taken-branch BTB+TAGE prediction)
   5. Sequential PC + 16
 - **L1I:** see §11
-- **Stall sources:** I-cache miss, pipeline backpressure (FTQ full / packet buffer full / rename stall), wait-for-Icresp, NLP miss
+- **Current advance model:** F1 is still coupled to F2 packet progress. This
+  means the BPU can predict a target, but the frontend generally does not build
+  a multi-entry predicted-block stream ahead of decode.
+- **Current IFU work cursor:** the default RTL has a stateful work item carrying
+  current PC, line address, FTQ identity, FTQ metadata, and completion fields.
+  It is the single registered F2 work state; request anti-duplication, NLPB
+  response matching, line acceptance, line-state matching, extraction,
+  predecode, owner-live checks, packet construction, owner-completion decisions,
+  and debug/profile paths consume the cursor aliases rather than raw F2 PC/owner
+  signals.
+- **Current stall sources:** I-cache miss, pipeline backpressure (FTQ full / packet buffer full / rename stall), wait-for-Icresp, NLP miss
+- **Intended ownership contract:** F1 may request the next predicted block when
+  a stable FTQ/fetch-block owner and downstream packet-buffer slot are available.
+  `icache_resp_queue` absorbs line-response elasticity before F2 packet
+  extraction. F2 remains conservative: it consumes owned line state exactly once
+  per required PC and relies on redirect/epoch/tag ownership instead of local
+  duplicate, same-tail, or sequential-lookahead steering.
+- **Current response-queue boundary:** `icache_resp_queue` is consumed through a
+  line-qualified ready/valid boundary. A queue head is accepted as IFU data only
+  when its explicit response-line address matches `ifu_work_r.line_addr`;
+  invalid or stale epoch responses are drained as flushed work. The queue can
+  still accept an enqueue on a full cycle when the head also pops, avoiding
+  dropped one-cycle I-cache responses.
+- **Current line-state boundary:** F2 records a separate line-state register for
+  the consumed response line (line address, data, hit, and epoch). Packet
+  metadata is sourced from this line identity, while FTQ idx/epoch/tag remain
+  the owner cursor. The extraction datapath may consume the line-state record
+  when the line and epoch match `ifu_work_r.line_addr`; otherwise it waits for
+  an accepted queue response.
+- **Current IBuffer boundary:** `fetch_packet_buffer` is the only packet source
+  for decode. Its empty-buffer flow-through preserves the previous fast path
+  without letting `fetch_unit.sv` bypass the owner-aware buffer. F2 emission is
+  gated by the IBuffer enqueue-ready signal rather than the raw full flag, so a
+  full buffer can still accept a packet on a same-cycle dequeue. The old
+  `FETCH_PACKET_BYPASS2` direct-bypass control surface has been removed; the
+  current debug/profiling signal is an IBuffer flow-through observation, not an
+  alternate decode data path.
+- **Current runahead precondition:** the IFU work cursor is still conservative
+  and mirror-locked to the registered F1/F2 flow. Before F1 can run ahead by
+  default, this cursor must become the independently advanced work item for the
+  FTQ IFU-writeback owner, not a local PC-steering shortcut. Retired
+  same-line, same-tail, sequential-lookahead, and weak-bias controls must not
+  be reintroduced as a substitute for FTQ/IBuffer capacity-owned runahead; the
+  corresponding dead RTL paths have been removed. A hold-only cursor split is
+  not sufficient: the cursor handoff must be driven by the FTQ IFU-writeback
+  owner when the previous owner completes.
+- **Accepted ownership rule:** BPU prediction may choose the next PC, but FTQ
+  owns the dynamic block. Any request, response, packet, redirect, and training
+  update must carry the FTQ idx/epoch/alloc-tag identity or be explicitly
+  discarded by an FTQ-defined flush/epoch rule.
+- **Rejected ownership rule:** F2 or `icache_resp_queue` must not recover
+  correctness by dropping "stale" entries based only on current queue head or
+  last-emitted PC.
+- **Verification role:** golden PC checking and owner-identity counter
+  invariants protect architectural identity during frontend changes. They are
+  not pipeline mechanisms.
+- **Excluded from active frontend architecture:** legacy loop buffer revival,
+  standalone UOC replay, same-line handoff, same-FTQ tail carry, static
+  direction shortcuts, sequential lookahead, weak static branch bias, and
+  decode/rename/commit widening.
 
 ### 2.2 BPU: TAGE-SC-L (`src/rtl/core/fetch/tage_sc_l.sv`)
 
@@ -236,7 +421,9 @@ These are the structural constraint points that any optimization needs to be awa
 - **Loop predictor:** 64 entries (`LOOP_PRED_ENTRIES=64`)
 - **GHR:** 64 bits (`GHR_BITS=64`)
 - **Per-PC mispredict instrumentation** (`+PERF_PROFILE`): top mispredict PCs reported at end of run
-- **Comparison vs BOOM v4 MegaBoom:** rv64gc-v2's BPU is BIGGER in most dimensions (8× BTB, has SC that BOOM-default lacks, larger TAGE tags). See `doc/4wide_iter_uBTB_results.md` for the full audit.
+- **Reference note:** the BPU includes a large BTB, TAGE tables, SC, loop
+  predictor, and RAS. Comparative sizing notes live in the reference-core audit
+  docs, not in this spec.
 
 ### 2.3 BTB (`src/rtl/core/fetch/btb.sv`)
 
@@ -258,22 +445,32 @@ These are the structural constraint points that any optimization needs to be awa
 - **Entries:** 4 (`NUM_ENTRIES=4`)
 - **Purpose:** small prefetch buffer for sequential-access lines (warm-cache helper, not primary predictor)
 
-### 2.6 µop Cache (UOC) (`src/rtl/core/fetch/uop_cache.sv`)
+### 2.6 UOP Cache (UOC) (`src/rtl/core/fetch/uop_cache.sv`)
 
 - **Geometry:** 32 sets × 8 ways × 4 µops/entry = 1024 µop slots (`UOC_SETS=32`, `UOC_WAYS=8`, `UOC_PER_ENTRY=PIPE_WIDTH=4`)
 - **Indexed by:** fetch-group start PC
 - **Replacement:** tree-pLRU (7-bit per set)
-- **Bring-up:** UOC is opt-in via `+UOC_ENABLE` plusarg (gen-2 design; loop buffer remains primary)
-- **Comparison:** modeled after Intel DSB / AMD Zen op-cache / ARM Mop-cache
-- **Status:** functional 21/21 PASS, ~0% IPC win on 6-wide measurements; ports cleanly to 4-wide
+- **Architectural role:** not currently the authoritative frontend backbone. A
+  decoded-op cache can only be enabled behind the same owner, redirect, fill,
+  invalidation, and branch/exit prediction contract as normal fetch delivery.
+- **Comparison:** modeled after Intel DSB, AMD Zen op-cache, and Arm macro-op caches; this repo uses the single local name "UOP cache" / `UOC`
+- **Inactive replay path:** standalone UOC replay plusargs are simulation
+  experiments only. The default core architecture keeps decoded-op replay
+  inactive unless it is integrated through FTQ-owned delivery.
 
-### 2.7 Loop Buffer (`src/rtl/core/loop_buffer.sv`)
+### 2.7 Legacy Loop Buffer
 
-- **Depth:** 64 entries (`LOOP_BUF_DEPTH`)
-- **Activation:** detected backward branches with body ≤ 64 entries enter LB-replay mode
-- **Exit prediction:** instrumented with exit_pred_learn/use/bad counters
-- **Forward-progress monitor:** tracks `commit_no_load` cycles to prevent stuck states
-- **Known structural concern:** the prior 6-wide spec flagged a CDB→bypass→AGU→fwd→CDB delta-cycle loop class triggered by LB lifecycle interactions. The current 4-wide RTL has not surfaced this issue post-cd54cf1, but the LB→bypass interface remains a watchpoint.
+- **Status:** removed from the active RTL. `src/rtl/core/loop_buffer.sv` is
+  deleted and no loop-buffer instance is present in `rv64gc_core_top.sv`.
+- **Compatibility counter:** the simulator may still print a legacy activity
+  counter so old tooling can confirm the removed path is inactive.
+- **Replacement architecture:** prediction, loop-exit state, redirect identity,
+  and packet delivery are owned by the BPU/FTQ fetch-block contract, not by a
+  local replay buffer.
+- **Excluded local shortcuts:** same-line handoff, same-FTQ tail carry,
+  guarded loop-tail lookahead, sequential lookahead, and weak static branch
+  bias are not implementation candidates because they do not preserve general
+  fetch-block ownership.
 
 ### 2.8 Decode (`src/rtl/core/decode/decode.sv`, `decode_slice.sv`)
 
@@ -285,11 +482,42 @@ These are the structural constraint points that any optimization needs to be awa
 
 - **Adjacent-pair fusion** at decode (e.g., `auipc + addi` → `LI64`)
 - **Status:** detection logic present; commit_count statistics in PERF_PROFILE include fused vs non-fused breakdown
+- **BRU fused-immediate contract:** fused `slti/sltiu + beq/bne` branches must
+  carry the compare immediate separately from the branch redirect offset. The
+  BRU consumes `fused_imm` for the compare and uses the branch op to invert the
+  equality sense for BEQ versus BNE. This is a correctness contract, not a
+  frontend ownership mechanism.
 
 ### 2.10 Frontend Queues
 
-- **FTQ (Fetch Target Queue):** 24 entries (`FTQ_DEPTH=24`), 16-bit alloc tag
-- **Fetch packet buffer** (`fetch_packet_buffer.sv`): between IF2 and decode; absorbs decode backpressure
+- **FTQ (Fetch Target Queue):** 24 entries (`FTQ_DEPTH=24`), 16-bit alloc tag.
+  Current RTL has separate allocation-to-request, request-to-writeback, and
+  writeback-to-commit counts, current IFU request owner, current IFU-writeback
+  owner, next IFU-writeback owner after same-cycle pop/request movement, and
+  commit/training owner aliases. It is already the right place to own
+  prediction-block metadata.
+- **FTQ ownership gaps:** the current RTL has an explicit monolithic IFU request
+  valid/ready/fire boundary. Remaining gaps are redirect/epoch lifetime for
+  outstanding I-cache responses, clear squashing rules for younger predicted
+  owners, and converting the IFU work cursor from lockstep packet processing to
+  a capacity-bounded FTQ/IBuffer-driven work item. These belong in `ftq.sv` and
+  the IFU/IBuffer boundary before proactive F1 runahead is enabled.
+- **I-cache response queue** (`icache_resp_queue.sv`): 4-entry line-response
+  FIFO. It is an elasticity mechanism, not the architectural owner. It may
+  carry request PC, explicit response-line address, plus FTQ identity, but it
+  must not decide correctness by local stale-entry filtering. F2 accepts only
+  matching-line responses; flushed responses are drained by invalid/stale FTQ
+  epoch metadata. It accepts a replacement response on a full-plus-pop cycle so
+  a one-cycle I-cache response is not dropped when F2 frees a slot at the same
+  edge.
+- **Owner-aware IBuffer** (`fetch_packet_buffer.sv`): current buffer between
+  IF2 and decode; stores complete fetch packets with per-packet FTQ
+  idx/epoch/alloc-tag, block PC, start offset, IFU line address/reuse bit,
+  per-slot PCs, predicted-control metadata, and `owner_complete`. The IFU line
+  address names the cache-line data used by F2; for a line-straddling 32-bit
+  instruction, slot 0 may still have a PC in the previous line. It exposes head
+  owner match/stale/complete signals for FTQ commit-pop. Decode-accept tracking
+  and proactive runahead capacity rules are still future work.
 
 ---
 
@@ -432,9 +660,10 @@ Per `issue_queue.sv`:
 | [1] | `cdb_data_r[1]` (ALU1/BRU1) | Registered |
 | [2] | `cdb_data_r[2]` (ALU2/MUL) | Registered |
 | [3] | `load_wb_data[0]` (Load0) | **Combinational** (0-cycle) |
-| [4] | `load_wb_data[1]` (Load1) | **Combinational** — added at `cd54cf1` to fix Stage 2 cm bug |
+| [4] | `load_wb_data[1]` (Load1) | **Combinational** — added at `cd54cf1` to restore Load1 bypass coverage |
 
-**ALU3/DIV/CSR (CDB[3]) is NOT bypassed.** Cycle E tested adding bypass[5]=cdb_r[3] and measured 0% IPC impact (REFUTED). Consumers of CDB[3] producers fall back to PRF read at T+3 (1 extra cycle vs bypass).
+**ALU3/DIV/CSR (CDB[3]) is NOT bypassed.** Consumers of CDB[3]
+producers fall back to PRF read at T+3 (1 extra cycle vs bypass).
 
 The bypass mux at each ALU operand selects between PRF read result and any matching bypass source.
 
@@ -445,7 +674,10 @@ For LOADS [slot 3, 4] — combinational bypass is REQUIRED:
 - PRF write doesn't latch until T+3
 - Without combinational bypass at T+2, consumer reads stale PRF → spurious result
 
-This was the Stage 2 cm functional bug (NUM_BYPASS_SRCS shrunk 6→4 with only Load0 restored, leaving Load1 with wakeup but no bypass → consumers read stale PRF → BPU mistraining cascade → 11× cm runtime). Fixed at `cd54cf1`.
+During the 4-wide transition, `NUM_BYPASS_SRCS` was reduced from 6 to 4 with
+only Load0 restored. Load1 consumers could then wake up without a matching
+combinational bypass path and read stale PRF data. Commit `cd54cf1` restores
+the Load1 bypass slot.
 
 ---
 
@@ -477,7 +709,7 @@ This was the Stage 2 cm functional bug (NUM_BYPASS_SRCS shrunk 6→4 with only L
 - **L1D MSHR depth:** 16 (`L1D_MSHR_DEPTH=16`)
 - **Allocation:** on dcache miss; subsequent loads to same line merge into existing MSHR
 
-### 7.5 load_wb Sideband (Architectural Addition from Stage 2)
+### 7.5 load_wb Sideband
 
 Originally CDB carried load writebacks (CDB[4]/[5] in 6-wide). When CDB shrank 6→4, loads needed a new path:
 - Dedicated 2-port `load_wb` sideband (Load0, Load1)
@@ -487,9 +719,11 @@ Originally CDB carried load writebacks (CDB[4]/[5] in 6-wide). When CDB shrank 6
 
 **INT PRF write ports:** 4 (CDB) + 2 (load_wb sideband) = 6 total (`PRF_WRITE_PORTS=6`).
 
-### 7.6 LSU iter=10 Misalign-Hold Patch (FROZEN)
+### 7.6 LSU Misalign-Hold Fast Path
 
-`src/rtl/core/lsu/lsu.sv` contains a sign-off-class IPC win for cm iter=10 (misalign-hold special case). **This patch must NEVER be modified.** Documented in `AGENTS.md` and respected by all gap-closure cycles.
+`src/rtl/core/lsu/lsu.sv` contains a misalign-hold special case that is part of
+the current LSU behavior. Changes to this path require targeted load/store
+correctness checks and pipeline-counter review.
 
 ### 7.7 Per-Port LSU Pressure Counters (PERF_PROFILE)
 
@@ -588,15 +822,13 @@ Originally CDB carried load writebacks (CDB[4]/[5] in 6-wide). When CDB shrank 6
 |---|---|
 | Size | 64 KB (`L1D_SIZE=65536`) |
 | Associativity | 4-way (`L1D_WAYS=4`) |
-| Banks | 2 (`L1D_BANKS=2`) — was 4 pre-Stage-4 |
+| Banks | 2 (`L1D_BANKS=2`) |
 | Sets | 256 (`L1D_SETS=256`) |
 | Line size | 64 B |
 | Hit latency | **2 cycles total (S0 issue + S1 tag/data/way-select)** |
 | Load-to-use | **3 cycles** (issue → AGU → S0 → S1 wb → consumer issue at T+2 via combinational bypass) |
 | MSHR depth | 16 (`L1D_MSHR_DEPTH=16`) |
-| Banking | Implicit via dual-port RAM (Stage-4 simplification) |
-
-**Comparison vs BOOM v4:** rv64gc-v2 dcache is 2× bigger (64 KB vs typical 32 KB), 2× more MSHRs (16 vs 8), and 1-2 cycles FASTER load-to-use (~3 vs BOOM 4-5).
+| Banking | Implicit via dual-port RAM |
 
 ### 10.3 L2 Cache (`src/rtl/core/cache/l2_cache.sv`)
 
@@ -628,7 +860,7 @@ All gated on `+PERF_PROFILE` plusarg unless otherwise noted.
 - **`fetch_hist[0..6]`:** cycles where fetch_count = N
 - **`frontend_hist[0..6]`:** cycles where rename sees N instructions
 - **`fused_hist[0..6]`:** non-LB cycles, fused_count distribution
-- **`lb_replay_hist[0..6]`:** LB-active replay distribution
+- **`uoc_replay_hist[0..6]`:** standalone decoded-op replay distribution
 - **`load_lat_hist[10 buckets]`:** load issue-to-WB latency
 
 ### 11.3 ROB Head-Stall Detail (`rob.sv` final block)
@@ -664,185 +896,30 @@ Used by `tools/bubble_taxonomy.py` and `tools/headwait_deepdive.py` for per-cycl
 
 - `+TRACE_HEAD_STALL`: per-cycle head PC + flags
 - `+TRACE_LOWPC`: per-uop tracking through fetch/decode/rename/dispatch/issue/commit
-- `+TRACE_CM`: CoreMark-specific progress markers
+- `+TRACE_CM`: workload-specific progress markers
 - `[CPC]`, `[DEP schema=dep.v1]`: per-uop committed PC + dependency info
 
 ---
 
-## 12. Refactor History (chronological)
-
-### 12.1 Stage 1-5 (pre-merge, 4wide-pivot branch)
-
-| Stage | Commit | Files | Summary |
-|---|---|---:|---|
-| Pre-flight | `e1ce792` | 1 | clockcheck allowlist for 4-wide pivot |
-| Stage 1 | `a64efbc` + `ab9e897` | 5 | rename + ROB cascade (PIPE_WIDTH 6→4, ROB 192→128, INT_PRF 256→160). count_r width fix. |
-| Stage 2 | `d566919` + `80da9b9` | 12 | dispatch + IQ + CDB + bypass + load_wb sideband. **Stage-2 cm bug introduced (Load1 bypass missing).** |
-| Stage 3 | `76b190e` | 1 | LSU LQ/SQ depth 64→32 |
-| Stage 4 | `4c14b5e` | 2 | L1D 4-bank → 2-bank (already dual-port) |
-| Stage 5 | `3a64585` | 5 | frontend + uop cache + LB + tb_top PERF_PROFILE to 4-wide |
-
-### 12.2 Critical Bug Fix
-
-| Commit | Summary |
-|---|---|
-| `cd54cf1` | **fix(stage2-bypass): restore Load1 bypass slot** — `NUM_BYPASS_SRCS=5`, add `bypass[4]` for Load1. Resolves cm 11× spurious-instret cascade. |
-
-### 12.3 Gap-Closure Cycles (all REFUTED with data)
-
-| Cycle | Hypothesis | Result |
-|---|---|---|
-| A — uBTB sizing | BPU undersized vs BOOM | REFUTE-on-investigation (we're bigger) |
-| C — BRU early-redirect | Reduce flush penalty | REFUTE (mechanism increased mispredicts +7.1%) |
-| B — SFB | Eliminate predictable branches | REFUTE (only 0.92% of cm cycles eligible) |
-| E — ALU3 bypass | Reduce operand-stall | REFUTE (0% IPC impact) |
-| F — INT IQ reorg | More issue parallelism | REFUTE (regressed cm by −2.82%) |
-
-### 12.4 Phase A.2 Instrumentation (added during gap analysis)
-
-| Commit | Files | Summary |
-|---|---|---|
-| `766f8d7` | `rob.sv`, `rv64gc_core_top.sv` | ROB other-class sub-decomposition (mul/div/csr/bru/unknown) |
-| `4a78605` | `tb_top.sv` | Issue-stall classification (operand/fu/arb) |
-
----
-
-## 13. Current Performance State
-
-### 13.1 Measurements (master @ `a6a0443`)
-
-| Workload | Cycles | Instret | IPC | Metric |
-|---|---:|---:|---:|---|
-| dhrystone (100 iter) | 23,514 | 47,670 | 2.027 | 2.42 DMIPS/MHz |
-| coremark iter1 | 199,452 | 332,110 | 1.665 | 5.01 CM/MHz |
-| coremark iter10 | 1,860,512 | 3,197,342 | 1.719 | 5.37 CM/MHz |
-| bench_loop_100 | 237 | 709 | 2.992 | (microbench) |
-
-### 13.2 Functional + Clockcheck
-
-- Functional regression: 20/20 PASS (8 rv64ui_* + 10 bench_* + dhry + cm iter1 + cm iter10)
-- Clockcheck: 3/3 microbench PASS (bench_loop_100, bench_load, bench_unrolled_5), 0 diverging cycles
-
-### 13.3 Pipeline Bubble Profile (cm iter1)
-
-Per `doc/4wide_pipeline_bubble_taxonomy_2026-05-02.md` and `doc/4wide_headwait_deepdive_2026-05-02.md`:
-
-| Category | % of cm cycles |
-|---|---:|
-| HEAD_WAIT_BACKLOG | **74.04%** |
-| FRONTEND_LIMITED | 11.44% |
-| PEAK (commit=4) | 9.93% |
-| DISPATCH_BLOCKED | 2.41% |
-| FLUSH | 2.18% |
-
-HEAD_WAIT_BACKLOG dwell-time decomposition:
-- Dwell=1 (productive): 64.7% of cm cycles
-- Dwell=2 (load-WB at head): **16.4%**
-- Dwell=3 (MUL at head): 2.6%
-- Dwell=6-10 (mispredict recovery): **14.7%** (matches 4,343 misps × ~7 cyc exactly)
-- Other long-tail: ~1%
-
-### 13.4 Little's-Law Decomposition (cm)
-
-| Stage | Avg occupancy | Avg time per uop |
-|---|---:|---:|
-| ROB (rename → commit) | 12.61 | **7.57 cycles** |
-| IQ_INT_TOTAL | 4.64 | 2.79 cycles |
-| LQ | 1.61 | 0.96 cycles |
-| SQ | 0.53 | 0.32 cycles |
-| Implied post-IQ → commit | — | **4.78 cycles** |
-
-The 4.78 cycles "post-IQ → commit" exceeds the typical 3-cyc (execute + WB + commit) by ~1.78 cycles — this is the **commit-wait** (head-of-line blocking).
-
-### 13.5 Top Head-Stall PCs (cm) — All Are Load+Consumer Chains
-
-| PC | Cycles | Disasm | Pattern |
-|---|---:|---|---|
-| `0x80002440` | 6,528 | `ld a4, 0(s0); bnez a4` | Linked-list walk in `core_bench_list` |
-| `0x8000235e` | 320 | **`ld a5, 0(a5)`**; `bnez a5` | **Pure pointer chase in `core_list_mergesort`** |
-| `0x80003164` | 2,951 | `lh a5, 0(a5); mulw a5,a5,a1` | Load → MUL chain (matrix_test) |
-| `0x80003326` | 114 | `lw a3, 0(a3); slt a5,a5,a3` | Load → ALU |
-| (10+ more) | varies | Similar load+immediate-consumer | All same pattern |
-
-These are intrinsic serial dependencies in the workload. No OoO depth/IQ size/BPU helps when iteration N's load address depends on iteration N-1's load result.
-
----
-
-## 14. Open Issues / Structural Ceilings
-
-### 14.1 Settled (do NOT re-investigate)
-
-The following hypotheses have been data-driven REFUTED in prior cycles and should not be re-investigated:
-- BPU storage size (we're bigger than BOOM)
-- BRU early-redirect (mechanism net-negative)
-- SFB pattern density (insufficient in workloads)
-- ALU3/DIV/CSR bypass coverage (CDB[3] activity too sparse)
-- INT IQ reorganization (consolidation hurts)
-- Dcache hit latency 2→1 (we're already faster than BOOM; structural rework)
-- Compiler/binary contribution (≤3%)
-
-### 14.2 Stale Parameters (low-priority cleanup)
-
-- `MUL_LATENCY = 3` in pkg.sv vs hardware latency = 1 in multiplier.sv
-- `IQ_INT_DEPTH = 24` in pkg.sv refers to all 3 INT IQs uniformly; if differentiation is wanted (e.g., u_iq0 deeper than u_iq1/2), would need to break this out
-
-### 14.3 Theoretical IPC Ceiling for cm
-
-If all 3 structural waits (load-WB at head, mispredict recovery, MUL at head) could be eliminated:
-- Save 33.7% of cm cycles
-- Theoretical IPC = 2.51 → CM/MHz = 7.55 (would beat MegaBoom 6.2)
-
-But each elimination requires structural change beyond this design point:
-- Load-WB: dcache hit latency 2→1 (VIPT + way-prediction; structural)
-- Mispredict recovery: shorter flush pipe OR fewer mispredicts (both REFUTED)
-- MUL at head: faster MUL (large area cost)
-
-### 14.4 Auxiliary Instrumentation Items
-
-- Frontend bubble sub-classification (`fetch_zero_*` counters) is rich (~25 sub-buckets); could be summarized per-cycle for taxonomy purposes
-- Per-PC head-stall classification could be extended to track issue→wb time per occurrence
-
----
-
-## 15. Tools
+## 12. Tools
 
 | Tool | Path | Purpose |
 |---|---|---|
 | `bubble_taxonomy.py` | `tools/bubble_taxonomy.py` | Per-cycle bubble classification from pipe.v1 trace |
 | `headwait_deepdive.py` | `tools/headwait_deepdive.py` | Little's-law decomposition + head-dwell analysis |
 | `clockcheck` | `../rv64gc-perf-model/tools/rtl_clockcheck.py` | Per-cycle pipeline trace divergence check vs baseline |
-| `regress_dsim.sh` | `scripts/regress_dsim.sh` | Functional + bench regression runner; tightened STOP-OK detection (requires `PASS at cycle` not just `TOHOST=`) |
+| `regress_dsim.sh` | `scripts/regress_dsim.sh` | Functional regression runner; tightened STOP-OK detection requires an explicit pass event, not just a `TOHOST=` print |
 | `build_dsim.sh` | `build_dsim.sh` | Top-level DSim image build |
 | `run_dsim.sh` | `run_dsim.sh` | Single-test DSim invocation |
 
 ---
 
-## 16. Documentation Index
+## 13. Documentation Index
 
-### Active design + analysis docs
-
-- `doc/rv64gc_v2_uarch.md` — **this doc** (current µarch spec)
-- `doc/4wide_signoff_2026-05-01.md` — refreshed PARTIAL-FLOOR sign-off
-- `doc/4wide_pipeline_bubble_taxonomy_2026-05-02.md` — bubble taxonomy
-- `doc/4wide_headwait_deepdive_2026-05-02.md` — HEAD_WAIT_BACKLOG decomposition + per-PC analysis
-- `doc/4wide_arch_diff_2026-05-02.md` — BOOM v4 ↔ rv64gc-v2 architectural audit
-- `doc/4wide_methodology_retrospective_2026-05-02.md` — methodology retrospective
-
-### Refactor execution docs
-
-- `doc/4wide_refactor_checklist.md` — execution checklist (all 90 items complete)
-- `doc/4wide_pivot_plan_2026-04-25.md` — original RTL pivot plan (historical)
-
-### Gap-closure cycle docs (all REFUTED)
-
-- `doc/4wide_gap_closure_sequence_2026-05-01.md` — sequence design
-- `doc/4wide_iter_uBTB_*.md` — Cycle A
-- `doc/4wide_iter_flush_recovery_*.md` — Cycle C
-- `doc/4wide_iter_sfb_*.md` — Cycle B
-- `doc/4wide_iter_alu3_bypass_*.md` — Cycle E
-- `doc/4wide_iter_iq_reorg_*.md` — Cycle F
-
-### Stale (do not refer to for current numbers)
-
-- `doc/4wide_signoff_2026-04-30.md` — superseded; numbers inflated by cm bug
-- `doc/baseline_6wide_obsolete_2026-04-30.md` — obsolete 6-wide archive
+- `doc/rv64gc_v2_uarch.md` — this document; architectural specification only.
+- `doc/stage1_frontend_refactor_status_2026-05-06.md` — Stage 1 frontend
+  refactor status, performance methodology, raw rows, and evaluation status.
+- `doc/competitor_analysis.md` — external core architecture references and
+  comparison methodology.
+- `doc/archive/4wide/` — historical pivot notes, run reports, and retired
+  analysis artifacts.

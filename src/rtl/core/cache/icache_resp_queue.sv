@@ -9,12 +9,11 @@
               Depth-parameterized FIFO. flush clears all entries
               (used on backend redirect).
 
-              Per the data-driven bottleneck analysis:
-              packet_empty_noemit_dup=725k (35.5% of cm10 cycles) is the
-              F2 dup-suppressor firing because F2 holds same PC across
-              consecutive cycles. Root cause: F2 captures f1_pc each
-              cycle (fetch_unit.sv:1267), so F1 hold = F2 hold. This
-              queue + F2-decoupled-from-f1_pc breaks that lockstep.
+              This queue is an elasticity boundary only. It preserves
+              response data and owner metadata, but it does not make
+              queue-head state authoritative for frontend correctness.
+              Any future F2 line latch or BPU runahead must remain
+              qualified by the FTQ/IBuffer owner contract.
 
  Author: Jeremy Cai
  Date: 2026-05-05
@@ -48,6 +47,7 @@ module icache_resp_queue
     output logic [511:0]                  deq_data_o,
     output logic                          deq_hit_o,
     output logic [63:0]                   deq_pc_o,
+    output logic [63:LINE_BITS]           deq_line_addr_o,
     output logic                          deq_ftq_valid_o,
     output logic [FTQ_IDX_BITS-1:0]       deq_ftq_idx_o,
     output logic [FTQ_EPOCH_BITS-1:0]     deq_ftq_epoch_o,
@@ -90,7 +90,11 @@ module icache_resp_queue
 
     assign deq_valid_o = !empty || resp_valid_i;
 
-    assign enq_fire_c = resp_valid_i && !full && !bypass_path_c;
+    // A response can arrive while the queue is full in the same cycle F2
+    // retires the head line. Accept that replacement response; otherwise a
+    // one-cycle icache response can be dropped even though a slot is freed at
+    // the clock edge.
+    assign enq_fire_c = resp_valid_i && (!full || deq_fire_c) && !bypass_path_c;
     assign deq_fire_c = !empty && deq_ready_i;  // pop only from mem; bypass uses no slot
 
     // Output the head entry (combinational, with bypass when empty)
@@ -122,6 +126,7 @@ module icache_resp_queue
             deq_ftq_alloc_tag_o = '0;
         end
     end
+    assign deq_line_addr_o = deq_pc_o[63:LINE_BITS];
 
     function automatic logic [PTR_W-1:0] ptr_next(input logic [PTR_W-1:0] p);
         if (DEPTH == 1) begin

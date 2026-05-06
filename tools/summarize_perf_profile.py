@@ -51,10 +51,9 @@ KEY_XS_PREFIX = [
     "frontend_",
     "dup_",
     "f2_owner_",
+    "f2_cursor_",
     "packet_stale_",
-    "bypass_",
-    "seq_",
-    "same_",
+    "flowthrough_",
 ]
 
 
@@ -178,9 +177,9 @@ def render(rows: list[dict[str, object]]) -> str:
     lines.append("# PERF_PROFILE Summary")
     lines.append("")
     lines.append(
-        "| Row | Status | Bench cycles | mcycle | instret | IPC | Frontend avg | FE zero | Commit avg | Commit zero | Legacy LB active | Standalone decoded-op replay active | UOC lookups | XS seq | XS tail | Stale owner |"
+        "| Row | Status | Bench cycles | mcycle | instret | IPC | Frontend avg | FE zero | Commit avg | Commit zero | Legacy LB active | Standalone decoded-op replay active | UOC lookups | IBuffer stale owner |"
     )
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for row in rows:
         bench = row["bench"]  # type: ignore[assignment]
         hist = row["hist"]  # type: ignore[assignment]
@@ -188,14 +187,11 @@ def render(rows: list[dict[str, object]]) -> str:
         xs = row["xs"]  # type: ignore[assignment]
         frontend_hist = hist["frontend"]
         commit_hist = hist["commit"]
-        xs_seq_fires = xs.get("seq_lookahead_fires", "-")
-        xs_tail_fires = xs.get("same_ftq_tail_bypass", "-")
         xs_stale_owner = xs.get("packet_buffer_stale_owner", "-")
         lines.append(
             "| {label} | {status} | {cycles} | {mcycle} | {instret} | {ipc} | "
             "{fe_avg:.3f} | {fe_zero:.1f}% | {cmt_avg:.3f} | {cmt_zero:.1f}% | "
-            "{lb} | {decoded_op_active} | {uoc_lookups} | {xs_seq_fires} | {xs_tail_fires} | "
-            "{xs_stale_owner} |".format(
+            "{lb} | {decoded_op_active} | {uoc_lookups} | {xs_stale_owner} |".format(
                 label=row["label"],
                 status=row["status"],
                 cycles=bench.get("cycles", "-"),
@@ -209,8 +205,6 @@ def render(rows: list[dict[str, object]]) -> str:
                 lb=fmt(row["loop_active"]),
                 decoded_op_active=fmt(row["decoded_op_active"]),
                 uoc_lookups=uoc.get("lookups", "-"),
-                xs_seq_fires=xs_seq_fires,
-                xs_tail_fires=xs_tail_fires,
                 xs_stale_owner=xs_stale_owner,
             )
         )

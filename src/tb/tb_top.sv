@@ -1,7 +1,7 @@
 /* file: tb_top.sv
  * Description: Top-level simulation testbench.  Instantiates rv64gc_core_top
- *              and sim_memory, wires them together, and exposes tohost
- *              pass/fail signals to the Verilator C++ driver.
+ *              and sim_memory, wires them together, and exposes simulation
+ *              endpoint pass/fail signals to the simulator driver.
  * Version: 2.0
  */
 
@@ -45,9 +45,14 @@ module tb_top
     // =========================================================================
     // Core instantiation
     // =========================================================================
-    // Core-level tohost detection (snoops CSB drain to D-cache)
-    logic        core_tohost_valid;
-    logic [63:0] core_tohost_data;
+    logic [63:0] sim_tohost_addr;
+
+    initial begin
+        sim_tohost_addr = TOHOST_ADDR;
+        if ($value$plusargs("TOHOST_ADDR=%h", sim_tohost_addr)) begin
+            $display("[SIM_PLATFORM] TOHOST_ADDR=%016h", sim_tohost_addr);
+        end
+    end
 
     rv64gc_core_top u_core (
         .clk             (clk),
@@ -73,35 +78,36 @@ module tb_top
         // Timer
         .time_val        (cycle_count),
 
-        // Tohost address from package
-        .tohost_addr     (TOHOST_ADDR),
-
-        // Tohost detection
-        .tohost_wr_valid (core_tohost_valid),
-        .tohost_wr_data  (core_tohost_data),
-
         // Performance counters
         .perf_mcycle     (perf_mcycle),
         .perf_minstret   (perf_minstret)
     );
 
-    // Use core-level tohost detection (immediate, no cache writeback delay)
-    // Latch the core_tohost into a sticky flop so the C++ driver can see
-    // the pulse even if it sampled in the wrong half-cycle.
-    logic        core_tohost_seen_q;
-    logic [63:0] core_tohost_data_q;
+    // Simulation endpoint detection lives in the harness, not in the CPU RTL.
+    // The harness observes ordinary committed-store traffic leaving the LSU.
+    logic        tb_tohost_store_valid;
+    logic [63:0] tb_tohost_store_data;
+    assign tb_tohost_store_valid =
+        u_core.dc_store_req_valid &&
+        (u_core.dc_store_req_addr[31:3] == sim_tohost_addr[31:3]);
+    assign tb_tohost_store_data = u_core.dc_store_req_data;
+
+    // Latch the endpoint pulse into a sticky flop so external drivers can
+    // observe it even if they sample in a later half-cycle.
+    logic        tb_tohost_seen_q;
+    logic [63:0] tb_tohost_data_q;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            core_tohost_seen_q <= 1'b0;
-            core_tohost_data_q <= 64'd0;
-        end else if (core_tohost_valid && !core_tohost_seen_q) begin
-            core_tohost_seen_q <= 1'b1;
-            core_tohost_data_q <= core_tohost_data;
+            tb_tohost_seen_q <= 1'b0;
+            tb_tohost_data_q <= 64'd0;
+        end else if (tb_tohost_store_valid && !tb_tohost_seen_q) begin
+            tb_tohost_seen_q <= 1'b1;
+            tb_tohost_data_q <= tb_tohost_store_data;
         end
     end
 
-    assign tohost_valid = core_tohost_seen_q;
-    assign tohost_value = core_tohost_data_q;
+    assign tohost_valid = tb_tohost_seen_q;
+    assign tohost_value = tb_tohost_data_q;
 
     // Benchmark result block snoop. Bare-metal benchmarks write these registers
     // before tohost so host scripts can calculate CoreMark/MHz, DMIPS/MHz, or
@@ -424,7 +430,7 @@ module tb_top
         begin
             tb_coremark_mmio_addr =
                 ((addr >= BENCH_RESULT_BASE) && (addr < BENCH_RESULT_END)) ||
-                (addr[31:3] == TOHOST_ADDR[31:3]);
+                (addr[31:3] == sim_tohost_addr[31:3]);
         end
     endfunction
 
@@ -1111,10 +1117,10 @@ module tb_top
                         !u_core.u_fetch_unit.fe_stall &&
                         u_core.u_fetch_unit.f1_valid)
                         fetch_zero_wait_icresp_cyc <= fetch_zero_wait_icresp_cyc + 1;
-                    if (u_core.u_fetch_unit.f2_valid_r &&
+                    if (u_core.u_fetch_unit.f2_work_valid_c &&
                         !u_core.u_fetch_unit.f2_data_valid)
                         fetch_zero_f2_wait_cyc <= fetch_zero_f2_wait_cyc + 1;
-                    if (u_core.u_fetch_unit.f2_valid_r &&
+                    if (u_core.u_fetch_unit.f2_work_valid_c &&
                         u_core.u_fetch_unit.f2_data_valid) begin
                         fetch_zero_f2_data_cyc <= fetch_zero_f2_data_cyc + 1;
                         if (u_core.u_fetch_unit.f2_will_emit_c) begin
@@ -1124,7 +1130,7 @@ module tb_top
                                 fetch_zero_no_emit_extract0_cyc + 1;
                         end else if (u_core.u_fetch_unit.f2_last_emit_valid_r &&
                                      (u_core.u_fetch_unit.f2_last_emit_pc_r ==
-                                      u_core.u_fetch_unit.f2_pc_r)) begin
+                                      u_core.u_fetch_unit.f2_work_pc_c)) begin
                             fetch_zero_no_emit_dup_cyc <=
                                 fetch_zero_no_emit_dup_cyc + 1;
                         end else begin
@@ -1138,7 +1144,7 @@ module tb_top
                         !( !u_core.u_fetch_unit.ic_resp_valid &&
                            !u_core.u_fetch_unit.fe_stall &&
                            u_core.u_fetch_unit.f1_valid) &&
-                        !(u_core.u_fetch_unit.f2_valid_r &&
+                        !(u_core.u_fetch_unit.f2_work_valid_c &&
                           !u_core.u_fetch_unit.f2_data_valid))
                         fetch_zero_other_cyc <= fetch_zero_other_cyc + 1;
                 end else begin
@@ -2481,12 +2487,12 @@ module tb_top
                 trace_prev_crat_s10_data <= crat_s10_data;
             end
             if (trace_listptr_en && (trace_cycle >= trace_listptr_start)) begin
-                if (u_core.u_fetch_unit.f2_valid_r &&
+                if (u_core.u_fetch_unit.f2_work_valid_c &&
                     u_core.u_fetch_unit.f2_data_valid &&
-                    tb_coremark_list_ptr_pc(u_core.u_fetch_unit.f2_pc_r)) begin
-                    $display("[LPF2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h bp=%b bp_tk=%b bp_slot=%0d bp_tgt=%016h sg_v=%b sg_pc=%016h pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b bypass=%b uoc_active=%b rn_stall=%b fe_stall=%b flush=%b",
+                    tb_coremark_list_ptr_pc(u_core.u_fetch_unit.f2_work_pc_c)) begin
+                    $display("[LPF2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h bp=%b bp_tk=%b bp_slot=%0d bp_tgt=%016h sg_v=%b sg_pc=%016h pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b flowthrough=%b uoc_active=%b rn_stall=%b fe_stall=%b flush=%b",
                         trace_cycle,
-                        u_core.u_fetch_unit.f2_pc_r,
+                        u_core.u_fetch_unit.f2_work_pc_c,
                         u_core.u_fetch_unit.extract_count,
                         u_core.u_fetch_unit.final_count,
                         u_core.u_fetch_unit.f2_will_emit_c,
@@ -2505,7 +2511,7 @@ module tb_top
                         u_core.u_fetch_unit.packet_buf_in.fetch_count,
                         u_core.u_fetch_unit.fetch_count,
                         u_core.u_fetch_unit.packet_buf_valid,
-                        u_core.u_fetch_unit.packet_bypass_valid,
+                        u_core.u_fetch_unit.packet_flowthrough_valid,
                         u_core.uoc_active,
                         u_core.rename_stall,
                         u_core.frontend_backend_stall,
@@ -2529,7 +2535,7 @@ module tb_top
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if ((i < int'(u_core.u_fetch_unit.fetch_count)) &&
                         tb_coremark_list_ptr_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
-                        $display("[LPFETCH] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b bypass=%b uoc_active=%b rn_stall=%b fe_stall=%b flush=%b",
+                        $display("[LPFETCH] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b flowthrough=%b uoc_active=%b rn_stall=%b fe_stall=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.u_fetch_unit.fetch_pc[i],
@@ -2538,7 +2544,7 @@ module tb_top
                             u_core.u_fetch_unit.fetch_count,
                             u_core.u_fetch_unit.fetch_packet_out.fetch_count,
                             u_core.u_fetch_unit.packet_buf_valid,
-                            u_core.u_fetch_unit.packet_bypass_valid,
+                            u_core.u_fetch_unit.packet_flowthrough_valid,
                             u_core.uoc_active,
                             u_core.rename_stall,
                             u_core.frontend_backend_stall,
@@ -2782,12 +2788,12 @@ module tb_top
                 automatic int lowpc_next_count;
 
                 lowpc_next_count = trace_lowpc_count;
-                if (u_core.u_fetch_unit.f2_valid_r &&
+                if (u_core.u_fetch_unit.f2_work_valid_c &&
                     u_core.u_fetch_unit.f2_data_valid &&
-                    tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.f2_pc_r)) begin
-                    $display("[CM_FETCH_F2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h strad=%b pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b bypass=%b uoc_active=%b stall=%b flush=%b",
+                    tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.f2_work_pc_c)) begin
+                    $display("[CM_FETCH_F2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h strad=%b pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b flowthrough=%b uoc_active=%b stall=%b flush=%b",
                         trace_cycle,
-                        u_core.u_fetch_unit.f2_pc_r,
+                        u_core.u_fetch_unit.f2_work_pc_c,
                         u_core.u_fetch_unit.extract_count,
                         u_core.u_fetch_unit.final_count,
                         u_core.u_fetch_unit.f2_will_emit_c,
@@ -2801,7 +2807,7 @@ module tb_top
                         u_core.u_fetch_unit.packet_buf_in.fetch_count,
                         u_core.u_fetch_unit.fetch_count,
                         u_core.u_fetch_unit.packet_buf_valid,
-                        u_core.u_fetch_unit.packet_bypass_valid,
+                        u_core.u_fetch_unit.packet_flowthrough_valid,
                         u_core.uoc_active,
                         u_core.frontend_backend_stall,
                         u_core.flush_out.valid);
@@ -2822,7 +2828,7 @@ module tb_top
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if ((i < int'(u_core.u_fetch_unit.fetch_count)) &&
                         tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
-                        $display("[CM_FETCH_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b bypass=%b uoc_active=%b stall=%b flush=%b",
+                        $display("[CM_FETCH_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b flowthrough=%b uoc_active=%b stall=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.u_fetch_unit.fetch_pc[i],
@@ -2831,7 +2837,7 @@ module tb_top
                             u_core.u_fetch_unit.fetch_count,
                             u_core.u_fetch_unit.fetch_packet_out.fetch_count,
                             u_core.u_fetch_unit.packet_buf_valid,
-                            u_core.u_fetch_unit.packet_bypass_valid,
+                            u_core.u_fetch_unit.packet_flowthrough_valid,
                             u_core.uoc_active,
                             u_core.frontend_backend_stall,
                             u_core.flush_out.valid);
@@ -3233,7 +3239,7 @@ module tb_top
                         u_core.dc_store_req_data,
                         u_core.dc_store_ack,
                         u_core.u_lsu.u_csb.count_r,
-                        u_core.tohost_wr_valid);
+                        tb_tohost_store_valid);
                 end
             end
             if (trace_matrix_branch_en) begin
@@ -3740,16 +3746,16 @@ module tb_top
                         u_core.bpu_update_mispredict,
                         u_core.bpu_update_target);
                 end
-                if (u_core.u_fetch_unit.f2_valid_r &&
+                if (u_core.u_fetch_unit.f2_work_valid_c &&
                     u_core.u_fetch_unit.ic_resp_valid &&
-                    (u_core.u_fetch_unit.f2_pc_r >= 64'h00000000800020d0) &&
-                    (u_core.u_fetch_unit.f2_pc_r < 64'h0000000080002440) &&
+                    (u_core.u_fetch_unit.f2_work_pc_c >= 64'h00000000800020d0) &&
+                    (u_core.u_fetch_unit.f2_work_pc_c < 64'h0000000080002440) &&
                     (u_core.u_fetch_unit.f2_btb_hit_r ||
                      u_core.u_fetch_unit.bp_branch_found ||
                      u_core.bpu_update_valid)) begin
                     $display("[BPF2] cyc=%0d f2_pc=%016h hit=%b btype=%0d boff=%0d btgt=%016h bp_found=%b bp_type=%0d bp_slot=%0d bp_tgt=%016h ras_tos=%0d push=%b pop=%b",
                         trace_cycle,
-                        u_core.u_fetch_unit.f2_pc_r,
+                        u_core.u_fetch_unit.f2_work_pc_c,
                         u_core.u_fetch_unit.f2_btb_hit_r,
                         u_core.u_fetch_unit.f2_btb_type_r,
                         u_core.u_fetch_unit.f2_btb_offset_r,
@@ -3772,14 +3778,14 @@ module tb_top
                         u_core.u_fetch_unit.ras_push_addr,
                         u_core.u_fetch_unit.ras_pop_valid,
                         u_core.u_fetch_unit.ras_pop_addr,
-                        u_core.u_fetch_unit.f2_pc_r,
+                        u_core.u_fetch_unit.f2_work_pc_c,
                         u_core.u_fetch_unit.bp_branch_found,
                         u_core.u_fetch_unit.bp_type,
                         u_core.u_fetch_unit.bp_target_addr,
                         u_core.u_fetch_unit.f2_will_emit_c,
                         (u_core.u_fetch_unit.f2_last_emit_valid_r &&
                          (u_core.u_fetch_unit.f2_last_emit_pc_r ==
-                          u_core.u_fetch_unit.f2_pc_r)),
+                          u_core.u_fetch_unit.f2_work_pc_c)),
                         u_core.flush_out.valid,
                         u_core.flush_out.ras_tos,
                         u_core.flush_out.redirect_pc);
@@ -3968,18 +3974,18 @@ module tb_top
                     u_core.dc_store_req_addr,
                     u_core.dc_store_req_data,
                     u_core.dc_store_ack,
-                    u_core.tohost_wr_valid);
+                    tb_tohost_store_valid);
             end
             if (trace_coremark_exit_en && u_core.dc_store_req_valid &&
                 (((u_core.dc_store_req_addr >= BENCH_RESULT_BASE) &&
                   (u_core.dc_store_req_addr < BENCH_RESULT_END)) ||
-                 (u_core.dc_store_req_addr[31:3] == TOHOST_ADDR[31:3]))) begin
+                 (u_core.dc_store_req_addr[31:3] == sim_tohost_addr[31:3]))) begin
                 $display("[CM_STORE] cyc=%0d addr=%016h data=%016h ack=%b tohost=%b",
                     trace_cycle,
                     u_core.dc_store_req_addr,
                     u_core.dc_store_req_data,
                     u_core.dc_store_ack,
-                    u_core.tohost_wr_valid);
+                    tb_tohost_store_valid);
             end
             // DC L2 traffic trace (to diagnose MSHR/fill stalls)
             if (trace_commit_en && u_core.u_dcache.l2_req_valid) begin
@@ -3996,7 +4002,7 @@ module tb_top
             end
             // Dump MSHR + waiting_for_fill state when store is stuck
             if (trace_commit_en && u_core.dc_store_req_valid && !u_core.dc_store_ack) begin
-                $display("[DC_STATE] cyc=%0d s1_st_v=%b wait_fill=%b fill_done=%b hit=%b allo_mshr=%b mshr_mat=%b is_tohost=%b l2_state=%0d mshr0_v=%b mshr0_fp=%b mshr0_wp=%b mshr0_fd=%b fill_avail=%b wb_avail=%b",
+                $display("[DC_STATE] cyc=%0d s1_st_v=%b wait_fill=%b fill_done=%b hit=%b allo_mshr=%b mshr_mat=%b l2_state=%0d mshr0_v=%b mshr0_fp=%b mshr0_wp=%b mshr0_fd=%b fill_avail=%b wb_avail=%b",
                     trace_cycle,
                     u_core.u_dcache.s1_st_valid,
                     u_core.u_dcache.s1_st_waiting_for_fill,
@@ -4004,7 +4010,6 @@ module tb_top
                     u_core.u_dcache.st_cache_hit,
                     u_core.u_dcache.s1_st_can_allocate_mshr,
                     u_core.u_dcache.mshr_st_match_hit,
-                    u_core.u_dcache.s1_st_is_tohost,
                     u_core.u_dcache.l2_state_q,
                     u_core.u_dcache.mshr[0].valid,
                     u_core.u_dcache.mshr[0].fill_pend,
@@ -4439,8 +4444,8 @@ module tb_top
                     trace_cycle,
                     u_core.u_fetch_unit.f1_pc,
                     u_core.u_fetch_unit.f1_valid,
-                    u_core.u_fetch_unit.f2_pc_r,
-                    u_core.u_fetch_unit.f2_valid_r,
+                    u_core.u_fetch_unit.f2_work_pc_c,
+                    u_core.u_fetch_unit.f2_work_valid_c,
                     u_core.u_fetch_unit.ic_resp_valid,
                     u_core.u_fetch_unit.ic_resp_data[63:0]);
                 $display("[ICST] cyc=%0d mshr0_v=%b mshr1_v=%b fill_v=%b fill_d[63:0]=%016h",
@@ -4501,12 +4506,7 @@ module tb_top
         .mem_req_wdata   (mem_req_wdata),
         .mem_req_ready   (mem_req_ready),
         .mem_resp_valid  (mem_resp_valid),
-        .mem_resp_data   (mem_resp_data),
-
-        // Tohost monitoring
-        .tohost_addr     (TOHOST_ADDR),
-        .tohost_valid    (tohost_valid),
-        .tohost_value    (tohost_value)
+        .mem_resp_data   (mem_resp_data)
     );
 
     // =========================================================================
@@ -4572,7 +4572,7 @@ module tb_top
             if (u_core.flush_out.valid) pc_flush_cycles <= pc_flush_cycles + 1;
             if (u_core.bru_early_redirect) pc_backend_redirect <= pc_backend_redirect + 1;
             // IC miss: f2 stage was valid but icache didn't deliver data
-            if (u_core.u_fetch_unit.f2_valid_r && !u_core.u_fetch_unit.ic_resp_valid)
+            if (u_core.u_fetch_unit.f2_work_valid_c && !u_core.u_fetch_unit.ic_resp_valid)
                 pc_icache_miss <= pc_icache_miss + 1;
             if (u_core.uoc_active)
                 pc_total_flushed <= pc_total_flushed + 1; // decoded-op replay active counter
@@ -4621,8 +4621,8 @@ module tb_top
         if (!rst_n) begin
             perf_printed <= 1'b0;
         end else if (perf_en && !perf_printed && pc_total_cycles > WARMUP &&
-                     (core_tohost_valid || (pc_total_cycles[19:0] == 20'd0 && pc_total_cycles > 64'd1000000))) begin
-            perf_printed <= (core_tohost_valid) ? 1'b1 : 1'b0;
+                     (tb_tohost_store_valid || (pc_total_cycles[19:0] == 20'd0 && pc_total_cycles > 64'd1000000))) begin
+            perf_printed <= (tb_tohost_store_valid) ? 1'b1 : 1'b0;
             $display("=== PERF COUNTERS (after %0d warmup cycles) ===", WARMUP);
             $display("Total measured cycles : %0d", pc_total_cycles - WARMUP);
             $display("--- Stall breakdown (cycles where signal was high) ---");
@@ -4671,24 +4671,24 @@ module tb_top
     // Shadow signals for incremental F2-decoupling cascade validation
     // ====================================================================
     // Per the data-driven discipline + the design-validation tooling gap
-    // identified 2026-05-05: rather than land the full F2-pc-from-queue
+    // identified 2026-05-05: rather than land the full F2-work-PC-from-queue
     // refactor as a single big-bang RTL change, we observe what the
     // hypothetical change WOULD do by computing it as a shadow signal
-    // alongside the current behavior. The shadow lets us measure the
+    // alongside the current cursor behavior. The shadow lets us measure the
     // divergence rate before committing.
     //
-    // Shadow A: f2_pc_r if it tracked icq_deq_pc instead of f1_pc.
+    // Shadow A: IFU work PC if it tracked icq_deq_pc instead of f1_pc.
     //   - In current design (post-bcf9b5c), the queue is wired but F2
     //     still captures f1_pc each cycle. So in steady-state lockstep,
-    //     icq_deq_pc == f1_pc(T-1) == f2_pc_r(T+1 captured at T edge).
+    //     icq_deq_pc == f1_pc(T-1) == IFU work PC(T+1 captured at T edge).
     //   - The shadow tracks icq_deq_pc each cycle; we count cycles
-    //     where the shadow would diverge from actual f2_pc_r. In
+    //     where the shadow would diverge from actual IFU work PC. In
     //     baseline this should be ~0 (lockstep validates the queue).
     //   - When we later enable F1 runahead, the shadow will start
     //     diverging because F1 advances more often than F2 consumes,
     //     giving us a quantitative measure of "how much would F2's
     //     pc tracking change."
-    logic [63:0] f2_pc_r_shadow_queue_r;
+    logic [63:0] f2_work_pc_shadow_queue_r;
     integer      shadow_queue_pc_diverge_cycles_r;
     integer      shadow_queue_pc_match_cycles_r;
     logic [63:0] last_shadow_diverge_actual_r;
@@ -4697,7 +4697,7 @@ module tb_top
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            f2_pc_r_shadow_queue_r <= 64'd0;
+            f2_work_pc_shadow_queue_r <= 64'd0;
             shadow_queue_pc_diverge_cycles_r <= 0;
             shadow_queue_pc_match_cycles_r <= 0;
             last_shadow_diverge_actual_r <= 64'd0;
@@ -4708,27 +4708,27 @@ module tb_top
             // capture from queue: when F2 is consuming this cycle (will emit).
             // Otherwise hold (proposed F2 holds when not consuming).
             if (u_core.u_fetch_unit.f2_will_emit_c &&
-                u_core.u_fetch_unit.icq_deq_valid) begin
-                f2_pc_r_shadow_queue_r <= u_core.u_fetch_unit.icq_deq_pc;
+                u_core.u_fetch_unit.ic_resp_valid) begin
+                f2_work_pc_shadow_queue_r <= u_core.u_fetch_unit.icq_deq_pc;
             end
 
             // Compare shadow against actual at the F2 stage (only meaningful
             // when F2 is valid AND has data via the queue path AND we're not
             // in a transition state)
-            if (u_core.u_fetch_unit.f2_valid_r &&
-                u_core.u_fetch_unit.icq_deq_valid &&
+            if (u_core.u_fetch_unit.f2_work_valid_c &&
+                u_core.u_fetch_unit.ic_resp_valid &&
                 u_core.u_fetch_unit.f2_will_emit_c &&
-                !u_core.u_fetch_unit.f2_same_line_handoff_r &&
+                !u_core.u_fetch_unit.f2_line_state_use_c &&
                 !u_core.u_fetch_unit.consumed_remainder_r) begin
-                if (u_core.u_fetch_unit.f2_pc_r[63:6] ==
-                    f2_pc_r_shadow_queue_r[63:6]) begin
+                if (u_core.u_fetch_unit.f2_work_pc_c[63:6] ==
+                    f2_work_pc_shadow_queue_r[63:6]) begin
                     shadow_queue_pc_match_cycles_r <=
                         shadow_queue_pc_match_cycles_r + 1;
                 end else begin
                     shadow_queue_pc_diverge_cycles_r <=
                         shadow_queue_pc_diverge_cycles_r + 1;
-                    last_shadow_diverge_actual_r   <= u_core.u_fetch_unit.f2_pc_r;
-                    last_shadow_diverge_proposed_r <= f2_pc_r_shadow_queue_r;
+                    last_shadow_diverge_actual_r   <= u_core.u_fetch_unit.f2_work_pc_c;
+                    last_shadow_diverge_proposed_r <= f2_work_pc_shadow_queue_r;
                     last_shadow_diverge_cycle_r    <= trace_cycle;
                 end
             end

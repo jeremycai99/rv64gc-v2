@@ -62,6 +62,7 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/cache/icache_tag_ram.sv" \
       "$P/src/rtl/core/cache/icache_data_ram.sv" \
       "$P/src/rtl/core/cache/icache.sv" \
+      "$P/src/rtl/core/cache/icache_resp_queue.sv" \
       "$P/src/rtl/core/fetch/next_line_prefetch_buffer.sv" \
       "$P/src/rtl/core/fetch/ftq.sv" \
       "$P/src/rtl/core/fetch/fetch_packet_buffer.sv" \
