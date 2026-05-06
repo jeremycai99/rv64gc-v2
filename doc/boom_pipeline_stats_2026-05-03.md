@@ -645,6 +645,74 @@ functionally a no-op because `f2_seq_valid` is itself computed from F2's
 byte-consumption state — the gate I removed was redundant, not the
 throttle. Reverted; tree at 8b30714 + α' (no further RTL changes).
 
+### CORRECTION (2026-05-05 late): branch cluster is NOT a loop pattern
+
+The earlier "loop predictor for branch cluster" recommendation below was
+misclassified. Disassembly of `core_state_transition`:
+
+```
+80003634:  lbu  a4, 0(a5)         <- load byte from string
+80003636:  li   a3, 44            (',')
+8000363c:  beq  a4, a3, ...       <- counted as "branch BACKEND_STALL"
+80003640:  li   a0, 46            ('.')
+80003644:  beq  a4, a0, ...       <- counted as "branch BACKEND_STALL"
+80003648:  bltu a0, a4, ...
+8000364c:  addiw a4, a4, -43
+...
+```
+
+These are **state-machine character-classifier branches consuming `a4`
+from the `lbu` 4 instructions earlier**. They are NOT loop branches.
+The "branch BACKEND_STALL" count of 115k cycles is mostly load-to-use
+latency (3-cycle hit on the `lbu`) manifesting at the branch because
+the branch is the load's consumer.
+
+A loop predictor would not help these branches. The user's concern that
+"loop predictor = loop buffer in disguise" was correct; the proposal
+was workload-shaped without architectural justification.
+
+**Corrected bottleneck composition for cm10 BACKEND_STALL (230k cycles):**
+
+| Apparent type | Real cause | RTL leverage |
+|---|---|---|
+| branch (115k, 50%) | Load-to-use latency at branch consumer | Same as load fix |
+| load (65k, 28%) | Linked-list pointer chase, intrinsic | Structural memory hierarchy |
+| alu/mul (40k, 17%) | Operand-chain dependency | Already-1-cycle FUs |
+| store (10k, 4%) | SQ drain, minor | Minor |
+
+The dominant cm10 backend stall is intrinsic data-dependency latency on
+loads (3-cycle hit, fundamental to memory hierarchy) and the chains that
+consume them. AGENTS.md memory is explicit: "Dcache hit latency 2->1 is
+NOT minimal change; structural (VIPT + way-prediction); rv64gc-v2 at
+2-cycle hit / 3-cycle load-to-use is ALREADY FASTER THAN BOOM."
+
+LSU speculative wakeup is already wired (lsu_spec_wakeup_valid/tag
+through all 5 IQ instantiations in rv64gc_core_top.sv). 1-cycle FUs
+(ALU, BRU, MUL) are at the latency limit; their dependents wake via CDB
+on writeback at minimum 2-cycle producer-to-consumer issue gap.
+
+**Honest conclusion:** there is no single-session RTL fix that
+meaningfully reduces cm10 BACKEND_STALL. The intrinsic dependency-chain
+component (loads at head, branches consuming loads, mul/alu chains) is
+load-latency-bound. Closing this gap requires structural memory
+hierarchy work (multi-week, not multi-day).
+
+**Stage 1 closure path (revised):** the addressable bottleneck on cm10
+is FRONTEND_BUBBLE (5.7%, 116k cycles). Closing it via the F2-decoupling
+work (icache_resp_queue is wired at bcf9b5c; F2-pc-from-queue + F1
+runahead is the remaining cascade) yields ~30-50k cycles. That's
+insufficient for Stage 1 close on cm10 (gap is 184k); but combined with
+loop-exit prediction targeting genuinely-loop branches in dhrystone
+(0x8000200e strcpy and similar in cm) — which IS a non-benchmark-shaped
+mechanism (BPU/FTQ-side prediction structure, not frontend replay) —
+may close the gap on dhry300 and a fraction of cm10.
+
+**Honest assessment:** Stage 1 close on cm10 may not be achievable
+without dcache hit latency reduction, which is a multi-week structural
+project. PARTIAL-FLOOR sign-off may be the correct outcome. The
+architectural ceiling is where the data analysis pointed all along; the
+loop-buffer removal exposed it but did not change it.
+
 ### Top-3 BACKEND_STALL sources + RTL recommendations (2026-05-05, c3e1305)
 
 `bubble_attribution.py --top-pcs 12` cross-correlated cm10's 230,971
