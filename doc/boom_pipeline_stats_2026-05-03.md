@@ -645,6 +645,64 @@ functionally a no-op because `f2_seq_valid` is itself computed from F2's
 byte-consumption state — the gate I removed was redundant, not the
 throttle. Reverted; tree at 8b30714 + α' (no further RTL changes).
 
+### Bottleneck reframing (2026-05-05 evening): commit-stage view supersedes frontend-stage view
+
+After landing `tools/bubble_attribution.py` (commit 6b3301c) which classifies
+each cycle at the COMMIT stage rather than the frontend stage, the cm10
+bottleneck picture changes substantially:
+
+| Category | Cycles | % of run | % of bubble | Meaning |
+|---|---:|---:|---:|---|
+| PRODUCTIVE | 1,617,865 | 79.1% | — | commit > 0 |
+| **BACKEND_STALL** | **230,971** | **11.3%** | **54.1%** | fetch > 0 but commit=0, rob_cnt > 0 |
+| FRONTEND_BUBBLE | 115,650 | 5.7% | 27.1% | fetch=0, rob_cnt > 0 (decode starved while backend has work) |
+| IDLE_BUBBLE | 27,976 | 1.4% | 6.5% | fetch=0, rob_cnt=0 (pipeline empty) |
+| FLUSH | 20,063 | 1.0% | 4.7% | control-flow recovery |
+| RAMP | 32,646 | 1.6% | 7.6% | reset/edge cases |
+
+**The dominant bottleneck on cm10 is BACKEND_STALL, not frontend supply.**
+
+The packet_buf + ROB absorb most of the 35.5% F2-suppressor cycles before
+they reach commit. The frontend-stage `packet_empty=40.5%` measured by
+`bottleneck_analysis.py` is buffered out by the time it reaches commit; the
+commit-stage view shows only 5.7% FRONTEND_BUBBLE.
+
+Implication for Stage 1 close (cm10 gap = +184k cycles):
+- Closing all BACKEND_STALL cycles → -230k cycles → Stage 1 close + margin
+- Closing all FRONTEND_BUBBLE → -116k cycles → does not close Stage 1
+
+The F2-decoupling refactor (queue + F2 pc-from-queue + F1 runahead) targets
+FRONTEND_BUBBLE. It is not the lever for Stage 1 close. The lever is
+BACKEND_STALL reduction.
+
+BACKEND_STALL diagnosis (per bubble_attribution + memory's prior
+HEAD_WAIT_BACKLOG analysis): commit head waits for its uop to be ready.
+Sources, in approximate order of expected contribution:
+1. Load-to-use latency (current 3-cycle load-to-use; further reduction is
+   structural — VIPT + way-prediction rework)
+2. Operand-stall on data-dependency chains (per prior Phase D investigation,
+   refuted as "intrinsic" on cm; revisit with PC-level attribution)
+3. Branch mispredict resolution latency (cm has ~9% mispredict rate;
+   improving TAGE training is a candidate)
+4. MUL/DIV latency at head (memory says rare on cm; not a likely lever)
+
+The remaining session work pivots from the F2-decoupling cascade
+(architecturally still correct but addresses the wrong bottleneck) to a
+focused BACKEND_STALL investigation: extend `bubble_attribution.py` with
+per-PC attribution of stalled-rob-head events, identify whether the
+dominant cause is load-at-head, mispredict, or operand-chain, then propose
+the targeted mechanism.
+
+The earlier `tools/bottleneck_analysis.py` view remains correct for
+identifying frontend-stage counter movement after RTL changes; it just
+doesn't predict IPC impact. Both tools are needed: bottleneck_analysis for
+counter-by-counter validation of changes, bubble_attribution for
+commit-stage IPC analysis.
+
+The icache_resp_queue infrastructure (commits b97adb1, bcf9b5c) and the
+SVA invariants (commit 6b3301c) remain valid scaffolding; they just are
+not the Stage 1 closure mechanism.
+
 ### Bottleneck verification (2026-05-05): 97% is bypass artifact, real bottleneck 41.5%
 
 A previous reading of `xs_packet_buf_empty_cycles=1,990,791 (97.3%)`
