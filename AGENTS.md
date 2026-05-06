@@ -19,120 +19,125 @@ the 4-wide pivot decision before any RTL refactor here).
 
 ## Project Overview
 
-Clean-sheet 6-wide out-of-order RV64GC processor core (v2). This is a ground-up redesign, not an incremental v1 upgrade. The v1 codebase lives at `D:/agent-workspace/RV64GC/` — reference it for naming conventions and module interfaces, but do not carry over its architectural bottlenecks.
+Out-of-order RV64GC processor core (v2). Pivoted from 6-wide to **4-wide**
+in April 2026 (see `doc/archive/4wide/` for pivot history and
+`memory/project_4wide_pivot.md`). The v1 codebase at
+`D:/agent-workspace/RV64GC/` is the naming/interface reference.
 
 **ISA:** `rv64imafdc_zba_zbb_zbs_zicond_zicsr_zifencei`
 
-The full microarchitecture spec is at `doc/rv64gc_v2_uarch.md`. The gem5 sweep data is at `D:/agent-workspace/rv64gc-gem5/`. Companion SoC peripherals spec (UART, GPIO, SPI, I2C, DMA, JTAG, PMU, watchdog, framebuffer): `D:/agent-workspace/rv64gc-gem5/study/rv64gc_next_gen_soc.md`.
+Microarchitecture spec: `doc/rv64gc_v2_uarch.md`. Stage 1 active doc:
+`doc/boom_pipeline_stats_2026-05-03.md`. Reference cores:
+`doc/reference_core_unified_audit_2026-05-03.md`.
 
-## Current Benchmark Status (2026-04-16)
+## Current Status (2026-05-05)
 
+**Master:** `5fd8577` after Stage 1 prep.
+
+| Workload | Timed cycles | Score | Stage 1 target | Gap |
+|---|---:|---:|---:|---:|
+| Dhrystone 300 | 76,738 | 2.225 DMIPS/MHz | < 70,783 | +5,955 |
+| CoreMark iter10 | 2,034,653 | 4.915 CM/MHz | < 1,850,040 | +184,613 |
+| Dhrystone 100 | 26,394 | 2.156 DMIPS/MHz | (sanity row) | — |
+
+All 3 signoff rows PASS, `flags=0`, checksums match, golden PC scoreboard
+PASS, all 5 owner-identity counter invariants hold zero.
+
+### Key recent commits
+
+- `8b30714` — Stage 1 prep: harness (golden PC scoreboard, counter
+  invariants, image_diff), iter α' (explicit `!packet_buf_full`
+  backpressure on F2 emit), FTQ-split scaffold (3-pointer FTQ:
+  `wr_ptr_r`/`ifu_ptr_r`/`commit_ptr_r`), loop_buffer.sv deletion, doc
+  cleanup.
+- `18007b7` — Stage 1 closure plan refined: BPU runahead requires
+  icache response queue prerequisite (γ' phase 0).
+- `5fd8577` — Harness enforces data-driven discipline: signoff with
+  RTL changes vs HEAD requires `--mechanism-class non-default`,
+  `--targets-counter`, and `--expect-counter-decrease` predictions
+  that the harness verifies against measurement.
+
+### Stage 1 closure plan
+
+The remaining gap is structural: BPU/F1/F2 lockstep pins
+`xs_ftq_occ_max=1`. Architectural unlock requires F1-stage runahead
+with an icache response queue absorbing rate mismatch. Iteration
+sequence in `doc/boom_pipeline_stats_2026-05-03.md`:
+
+| Step | Description | Status |
+|---|---|---|
+| α' | F2 backpressure on `!packet_buf_full` | LANDED |
+| α'' | Delete dup suppressor | BLOCKED (needs F2 data-lifecycle change) |
+| β' | Owner-tagged packets epoch-filter at decode pop | PARTIAL (struct fields exist, decode-pop wiring pending) |
+| γ' phase 0 | Icache response queue (NEW — discovered as prerequisite) | DESIGN-PENDING |
+| γ' phase 1 | F1 BTB-driven advance | BLOCKED on phase 0 |
+| γ' phase 2 | FTQ alloc rate decoupling | BLOCKED on phase 1 |
+| γ'' | ICache prefetch by FTQ entry | BLOCKED on phase 2 |
+
+## Data-Driven Iteration Discipline
+
+Per `feedback_perf_discipline.md` (memory) — every RTL iteration MUST
+be predicted-then-measured, not trial-and-error. Workflow:
+
+```bash
+# 1. Identify dominant bottleneck from baseline result.json
+./tools/bottleneck_analysis.py benchmark_results/<baseline>/<bench>/result.json
+
+# 2. Apply RTL change targeting that counter
+# 3. Run signoff with mechanism class + targeted counter + prediction
+python3 tools/run_benchmarks.py --runner dsim --run-class signoff \
+    --manifest tests/benchmarks/stage1_signoff.json \
+    --plusarg PERF_PROFILE --plusarg PERF_COUNTERS --plusarg STAT_DUMP \
+    --mechanism-class ftq_owned_delivery \
+    --mechanism-name <descriptive-name> \
+    --baseline-results <baseline_results.json> \
+    --targets-counter <counter_name> \
+    --expect-counter-decrease <counter_name>:<predicted_delta> \
+    --run-id <run_id>
 ```
-                    IPC (xsim authoritative)   Status
-CoreMark (-O2):     3.91                       23/23 regressions pass
-Dhrystone (-O2):    0.99 (watchdog recovery)   rename/flush bug, root-cause TBD
-```
 
-xsim is the authoritative simulator (IEEE 1800 4-state, matches synthesis).
-For tapeout: trust xsim, not Verilator.
+The harness enforces this in `validate_run_class_args`:
+- Signoff with `--mechanism-class default_rtl` is REJECTED if
+  `git diff HEAD -- src/rtl src/tb/tb_top.sv` shows uncommitted RTL.
+- Non-default mechanism class REQUIRES `--targets-counter`.
+- `--targets-counter` REQUIRES matching `--expect-counter-decrease`.
+- Predictions are verified against measurement; failure to materialize
+  fails the gate even if cycles improved.
 
-Dhrystone's root cause has been identified but not fixed.  ROB head
-stalls on a store at PC=0x80002398; the store's `src2_ready` never
-fires because consumer pdsts have been aliased across multiple arch
-regs (`RAT[8]=RAT[9]=RAT[12]=pdst=8` observed).  Root cause:
-`decode_slice.sv:50` unconditionally sets `decoded.rd_arch = rd_f`
-(bits[11:7]), but for stores those bits are `imm[4:0]`, not a reg
-number — rename then computes `old_pdst = RAT[bogus]` and commit
-releases a pdst that's still architecturally in use, desynchronizing
-`free_list.committed_bitmap` from `rat.committed_rat`.
+The golden PC scoreboard (`+CHECK_GOLDEN_PCS=...`) catches architectural
+divergence within microseconds (vs ~2M cycles to a CoreMark CRC fail).
+Goldens at `tests/golden_pc/*.golden.hex`, hash-gated to image SHA256.
 
-Naive fixes (clear rd_arch for non-rd instructions) break CoreMark
-because the phantom releases were compensating for a separate pdst
-leak.  BOTH bugs must be fixed together.  Watchdog mitigates from
-0.005 → 0.99 IPC (180x) but the 3.2 target is unmet.
+### Earlier-session known issues (still applicable)
 
-**For the next debug session, read `doc/dhrystone_debug_handoff.md`.**
-It has the full reproducer, diagnostic traces, and the exact sequence
-of attempts that failed, so nobody has to re-discover the coupled
-bug-leak equilibrium.
+- **CoreMark mispredict rate ~9% on dsim iter=1 (2026-04-25)**: BTB
+  index-mismatch fixed (commit 0a3ca2f). Remaining cause suspected
+  TAGE training in `rv64gc_core_top.sv:3683-3770`. Investigate before
+  claiming BTB causes mispredicts.
+- **xsim vs Verilator residual gap** (~5%): Verilator eval-scheduling
+  artifacts. Not blocking; xsim is authoritative.
 
-### CoreMark IPC Signoff
+### Infrastructure
 
-| Simulator | IPC | Window | Notes |
-|-----------|-----|--------|-------|
-| **xsim** (authoritative) | **3.91** | 500K cyc steady-state | +30% over 3.0 target |
-| Verilator | 3.31 | (pre-LB-trigger-fix baseline) | Build currently broken (MSYS2 install) |
-| gem5 (vanilla ceiling, no LB/dual-BRU) | 3.05-3.12 | — | v2 exceeds via LB + dual-BRU + dual-dcache |
-
-Margin over 3.0 target: **+30%** on xsim.
-
-### Recent optimizations (2026-04-16 session)
-
-1. **Dcache/icache tag RAM reset init** (commit 8e280c6) — uninitialized valid/dirty arrays caused xsim to hang on 10 call/return tests and CoreMark. Reset now clears arrays. Impact: xsim 13/23 → 23/23 PASS.
-2. **LB trigger combinational** (commit b397582) — the registered Verilator-workaround dropped loop-buffer activation to 0% on xsim, starving fetch. Reverted to combinational per xsim_workflow.md refactor plan. Impact: xsim CoreMark 0.48 → 3.15 IPC.
-3. **Load-balanced IQ dispatch** (commit 2a92d6b) — round-robin over-fed single-issue IQ1/IQ2 while dual-issue IQ0 had room. Replaced with occupancy-minimizing routing (IQ0 weighted 1/2 to match 2× drain rate). Impact: xsim CoreMark 3.15 → 3.64 IPC, iq1/iq2_full 19%/18% → 1%/1%.
-4. **int_prf reset init** (commit 99b2199) — defensive same-class fix for regfile_copy arrays. Impact: no IPC change, prevents X propagation on un-renamed pdst reads.
-5. **ROB head watchdog** (commits 197ea09 → 6c32178) — stuck-entry detector that fires a replay exception for deadlock recovery. Final threshold is 64 cycles (longer than DIV, shorter than any legit stall path). Impact: Dhrystone 0.005 → 0.99 IPC (180x); CoreMark unchanged.
-6. **Checkpoints 4 → 16** (commit 0ebc657) — rename-stall source breakdown showed 99.5% of stalls were checkpoint exhaustion. Increasing capacity eliminates the stall. Impact: CoreMark 3.64 → 3.91 IPC (+8%).
-7. **Dhrystone debug diagnostics** (commits 31ea5c7, 5b5fdf2, 9949708, df28746, 533a445, 35e64db) — extensive `+TRACE_COMMIT`-gated instrumentation that pinpointed the root cause to `decode_slice.sv:50` setting `rd_arch = rd_f` unconditionally. See `doc/dhrystone_debug_handoff.md` for the full reproducer, diagnostic traces, and the sequence of failed fix attempts.
-8. **rename_buf clear on full_flush** (commit ecbb064) — defensive clear of per-ROB-entry metadata on flush. No IPC change; closes a latent race.
-
-### Simulator migration history (2026-04-16)
-
-Previously xsim reported 0.48 IPC — a 6.9x gap vs Verilator's 3.33. Root
-cause: `backward_branch_taken` in `rv64gc_core_top.sv` was registered as
-a Verilator eval-scheduling workaround. That 1-cycle delay caused the
-loop buffer to miss the activation window on xsim, dropping activation
-from ~99% to 0% and starving fetch 52% of cycles. Revert to combinational
-(commit b397582) restored real IPC. The `+PERF_PROFILE` plusarg in
-`tb_top.sv` dumps per-stage histograms used for this triage.
-
-Optimization log: `doc/coremark_optimization_changelog.md`
-
-### Key Optimizations Applied
-1. BTB offset-based truncation (fetch delivers full group, not just slot 0)
-2. BPU update type (CALL/RET/JALR stored in BTB for RAS prediction)
-3. BRU early fetch redirect (redirect at execute, not commit)
-4. 1-cycle redirect bubble (icache + f2_pc bypass on BPU redirect)
-5. Loop buffer all-slot trigger (combinational — xsim-correct; reverted from registered Verilator workaround)
-6. Forwarding hold register (breaks CDB→bypass→SQ_fwd→CDB loop)
-7. SQ/LQ power-of-2 depths (fixes pointer-wrap count overflow)
-8. Dispatch load cap (limits to 2 loads/cycle matching IQ NUM_ENQUEUE)
-9. Combinational preg_ready_table (includes rename clears for IQ enrollment)
-10. Dual-port dcache tag/data RAM (restores dual-select load IQ)
-11. Dual BRU on IQ0 (port 0 + port 1 both handle branches, eliminates BRU bottleneck)
-
-### Known Issues
-- **Dhrystone 2-cycle fetch cadence**: 44% of cycles produce 0 instructions. F2→F1 feedback through registered SRAM. Needs decoupled F2 stage with independent PC counter (~200 LOC pipeline rewrite).
-- **CoreMark mispredict rate ~9% on dsim iter=1 (2026-04-25 measurement)**: BTB index-mismatch bug is FIXED (commit 0a3ca2f, both lookup/update use pc[13:6]). Remaining mispredict cause is suspected to be TAGE training / commit-side training that picks the oldest control in a wide commit batch and may starve younger CFIs (`rv64gc_core_top.sv:3683-3727`), or anchor-PC mismatch in TAGE update (`rv64gc_core_top.sv:3747-3770`). Investigate before claiming the BTB causes mispredicts.
-- **CoreMark -O3 slow (0.37 IPC)**: high branch mispredict rate. Likely TAGE training related per the bullet above; revisit after TAGE update path is verified.
-- **xsim vs Verilator residual gap** (~5%): remaining Verilator eval-scheduling artifacts still elevate Verilator IPC above xsim. Suspected sources: forwarding hold register (adds 1 cycle to same-cycle forwarded loads), registered fetch_insn fields, converge-limit 500, UNOPTFLAT suppressions. Not blocking (xsim already meets 3.0 target).
-- **Verilator convergence**: structural CDB→bypass loop currently settled by forwarding hold register + address gating. The hold register is a real 1-cycle latency cost, not a Verilator-only artifact — on xsim it also applies. To remove, need structural CDB loop break at the source.
-
-### Infrastructure Committed
 - **L2 prefetch port**: 3-way arbitration (dcache > icache > prefetch).
-- **NLPB**: 4-entry next-line prefetch buffer, wired into fetch pipeline. Reduces Dhrystone IC miss from 19% to 11%.
-- **Multi-MSHR icache**: 2-entry MSHR array with miss-under-miss and same-cycle install.
-- **iverilog testbench**: `tb_iverilog.sv` wrapper. iverilog 13.0 blocked by SV struct limitations.
-
-### Future Optimization TODO
-- [ ] **Fetch pipeline decoupled redesign**: make F2 an independent stage with its own PC counter, eliminating the 44% fetch bubble. Estimated Dhrystone 2.37 → ~2.9 IPC.
-- [ ] **BTB per-line redesign**: cache-line indexing (PC[13:6]) + in-window filter + RAS/GHR guards. Requires decoupled fetch first (hot branch at offset 14 beyond extraction window).
-- [ ] **Dhrystone compiler tuning**: try -O2 with different GCC flags (-funroll-loops, PGO, etc.).
-- [ ] **Dcache dual-port tag RAM for synthesis**: current flip-flop-based dual-port is sim-friendly but needs SRAM macro for tapeout.
+- **NLPB**: 4-entry next-line prefetch buffer.
+- **Multi-MSHR icache**: 2-entry MSHR array, miss-under-miss.
+- **FTQ-split delivery scaffold**: 3-pointer FTQ (alloc/ifu/commit)
+  with `count_alloc_to_ifu` and `count_ifu_to_commit` counts; 5
+  owner-identity invariants hold zero.
 
 ## Performance Targets
 
-```
-                    CoreMark      Dhrystone     Linux boot
-v1 (current):       0.47          —             0.13
-v2 hw-only:         2.5 target    3.2 target    0.8–1.2
-v2 + SW stack:     ~3.0 expected ~3.8           1.1–1.5
-gem5 ceiling:       3.15          3.92          —
-v2 measured:        3.33          2.37          —
-```
+4-wide regime (current):
 
-The ISA extensions + macro-op fusion + compiler opts add ~20–30% effective IPC on top of the microarchitecture alone.
+| Workload | Stage 1 target (timed cycles) | Stage 2 stretch | gem5 4-wide ceiling |
+|---|---:|---:|---:|
+| Dhrystone 300 | < 70,783 | 4.0 DMIPS/MHz | ~3.93 |
+| CoreMark iter10 | < 1,850,040 | 7.5 CM/MHz | ~6.2 |
+
+Stage 1 target = match the previous-clean-loop-buffer baseline without
+the loop buffer (now banished). Stage 2 = stretch via loop predictor,
+ICache prefetch upgrades, optional UOP cache.
 
 ## gem5 Study Provenance
 
@@ -199,10 +204,11 @@ sw/                   # Linux boot: opensbi, device tree, initramfs
 
 These are the authoritative values — do not deviate without gem5 evidence:
 
-| Parameter | Value | Do NOT change to |
+| Parameter | Value (post-4wide-pivot) | Do NOT change to |
 |-----------|-------|------------------|
-| Pipeline width | 6-wide | 8-wide (+5% IPC, +50% area) |
+| Pipeline width | **4-wide** (decode/rename/commit) | 6-wide (Stage 2 question, not parameter tweak) |
 | ROB | 192 entries | >192 (+0.05% IPC, +67% area) |
+| FTQ | 24 entries, 3-pointer split | (post-FTQ-split-scaffold) |
 | Int PRF | 256 × 64-bit, 12R6W | — |
 | FP PRF | 128 × 64-bit | — |
 | Int IQs | 3 × 32, dual-select | >32 per IQ (symptom, not cause) |
@@ -212,9 +218,10 @@ These are the authoritative values — do not deviate without gem5 evidence:
 | L1I | 32 kB, 4-way | — |
 | L2 | 2 MB, 8-way, 32 MSHRs | >2 MB (zero gain) |
 | Branch predictor | TAGE-SC-L | Perceptron (−20% on RISC-V) |
-| BTB | 1024 × 4-way | >1024 (+0.003 IPC) |
-| Recovery | 4 checkpoints | — |
-| Loop buffer | 64 µops | — |
+| BTB | 2048 × 8-way (rv64gc-v2) | (8× larger than BOOM v4 Mega — verified by audit) |
+| Recovery | 16 checkpoints | — |
+| Loop buffer | **REMOVED** (banished, was 64 µops) | DO NOT RE-ADD; loop-exit prediction belongs in BPU/FTQ |
+| `fetch_packet_buffer` | 8-entry FIFO (operationally 1-deep) | — |
 
 ## Critical v1→v2 Architectural Changes
 
