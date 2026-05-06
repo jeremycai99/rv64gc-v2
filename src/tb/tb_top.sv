@@ -4667,4 +4667,87 @@ module tb_top
         end
     end
 
+    // ====================================================================
+    // Shadow signals for incremental F2-decoupling cascade validation
+    // ====================================================================
+    // Per the data-driven discipline + the design-validation tooling gap
+    // identified 2026-05-05: rather than land the full F2-pc-from-queue
+    // refactor as a single big-bang RTL change, we observe what the
+    // hypothetical change WOULD do by computing it as a shadow signal
+    // alongside the current behavior. The shadow lets us measure the
+    // divergence rate before committing.
+    //
+    // Shadow A: f2_pc_r if it tracked icq_deq_pc instead of f1_pc.
+    //   - In current design (post-bcf9b5c), the queue is wired but F2
+    //     still captures f1_pc each cycle. So in steady-state lockstep,
+    //     icq_deq_pc == f1_pc(T-1) == f2_pc_r(T+1 captured at T edge).
+    //   - The shadow tracks icq_deq_pc each cycle; we count cycles
+    //     where the shadow would diverge from actual f2_pc_r. In
+    //     baseline this should be ~0 (lockstep validates the queue).
+    //   - When we later enable F1 runahead, the shadow will start
+    //     diverging because F1 advances more often than F2 consumes,
+    //     giving us a quantitative measure of "how much would F2's
+    //     pc tracking change."
+    logic [63:0] f2_pc_r_shadow_queue_r;
+    integer      shadow_queue_pc_diverge_cycles_r;
+    integer      shadow_queue_pc_match_cycles_r;
+    logic [63:0] last_shadow_diverge_actual_r;
+    logic [63:0] last_shadow_diverge_proposed_r;
+    integer      last_shadow_diverge_cycle_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            f2_pc_r_shadow_queue_r <= 64'd0;
+            shadow_queue_pc_diverge_cycles_r <= 0;
+            shadow_queue_pc_match_cycles_r <= 0;
+            last_shadow_diverge_actual_r <= 64'd0;
+            last_shadow_diverge_proposed_r <= 64'd0;
+            last_shadow_diverge_cycle_r <= 0;
+        end else begin
+            // Update shadow only when the proposed design's F2 would actually
+            // capture from queue: when F2 is consuming this cycle (will emit).
+            // Otherwise hold (proposed F2 holds when not consuming).
+            if (u_core.u_fetch_unit.f2_will_emit_c &&
+                u_core.u_fetch_unit.icq_deq_valid) begin
+                f2_pc_r_shadow_queue_r <= u_core.u_fetch_unit.icq_deq_pc;
+            end
+
+            // Compare shadow against actual at the F2 stage (only meaningful
+            // when F2 is valid AND has data via the queue path AND we're not
+            // in a transition state)
+            if (u_core.u_fetch_unit.f2_valid_r &&
+                u_core.u_fetch_unit.icq_deq_valid &&
+                u_core.u_fetch_unit.f2_will_emit_c &&
+                !u_core.u_fetch_unit.f2_same_line_handoff_r &&
+                !u_core.u_fetch_unit.consumed_remainder_r) begin
+                if (u_core.u_fetch_unit.f2_pc_r[63:6] ==
+                    f2_pc_r_shadow_queue_r[63:6]) begin
+                    shadow_queue_pc_match_cycles_r <=
+                        shadow_queue_pc_match_cycles_r + 1;
+                end else begin
+                    shadow_queue_pc_diverge_cycles_r <=
+                        shadow_queue_pc_diverge_cycles_r + 1;
+                    last_shadow_diverge_actual_r   <= u_core.u_fetch_unit.f2_pc_r;
+                    last_shadow_diverge_proposed_r <= f2_pc_r_shadow_queue_r;
+                    last_shadow_diverge_cycle_r    <= trace_cycle;
+                end
+            end
+        end
+    end
+
+    final begin
+        if (shadow_queue_pc_match_cycles_r > 0 ||
+            shadow_queue_pc_diverge_cycles_r > 0) begin
+            $display("[SHADOW_F2_PC_FROM_QUEUE] match=%0d diverge=%0d",
+                shadow_queue_pc_match_cycles_r,
+                shadow_queue_pc_diverge_cycles_r);
+            if (shadow_queue_pc_diverge_cycles_r > 0) begin
+                $display("[SHADOW_F2_PC_FROM_QUEUE] last_diverge cycle=%0d actual=%016h proposed=%016h",
+                    last_shadow_diverge_cycle_r,
+                    last_shadow_diverge_actual_r,
+                    last_shadow_diverge_proposed_r);
+            end
+        end
+    end
+
 endmodule

@@ -3680,4 +3680,93 @@ module fetch_unit
         end
     end
 
+    // ====================================================================
+    // Pipeline timing invariants (SVA assertions)
+    // ====================================================================
+    // Codifies the timing relationships that the current design depends
+    // on. Any RTL change that violates one fires immediately during
+    // simulation, telling us which invariant the change broke before
+    // benchmarks run. This is the "design validation" layer the harness
+    // was missing -- counters tell WHAT is wrong; assertions tell WHICH
+    // architectural property the change violated.
+    //
+    // Per AGENTS.md SVA discipline: gated on `ifndef SYNTHESIS` so they
+    // only fire in simulation; cleared during reset and 1 cycle after
+    // redirect_valid (when state is in transition).
+
+`ifndef SYNTHESIS
+
+    // Invariant A: F2's PC line must match the icache request that
+    // produced the current response. ic_resp_valid at cycle T is for
+    // ic_req at cycle T-1, which is recorded in ic_req_addr_pipe_r.
+    // f2_pc_r at cycle T should be f1_pc at cycle T-1 (lockstep), which
+    // equals ic_req_addr (modulo redirect overrides). When the pipe
+    // register and f2_pc_r diverge at the line level while F2 has data,
+    // F2 is reading data for the wrong PC -- architectural mismatch.
+    property p_f2_pc_matches_resp_source;
+        @(posedge clk) disable iff (!rst_n || redirect_valid ||
+                                     f2_same_line_handoff_r ||
+                                     consumed_remainder_r)
+        (icq_deq_valid && f2_valid_r && ic_req_ftq_pipe_valid_r) |->
+        (f2_pc_r[63:LINE_BITS] == ic_req_addr_pipe_r[63:LINE_BITS]);
+    endproperty
+    a_f2_pc_matches_resp_source: assert property (p_f2_pc_matches_resp_source)
+        else $error("[INVARIANT_A] F2 pc/data line mismatch: f2_pc_r=%016h ic_req_pipe=%016h",
+                    f2_pc_r, ic_req_addr_pipe_r);
+
+    // Invariant B: F2's owner epoch must equal current FTQ epoch when
+    // F2 has a valid owner. A stale epoch in F2 means F2 is processing
+    // data from a flushed FTQ entry. The xs_f2_owner_epoch_mismatch
+    // counter tracks this; this assertion makes the counter movement a
+    // hard correctness property.
+    property p_f2_owner_epoch_current;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        f2_ftq_valid_r |->
+        (f2_ftq_epoch_r == ftq_current_epoch);
+    endproperty
+    a_f2_owner_epoch_current: assert property (p_f2_owner_epoch_current)
+        else $error("[INVARIANT_B] F2 owner epoch stale: f2_epoch=%h ftq_epoch=%h",
+                    f2_ftq_epoch_r, ftq_current_epoch);
+
+    // Invariant C: when F2 emits, f2_pc_consumed_c must be 1 (semantic
+    // tautology that catches any future change accidentally clearing
+    // f2_pc_consumed_c on emit, which would break F1's case 4 advance).
+    property p_emit_implies_consumed;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        f2_will_emit_c |-> f2_pc_consumed_c;
+    endproperty
+    a_emit_implies_consumed: assert property (p_emit_implies_consumed)
+        else $error("[INVARIANT_C] F2 emitted but pc_consumed_c=0");
+
+    // Invariant D: queue's deq_pc must match the line of f2_pc_r
+    // whenever F2 has valid data and is processing a queue-sourced
+    // packet (not same-line handoff). This codifies the property that
+    // future runahead must preserve: F2's pc_r line must track the
+    // queue head's line.
+    property p_queue_pc_matches_f2;
+        @(posedge clk) disable iff (!rst_n || redirect_valid ||
+                                     f2_same_line_handoff_r)
+        (icq_deq_valid && f2_valid_r) |->
+        (icq_deq_pc[63:LINE_BITS] == f2_pc_r[63:LINE_BITS]);
+    endproperty
+    a_queue_pc_matches_f2: assert property (p_queue_pc_matches_f2)
+        else $error("[INVARIANT_D] queue.deq_pc/f2_pc_r line mismatch: deq_pc=%016h f2_pc_r=%016h",
+                    icq_deq_pc, f2_pc_r);
+
+    // Invariant E: when F2 emits, the FTQ entry it claims ownership of
+    // must be the current ifu_ptr's entry (not a stale or future one).
+    // f2_ftq_idx_r must match ftq's head_idx during emit cycles, modulo
+    // the cycle of FTQ allocation transitions.
+    property p_f2_emit_matches_ftq_head;
+        @(posedge clk) disable iff (!rst_n || redirect_valid ||
+                                     ftq_enq_valid)
+        (f2_will_emit_c && f2_ftq_valid_r && ftq_head_valid) |->
+        (f2_ftq_idx_r == ftq_head_idx);
+    endproperty
+    a_f2_emit_matches_ftq_head: assert property (p_f2_emit_matches_ftq_head)
+        else $error("[INVARIANT_E] F2 emit FTQ idx mismatch: f2_ftq_idx=%h ftq_head_idx=%h",
+                    f2_ftq_idx_r, ftq_head_idx);
+
+`endif
+
 endmodule
