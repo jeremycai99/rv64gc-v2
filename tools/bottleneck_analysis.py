@@ -110,16 +110,48 @@ def render_one(row: dict, top_n: int) -> str:
     out.append(f"total cycles: {total:,}    minstret: {row.get('minstret', '-')}    "
                f"IPC: {row.get('ipc', '-')}")
     out.append("")
+
+    # Bypass-corrected decode-supply view. The xs_packet_buf_empty_cycles
+    # counter overcounts: it fires whenever count_r=0, including cycles
+    # where a packet was delivered to decode via the same-cycle bypass
+    # (xs_bypass_valid) without entering the buffer. The TRUE decode-supply
+    # rate is bypass_delivered + buf_delivered; everything else is a
+    # decode bubble.
+    bypassed = int(pc.get("xs_bypass_valid", 0))
+    buf_delivered = int(pc.get("xs_packet_buf_occ_sum", 0))
+    decode_bubble = max(0, total - bypassed - buf_delivered)
+    if bypassed or buf_delivered:
+        out.append("**Bypass-corrected decode-supply view (READ THIS FIRST):**")
+        out.append("")
+        out.append("| Path | Cycles | % of run |")
+        out.append("|---|---:|---:|")
+        out.append(f"| Packet delivered via same-cycle bypass | {bypassed:,} | {100*bypassed/total:.1f}% |")
+        out.append(f"| Packet delivered via buf occupancy | {buf_delivered:,} | {100*buf_delivered/total:.1f}% |")
+        out.append(f"| **Decode bubble (no packet delivered)** | **{decode_bubble:,}** | **{100*decode_bubble/total:.1f}%** |")
+        out.append("")
+        out.append(f"True frontend supply rate: **{100*(bypassed+buf_delivered)/total:.1f}%**. "
+                   f"`xs_packet_buf_empty_cycles` reads near-100% on this design because the "
+                   f"bypass path keeps the buffer empty even on supply cycles; do NOT treat "
+                   f"that counter as a starvation indicator. The actual bottleneck is the "
+                   f"decode bubble row above, which equals `packet_empty` to within a cycle.")
+        out.append("")
+
+    out.append("**Per-counter ranking (some entries overlap; bypass-corrected view above is authoritative):**")
+    out.append("")
     out.append("| Rank | Counter | Cycles | % of run | Attribution | Meaning |")
     out.append("|---:|---|---:|---:|---|---|")
     for i, (counter, attribution, meaning, val, pct) in enumerate(rows[:top_n], 1):
-        out.append(f"| {i} | `{counter}` | {val:,} | {pct:.1f}% | {attribution} | {meaning} |")
+        flag = " ⚠ artifact" if counter == "xs_packet_buf_empty_cycles" else ""
+        out.append(f"| {i} | `{counter}`{flag} | {val:,} | {pct:.1f}% | {attribution} | {meaning} |")
     out.append("")
 
-    # Architectural recommendation: which bottleneck is the dominant one?
-    if rows:
-        top = rows[0]
-        out.append(f"**Dominant bottleneck:** `{top[0]}` ({top[3]:,} cycles, {top[4]:.1f}% of run)")
+    # Architectural recommendation. Skip xs_packet_buf_empty_cycles (artifact)
+    # when picking the dominant bottleneck.
+    actionable = [r for r in rows if r[0] != "xs_packet_buf_empty_cycles"]
+    if actionable:
+        top = actionable[0]
+        out.append(f"**Dominant actionable bottleneck:** `{top[0]}` "
+                   f"({top[3]:,} cycles, {top[4]:.1f}% of run)")
         out.append("")
         out.append("**Required for next RTL iteration (per feedback_perf_discipline.md):**")
         out.append("- Identify a specific RTL change that addresses this counter")

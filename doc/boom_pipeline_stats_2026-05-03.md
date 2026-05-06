@@ -573,6 +573,75 @@ functionally a no-op because `f2_seq_valid` is itself computed from F2's
 byte-consumption state — the gate I removed was redundant, not the
 throttle. Reverted; tree at 8b30714 + α' (no further RTL changes).
 
+### Bottleneck verification (2026-05-05): 97% is bypass artifact, real bottleneck 41.5%
+
+A previous reading of `xs_packet_buf_empty_cycles=1,990,791 (97.3%)`
+suggested decode is starved 97% of cycles. Verification with
+`tools/bottleneck_analysis.py` (committed at 5fd8577, updated to show
+the bypass-corrected view) shows this is a metric artifact:
+
+| Path | Cycles | % of run |
+|---|---:|---:|
+| Packet delivered via same-cycle bypass (`xs_bypass_valid`) | 1,142,874 | 55.9% |
+| Packet delivered via buf occupancy | 54,380 | 2.7% |
+| **Decode bubble (no packet delivered)** | **847,957** | **41.5%** |
+
+True frontend supply rate: **58.5%**. The bypass path delivers a packet
+to decode same-cycle without entering the buffer; `packet_buf_empty`
+fires on those cycles too, inflating the empty-cycles counter. Real
+bottleneck is the 41.5% decode-bubble row, which equals `packet_empty`
+to within a cycle.
+
+Of those 41.5% bubble cycles: ~35.5% (`packet_empty_noemit_dup=725,222`)
+are F2 dup-suppressor firing because F2 holds same PC across consecutive
+cycles. That's the BPU/F1/F2 lockstep.
+
+### Heterogeneous design analysis (2026-05-05)
+
+The "4-wide" pipeline is decode/rename/commit width. Other stages may
+be wider or different. Key counter check on whether non-uniform widths
+help:
+
+| Counter | cm10 value | Implication |
+|---|---:|---|
+| `xs_backend_stall_cycles` | 0 | Backend never stalls supplying packet back-pressure |
+| `xs_backend_stall_pkt_ready` | 0 | No back-pressure stalls when packet was ready |
+| `commit_zero` (frontend probe) | 19.9% | Commit fires 80% of cycles |
+| `frontend_zero` | 41.5% | Frontend supplies 58.5% of cycles (decode bubble dominant) |
+
+Backend is NOT a bottleneck. Heterogeneous backend widening
+(rename > 4, commit > 4, more ALUs/IQs) cannot help while frontend
+delivers only 58.5% of cycles. Issue stage is already heterogeneous
+(3 IQs × 1-2 select ports each = up to 5 issues/cycle into 4 ALUs +
+1 BRU + LSU).
+
+The only heterogeneity that would help today is **wider frontend supply**
+(more packets/cycle to decode) — which requires fixing the lockstep,
+not adding pipeline stages. The lockstep fix is structural per below.
+
+### Why the simple "advance F1 on suppressor" fix is unsafe
+
+A naive RTL change (when suppressor fires AND `last_emit_next == f1_pc`,
+advance F1 to next-line in `f2_duplicate_next_pc_c`) fails architecturally.
+F2's update logic captures `f1_pc` each cycle (`f2_pc_r <= f1_pc` at
+fetch_unit.sv:1267). When F1 jumps ahead by a full line, F2 follows on
+the next cycle, **skipping intermediate packets**:
+
+```
+T0: F2 at A0+0,  emit packet [A+0, A+4, A+8, A+12]. last_emit=A0.
+T1: f1_pc=A0+16. f2_pc_r=A0+0 (captured f1(T0)). SUPPRESSOR.
+    Old: case 3 → next_pc=A0+16=f1_pc. NO advance.
+    Naive new: case 3 → next_pc=A0+64 (next line). F1 jumps.
+T2: f1_pc=A0+64. f2_pc_r=A0+16. F2 emits A0+16.
+T3: f1_pc=A0+72. f2_pc_r=A0+64. F2 emits A0+64. ← SKIPS A0+32, A0+48!
+```
+
+Architecturally wrong; golden PC will trip. The naive fix violates the
+F2-tracks-F1 invariant. To safely break the lockstep, F2 must track its
+own PC (sourced from FTQ entries with stored block_pc and predicted
+control), not from `f1_pc` capture. That decoupling is the deep
+refactor.
+
 ### Architectural conclusion
 
 Stage 1 close requires γ' phase 0 (icache response queue) before any of
