@@ -411,7 +411,7 @@ module tage_sc_l
     assign upd_local_alternates = update_taken != local_last_actual[upd_local_idx];
 
     // =========================================================================
-    //  4. Loop Predictor — 64 entries
+    //  4. Loop Predictor
     //     {tag[11:0], count[13:0], limit[13:0], confidence[1:0], dir}
     // =========================================================================
     logic [LOOP_TAG_BITS-1:0]  loop_tags  [LOOP_PRED_ENTRIES];
@@ -437,6 +437,12 @@ module tage_sc_l
     logic [LOOP_CNT_BITS-1:0]  loop_lookup_count;
     logic [LOOP_CNT_BITS-1:0]  aux_loop_lookup_count;
 
+    function automatic logic [LOOP_IDX_BITS-1:0] loop_idx_hash(input logic [63:0] pc_i);
+        loop_idx_hash = pc_i[LOOP_IDX_BITS+1:2] ^
+                        LOOP_IDX_BITS'(pc_i[13:8]) ^
+                        LOOP_IDX_BITS'(pc_i[19:14]);
+    endfunction
+
 `ifdef SIMULATION
     logic sim_disable_loop_spec_count;
 
@@ -448,9 +454,9 @@ module tage_sc_l
     localparam logic sim_disable_loop_spec_count = 1'b0;
 `endif
 
-    assign loop_lkp_idx = pc[LOOP_IDX_BITS+1:2];
+    assign loop_lkp_idx = loop_idx_hash(pc);
     assign loop_lkp_tag = pc[LOOP_TAG_BITS+1:2];
-    assign aux_loop_lkp_idx = aux_pc[LOOP_IDX_BITS+1:2];
+    assign aux_loop_lkp_idx = loop_idx_hash(aux_pc);
     assign aux_loop_lkp_tag = aux_pc[LOOP_TAG_BITS+1:2];
 
     always_comb begin
@@ -477,8 +483,11 @@ module tage_sc_l
             end else begin
                 loop_pred = 1'b0;  // exit loop
             end
-            // Override TAGE+SC only with high confidence
-            loop_override = loop_confident;
+            // Use the loop predictor as an exit corrector.  The base/TAGE
+            // path already handles the common taken backedge; forcing taken
+            // from the loop table on data-dependent backward branches is too
+            // aggressive.
+            loop_override = loop_confident && !loop_pred;
         end
 
         aux_loop_hit       = loop_valid[aux_loop_lkp_idx] &&
@@ -494,7 +503,7 @@ module tage_sc_l
             end else begin
                 aux_loop_pred = 1'b0;
             end
-            aux_loop_override = aux_loop_confident;
+            aux_loop_override = aux_loop_confident && !aux_loop_pred;
         end
     end
 
@@ -599,6 +608,51 @@ module tage_sc_l
     integer sim_bpu_update_tage_hit    [0:SIM_BPU_HOT_PCS-1];
     integer sim_bpu_update_provider    [0:SIM_BPU_HOT_PCS-1][0:3];
 
+    logic   sim_watch_pc_valid;
+    logic [63:0] sim_watch_pc;
+    integer sim_watch_lp_primary_lookup;
+    integer sim_watch_lp_primary_hit;
+    integer sim_watch_lp_primary_override;
+    integer sim_watch_lp_primary_pred_taken;
+    integer sim_watch_lp_aux_lookup;
+    integer sim_watch_lp_aux_hit;
+    integer sim_watch_lp_aux_override;
+    integer sim_watch_lp_aux_pred_taken;
+    integer sim_watch_lp_update;
+    integer sim_watch_lp_update_taken;
+    integer sim_watch_lp_update_not_taken;
+    integer sim_watch_lp_update_misp;
+    integer sim_watch_lp_update_backward;
+    integer sim_watch_lp_update_hit;
+    integer sim_watch_lp_exit_limit_match;
+    integer sim_watch_lp_exit_limit_update;
+    integer sim_watch_lp_conf_hist [0:3];
+    integer sim_watch_bpu_primary_lookup;
+    integer sim_watch_bpu_primary_taken;
+    integer sim_watch_bpu_primary_confident;
+    integer sim_watch_bpu_primary_loop_hit;
+    integer sim_watch_bpu_primary_loop_ovr;
+    integer sim_watch_bpu_primary_local_ovr;
+    integer sim_watch_bpu_primary_tage_hit;
+    integer sim_watch_bpu_primary_tage_weak;
+    integer sim_watch_bpu_primary_sc_ovr;
+    integer sim_watch_bpu_aux_lookup;
+    integer sim_watch_bpu_aux_taken;
+    integer sim_watch_bpu_aux_confident;
+    integer sim_watch_bpu_aux_loop_hit;
+    integer sim_watch_bpu_aux_loop_ovr;
+    integer sim_watch_bpu_aux_local_ovr;
+    integer sim_watch_bpu_aux_tage_hit;
+    integer sim_watch_bpu_aux_tage_weak;
+    integer sim_watch_bpu_aux_sc_ovr;
+    integer sim_watch_bpu_update;
+    integer sim_watch_bpu_update_taken;
+    integer sim_watch_bpu_update_not_taken;
+    integer sim_watch_bpu_update_misp;
+    integer sim_watch_bpu_update_loop_hit;
+    integer sim_watch_bpu_update_tage_hit;
+    integer sim_watch_bpu_update_provider [0:3];
+
     function automatic int sim_looppred_hot_idx(input logic [63:0] hot_pc);
         begin
             unique case (hot_pc)
@@ -677,6 +731,8 @@ module tage_sc_l
             $test$plusargs("TRACE_BPU_HOT") ||
             $test$plusargs("PERF_PROFILE") ||
             $test$plusargs("STAT_DUMP");
+        sim_watch_pc_valid =
+            $value$plusargs("LOOPPRED_WATCH_PC=%h", sim_watch_pc);
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -731,6 +787,52 @@ module tage_sc_l
                     sim_bpu_update_provider[i][t] <= 0;
                 end
             end
+            sim_watch_lp_primary_lookup <= 0;
+            sim_watch_lp_primary_hit <= 0;
+            sim_watch_lp_primary_override <= 0;
+            sim_watch_lp_primary_pred_taken <= 0;
+            sim_watch_lp_aux_lookup <= 0;
+            sim_watch_lp_aux_hit <= 0;
+            sim_watch_lp_aux_override <= 0;
+            sim_watch_lp_aux_pred_taken <= 0;
+            sim_watch_lp_update <= 0;
+            sim_watch_lp_update_taken <= 0;
+            sim_watch_lp_update_not_taken <= 0;
+            sim_watch_lp_update_misp <= 0;
+            sim_watch_lp_update_backward <= 0;
+            sim_watch_lp_update_hit <= 0;
+            sim_watch_lp_exit_limit_match <= 0;
+            sim_watch_lp_exit_limit_update <= 0;
+            for (int c = 0; c < 4; c++) begin
+                sim_watch_lp_conf_hist[c] <= 0;
+            end
+            sim_watch_bpu_primary_lookup <= 0;
+            sim_watch_bpu_primary_taken <= 0;
+            sim_watch_bpu_primary_confident <= 0;
+            sim_watch_bpu_primary_loop_hit <= 0;
+            sim_watch_bpu_primary_loop_ovr <= 0;
+            sim_watch_bpu_primary_local_ovr <= 0;
+            sim_watch_bpu_primary_tage_hit <= 0;
+            sim_watch_bpu_primary_tage_weak <= 0;
+            sim_watch_bpu_primary_sc_ovr <= 0;
+            sim_watch_bpu_aux_lookup <= 0;
+            sim_watch_bpu_aux_taken <= 0;
+            sim_watch_bpu_aux_confident <= 0;
+            sim_watch_bpu_aux_loop_hit <= 0;
+            sim_watch_bpu_aux_loop_ovr <= 0;
+            sim_watch_bpu_aux_local_ovr <= 0;
+            sim_watch_bpu_aux_tage_hit <= 0;
+            sim_watch_bpu_aux_tage_weak <= 0;
+            sim_watch_bpu_aux_sc_ovr <= 0;
+            sim_watch_bpu_update <= 0;
+            sim_watch_bpu_update_taken <= 0;
+            sim_watch_bpu_update_not_taken <= 0;
+            sim_watch_bpu_update_misp <= 0;
+            sim_watch_bpu_update_loop_hit <= 0;
+            sim_watch_bpu_update_tage_hit <= 0;
+            for (int t = 0; t < 4; t++) begin
+                sim_watch_bpu_update_provider[t] <= 0;
+            end
         end else if (sim_looppred_en) begin
             int pidx;
             int aidx;
@@ -746,6 +848,17 @@ module tage_sc_l
                 if (pred_taken)
                     sim_lp_primary_pred_taken[pidx] <= sim_lp_primary_pred_taken[pidx] + 1;
             end
+            if (sim_watch_pc_valid && (pc == sim_watch_pc)) begin
+                sim_watch_lp_primary_lookup <= sim_watch_lp_primary_lookup + 1;
+                if (loop_hit)
+                    sim_watch_lp_primary_hit <= sim_watch_lp_primary_hit + 1;
+                if (loop_override)
+                    sim_watch_lp_primary_override <=
+                        sim_watch_lp_primary_override + 1;
+                if (pred_taken)
+                    sim_watch_lp_primary_pred_taken <=
+                        sim_watch_lp_primary_pred_taken + 1;
+            end
 
             aidx = sim_looppred_hot_idx(aux_pc);
             if (aidx >= 0) begin
@@ -756,6 +869,16 @@ module tage_sc_l
                     sim_lp_aux_override[aidx] <= sim_lp_aux_override[aidx] + 1;
                 if (aux_pred_taken)
                     sim_lp_aux_pred_taken[aidx] <= sim_lp_aux_pred_taken[aidx] + 1;
+            end
+            if (sim_watch_pc_valid && (aux_pc == sim_watch_pc)) begin
+                sim_watch_lp_aux_lookup <= sim_watch_lp_aux_lookup + 1;
+                if (aux_loop_hit)
+                    sim_watch_lp_aux_hit <= sim_watch_lp_aux_hit + 1;
+                if (aux_loop_override)
+                    sim_watch_lp_aux_override <= sim_watch_lp_aux_override + 1;
+                if (aux_pred_taken)
+                    sim_watch_lp_aux_pred_taken <=
+                        sim_watch_lp_aux_pred_taken + 1;
             end
 
             uidx = sim_looppred_hot_idx(update_pc);
@@ -798,6 +921,45 @@ module tage_sc_l
                              loop_override, aux_loop_override);
                 end
             end
+            if (update_valid && sim_watch_pc_valid &&
+                (update_pc == sim_watch_pc)) begin
+                sim_watch_lp_update <= sim_watch_lp_update + 1;
+                if (update_taken)
+                    sim_watch_lp_update_taken <=
+                        sim_watch_lp_update_taken + 1;
+                else
+                    sim_watch_lp_update_not_taken <=
+                        sim_watch_lp_update_not_taken + 1;
+                if (update_mispredict)
+                    sim_watch_lp_update_misp <= sim_watch_lp_update_misp + 1;
+                if (upd_loop_backward)
+                    sim_watch_lp_update_backward <=
+                        sim_watch_lp_update_backward + 1;
+                if (upd_loop_hit)
+                    sim_watch_lp_update_hit <= sim_watch_lp_update_hit + 1;
+                if (upd_loop_hit) begin
+                    sim_watch_lp_conf_hist[loop_conf[upd_loop_idx]] <=
+                        sim_watch_lp_conf_hist[loop_conf[upd_loop_idx]] + 1;
+                end
+                if (upd_loop_hit && upd_loop_backward && !update_taken) begin
+                    if (loop_count[upd_loop_idx] == loop_limit[upd_loop_idx])
+                        sim_watch_lp_exit_limit_match <=
+                            sim_watch_lp_exit_limit_match + 1;
+                    else
+                        sim_watch_lp_exit_limit_update <=
+                            sim_watch_lp_exit_limit_update + 1;
+                end
+                if (sim_trace_looppred_en) begin
+                    $display("[LOOPPRED_WATCH_UPD] pc=%016h taken=%b misp=%b back=%b hit=%b idx=%0d tag=%0h count=%0d spec=%0d limit=%0d conf=%0d",
+                             update_pc, update_taken, update_mispredict,
+                             upd_loop_backward, upd_loop_hit,
+                             upd_loop_idx, upd_loop_tag,
+                             upd_loop_hit ? loop_count[upd_loop_idx] : 14'd0,
+                             upd_loop_hit ? loop_spec_count[upd_loop_idx] : 14'd0,
+                             upd_loop_hit ? loop_limit[upd_loop_idx] : 14'd0,
+                             upd_loop_hit ? loop_conf[upd_loop_idx] : 2'd0);
+                end
+            end
         end
 
         if (sim_bpu_hot_en) begin
@@ -834,6 +996,34 @@ module tage_sc_l
                     sim_bpu_primary_sc_ovr[bpu_pidx] <=
                         sim_bpu_primary_sc_ovr[bpu_pidx] + 1;
             end
+            if (sim_watch_pc_valid && (pc == sim_watch_pc)) begin
+                sim_watch_bpu_primary_lookup <=
+                    sim_watch_bpu_primary_lookup + 1;
+                if (pred_taken)
+                    sim_watch_bpu_primary_taken <=
+                        sim_watch_bpu_primary_taken + 1;
+                if (pred_confident)
+                    sim_watch_bpu_primary_confident <=
+                        sim_watch_bpu_primary_confident + 1;
+                if (loop_hit)
+                    sim_watch_bpu_primary_loop_hit <=
+                        sim_watch_bpu_primary_loop_hit + 1;
+                if (loop_override)
+                    sim_watch_bpu_primary_loop_ovr <=
+                        sim_watch_bpu_primary_loop_ovr + 1;
+                if (local_override)
+                    sim_watch_bpu_primary_local_ovr <=
+                        sim_watch_bpu_primary_local_ovr + 1;
+                if (tage_any_hit)
+                    sim_watch_bpu_primary_tage_hit <=
+                        sim_watch_bpu_primary_tage_hit + 1;
+                if (tage_pred_weak)
+                    sim_watch_bpu_primary_tage_weak <=
+                        sim_watch_bpu_primary_tage_weak + 1;
+                if (sc_override)
+                    sim_watch_bpu_primary_sc_ovr <=
+                        sim_watch_bpu_primary_sc_ovr + 1;
+            end
 
             bpu_aidx = sim_bpu_hot_idx(aux_pc);
             if (bpu_aidx >= 0) begin
@@ -864,6 +1054,31 @@ module tage_sc_l
                     sim_bpu_aux_sc_ovr[bpu_aidx] <=
                         sim_bpu_aux_sc_ovr[bpu_aidx] + 1;
             end
+            if (sim_watch_pc_valid && (aux_pc == sim_watch_pc)) begin
+                sim_watch_bpu_aux_lookup <= sim_watch_bpu_aux_lookup + 1;
+                if (aux_pred_taken)
+                    sim_watch_bpu_aux_taken <= sim_watch_bpu_aux_taken + 1;
+                if (aux_pred_confident)
+                    sim_watch_bpu_aux_confident <=
+                        sim_watch_bpu_aux_confident + 1;
+                if (aux_loop_hit)
+                    sim_watch_bpu_aux_loop_hit <=
+                        sim_watch_bpu_aux_loop_hit + 1;
+                if (aux_loop_override)
+                    sim_watch_bpu_aux_loop_ovr <=
+                        sim_watch_bpu_aux_loop_ovr + 1;
+                if (aux_local_override)
+                    sim_watch_bpu_aux_local_ovr <=
+                        sim_watch_bpu_aux_local_ovr + 1;
+                if (aux_tage_any_hit)
+                    sim_watch_bpu_aux_tage_hit <=
+                        sim_watch_bpu_aux_tage_hit + 1;
+                if (aux_tage_pred_weak)
+                    sim_watch_bpu_aux_tage_weak <=
+                        sim_watch_bpu_aux_tage_weak + 1;
+                if (aux_sc_override)
+                    sim_watch_bpu_aux_sc_ovr <= sim_watch_bpu_aux_sc_ovr + 1;
+            end
 
             bpu_uidx = sim_bpu_hot_idx(update_pc);
             if (update_valid && (bpu_uidx >= 0)) begin
@@ -886,6 +1101,28 @@ module tage_sc_l
                         sim_bpu_update_tage_hit[bpu_uidx] + 1;
                     sim_bpu_update_provider[bpu_uidx][upd_provider] <=
                         sim_bpu_update_provider[bpu_uidx][upd_provider] + 1;
+                end
+            end
+            if (update_valid && sim_watch_pc_valid &&
+                (update_pc == sim_watch_pc)) begin
+                sim_watch_bpu_update <= sim_watch_bpu_update + 1;
+                if (update_taken)
+                    sim_watch_bpu_update_taken <=
+                        sim_watch_bpu_update_taken + 1;
+                else
+                    sim_watch_bpu_update_not_taken <=
+                        sim_watch_bpu_update_not_taken + 1;
+                if (update_mispredict)
+                    sim_watch_bpu_update_misp <=
+                        sim_watch_bpu_update_misp + 1;
+                if (upd_loop_hit)
+                    sim_watch_bpu_update_loop_hit <=
+                        sim_watch_bpu_update_loop_hit + 1;
+                if (upd_any_hit) begin
+                    sim_watch_bpu_update_tage_hit <=
+                        sim_watch_bpu_update_tage_hit + 1;
+                    sim_watch_bpu_update_provider[upd_provider] <=
+                        sim_watch_bpu_update_provider[upd_provider] + 1;
                 end
             end
         end
@@ -919,6 +1156,30 @@ module tage_sc_l
                          sim_lp_conf_hist[i][1],
                          sim_lp_conf_hist[i][2],
                          sim_lp_conf_hist[i][3]);
+            end
+            if (sim_watch_pc_valid) begin
+                $display("watch=%016h %0d/%0d/%0d/%0d %0d/%0d/%0d/%0d %0d/%0d/%0d/%0d/%0d/%0d %0d/%0d %0d/%0d/%0d/%0d",
+                         sim_watch_pc,
+                         sim_watch_lp_primary_lookup,
+                         sim_watch_lp_primary_hit,
+                         sim_watch_lp_primary_override,
+                         sim_watch_lp_primary_pred_taken,
+                         sim_watch_lp_aux_lookup,
+                         sim_watch_lp_aux_hit,
+                         sim_watch_lp_aux_override,
+                         sim_watch_lp_aux_pred_taken,
+                         sim_watch_lp_update,
+                         sim_watch_lp_update_taken,
+                         sim_watch_lp_update_not_taken,
+                         sim_watch_lp_update_misp,
+                         sim_watch_lp_update_backward,
+                         sim_watch_lp_update_hit,
+                         sim_watch_lp_exit_limit_match,
+                         sim_watch_lp_exit_limit_update,
+                         sim_watch_lp_conf_hist[0],
+                         sim_watch_lp_conf_hist[1],
+                         sim_watch_lp_conf_hist[2],
+                         sim_watch_lp_conf_hist[3]);
             end
         end
 
@@ -958,6 +1219,38 @@ module tage_sc_l
                          sim_bpu_update_provider[i][2],
                          sim_bpu_update_provider[i][3]);
             end
+            if (sim_watch_pc_valid) begin
+                $display("watch=%016h %0d %0d %0d %0d/%0d %0d %0d %0d %0d  %0d %0d %0d %0d/%0d %0d %0d %0d %0d  %0d(%0d %0d %0d %0d %0d %0d/%0d/%0d/%0d)",
+                         sim_watch_pc,
+                         sim_watch_bpu_primary_lookup,
+                         sim_watch_bpu_primary_taken,
+                         sim_watch_bpu_primary_confident,
+                         sim_watch_bpu_primary_loop_hit,
+                         sim_watch_bpu_primary_loop_ovr,
+                         sim_watch_bpu_primary_local_ovr,
+                         sim_watch_bpu_primary_tage_hit,
+                         sim_watch_bpu_primary_tage_weak,
+                         sim_watch_bpu_primary_sc_ovr,
+                         sim_watch_bpu_aux_lookup,
+                         sim_watch_bpu_aux_taken,
+                         sim_watch_bpu_aux_confident,
+                         sim_watch_bpu_aux_loop_hit,
+                         sim_watch_bpu_aux_loop_ovr,
+                         sim_watch_bpu_aux_local_ovr,
+                         sim_watch_bpu_aux_tage_hit,
+                         sim_watch_bpu_aux_tage_weak,
+                         sim_watch_bpu_aux_sc_ovr,
+                         sim_watch_bpu_update,
+                         sim_watch_bpu_update_taken,
+                         sim_watch_bpu_update_not_taken,
+                         sim_watch_bpu_update_misp,
+                         sim_watch_bpu_update_loop_hit,
+                         sim_watch_bpu_update_tage_hit,
+                         sim_watch_bpu_update_provider[0],
+                         sim_watch_bpu_update_provider[1],
+                         sim_watch_bpu_update_provider[2],
+                         sim_watch_bpu_update_provider[3]);
+            end
         end
     end
 `endif
@@ -966,7 +1259,7 @@ module tage_sc_l
     always_comb begin
         upd_base_idx = update_pc[BASE_IDX_BITS+1:2];
         upd_sc_idx   = update_pc[SC_IDX_BITS+1:2] ^ SC_IDX_BITS'(update_ghr[7:0]);
-        upd_loop_idx = update_pc[LOOP_IDX_BITS+1:2];
+        upd_loop_idx = loop_idx_hash(update_pc);
         upd_loop_tag = update_pc[LOOP_TAG_BITS+1:2];
         upd_loop_backward = (update_target < update_pc);
 
@@ -985,7 +1278,7 @@ module tage_sc_l
 
         upd_loop_hit = loop_valid[upd_loop_idx] &&
                        (loop_tags[upd_loop_idx] == upd_loop_tag);
-        spec_loop_idx = spec_pc[LOOP_IDX_BITS+1:2];
+        spec_loop_idx = loop_idx_hash(spec_pc);
         spec_loop_tag = spec_pc[LOOP_TAG_BITS+1:2];
         spec_loop_backward = (spec_target < spec_pc);
         spec_loop_hit = loop_valid[spec_loop_idx] &&

@@ -19,6 +19,17 @@ module btb
     output logic [63:0] alt_target,
     output logic [2:0]  alt_branch_type,
     output logic [5:0]  alt_branch_offset,
+    // Independent auxiliary lookup.  This lets the frontend inspect the
+    // current F1 PC while the main lookup may be steered to a redirect target.
+    input  logic [63:0] aux_lookup_pc,
+    output logic        aux_hit,
+    output logic [63:0] aux_target,
+    output logic [2:0]  aux_branch_type,
+    output logic [5:0]  aux_branch_offset,
+    output logic        aux_alt_hit,
+    output logic [63:0] aux_alt_target,
+    output logic [2:0]  aux_alt_branch_type,
+    output logic [5:0]  aux_alt_branch_offset,
     // Update (from commit/BRU resolution)
     input  logic        update_valid,
     input  logic [63:0] update_pc,
@@ -55,9 +66,13 @@ module btb
     // =========================================================================
     logic [IDX_BITS-1:0] lkp_idx;
     logic [TAG_BITS-1:0] lkp_tag;
+    logic [IDX_BITS-1:0] aux_lkp_idx;
+    logic [TAG_BITS-1:0] aux_lkp_tag;
 
     assign lkp_idx = lookup_pc[IDX_BITS+LINE_BITS-1:LINE_BITS];
     assign lkp_tag = lookup_pc[63:IDX_BITS+LINE_BITS];
+    assign aux_lkp_idx = aux_lookup_pc[IDX_BITS+LINE_BITS-1:LINE_BITS];
+    assign aux_lkp_tag = aux_lookup_pc[63:IDX_BITS+LINE_BITS];
 
     always_comb begin
         hit           = 1'b0;
@@ -84,6 +99,37 @@ module btb
                     alt_target        = targets[lkp_idx][w];
                     alt_branch_type   = btypes[lkp_idx][w];
                     alt_branch_offset = boffs[lkp_idx][w];
+                end
+            end
+        end
+    end
+
+    always_comb begin
+        aux_hit           = 1'b0;
+        aux_target        = 64'd0;
+        aux_branch_type   = 3'd0;
+        aux_branch_offset = 6'd0;
+        aux_alt_hit           = 1'b0;
+        aux_alt_target        = 64'd0;
+        aux_alt_branch_type   = 3'd0;
+        aux_alt_branch_offset = 6'd0;
+        for (int w = 0; w < BTB_WAYS; w++) begin
+            if (valid[aux_lkp_idx][w]
+                && (tags[aux_lkp_idx][w] == aux_lkp_tag)
+                && (boffs[aux_lkp_idx][w] >= aux_lookup_pc[5:0])) begin
+                if (!aux_hit || (boffs[aux_lkp_idx][w] < aux_branch_offset)) begin
+                    aux_hit           = 1'b1;
+                    aux_target        = targets[aux_lkp_idx][w];
+                    aux_branch_type   = btypes[aux_lkp_idx][w];
+                    aux_branch_offset = boffs[aux_lkp_idx][w];
+                end
+                if ((btypes[aux_lkp_idx][w] != BTB_TYPE_COND) &&
+                    (!aux_alt_hit ||
+                     (boffs[aux_lkp_idx][w] < aux_alt_branch_offset))) begin
+                    aux_alt_hit           = 1'b1;
+                    aux_alt_target        = targets[aux_lkp_idx][w];
+                    aux_alt_branch_type   = btypes[aux_lkp_idx][w];
+                    aux_alt_branch_offset = boffs[aux_lkp_idx][w];
                 end
             end
         end

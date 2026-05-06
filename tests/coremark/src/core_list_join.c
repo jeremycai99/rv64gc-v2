@@ -66,6 +66,106 @@ list_head *core_list_mergesort(list_head *   list,
                                list_cmp      cmp,
                                core_results *res);
 
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+static list_head *rv64gc_dbg_list_base;
+static list_head *rv64gc_dbg_list_end;
+static list_data *rv64gc_dbg_data_base;
+static list_data *rv64gc_dbg_data_end;
+static ee_u32     rv64gc_dbg_list_max;
+static ee_u32     rv64gc_dbg_sort_stage;
+
+static void
+rv64gc_debug_pair(ee_u32 tag, ee_ptr_int value)
+{
+    rv64gc_coremark_debug(
+        23,
+        (((unsigned long)tag & 0xffUL) << 56)
+            | ((unsigned long)value & 0x00ffffffffffffffUL));
+}
+
+static void
+rv64gc_list_debug_set_bounds_raw(list_head *base,
+                                 list_head *end,
+                                 list_data *data_base,
+                                 list_data *data_end,
+                                 ee_u32     stage)
+{
+    rv64gc_dbg_list_base  = base;
+    rv64gc_dbg_list_end   = end;
+    rv64gc_dbg_data_base  = data_base;
+    rv64gc_dbg_data_end   = data_end;
+    rv64gc_dbg_list_max   = (ee_u32)(end - base) + 2;
+    rv64gc_dbg_sort_stage = stage;
+}
+
+static void
+rv64gc_list_debug_set_bounds(core_results *res, ee_u32 stage)
+{
+    ee_u32     per_item = 16 + sizeof(struct list_data_s);
+    ee_u32     size     = (res->size / per_item) - 2;
+    list_head *base     = (list_head *)res->memblock[1];
+    list_head *end      = base + size;
+    list_data *data     = (list_data *)end;
+
+    rv64gc_list_debug_set_bounds_raw(base, end, data, data + size, stage);
+}
+
+static ee_s32
+rv64gc_list_debug_check(list_head *list, ee_u32 stage)
+{
+    list_head *p = list;
+    ee_u32     count = 0;
+    ee_ptr_int checksum = 0;
+    ee_ptr_int list_base = (ee_ptr_int)rv64gc_dbg_list_base;
+    ee_ptr_int list_end = (ee_ptr_int)rv64gc_dbg_list_end;
+    ee_ptr_int data_base = (ee_ptr_int)rv64gc_dbg_data_base;
+    ee_ptr_int data_end = (ee_ptr_int)rv64gc_dbg_data_end;
+
+    while (p != NULL)
+    {
+        ee_ptr_int paddr = (ee_ptr_int)p;
+        ee_ptr_int iaddr;
+
+        if ((paddr < list_base) || (paddr >= list_end))
+        {
+            rv64gc_debug_pair(5, stage);
+            rv64gc_debug_pair(6, count);
+            rv64gc_debug_pair(7, paddr);
+            rv64gc_coremark_abort(23, (((unsigned long)0x5UL) << 56) | stage);
+            return 1;
+        }
+
+        iaddr = (ee_ptr_int)p->info;
+        if ((iaddr < data_base) || (iaddr >= data_end))
+        {
+            rv64gc_debug_pair(8, stage);
+            rv64gc_debug_pair(9, count);
+            rv64gc_debug_pair(10, paddr);
+            rv64gc_debug_pair(11, iaddr);
+            rv64gc_coremark_abort(23, (((unsigned long)0x8UL) << 56) | stage);
+            return 1;
+        }
+
+        checksum ^= paddr ^ (ee_ptr_int)p->next ^ iaddr;
+        count++;
+        if (count > rv64gc_dbg_list_max)
+        {
+            rv64gc_debug_pair(12, stage);
+            rv64gc_debug_pair(13, count);
+            rv64gc_debug_pair(14, paddr);
+            rv64gc_debug_pair(15, (ee_ptr_int)p->next);
+            rv64gc_coremark_abort(23, (((unsigned long)0xcUL) << 56) | stage);
+            return 1;
+        }
+
+        p = p->next;
+    }
+
+    (void)checksum;
+    return 0;
+}
+#endif
+
 ee_s16
 calc_func(ee_s16 *pdata, core_results *res)
 {
@@ -166,6 +266,12 @@ core_bench_list(core_results *res, ee_s16 finder_idx)
     list_head *finder, *remover;
     list_data  info = {0};
     ee_s16     i;
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    ee_u32     debug_stage = (finder_idx > 0) ? 100 : 200;
+
+    rv64gc_list_debug_set_bounds(res, debug_stage);
+    rv64gc_list_debug_check(list, debug_stage);
+#endif
 
     info.idx = finder_idx;
     /* find <find_num> values in the list, and change the list each time
@@ -200,11 +306,25 @@ core_bench_list(core_results *res, ee_s16 finder_idx)
         ee_printf("List find %d: [%d,%d,%d]\n", i, retval, missed, found);
 #endif
     }
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    rv64gc_list_debug_check(list, debug_stage + 1);
+#endif
     retval += found * 4 - missed;
     /* sort the list by data content and remove one item*/
     if (finder_idx > 0)
+    {
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+        rv64gc_dbg_sort_stage = debug_stage + 2;
+#endif
         list = core_list_mergesort(list, cmp_complex, res);
+    }
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    rv64gc_list_debug_check(list, debug_stage + 3);
+#endif
     remover = core_list_remove(list->next);
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    rv64gc_list_debug_check(list, debug_stage + 4);
+#endif
     /* CRC data content of list from location of index N forward, and then undo
      * remove */
     finder = core_list_find(list, &info);
@@ -219,8 +339,15 @@ core_bench_list(core_results *res, ee_s16 finder_idx)
     ee_printf("List sort 1: %04x\n", retval);
 #endif
     remover = core_list_undo_remove(remover, list->next);
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    rv64gc_list_debug_check(list, debug_stage + 5);
+    rv64gc_dbg_sort_stage = debug_stage + 6;
+#endif
     /* sort the list by index, in effect returning the list to original state */
     list = core_list_mergesort(list, cmp_idx, NULL);
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    rv64gc_list_debug_check(list, debug_stage + 7);
+#endif
     /* CRC data content of list */
     finder = list->next;
     while (finder)
@@ -261,6 +388,7 @@ core_list_init(ee_u32 blksize, list_head *memblock, ee_s16 seed)
     /* some useful variables */
     ee_u32     i;
     list_head *finder, *list = memblock;
+    list_head *memblock_base = memblock;
     list_data  info;
 
     /* create a fake items for the list head and tail */
@@ -303,7 +431,14 @@ core_list_init(ee_u32 blksize, list_head *memblock, ee_s16 seed)
         }
         finder = finder->next;
     }
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    rv64gc_list_debug_set_bounds_raw(
+        memblock_base, memblock_end, (list_data *)memblock_end, datablock_end, 50);
+#endif
     list = core_list_mergesort(list, cmp_idx, NULL);
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    rv64gc_list_debug_check(list, 51);
+#endif
 #if CORE_DEBUG
     ee_printf("Initialized list:\n");
     finder = list;
@@ -501,11 +636,31 @@ core_list_mergesort(list_head *list, list_cmp cmp, core_results *res)
 {
     list_head *p, *q, *e, *tail;
     ee_s32     insize, nmerges, psize, qsize, i;
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    ee_u32     debug_outer = 0;
+    ee_u32     debug_inner = 0;
+    ee_u32     debug_limit = (rv64gc_dbg_list_max * rv64gc_dbg_list_max * 8) + 64;
+#endif
 
     insize = 1;
 
     while (1)
     {
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+        debug_outer++;
+        if (debug_outer > (rv64gc_dbg_list_max + 4))
+        {
+            rv64gc_debug_pair(19, rv64gc_dbg_sort_stage);
+            rv64gc_debug_pair(20, debug_outer);
+            rv64gc_debug_pair(21, (ee_ptr_int)insize);
+            rv64gc_coremark_abort(
+                23,
+                (((unsigned long)0x13UL) << 56) | rv64gc_dbg_sort_stage);
+            return list;
+        }
+        if (rv64gc_list_debug_check(list, rv64gc_dbg_sort_stage))
+            return list;
+#endif
         p    = list;
         list = NULL;
         tail = NULL;
@@ -514,6 +669,20 @@ core_list_mergesort(list_head *list, list_cmp cmp, core_results *res)
 
         while (p)
         {
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+            debug_inner++;
+            if (debug_inner > debug_limit)
+            {
+                rv64gc_debug_pair(22, rv64gc_dbg_sort_stage);
+                rv64gc_debug_pair(19, debug_inner);
+                rv64gc_debug_pair(20, (ee_ptr_int)p);
+                rv64gc_debug_pair(21, (ee_ptr_int)insize);
+                rv64gc_coremark_abort(
+                    23,
+                    (((unsigned long)0x16UL) << 56) | rv64gc_dbg_sort_stage);
+                return list;
+            }
+#endif
             nmerges++; /* there exists a merge to be done */
             /* step `insize' places along from p */
             q     = p;

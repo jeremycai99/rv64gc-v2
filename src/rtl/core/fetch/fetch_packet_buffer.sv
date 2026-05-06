@@ -21,7 +21,8 @@ module fetch_packet_buffer
     output fetch_packet_t deq_packet,
 
     output logic          full,
-    output logic          empty
+    output logic          empty,
+    output logic [3:0]    count
 );
 
     localparam int DEPTH = 8;
@@ -37,6 +38,7 @@ module fetch_packet_buffer
     assign full      = (count_r == DEPTH);
     assign enq_ready = !full;
     assign deq_valid = !empty;
+    assign count     = count_r;
 
     always_comb begin
         if (!empty) begin

@@ -20,6 +20,14 @@ module next_line_prefetch_buffer
     output logic         hit,
     output logic [511:0] hit_data,
 
+    // Auxiliary observation port.  This is used by frontend probes to inspect
+    // the current F1 line while the primary port follows the live icache
+    // request address.
+    input  logic         aux_lookup_valid,
+    input  logic [63:0]  aux_lookup_addr,
+    output logic         aux_hit,
+    output logic [511:0] aux_hit_data,
+
     // Prefetch trigger (icache delivered a line this cycle)
     input  logic         trigger_valid,
     input  logic [63:0]  trigger_addr,   // line-aligned address that was just delivered
@@ -71,6 +79,24 @@ module next_line_prefetch_buffer
         hit_data = '0;
         for (int i = NUM_ENTRIES-1; i >= 0; i--)
             if (entry_match[i]) hit_data = buf_data[i];
+    end
+
+    logic [TAG_HI:TAG_LO] aux_lookup_tag;
+    assign aux_lookup_tag = aux_lookup_addr[TAG_HI:TAG_LO];
+
+    logic [NUM_ENTRIES-1:0] aux_entry_match;
+    always_comb begin
+        for (int i = 0; i < NUM_ENTRIES; i++)
+            aux_entry_match[i] =
+                buf_valid[i] && (buf_tag[i] == aux_lookup_tag);
+    end
+
+    assign aux_hit = aux_lookup_valid && (|aux_entry_match);
+
+    always_comb begin
+        aux_hit_data = '0;
+        for (int i = NUM_ENTRIES-1; i >= 0; i--)
+            if (aux_entry_match[i]) aux_hit_data = buf_data[i];
     end
 
     // =========================================================================

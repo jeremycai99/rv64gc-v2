@@ -23,11 +23,14 @@ module tb_bru
     br_op_e      op;
     logic        is_fused;
     logic [2:0]  fusion_type;
+    logic [63:0] fused_imm;
     logic        bp_taken;
     logic [63:0] bp_target;
+    logic        is_rvc;
     logic [63:0] result;
     logic        taken;
     logic [63:0] target;
+    logic [63:0] taken_target;
     logic        mispredict;
 
     // Test tracking
@@ -48,15 +51,18 @@ module tb_bru
         .op          (op),
         .is_fused    (is_fused),
         .fusion_type (fusion_type),
+        .fused_imm   (fused_imm),
         .bp_taken    (bp_taken),
         .bp_target   (bp_target),
+        .is_rvc      (is_rvc),
         .result      (result),
         .taken       (taken),
         .target      (target),
+        .taken_target(taken_target),
         .mispredict  (mispredict)
     );
 
-    localparam int NUM_TESTS = 42;
+    localparam int NUM_TESTS = 46;
 
     initial begin
         pass_count = 0;
@@ -74,8 +80,10 @@ module tb_bru
         op          = BR_EQ;
         is_fused    = 1'b0;
         fusion_type = 3'd0;
+        fused_imm   = 64'd0;
         bp_taken    = 1'b0;
         bp_target   = 64'd0;
+        is_rvc      = 1'b0;
         exp_taken   = 1'b0;
         exp_target  = 64'h8000_0010;  // pc + 16
         exp_result  = 64'h8000_0004;  // pc + 4
@@ -345,7 +353,7 @@ module tb_bru
             // =================================================================
             // 29: fusion_type=0: SLT+BNE -> branch if rs1 < rs2 (signed), taken
             29: begin
-                is_fused = 1'b1; fusion_type = 3'd0;
+                is_fused = 1'b1; fusion_type = 3'd0; op = BR_NE;
                 operand_a = 64'hFFFFFFFF_FFFFFFFF; operand_b = 64'd5;  // -1 < 5
                 imm = 64'd32; pc = 64'h8000_0000;
                 exp_taken = 1'b1; exp_target = 64'h8000_0020;
@@ -354,7 +362,7 @@ module tb_bru
             end
             // 30: fusion_type=0: SLT+BNE -> not taken (5 >= 3)
             30: begin
-                is_fused = 1'b1; fusion_type = 3'd0;
+                is_fused = 1'b1; fusion_type = 3'd0; op = BR_NE;
                 operand_a = 64'd5; operand_b = 64'd3;
                 imm = 64'd32; pc = 64'h8000_0000;
                 exp_taken = 1'b0; exp_target = 64'h8000_0020;
@@ -363,7 +371,7 @@ module tb_bru
             end
             // 31: fusion_type=1: SLTU+BNE -> branch if rs1 < rs2 (unsigned), taken
             31: begin
-                is_fused = 1'b1; fusion_type = 3'd1;
+                is_fused = 1'b1; fusion_type = 3'd1; op = BR_NE;
                 operand_a = 64'd3; operand_b = 64'd5;
                 imm = 64'd8; pc = 64'h8000_0100;
                 exp_taken = 1'b1; exp_target = 64'h8000_0108;
@@ -372,7 +380,7 @@ module tb_bru
             end
             // 32: fusion_type=1: SLTU+BNE -> not taken (large unsigned >= small)
             32: begin
-                is_fused = 1'b1; fusion_type = 3'd1;
+                is_fused = 1'b1; fusion_type = 3'd1; op = BR_NE;
                 operand_a = 64'hFFFFFFFF_FFFFFFFF; operand_b = 64'd5;
                 imm = 64'd8; pc = 64'h8000_0100;
                 exp_taken = 1'b0; exp_target = 64'h8000_0108;
@@ -381,7 +389,7 @@ module tb_bru
             end
             // 33: fusion_type=2: SLT+BEQ -> branch if rs1 >= rs2 (signed), taken
             33: begin
-                is_fused = 1'b1; fusion_type = 3'd2;
+                is_fused = 1'b1; fusion_type = 3'd2; op = BR_EQ;
                 operand_a = 64'd10; operand_b = 64'd5;  // 10 >= 5
                 imm = 64'd12; pc = 64'h8000_0200;
                 exp_taken = 1'b1; exp_target = 64'h8000_020C;
@@ -390,7 +398,7 @@ module tb_bru
             end
             // 34: fusion_type=2: SLT+BEQ -> not taken (rs1 < rs2)
             34: begin
-                is_fused = 1'b1; fusion_type = 3'd2;
+                is_fused = 1'b1; fusion_type = 3'd2; op = BR_EQ;
                 operand_a = 64'd3; operand_b = 64'd10;  // 3 < 10
                 imm = 64'd12; pc = 64'h8000_0200;
                 exp_taken = 1'b0; exp_target = 64'h8000_020C;
@@ -399,7 +407,7 @@ module tb_bru
             end
             // 35: fusion_type=3: SLTU+BEQ -> branch if rs1 >= rs2 (unsigned), taken
             35: begin
-                is_fused = 1'b1; fusion_type = 3'd3;
+                is_fused = 1'b1; fusion_type = 3'd3; op = BR_EQ;
                 operand_a = 64'hFFFFFFFF_FFFFFFFF; operand_b = 64'd5;  // max >= 5
                 imm = 64'd20; pc = 64'h8000_0300;
                 exp_taken = 1'b1; exp_target = 64'h8000_0314;
@@ -408,7 +416,7 @@ module tb_bru
             end
             // 36: fusion_type=3: SLTU+BEQ -> not taken (0 < 1)
             36: begin
-                is_fused = 1'b1; fusion_type = 3'd3;
+                is_fused = 1'b1; fusion_type = 3'd3; op = BR_EQ;
                 operand_a = 64'd0; operand_b = 64'd1;
                 imm = 64'd20; pc = 64'h8000_0300;
                 exp_taken = 1'b0; exp_target = 64'h8000_0314;
@@ -417,52 +425,96 @@ module tb_bru
             end
             // 37: fusion_type=4: SLTI+BNE -> branch if rs1 < imm (signed), taken
             37: begin
-                is_fused = 1'b1; fusion_type = 3'd4;
+                is_fused = 1'b1; fusion_type = 3'd4; op = BR_NE;
                 operand_a = 64'hFFFFFFFF_FFFFFFFF;  // -1
-                imm = 64'd0;  // imm=0, -1 < 0
+                fused_imm = 64'd0;  // -1 < 0
+                imm = 64'd16;
                 pc = 64'h8000_0400;
-                exp_taken = 1'b1; exp_target = 64'h8000_0400;
-                bp_taken = 1'b1; bp_target = 64'h8000_0400;
+                exp_taken = 1'b1; exp_target = 64'h8000_0410;
+                bp_taken = 1'b1; bp_target = 64'h8000_0410;
                 exp_mispredict = 1'b0;
             end
             // 38: fusion_type=4: SLTI+BNE -> not taken (5 >= 3)
             38: begin
-                is_fused = 1'b1; fusion_type = 3'd4;
+                is_fused = 1'b1; fusion_type = 3'd4; op = BR_NE;
                 operand_a = 64'd5;
-                imm = 64'd3;  // 5 >= 3
+                fused_imm = 64'd3;  // 5 >= 3
+                imm = 64'd16;
                 pc = 64'h8000_0400;
-                exp_taken = 1'b0; exp_target = 64'h8000_0403;
+                exp_taken = 1'b0; exp_target = 64'h8000_0410;
                 bp_taken = 1'b0; bp_target = 64'd0;
                 exp_mispredict = 1'b0;
             end
             // 39: fusion_type=5: SLTIU+BNE -> branch if rs1 < imm (unsigned), taken
             39: begin
-                is_fused = 1'b1; fusion_type = 3'd5;
+                is_fused = 1'b1; fusion_type = 3'd5; op = BR_NE;
                 operand_a = 64'd3;
-                imm = 64'd10;  // 3 < 10
+                fused_imm = 64'd10;  // 3 < 10
+                imm = 64'd20;
                 pc = 64'h8000_0500;
-                exp_taken = 1'b1; exp_target = 64'h8000_050A;
-                bp_taken = 1'b1; bp_target = 64'h8000_050A;
+                exp_taken = 1'b1; exp_target = 64'h8000_0514;
+                bp_taken = 1'b1; bp_target = 64'h8000_0514;
                 exp_mispredict = 1'b0;
             end
             // 40: fusion_type=5: SLTIU+BNE -> not taken (10 >= 3)
             40: begin
-                is_fused = 1'b1; fusion_type = 3'd5;
+                is_fused = 1'b1; fusion_type = 3'd5; op = BR_NE;
                 operand_a = 64'd10;
-                imm = 64'd3;  // 10 >= 3
+                fused_imm = 64'd3;  // 10 >= 3
+                imm = 64'd20;
                 pc = 64'h8000_0500;
-                exp_taken = 1'b0; exp_target = 64'h8000_0503;
+                exp_taken = 1'b0; exp_target = 64'h8000_0514;
                 bp_taken = 1'b0; bp_target = 64'd0;
                 exp_mispredict = 1'b0;
             end
             // 41: Fused mispredict: predicted not taken but actually taken
             41: begin
-                is_fused = 1'b1; fusion_type = 3'd0;
+                is_fused = 1'b1; fusion_type = 3'd0; op = BR_NE;
                 operand_a = 64'd1; operand_b = 64'd100;  // 1 < 100 signed
                 imm = 64'd64; pc = 64'h8000_0000;
                 exp_taken = 1'b1; exp_target = 64'h8000_0040;
                 bp_taken = 1'b0; bp_target = 64'd0;
                 exp_mispredict = 1'b1;
+            end
+            // 42: fusion_type=4: SLTI+BEQ -> branch if rs1 >= imm, taken
+            42: begin
+                is_fused = 1'b1; fusion_type = 3'd4; op = BR_EQ;
+                operand_a = 64'd5;
+                fused_imm = 64'd3;
+                imm = 64'd24; pc = 64'h8000_0600;
+                exp_taken = 1'b1; exp_target = 64'h8000_0618;
+                bp_taken = 1'b1; bp_target = 64'h8000_0618;
+                exp_mispredict = 1'b0;
+            end
+            // 43: fusion_type=4: SLTI+BEQ -> not taken when rs1 < imm
+            43: begin
+                is_fused = 1'b1; fusion_type = 3'd4; op = BR_EQ;
+                operand_a = 64'hFFFF_FFFF_FFFF_FFFF;  // -1
+                fused_imm = 64'd0;
+                imm = 64'd24; pc = 64'h8000_0600;
+                exp_taken = 1'b0; exp_target = 64'h8000_0618;
+                bp_taken = 1'b0; bp_target = 64'd0;
+                exp_mispredict = 1'b0;
+            end
+            // 44: fusion_type=5: SLTIU+BEQ -> branch if rs1 >= imm, taken
+            44: begin
+                is_fused = 1'b1; fusion_type = 3'd5; op = BR_EQ;
+                operand_a = 64'hFFFF_FFFF_FFFF_FFFF;
+                fused_imm = 64'd5;
+                imm = 64'd28; pc = 64'h8000_0700;
+                exp_taken = 1'b1; exp_target = 64'h8000_071C;
+                bp_taken = 1'b1; bp_target = 64'h8000_071C;
+                exp_mispredict = 1'b0;
+            end
+            // 45: fusion_type=5: SLTIU+BEQ -> not taken when rs1 < imm
+            45: begin
+                is_fused = 1'b1; fusion_type = 3'd5; op = BR_EQ;
+                operand_a = 64'd3;
+                fused_imm = 64'd10;
+                imm = 64'd28; pc = 64'h8000_0700;
+                exp_taken = 1'b0; exp_target = 64'h8000_071C;
+                bp_taken = 1'b0; bp_target = 64'd0;
+                exp_mispredict = 1'b0;
             end
 
             default: begin end

@@ -19,6 +19,7 @@ module tb_alu
     logic [63:0] operand_b;
     alu_op_e     op;
     logic        is_w_op;
+    logic        is_unsigned;
     logic [63:0] result;
 
     // Test tracking
@@ -33,11 +34,12 @@ module tb_alu
         .operand_b (operand_b),
         .op        (op),
         .is_w_op   (is_w_op),
+        .is_unsigned(is_unsigned),
         .result    (result)
     );
 
     // Total number of tests (update if adding/removing cases)
-    localparam int NUM_TESTS = 112;
+    localparam int NUM_TESTS = 116;
 
     initial begin
         pass_count = 0;
@@ -51,6 +53,7 @@ module tb_alu
         operand_b = 64'd0;
         op        = ALU_ADD;
         is_w_op   = 1'b0;
+        is_unsigned = 1'b0;
         expected  = 64'd0;
 
         case (test_num)
@@ -216,6 +219,11 @@ module tb_alu
             // --- CZERO_NEZ ---
             110: begin op=ALU_CZERO_NEZ; operand_a=64'hDEADBEEF_12345678; operand_b=64'd0; expected=64'hDEADBEEF_12345678; end
             111: begin op=ALU_CZERO_NEZ; operand_a=64'hDEADBEEF_12345678; operand_b=64'd1; expected=64'd0; end
+            // --- ADD.UW / SLLI.UW ---
+            112: begin op=ALU_ADD; is_w_op=1; is_unsigned=1; operand_a=64'hFFFFFFFF_80000000; operand_b=64'd5; expected=64'h00000000_80000005; end
+            113: begin op=ALU_ADD; is_w_op=1; is_unsigned=1; operand_a=64'hDEADBEEF_FFFFFFFE; operand_b=64'h00000001_00000005; expected=64'h00000002_00000003; end
+            114: begin op=ALU_SLL; is_w_op=1; is_unsigned=1; operand_a=64'hFFFFFFFF_80000001; operand_b=64'd1; expected=64'h00000001_00000002; end
+            115: begin op=ALU_SLL; is_w_op=1; is_unsigned=1; operand_a=64'hFFFFFFFF_00000001; operand_b=64'd32; expected=64'h00000001_00000000; end
             default: begin end
         endcase
     end
@@ -225,11 +233,11 @@ module tb_alu
     always @(posedge clk) begin
         if (test_num < NUM_TESTS) begin
             if (result === expected) begin
-                $display("PASS: test %0d  op=%0d  is_w=%0b  result=0x%016h", test_num, op, is_w_op, result);
+                $display("PASS: test %0d  op=%0d  is_w=%0b  unsigned=%0b  result=0x%016h", test_num, op, is_w_op, is_unsigned, result);
                 pass_count = pass_count + 1;
             end else begin
-                $error("FAIL: test %0d  op=%0d  is_w=%0b  expected=0x%016h  got=0x%016h",
-                       test_num, op, is_w_op, expected, result);
+                $error("FAIL: test %0d  op=%0d  is_w=%0b  unsigned=%0b  expected=0x%016h  got=0x%016h",
+                       test_num, op, is_w_op, is_unsigned, expected, result);
                 fail_count = fail_count + 1;
             end
             test_num = test_num + 1;

@@ -55,6 +55,12 @@ typedef struct CORE_PORTABLE_S {
 void portable_init(core_portable *p, int *argc, char *argv[]);
 void portable_fini(core_portable *p);
 
+ee_s32 portme_sys1(void);
+ee_s32 portme_sys2(void);
+ee_s32 portme_sys3(void);
+ee_s32 portme_sys4(void);
+ee_s32 portme_sys5(void);
+
 #if !defined(PROFILE_RUN) && !defined(PERFORMANCE_RUN) && !defined(VALIDATION_RUN)
 #define PERFORMANCE_RUN 1
 #endif
@@ -64,5 +70,8 @@ int ee_printf(const char *fmt, ...);
 void gem5_roi_begin(void);
 void gem5_roi_end(void);
 void gem5_bench_exit(void);
+void rv64gc_coremark_debug(unsigned long index, unsigned long value);
+void rv64gc_coremark_abort(unsigned long index, unsigned long value);
+void rv64gc_coremark_report(ee_u32 checksum, ee_s32 total_errors);
 
 #endif

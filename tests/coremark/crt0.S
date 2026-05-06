@@ -21,10 +21,15 @@ _start:
     .endr
 1:
 
-    # Call main
+    # Call main. main() returns 0 on success.
     call    main
-    # Write 1 to tohost (PASS)
     li      t0, 0x80001000
-    li      t1, 1
+    beqz    a0, 3f
+    slli    t1, a0, 1
+    ori     t1, t1, 1
     sd      t1, 0(t0)
 2:  j       2b
+3:
+    li      t1, 1
+    sd      t1, 0(t0)
+4:  j       4b

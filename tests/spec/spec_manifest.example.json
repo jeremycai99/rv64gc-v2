@@ -1,0 +1,14 @@
+{
+  "benchmarks": [
+    {
+      "name": "specint-example",
+      "kind": "spec",
+      "hex": "D:/path/to/licensed/spec/hex/specint-example.hex",
+      "max_cycles": 5000000,
+      "iterations": 1,
+      "spec_ref_seconds": 1.0,
+      "suite": "SPEC CPU",
+      "notes": "Example only. Keep licensed SPEC sources and generated images outside this repository."
+    }
+  ]
+}

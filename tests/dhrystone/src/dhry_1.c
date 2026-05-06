@@ -3,6 +3,7 @@
  * Adapted from the original by Reinhold P. Weicker.
  */
 #include "dhry.h"
+#include "../../benchmarks/bench_mmio.h"
 
 /* Global variables */
 Rec_Pointer     Ptr_Glob, Next_Ptr_Glob;
@@ -42,6 +43,9 @@ int main(void)
 
     Arr_2_Glob[8][7] = 10;
 
+    rv64gc_bench_begin(RV64GC_BENCH_ID_DHRYSTONE,
+                       (unsigned long)NUM_RUNS);
+
     for (Run_Index = 1; Run_Index <= NUM_RUNS; ++Run_Index) {
         Proc_5();
         Proc_4();
@@ -76,6 +80,7 @@ int main(void)
 
     /* Store result so optimizer doesn't remove the loop. */
     dhry_result = Int_1_Loc + Int_2_Loc + Int_Glob + Bool_Glob;
+    rv64gc_bench_end((unsigned long)dhry_result, 0);
 
     /* Return 0 = PASS (crt0 writes 1 to tohost). */
     return (Int_Glob == 5 && Bool_Glob == 1 &&

@@ -29,12 +29,12 @@ module fetch_unit
 
     // Stall from downstream (decode/rename backpressure)
     input  logic        backend_stall,
-    // Frontend quiesce while loop-buffer playback owns rename input.
+    // Frontend quiesce while decoded-op replay owns rename input.
     input  logic        frontend_hold,
-    // Avoid packet fast-pathing while the loop buffer is forming a candidate,
-    // including the cycle that starts capture from a decoded backedge.
-    input  logic        loop_buffer_capturing,
-    input  logic        loop_buffer_capture_start,
+    // Avoid packet fast-pathing while a replay structure is forming a
+    // candidate, including the cycle that starts a replay window.
+    input  logic        frontend_replay_blocking,
+    input  logic        frontend_replay_start,
 
     // Redirect (from commit -- mispredict or exception)
     input  logic        redirect_valid,
@@ -135,6 +135,16 @@ module fetch_unit
     logic        f2_pc_consumed_c;
     logic        f2_duplicate_suppressed_c;
     logic [63:0] f2_duplicate_next_pc_c;
+    logic        same_ftq_tail_carry_c;
+    logic        same_ftq_tail_pending_c;
+    logic        same_ftq_tail_owner_open_c;
+    logic        f2_ftq_owner_live_c;
+    logic        same_line_handoff_c;
+    logic        same_line_next_has_ctl_c;
+    logic        f2_same_line_handoff_r;
+    logic        xs_same_line_alloc_ok_c;
+    logic        xs_same_line_lookahead_c;
+    logic        xs_seq_lookahead_c;
     logic        bp_branch_found;
     logic        bp_taken;
     logic [63:0] bp_target_addr;
@@ -216,16 +226,20 @@ module fetch_unit
     logic        ic_invalidate_busy;
     logic        f2_data_valid;
     logic [511:0] f2_data_line;
+    logic [511:0] f2_same_line_handoff_data_r;
     logic        packet_buf_enq;
     logic        packet_buf_deq;
     logic        packet_buf_valid;
     logic        packet_buf_full;
     logic        packet_buf_empty;
+    logic [3:0]  packet_buf_count;
+    logic        packet_buf_stale_owner_c;
     logic        packet_bypass_candidate;
     logic        packet_bypass_valid;
     logic        packet_bypass_owner_match_c;
     logic        packet_bypass_ftq_pop;
     logic        packet_bypass_policy_ok;
+    logic        packet_bypass_tail_carry_c;
     logic        packet_bypass_backward_only;
     logic        packet_bypass_noncond_only;
     logic        packet_bypass_ctl_backward;
@@ -236,23 +250,32 @@ module fetch_unit
     logic        fetch_packet_out_valid;
     fetch_packet_t fetch_packet_out;
     logic        ftq_need_alloc_c;
+    logic        ftq_normal_enq_valid;
     logic        ftq_enq_valid;
     logic        ftq_pop_valid;
+    logic        ftq_ifu_pop_valid;
+    logic        ftq_commit_pop_valid;
     logic        ftq_head_valid;
+    logic        ftq_commit_head_valid;
     logic        ftq_full;
     logic        ftq_empty;
     logic [FTQ_IDX_BITS-1:0]   ftq_enq_idx;
     logic [FTQ_IDX_BITS-1:0]   ftq_head_idx;
+    logic [FTQ_IDX_BITS-1:0]   ftq_commit_head_idx;
     logic [FTQ_EPOCH_BITS-1:0] ftq_enq_epoch;
     logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_enq_tag;
     logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_head_tag;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_commit_head_tag;
     logic [FTQ_EPOCH_BITS-1:0] ftq_current_epoch;
     logic [FTQ_IDX_BITS:0]     ftq_count;
+    logic [FTQ_IDX_BITS:0]     ftq_count_alloc_to_ifu;
+    logic [FTQ_IDX_BITS:0]     ftq_count_ifu_to_commit;
     // Forward declarations used by FTQ allocation gating before the full F2
     // register block later in the file.
     logic        f2_valid_r;
     logic [63:0] f2_pc_r;
     // Forward-declared for FTQ completion wiring before the F2 pipeline block.
+    logic        f2_ftq_valid_r;
     logic [FTQ_IDX_BITS-1:0]   f2_ftq_idx_r;
     logic [FTQ_EPOCH_BITS-1:0] f2_ftq_epoch_r;
     logic [FTQ_ALLOC_TAG_BITS-1:0] f2_ftq_alloc_tag_r;
@@ -277,6 +300,9 @@ module fetch_unit
     logic [2:0]  req_pred_ctl_type_c;
     logic [63:0] req_pred_ctl_target_c;
     ftq_entry_t  ftq_head_entry;
+    ftq_entry_t  ftq_commit_head_entry;
+    ftq_entry_t  same_line_handoff_ftq_entry_c;
+    ftq_entry_t  ftq_enq_entry_c;
     fetch_packet_t packet_buf_in;
     fetch_packet_t packet_buf_head;
     logic        packet_buf_owner_match_c;
@@ -286,6 +312,12 @@ module fetch_unit
     logic        subgroup_split_any_second_ctl_en;
     logic        subgroup_split_owner_cond_en;
     logic        subgroup_split_slot3_ftq_taken_only_en;
+    logic        same_ftq_tail_carry_en;
+    logic        same_ftq_tail_bypass_en;
+    logic        same_line_handoff_en;
+    logic        xs_same_line_lookahead_en;
+    logic        xs_seq_lookahead_en;
+    logic        weak_backward_cond_bias_en;
 
 `ifdef SIMULATION
     logic sim_fetch_packet_bypass_en;
@@ -297,8 +329,16 @@ module fetch_unit
     logic sim_subgroup_split_any_second_ctl_en;
     logic sim_subgroup_split_owner_cond_en;
     logic sim_subgroup_split_slot3_ftq_taken_only_en;
+    logic sim_same_ftq_tail_carry_en;
+    logic sim_same_ftq_tail_bypass_en;
+    logic sim_same_line_handoff_en;
+    logic sim_xs_same_line_lookahead_en;
+    logic sim_xs_seq_lookahead_en;
+    logic sim_weak_backward_cond_bias_en;
+    logic [FTQ_IDX_BITS:0] sim_xs_seq_lookahead_limit;
     initial begin
-        sim_fetch_packet_bypass_en = $test$plusargs("FETCH_PACKET_BYPASS2");
+        sim_fetch_packet_bypass_en =
+            !$test$plusargs("DISABLE_FETCH_PACKET_BYPASS2");
         sim_fetch_packet_bypass_backward_only =
             $test$plusargs("FETCH_PACKET_BYPASS2_BACKWARD");
         sim_fetch_packet_bypass_noncond_only =
@@ -320,6 +360,25 @@ module fetch_unit
             !$test$plusargs("DISABLE_SUBGROUP_SPLIT_OWNER_COND");
         sim_subgroup_split_slot3_ftq_taken_only_en =
             $test$plusargs("SPLIT_SLOT3_FTQ_TAKEN_ONLY");
+        sim_same_ftq_tail_carry_en =
+            $test$plusargs("ENABLE_SAME_FTQ_TAIL_CARRY");
+        sim_same_ftq_tail_bypass_en =
+            $test$plusargs("ENABLE_SAME_FTQ_TAIL_BYPASS");
+        sim_same_line_handoff_en =
+            $test$plusargs("ENABLE_SAME_LINE_FTQ_HANDOFF");
+        sim_xs_same_line_lookahead_en =
+            $test$plusargs("ENABLE_XS_SAME_LINE_LOOKAHEAD");
+        sim_xs_seq_lookahead_en =
+            $test$plusargs("ENABLE_XS_SEQ_LOOKAHEAD");
+        sim_weak_backward_cond_bias_en =
+            $test$plusargs("ENABLE_WEAK_BACKWARD_COND_BIAS");
+        sim_xs_seq_lookahead_limit = {{FTQ_IDX_BITS{1'b0}}, 1'b1};
+        if ($test$plusargs("XS_SEQ_LOOKAHEAD_DEPTH2"))
+            sim_xs_seq_lookahead_limit = (FTQ_IDX_BITS+1)'(2);
+        if ($test$plusargs("XS_SEQ_LOOKAHEAD_DEPTH4"))
+            sim_xs_seq_lookahead_limit = (FTQ_IDX_BITS+1)'(4);
+        if ($test$plusargs("XS_SEQ_LOOKAHEAD_DEPTH8"))
+            sim_xs_seq_lookahead_limit = (FTQ_IDX_BITS+1)'(8);
     end
     assign fetch_packet_bypass_en = sim_fetch_packet_bypass_en;
     assign packet_bypass_backward_only = sim_fetch_packet_bypass_backward_only;
@@ -335,8 +394,16 @@ module fetch_unit
         sim_subgroup_split_owner_cond_en;
     assign subgroup_split_slot3_ftq_taken_only_en =
         sim_subgroup_split_slot3_ftq_taken_only_en;
+    assign same_ftq_tail_carry_en = sim_same_ftq_tail_carry_en;
+    assign same_ftq_tail_bypass_en = sim_same_ftq_tail_bypass_en;
+    assign same_line_handoff_en = sim_same_line_handoff_en;
+    assign xs_same_line_lookahead_en = sim_xs_same_line_lookahead_en;
+    assign xs_seq_lookahead_en = sim_xs_seq_lookahead_en;
+    assign weak_backward_cond_bias_en = sim_weak_backward_cond_bias_en;
+    logic [FTQ_IDX_BITS:0] xs_seq_lookahead_limit;
+    assign xs_seq_lookahead_limit = sim_xs_seq_lookahead_limit;
 `else
-    assign fetch_packet_bypass_en = 1'b0;
+    assign fetch_packet_bypass_en = 1'b1;
     assign packet_bypass_backward_only = 1'b0;
     assign packet_bypass_noncond_only = 1'b0;
     assign packet_bypass_guard_en = 1'b0;
@@ -345,6 +412,14 @@ module fetch_unit
     assign subgroup_split_any_second_ctl_en = 1'b1;
     assign subgroup_split_owner_cond_en = 1'b1;
     assign subgroup_split_slot3_ftq_taken_only_en = 1'b0;
+    assign same_ftq_tail_carry_en = 1'b0;
+    assign same_ftq_tail_bypass_en = 1'b0;
+    assign same_line_handoff_en = 1'b0;
+    assign xs_same_line_lookahead_en = 1'b0;
+    assign xs_seq_lookahead_en = 1'b0;
+    assign weak_backward_cond_bias_en = 1'b0;
+    logic [FTQ_IDX_BITS:0] xs_seq_lookahead_limit;
+    assign xs_seq_lookahead_limit = '0;
 `endif
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -368,18 +443,25 @@ module fetch_unit
 
     assign req_pc_c = (req_redirect_c && !redirect_valid)
                       ? f2_bpu_target
-                      : (line_straddle_advance_c ? f2_seq_next_pc : f1_pc);
+                      : ((xs_same_line_lookahead_c ||
+                          xs_seq_lookahead_c ||
+                          line_straddle_advance_c)
+                            ? f2_seq_next_pc
+                            : f1_pc);
     assign req_block_pc_c = {req_pc_c[63:LINE_BITS], {LINE_BITS{1'b0}}};
     assign ftq_need_alloc_c =
         !redirect_valid &&
         f1_valid &&
         !remainder_valid_r &&
         !line_straddle_advance_c &&
+        !same_ftq_tail_carry_c &&
         // The live F2 group already owns this exact request PC. Re-allocating
         // a fresh FTQ entry for it creates a tag with no distinct packet to
-        // pair against. Dhrystone hit this at tag 390 on 0x800023d0.
-        !(f2_valid_r && (req_pc_c == f2_pc_r)) &&
-        (!ftq_last_alloc_valid_r ||
+        // pair against. A predicted redirect is different: it starts a new
+        // dynamic fetch block even when the target PC matches a recently
+        // allocated loop-body PC, so it must get a fresh owner tag.
+        (req_redirect_c || !(f2_valid_r && (req_pc_c == f2_pc_r))) &&
+        (req_redirect_c || !ftq_last_alloc_valid_r ||
          (req_pc_c != ftq_last_alloc_req_pc_r));
 
     // Request to I-cache: issue when F1 is valid and not stalled
@@ -391,7 +473,10 @@ module fetch_unit
     // cycles to 1: the icache starts the new lookup in the SAME cycle as
     // the redirect instead of waiting for f1_pc to update next cycle.
     assign ic_req_addr  = req_pc_c;
-    assign ftq_enq_valid = ic_req_valid && ftq_need_alloc_c;
+    assign ftq_normal_enq_valid = ic_req_valid && ftq_need_alloc_c;
+    assign ftq_enq_valid = ftq_normal_enq_valid || same_line_handoff_c;
+    assign ftq_enq_entry_c =
+        same_line_handoff_c ? same_line_handoff_ftq_entry_c : req_ftq_entry_c;
 
     // I-cache raw combinational outputs (same-cycle as request)
     logic        ic_resp_valid_comb;
@@ -420,6 +505,8 @@ module fetch_unit
     // =========================================================================
     logic        nlpb_hit_comb;
     logic [511:0] nlpb_data_comb;
+    logic        nlpb_aux_hit_comb;
+    logic [511:0] nlpb_aux_data_comb;
     logic        nlpb_resp_valid_r;
     logic [63:0] nlpb_resp_addr_r;
     logic [511:0] nlpb_resp_data_r;
@@ -437,6 +524,10 @@ module fetch_unit
         .lookup_addr    (ic_req_addr),
         .hit            (nlpb_hit_comb),
         .hit_data       (nlpb_data_comb),
+        .aux_lookup_valid(f1_valid && !fe_stall),
+        .aux_lookup_addr (f1_pc),
+        .aux_hit         (nlpb_aux_hit_comb),
+        .aux_hit_data    (nlpb_aux_data_comb),
         .trigger_valid  (nlpb_trigger),
         .trigger_addr   (nlpb_trigger_addr),
         .flush          (redirect_valid),
@@ -487,15 +578,28 @@ module fetch_unit
     assign ic_resp_valid = merged_resp_valid_comb;
     assign ic_resp_data  = merged_resp_data_comb;
     assign ic_resp_hit   = ic_resp_hit_comb || nlpb_resp_match_c;
-    assign f2_data_valid = ic_resp_valid;
-    assign f2_data_line  = ic_resp_data;
+    assign f2_data_valid = f2_same_line_handoff_r ? 1'b1 : ic_resp_valid;
+    assign f2_data_line  =
+        f2_same_line_handoff_r ? f2_same_line_handoff_data_r : ic_resp_data;
     assign packet_buf_owner_match_c =
         packet_buf_valid &&
         packet_buf_head.valid &&
-        ftq_head_valid &&
-        (packet_buf_head.ftq_idx == ftq_head_idx) &&
+        ftq_commit_head_valid &&
+        (packet_buf_head.ftq_idx == ftq_commit_head_idx) &&
         (packet_buf_head.ftq_epoch == ftq_current_epoch) &&
-        (packet_buf_head.ftq_alloc_tag == ftq_head_tag);
+        (packet_buf_head.ftq_alloc_tag == ftq_commit_head_tag);
+    assign packet_buf_stale_owner_c =
+        packet_buf_valid && packet_buf_head.valid &&
+        (!ftq_commit_head_valid ||
+         (packet_buf_head.ftq_idx != ftq_commit_head_idx) ||
+         (packet_buf_head.ftq_epoch != ftq_current_epoch) ||
+         (packet_buf_head.ftq_alloc_tag != ftq_commit_head_tag));
+    assign f2_ftq_owner_live_c =
+        f2_ftq_valid_r &&
+        ftq_head_valid &&
+        (f2_ftq_idx_r == ftq_head_idx) &&
+        (f2_ftq_epoch_r == ftq_current_epoch) &&
+        (f2_ftq_alloc_tag_r == ftq_head_tag);
     assign packet_buf_deq = packet_buf_valid && !backend_stall &&
                             !frontend_hold;
 
@@ -504,18 +608,25 @@ module fetch_unit
         .rst_n        (rst_n),
         .flush        (redirect_valid),
         .enq_valid    (ftq_enq_valid),
-        .enq_entry    (req_ftq_entry_c),
+        .enq_entry    (ftq_enq_entry_c),
         .enq_ready    (),
         .enq_idx      (ftq_enq_idx),
         .enq_epoch    (ftq_enq_epoch),
         .enq_tag      (ftq_enq_tag),
-        .pop_valid    (ftq_pop_valid),
+        .pop_valid    (ftq_ifu_pop_valid),
         .head_valid   (ftq_head_valid),
         .head_entry   (ftq_head_entry),
         .head_idx     (ftq_head_idx),
         .head_tag     (ftq_head_tag),
+        .commit_pop_valid(ftq_commit_pop_valid),
+        .commit_head_valid(ftq_commit_head_valid),
+        .commit_head_entry(ftq_commit_head_entry),
+        .commit_head_idx(ftq_commit_head_idx),
+        .commit_head_tag(ftq_commit_head_tag),
         .current_epoch(ftq_current_epoch),
         .count        (ftq_count),
+        .count_alloc_to_ifu(ftq_count_alloc_to_ifu),
+        .count_ifu_to_commit(ftq_count_ifu_to_commit),
         .full         (ftq_full),
         .empty        (ftq_empty)
     );
@@ -531,7 +642,8 @@ module fetch_unit
         .deq_valid  (packet_buf_valid),
         .deq_packet (packet_buf_head),
         .full       (packet_buf_full),
-        .empty      (packet_buf_empty)
+        .empty      (packet_buf_empty),
+        .count      (packet_buf_count)
     );
 
     // =========================================================================
@@ -545,6 +657,14 @@ module fetch_unit
     logic [63:0] btb_alt_target;
     logic [2:0]  btb_alt_branch_type;
     logic [5:0]  btb_alt_branch_offset;
+    logic        f1_aux_btb_hit;
+    logic [63:0] f1_aux_btb_target;
+    logic [2:0]  f1_aux_btb_type;
+    logic [5:0]  f1_aux_btb_offset;
+    logic        f1_aux_btb_alt_hit;
+    logic [63:0] f1_aux_btb_alt_target;
+    logic [2:0]  f1_aux_btb_alt_type;
+    logic [5:0]  f1_aux_btb_alt_offset;
     logic        btb_update_valid;
     logic        tage_update_valid;
 
@@ -560,6 +680,15 @@ module fetch_unit
         .alt_target    (btb_alt_target),
         .alt_branch_type  (btb_alt_branch_type),
         .alt_branch_offset(btb_alt_branch_offset),
+        .aux_lookup_pc (f1_pc),
+        .aux_hit       (f1_aux_btb_hit),
+        .aux_target    (f1_aux_btb_target),
+        .aux_branch_type  (f1_aux_btb_type),
+        .aux_branch_offset(f1_aux_btb_offset),
+        .aux_alt_hit       (f1_aux_btb_alt_hit),
+        .aux_alt_target    (f1_aux_btb_alt_target),
+        .aux_alt_branch_type  (f1_aux_btb_alt_type),
+        .aux_alt_branch_offset(f1_aux_btb_alt_offset),
         .update_valid  (btb_update_valid),
         .update_pc     (bpu_update_pc),
         .update_target (bpu_update_target),
@@ -665,7 +794,9 @@ module fetch_unit
                     req_pred_ctl_target_c = btb_target;
                     req_pred_ctl_taken_c =
                         tage_pred_taken ||
-                        (!tage_pred_confident && (btb_target < pred_branch_pc));
+                        (weak_backward_cond_bias_en &&
+                         !tage_pred_confident &&
+                         (btb_target < pred_branch_pc));
                 end
                 BT_JAL,
                 BT_JALR,
@@ -681,6 +812,51 @@ module fetch_unit
                 end
                 default: begin
                     req_pred_ctl_valid_c = 1'b0;
+                end
+            endcase
+        end
+    end
+
+    logic        f1_aux_pred_ctl_valid_c;
+    logic        f1_aux_pred_ctl_taken_c;
+    logic [5:0]  f1_aux_pred_ctl_offset_c;
+    logic [2:0]  f1_aux_pred_ctl_type_c;
+    logic [63:0] f1_aux_pred_ctl_target_c;
+
+    always_comb begin
+        f1_aux_pred_ctl_valid_c  = 1'b0;
+        f1_aux_pred_ctl_taken_c  = 1'b0;
+        f1_aux_pred_ctl_offset_c = 6'd0;
+        f1_aux_pred_ctl_type_c   = BT_COND;
+        f1_aux_pred_ctl_target_c = 64'd0;
+
+        if (f1_aux_btb_hit) begin
+            automatic logic [63:0] pred_branch_pc;
+            pred_branch_pc = {f1_pc[63:LINE_BITS], f1_aux_btb_offset};
+            f1_aux_pred_ctl_valid_c  = 1'b1;
+            f1_aux_pred_ctl_offset_c = f1_aux_btb_offset;
+            f1_aux_pred_ctl_type_c   = f1_aux_btb_type;
+
+            case (f1_aux_btb_type)
+                BT_COND: begin
+                    f1_aux_pred_ctl_target_c = f1_aux_btb_target;
+                    f1_aux_pred_ctl_taken_c =
+                        (f1_aux_btb_target < pred_branch_pc);
+                end
+                BT_JAL,
+                BT_JALR,
+                BT_CALL: begin
+                    f1_aux_pred_ctl_target_c = f1_aux_btb_target;
+                    f1_aux_pred_ctl_taken_c  = 1'b1;
+                end
+                BT_RET: begin
+                    if ((ras_tos != 5'd0) && (ras_pop_addr != 64'd0)) begin
+                        f1_aux_pred_ctl_target_c = ras_pop_addr;
+                        f1_aux_pred_ctl_taken_c  = 1'b1;
+                    end
+                end
+                default: begin
+                    f1_aux_pred_ctl_valid_c = 1'b0;
                 end
             endcase
         end
@@ -734,13 +910,10 @@ module fetch_unit
     logic [5:0]  f2_btb_alt_offset_r;
     logic        f2_tage_taken_r;
     logic        f2_tage_confident_r;
-    logic        f2_ftq_valid_r;
     ftq_entry_t  f2_ftq_entry_r;
     // Forward declarations (used by consume_remainder_c before full definition)
     logic [2:0]  extract_count;
     logic [5:0]  start_offset;
-    logic        same_line_handoff_c;
-    logic        same_line_next_has_ctl_c;
 
     // On the cycle where f2 consumes a straddle remainder (start_offset=0,
     // remainder_valid_r=1 and one or more instructions were emitted), the
@@ -760,24 +933,59 @@ module fetch_unit
     logic        f2_last_emit_valid_r;
     logic [63:0] f2_last_emit_pc_r;
     logic [63:0] f2_last_emit_next_pc_r;
+    logic        f2_last_emit_ftq_valid_r;
+    logic [FTQ_IDX_BITS-1:0] f2_last_emit_ftq_idx_r;
+    logic [FTQ_EPOCH_BITS-1:0] f2_last_emit_ftq_epoch_r;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] f2_last_emit_ftq_alloc_tag_r;
     logic        f2_replay_block_valid_r;
     logic [63:0] f2_replay_block_pc_r;
+    logic        f2_replay_block_ftq_valid_r;
+    logic [FTQ_IDX_BITS-1:0] f2_replay_block_ftq_idx_r;
+    logic [FTQ_EPOCH_BITS-1:0] f2_replay_block_ftq_epoch_r;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] f2_replay_block_ftq_alloc_tag_r;
     logic [1:0]  f2_replay_block_age_r;
+    logic        f2_last_emit_owner_match_c;
+    logic        f2_last_emit_hit_c;
+    logic        f2_replay_block_owner_match_c;
     logic        f2_replay_block_hit_c;
     assign f2_has_emit_payload_c = f2_valid_r && f2_data_valid &&
                                    (extract_count > 3'd0);
+    assign f2_last_emit_owner_match_c =
+        (f2_last_emit_ftq_valid_r && f2_ftq_valid_r &&
+         (f2_last_emit_ftq_idx_r == f2_ftq_idx_r) &&
+         (f2_last_emit_ftq_epoch_r == f2_ftq_epoch_r) &&
+         (f2_last_emit_ftq_alloc_tag_r == f2_ftq_alloc_tag_r)) ||
+        (!f2_last_emit_ftq_valid_r && !f2_ftq_valid_r);
+    assign f2_last_emit_hit_c =
+        f2_last_emit_valid_r &&
+        (f2_last_emit_pc_r == f2_pc_r) &&
+        f2_last_emit_owner_match_c;
+    assign f2_replay_block_owner_match_c =
+        (f2_replay_block_ftq_valid_r && f2_ftq_valid_r &&
+         (f2_replay_block_ftq_idx_r == f2_ftq_idx_r) &&
+         (f2_replay_block_ftq_epoch_r == f2_ftq_epoch_r) &&
+         (f2_replay_block_ftq_alloc_tag_r == f2_ftq_alloc_tag_r)) ||
+        (!f2_replay_block_ftq_valid_r && !f2_ftq_valid_r);
     assign f2_replay_block_hit_c =
-        f2_replay_block_valid_r && (f2_replay_block_pc_r == f2_pc_r);
+        f2_replay_block_valid_r &&
+        (f2_replay_block_pc_r == f2_pc_r) &&
+        f2_replay_block_owner_match_c;
     assign f2_duplicate_suppressed_c =
         f2_has_emit_payload_c &&
-        ((f2_last_emit_valid_r && (f2_last_emit_pc_r == f2_pc_r)) ||
-         f2_replay_block_hit_c);
+        (f2_last_emit_hit_c || f2_replay_block_hit_c);
     assign f2_duplicate_next_pc_c =
-        (f2_last_emit_valid_r && (f2_last_emit_pc_r == f2_pc_r))
+        f2_last_emit_hit_c
             ? f2_last_emit_next_pc_r
             : (f2_seq_valid ? f2_seq_next_pc : f1_pc);
+    // Iteration alpha' (2026-05-05): explicit packet-buffer backpressure.
+    // F2 must not emit when the packet buffer is full; previously, the
+    // implicit chain fe_stall->!ic_req_valid->no-fresh-data->dup-suppress
+    // covered this case but only after a packet had already been silently
+    // dropped at the buffer enq stage. Gating f2_will_emit_c on
+    // !packet_buf_full prevents the loss and makes backpressure structural.
     assign f2_will_emit_c = f2_has_emit_payload_c &&
-                             !f2_duplicate_suppressed_c;
+                             !f2_duplicate_suppressed_c &&
+                             !packet_buf_full;
     // A duplicate-suppressed F2 group must not advance F1 using the current
     // group's sequential PC. The bytes were already consumed by the original
     // emission; advancing again starts the next request inside that packet.
@@ -792,8 +1000,9 @@ module fetch_unit
             ftq_last_alloc_req_pc_r   <= '0;
         end else if (ftq_enq_valid) begin
             ftq_last_alloc_valid_r    <= 1'b1;
-            ftq_last_alloc_req_pc_r   <= req_pc_c;
-        end else if (ftq_pop_valid &&
+            ftq_last_alloc_req_pc_r   <=
+                same_line_handoff_c ? f2_seq_next_pc : req_pc_c;
+        end else if (ftq_ifu_pop_valid &&
                      (ftq_count == {{FTQ_IDX_BITS{1'b0}}, 1'b1})) begin
             ftq_last_alloc_valid_r    <= 1'b0;
             ftq_last_alloc_req_pc_r   <= '0;
@@ -825,9 +1034,19 @@ module fetch_unit
             f2_last_emit_valid_r <= 1'b0;
             f2_last_emit_pc_r    <= '0;
             f2_last_emit_next_pc_r <= '0;
+            f2_last_emit_ftq_valid_r <= 1'b0;
+            f2_last_emit_ftq_idx_r <= '0;
+            f2_last_emit_ftq_epoch_r <= '0;
+            f2_last_emit_ftq_alloc_tag_r <= '0;
             f2_replay_block_valid_r <= 1'b0;
             f2_replay_block_pc_r    <= '0;
+            f2_replay_block_ftq_valid_r <= 1'b0;
+            f2_replay_block_ftq_idx_r <= '0;
+            f2_replay_block_ftq_epoch_r <= '0;
+            f2_replay_block_ftq_alloc_tag_r <= '0;
             f2_replay_block_age_r   <= '0;
+            f2_same_line_handoff_r  <= 1'b0;
+            f2_same_line_handoff_data_r <= '0;
         end else if (redirect_valid) begin
             // Flush F2 on redirect and clear the duplicate-suppress flag
             f2_valid_r           <= 1'b0;
@@ -835,10 +1054,14 @@ module fetch_unit
             f2_ftq_valid_r       <= 1'b0;
             f2_ftq_alloc_tag_r   <= '0;
             f2_last_emit_valid_r <= 1'b0;
+            f2_last_emit_ftq_valid_r <= 1'b0;
             f2_replay_block_valid_r <= 1'b0;
+            f2_replay_block_ftq_valid_r <= 1'b0;
             f2_last_emit_next_pc_r <= '0;
             f2_replay_block_pc_r    <= '0;
             f2_replay_block_age_r   <= '0;
+            f2_same_line_handoff_r  <= 1'b0;
+            f2_same_line_handoff_data_r <= '0;
         end else if (f2_bpu_redirect && !fe_stall) begin
             // BPU redirect: set f2_pc to target so the icache bypass
             // response (arriving next cycle) matches the expected PC.
@@ -863,7 +1086,7 @@ module fetch_unit
                 f2_ftq_idx_r    <= ftq_enq_idx;
                 f2_ftq_epoch_r  <= ftq_enq_epoch;
                 f2_ftq_alloc_tag_r <= ftq_enq_tag;
-                f2_ftq_entry_r  <= req_ftq_entry_c;
+                f2_ftq_entry_r  <= ftq_enq_entry_c;
             end
             consumed_remainder_r <= 1'b0;
             // The redirecting packet was emitted this cycle.  Remember its
@@ -873,9 +1096,19 @@ module fetch_unit
             f2_last_emit_valid_r <= (f2_bpu_target != f2_pc_r);
             f2_last_emit_pc_r    <= f2_pc_r;
             f2_last_emit_next_pc_r <= f2_bpu_target;
+            f2_last_emit_ftq_valid_r <= f2_ftq_valid_r;
+            f2_last_emit_ftq_idx_r <= f2_ftq_idx_r;
+            f2_last_emit_ftq_epoch_r <= f2_ftq_epoch_r;
+            f2_last_emit_ftq_alloc_tag_r <= f2_ftq_alloc_tag_r;
             f2_replay_block_valid_r <= (f2_bpu_target != f2_pc_r);
             f2_replay_block_pc_r    <= f2_pc_r;
+            f2_replay_block_ftq_valid_r <= f2_ftq_valid_r;
+            f2_replay_block_ftq_idx_r <= f2_ftq_idx_r;
+            f2_replay_block_ftq_epoch_r <= f2_ftq_epoch_r;
+            f2_replay_block_ftq_alloc_tag_r <= f2_ftq_alloc_tag_r;
             f2_replay_block_age_r   <= 2'd2;
+            f2_same_line_handoff_r  <= 1'b0;
+            f2_same_line_handoff_data_r <= '0;
         end else begin
             // Duplicate suppression must track any packet that was actually
             // emitted, even if F1/F2 state is frozen by fe_stall. Otherwise a
@@ -885,6 +1118,10 @@ module fetch_unit
             if (f2_will_emit_c) begin
                 f2_last_emit_valid_r <= 1'b1;
                 f2_last_emit_pc_r    <= f2_pc_r;
+                f2_last_emit_ftq_valid_r <= f2_ftq_valid_r;
+                f2_last_emit_ftq_idx_r <= f2_ftq_idx_r;
+                f2_last_emit_ftq_epoch_r <= f2_ftq_epoch_r;
+                f2_last_emit_ftq_alloc_tag_r <= f2_ftq_alloc_tag_r;
                 if (bp_branch_found && bp_taken &&
                     !subgroup_split_before_ctl_c && !redirect_valid) begin
                     f2_last_emit_next_pc_r <= bp_target_addr;
@@ -895,76 +1132,190 @@ module fetch_unit
                 end
             end
             if (f2_replay_block_valid_r && !fe_stall) begin
-                if (f2_replay_block_hit_c && f2_has_emit_payload_c) begin
+                if (f2_will_emit_c &&
+                    ((f2_pc_r != f2_replay_block_pc_r) ||
+                     !f2_replay_block_owner_match_c)) begin
+                    // Once the redirected-to packet has emitted, the blocked
+                    // PC may be reached again by a real tight-loop iteration.
+                    // Keeping the guard alive for a fixed age turns that real
+                    // return into a frontend bubble.
                     f2_replay_block_valid_r <= 1'b0;
+                    f2_replay_block_ftq_valid_r <= 1'b0;
+                    f2_replay_block_age_r   <= '0;
+                end else if (f2_replay_block_hit_c && f2_has_emit_payload_c) begin
+                    f2_replay_block_valid_r <= 1'b0;
+                    f2_replay_block_ftq_valid_r <= 1'b0;
                     f2_replay_block_age_r   <= '0;
                 end else if (f2_replay_block_age_r == 2'd0) begin
                     f2_replay_block_valid_r <= 1'b0;
+                    f2_replay_block_ftq_valid_r <= 1'b0;
                 end else begin
                     f2_replay_block_age_r <= f2_replay_block_age_r - 2'd1;
                 end
             end
 
             if (!fe_stall) begin
-                f2_valid_r          <= f1_valid;
-                if (line_straddle_advance_c)
-                    f2_pc_r         <= f2_seq_next_pc;
-                else if (consume_remainder_c)
-                    f2_pc_r         <= f2_seq_next_pc;
-                else if (consumed_remainder_r)
-                    f2_pc_r         <= post_remainder_pc_r;
-                else
-                    f2_pc_r         <= f1_pc;
-                f2_btb_hit_r        <= btb_hit;
-                f2_btb_target_r     <= btb_target;
-                f2_btb_type_r       <= btb_branch_type;
-                f2_btb_offset_r     <= btb_branch_offset;
-                f2_btb_alt_hit_r    <= btb_alt_hit;
-                f2_btb_alt_target_r <= btb_alt_target;
-                f2_btb_alt_type_r   <= btb_alt_branch_type;
-                f2_btb_alt_offset_r <= btb_alt_branch_offset;
-                f2_tage_taken_r     <= tage_pred_taken;
-                f2_tage_confident_r <= tage_pred_confident;
-                if (line_straddle_advance_c || consume_remainder_c || consumed_remainder_r)
-                    f2_ghr_snapshot_r <= f2_ghr_snapshot_r;
-                else
-                    f2_ghr_snapshot_r <= ghr_out;
-
-                if (line_straddle_advance_c || consume_remainder_c || consumed_remainder_r) begin
-                    if (consumed_remainder_r && ftq_enq_valid) begin
+                if (same_ftq_tail_carry_c) begin
+                    f2_valid_r          <= 1'b1;
+                    f2_pc_r             <= f2_seq_next_pc;
+                    f2_btb_hit_r        <= 1'b0;
+                    f2_btb_target_r     <= '0;
+                    f2_btb_type_r       <= '0;
+                    f2_btb_offset_r     <= '0;
+                    f2_btb_alt_hit_r    <= 1'b0;
+                    f2_btb_alt_target_r <= '0;
+                    f2_btb_alt_type_r   <= '0;
+                    f2_btb_alt_offset_r <= '0;
+                    f2_tage_taken_r     <= f2_tage_taken_r;
+                    f2_tage_confident_r <= f2_tage_confident_r;
+                    f2_ghr_snapshot_r   <= f2_ghr_snapshot_r;
+                    f2_ftq_valid_r      <= f2_ftq_valid_r;
+                    f2_ftq_idx_r        <= f2_ftq_idx_r;
+                    f2_ftq_epoch_r      <= f2_ftq_epoch_r;
+                    f2_ftq_alloc_tag_r  <= f2_ftq_alloc_tag_r;
+                    f2_ftq_entry_r      <= f2_ftq_entry_r;
+                    consumed_remainder_r <= 1'b0;
+                    f2_same_line_handoff_r <= 1'b1;
+                    f2_same_line_handoff_data_r <= f2_data_line;
+                end else if (same_line_handoff_c) begin
+                    f2_valid_r          <= 1'b1;
+                    f2_pc_r             <= f2_seq_next_pc;
+                    f2_btb_hit_r        <= btb_hit;
+                    f2_btb_target_r     <= btb_target;
+                    f2_btb_type_r       <= btb_branch_type;
+                    f2_btb_offset_r     <= btb_branch_offset;
+                    f2_btb_alt_hit_r    <= btb_alt_hit;
+                    f2_btb_alt_target_r <= btb_alt_target;
+                    f2_btb_alt_type_r   <= btb_alt_branch_type;
+                    f2_btb_alt_offset_r <= btb_alt_branch_offset;
+                    f2_tage_taken_r     <= tage_pred_taken;
+                    f2_tage_confident_r <= tage_pred_confident;
+                    f2_ghr_snapshot_r   <= ghr_out;
+                    f2_ftq_valid_r      <= 1'b1;
+                    f2_ftq_idx_r        <= ftq_enq_idx;
+                    f2_ftq_epoch_r      <= ftq_enq_epoch;
+                    f2_ftq_alloc_tag_r  <= ftq_enq_tag;
+                    f2_ftq_entry_r      <= same_line_handoff_ftq_entry_c;
+                    consumed_remainder_r <= 1'b0;
+                    f2_same_line_handoff_r <= 1'b1;
+                    f2_same_line_handoff_data_r <= f2_data_line;
+                end else if (xs_same_line_lookahead_c) begin
+                    f2_valid_r          <= 1'b1;
+                    f2_pc_r             <= f2_seq_next_pc;
+                    f2_btb_hit_r        <= btb_hit;
+                    f2_btb_target_r     <= btb_target;
+                    f2_btb_type_r       <= btb_branch_type;
+                    f2_btb_offset_r     <= btb_branch_offset;
+                    f2_btb_alt_hit_r    <= btb_alt_hit;
+                    f2_btb_alt_target_r <= btb_alt_target;
+                    f2_btb_alt_type_r   <= btb_alt_branch_type;
+                    f2_btb_alt_offset_r <= btb_alt_branch_offset;
+                    f2_tage_taken_r     <= tage_pred_taken;
+                    f2_tage_confident_r <= tage_pred_confident;
+                    f2_ghr_snapshot_r   <= ghr_out;
+                    if (ftq_enq_valid) begin
                         f2_ftq_valid_r <= 1'b1;
                         f2_ftq_idx_r   <= ftq_enq_idx;
                         f2_ftq_epoch_r <= ftq_enq_epoch;
                         f2_ftq_alloc_tag_r <= ftq_enq_tag;
-                        f2_ftq_entry_r <= req_ftq_entry_c;
+                        f2_ftq_entry_r <= ftq_enq_entry_c;
                     end else begin
-                        f2_ftq_valid_r <= f2_ftq_valid_r;
-                        f2_ftq_idx_r   <= f2_ftq_idx_r;
-                        f2_ftq_epoch_r <= f2_ftq_epoch_r;
-                        f2_ftq_alloc_tag_r <= f2_ftq_alloc_tag_r;
-                        f2_ftq_entry_r <= f2_ftq_entry_r;
+                        f2_ftq_valid_r <= 1'b0;
+                        f2_ftq_idx_r   <= '0;
+                        f2_ftq_epoch_r <= '0;
+                        f2_ftq_alloc_tag_r <= '0;
+                        f2_ftq_entry_r <= '0;
                     end
-                end else if (ftq_enq_valid) begin
-                    f2_ftq_valid_r <= 1'b1;
-                    f2_ftq_idx_r   <= ftq_enq_idx;
-                    f2_ftq_epoch_r <= ftq_enq_epoch;
-                    f2_ftq_alloc_tag_r <= ftq_enq_tag;
-                    f2_ftq_entry_r <= req_ftq_entry_c;
-                end else if (!f1_valid) begin
-                    f2_ftq_valid_r <= 1'b0;
-                    f2_ftq_idx_r   <= '0;
-                    f2_ftq_epoch_r <= '0;
-                    f2_ftq_alloc_tag_r <= '0;
-                    f2_ftq_entry_r <= '0;
-                end
-
-                // Latch the consume event and the post-remainder PC so the
-                // next cycle can also advance f1_pc in lock-step.
-                if (consume_remainder_c) begin
-                    consumed_remainder_r <= 1'b1;
-                    post_remainder_pc_r  <= f2_seq_next_pc;
-                end else begin
                     consumed_remainder_r <= 1'b0;
+                    f2_same_line_handoff_r <= 1'b1;
+                    f2_same_line_handoff_data_r <= f2_data_line;
+                end else if (xs_seq_lookahead_c) begin
+                    f2_valid_r          <= 1'b1;
+                    f2_pc_r             <= f2_seq_next_pc;
+                    f2_btb_hit_r        <= btb_hit;
+                    f2_btb_target_r     <= btb_target;
+                    f2_btb_type_r       <= btb_branch_type;
+                    f2_btb_offset_r     <= btb_branch_offset;
+                    f2_btb_alt_hit_r    <= btb_alt_hit;
+                    f2_btb_alt_target_r <= btb_alt_target;
+                    f2_btb_alt_type_r   <= btb_alt_branch_type;
+                    f2_btb_alt_offset_r <= btb_alt_branch_offset;
+                    f2_tage_taken_r     <= tage_pred_taken;
+                    f2_tage_confident_r <= tage_pred_confident;
+                    f2_ghr_snapshot_r   <= ghr_out;
+                    if (ftq_enq_valid) begin
+                        f2_ftq_valid_r <= 1'b1;
+                        f2_ftq_idx_r   <= ftq_enq_idx;
+                        f2_ftq_epoch_r <= ftq_enq_epoch;
+                        f2_ftq_alloc_tag_r <= ftq_enq_tag;
+                        f2_ftq_entry_r <= ftq_enq_entry_c;
+                    end
+                    consumed_remainder_r <= 1'b0;
+                    f2_same_line_handoff_r <= 1'b0;
+                    f2_same_line_handoff_data_r <= '0;
+                end else begin
+                    f2_same_line_handoff_r <= 1'b0;
+                    f2_same_line_handoff_data_r <= '0;
+                    f2_valid_r          <= f1_valid;
+                    if (line_straddle_advance_c)
+                        f2_pc_r         <= f2_seq_next_pc;
+                    else if (consume_remainder_c)
+                        f2_pc_r         <= f2_seq_next_pc;
+                    else if (consumed_remainder_r)
+                        f2_pc_r         <= post_remainder_pc_r;
+                    else
+                        f2_pc_r         <= f1_pc;
+                    f2_btb_hit_r        <= btb_hit;
+                    f2_btb_target_r     <= btb_target;
+                    f2_btb_type_r       <= btb_branch_type;
+                    f2_btb_offset_r     <= btb_branch_offset;
+                    f2_btb_alt_hit_r    <= btb_alt_hit;
+                    f2_btb_alt_target_r <= btb_alt_target;
+                    f2_btb_alt_type_r   <= btb_alt_branch_type;
+                    f2_btb_alt_offset_r <= btb_alt_branch_offset;
+                    f2_tage_taken_r     <= tage_pred_taken;
+                    f2_tage_confident_r <= tage_pred_confident;
+                    if (line_straddle_advance_c || consume_remainder_c || consumed_remainder_r)
+                        f2_ghr_snapshot_r <= f2_ghr_snapshot_r;
+                    else
+                        f2_ghr_snapshot_r <= ghr_out;
+
+                    if (line_straddle_advance_c || consume_remainder_c || consumed_remainder_r) begin
+                        if (consumed_remainder_r && ftq_enq_valid) begin
+                            f2_ftq_valid_r <= 1'b1;
+                            f2_ftq_idx_r   <= ftq_enq_idx;
+                            f2_ftq_epoch_r <= ftq_enq_epoch;
+                            f2_ftq_alloc_tag_r <= ftq_enq_tag;
+                            f2_ftq_entry_r <= ftq_enq_entry_c;
+                        end else begin
+                            f2_ftq_valid_r <= f2_ftq_valid_r;
+                            f2_ftq_idx_r   <= f2_ftq_idx_r;
+                            f2_ftq_epoch_r <= f2_ftq_epoch_r;
+                            f2_ftq_alloc_tag_r <= f2_ftq_alloc_tag_r;
+                            f2_ftq_entry_r <= f2_ftq_entry_r;
+                        end
+                    end else if (ftq_enq_valid) begin
+                        f2_ftq_valid_r <= 1'b1;
+                        f2_ftq_idx_r   <= ftq_enq_idx;
+                        f2_ftq_epoch_r <= ftq_enq_epoch;
+                        f2_ftq_alloc_tag_r <= ftq_enq_tag;
+                        f2_ftq_entry_r <= ftq_enq_entry_c;
+                    end else if (!f1_valid) begin
+                        f2_ftq_valid_r <= 1'b0;
+                        f2_ftq_idx_r   <= '0;
+                        f2_ftq_epoch_r <= '0;
+                        f2_ftq_alloc_tag_r <= '0;
+                        f2_ftq_entry_r <= '0;
+                    end
+
+                    // Latch the consume event and the post-remainder PC so the
+                    // next cycle can also advance f1_pc in lock-step.
+                    if (consume_remainder_c) begin
+                        consumed_remainder_r <= 1'b1;
+                        post_remainder_pc_r  <= f2_seq_next_pc;
+                    end else begin
+                        consumed_remainder_r <= 1'b0;
+                    end
                 end
             end
         end
@@ -1072,7 +1423,8 @@ module fetch_unit
                     automatic logic [15:0] hw;
                     automatic logic [6:0]  bp;
                     bp = byte_pos;
-                    hw = {f2_data_line[bp*8 +: 8], f2_data_line[bp*8 +: 8]};
+                    hw = {f2_data_line[bp*8 +: 8],
+                          f2_data_line[bp*8 +: 8]};
                     // Correct: read two bytes in little-endian order
                     hw[7:0]  = f2_data_line[bp*8 +: 8];
                     hw[15:8] = f2_data_line[(bp+7'd1)*8 +: 8];
@@ -1255,7 +1607,8 @@ module fetch_unit
             predecode_ctl_found &&
             (predecode_ctl_type == BT_COND)) begin
             if (owner_tage_pred_taken ||
-                (!owner_tage_pred_confident &&
+                (weak_backward_cond_bias_en &&
+                 !owner_tage_pred_confident &&
                  (predecode_ctl_target < predecode_ctl_pc))) begin
                 owner_cond_pred_found = 1'b1;
             end
@@ -1278,7 +1631,8 @@ module fetch_unit
 
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (slot_valid[i] &&
-                    (slot_pc[i][5:0] == f2_ftq_entry_r.pred_ctl_offset)) begin
+                    (slot_pc[i][5:0] ==
+                     f2_ftq_entry_r.pred_ctl_offset)) begin
                     ftq_pred_ctl_slot_match = 1'b1;
                     ftq_pred_ctl_slot       = 3'(i);
                 end
@@ -1307,12 +1661,13 @@ module fetch_unit
         (ftq_pred_ctl_valid &&
          (ftq_pred_ctl_slot == subgroup_split_slot_c) &&
          (ftq_pred_ctl_type == subgroup_split_type_c))
-            ? ftq_pred_ctl_taken
+           ? ftq_pred_ctl_taken
             : (((subgroup_split_slot_c == predecode_ctl_slot) &&
                 (subgroup_split_pc_c == predecode_ctl_pc) &&
                 (subgroup_split_target_c == predecode_ctl_target))
                    ? owner_cond_pred_found
-                   : (subgroup_split_target_c < subgroup_split_pc_c));
+                   : (weak_backward_cond_bias_en &&
+                      (subgroup_split_target_c < subgroup_split_pc_c)));
 
     assign second_ctl_backward_cond =
         second_ctl_found &&
@@ -1433,11 +1788,13 @@ module fetch_unit
         btb_alt_target_addr  = '0;
         btb_alt_truncated_count = extract_count;
 
-        if (f2_valid_r && f2_data_valid && f2_btb_hit_r) begin
+        if (f2_valid_r && f2_data_valid &&
+            f2_btb_hit_r) begin
             case (f2_btb_type_r)
                 BT_COND: begin
                     if (f2_tage_taken_r ||
-                        (!f2_tage_confident_r &&
+                        (weak_backward_cond_bias_en &&
+                         !f2_tage_confident_r &&
                          (f2_btb_target_r < f2_btb_branch_pc))) begin
                         btb_pred_found  = 1'b1;
                         btb_taken       = 1'b1;
@@ -1495,7 +1852,8 @@ module fetch_unit
             end
         end
 
-        if (f2_valid_r && f2_data_valid && f2_btb_alt_hit_r) begin
+        if (f2_valid_r && f2_data_valid &&
+            f2_btb_alt_hit_r) begin
             case (f2_btb_alt_type_r)
                 BT_JAL,
                 BT_JALR,
@@ -1750,7 +2108,7 @@ module fetch_unit
             // the remainder buffer can be combined with the new data.
             last_slot_pc   = straddle_pc;
             last_slot_rvc  = 1'b0;
-            f2_seq_next_pc = {f2_pc_r[63:6] + 58'd1, 6'd0};  // next line
+            f2_seq_next_pc = {f2_pc_r[63:6] + 58'd1, 6'd0};
             f2_seq_valid   = 1'b1;
         end else begin
             last_slot_pc   = f2_pc_r;
@@ -1760,12 +2118,100 @@ module fetch_unit
         end
     end
 
-    // Phase-6 cleanup: the same-line subgroup handoff path is retired.
-    // Continued delivery now relies only on the FTQ-owned request contract and
-    // the cross-line remainder path. Keep trace plumbing explicit at zero so
-    // debug logs still show that the legacy path is inactive.
-    assign same_line_next_has_ctl_c = 1'b0;
-    assign same_line_handoff_c = 1'b0;
+    always_comb begin
+        same_line_handoff_ftq_entry_c = '0;
+        same_line_handoff_ftq_entry_c.block_pc =
+            {f2_seq_next_pc[63:LINE_BITS], {LINE_BITS{1'b0}}};
+        same_line_handoff_ftq_entry_c.start_offset = f2_seq_next_pc[5:0];
+        same_line_handoff_ftq_entry_c.fallthrough_pc =
+            {f2_seq_next_pc[63:LINE_BITS], {LINE_BITS{1'b0}}} +
+            64'(LINE_SIZE);
+
+        if (req_pred_ctl_valid_c &&
+            (req_pred_ctl_offset_c >= f2_seq_next_pc[5:0])) begin
+            same_line_handoff_ftq_entry_c.pred_ctl_valid  = 1'b1;
+            same_line_handoff_ftq_entry_c.pred_ctl_taken  =
+                req_pred_ctl_taken_c;
+            same_line_handoff_ftq_entry_c.pred_ctl_offset =
+                req_pred_ctl_offset_c;
+            same_line_handoff_ftq_entry_c.pred_ctl_type   =
+                req_pred_ctl_type_c;
+            same_line_handoff_ftq_entry_c.pred_ctl_target =
+                req_pred_ctl_target_c;
+        end
+        same_line_handoff_ftq_entry_c.pred_from_subgroup = 1'b0;
+
+        same_line_handoff_ftq_entry_c.btb_hit =
+            btb_hit && (btb_branch_offset >= f2_seq_next_pc[5:0]);
+        same_line_handoff_ftq_entry_c.btb_offset     = btb_branch_offset;
+        same_line_handoff_ftq_entry_c.btb_type       = btb_branch_type;
+        same_line_handoff_ftq_entry_c.btb_target     = btb_target;
+        same_line_handoff_ftq_entry_c.btb_alt_hit =
+            btb_alt_hit && (btb_alt_branch_offset >= f2_seq_next_pc[5:0]);
+        same_line_handoff_ftq_entry_c.btb_alt_offset = btb_alt_branch_offset;
+        same_line_handoff_ftq_entry_c.btb_alt_type   = btb_alt_branch_type;
+        same_line_handoff_ftq_entry_c.btb_alt_target = btb_alt_target;
+        same_line_handoff_ftq_entry_c.tage_taken     = tage_pred_taken;
+        same_line_handoff_ftq_entry_c.tage_confident = tage_pred_confident;
+        same_line_handoff_ftq_entry_c.ras_tos_snapshot = ras_tos;
+        same_line_handoff_ftq_entry_c.ras_top_snapshot = ras_pop_addr;
+        same_line_handoff_ftq_entry_c.ghr_snapshot     = ghr_out;
+    end
+
+    assign same_line_next_has_ctl_c =
+        same_line_handoff_ftq_entry_c.pred_ctl_valid;
+    assign same_ftq_tail_pending_c =
+        f2_will_emit_c &&
+        f2_ftq_valid_r &&
+        f2_ftq_entry_r.pred_ctl_valid &&
+        f2_ftq_entry_r.pred_ctl_taken &&
+        (f2_ftq_entry_r.pred_ctl_type == BT_COND) &&
+        f2_seq_valid &&
+        (final_count == 3'(PIPE_WIDTH)) &&
+        (f2_seq_next_pc != f2_pc_r) &&
+        (f2_seq_next_pc[63:LINE_BITS] == f2_pc_r[63:LINE_BITS]) &&
+        (f2_ftq_entry_r.pred_ctl_offset == f2_seq_next_pc[5:0]) &&
+        (f2_ftq_entry_r.pred_ctl_target < f2_seq_next_pc) &&
+        !predecode_ctl_found &&
+        !bp_branch_found &&
+        !subgroup_split_before_ctl_c &&
+        !straddle_detected &&
+        !remainder_valid_r &&
+        !line_straddle_advance_c &&
+        !redirect_valid;
+    assign same_ftq_tail_owner_open_c =
+        same_ftq_tail_carry_en &&
+        same_ftq_tail_pending_c;
+    assign same_ftq_tail_carry_c =
+        same_ftq_tail_owner_open_c &&
+        !ftq_full &&
+        !frontend_hold &&
+        !backend_stall;
+    assign same_line_handoff_c =
+        f2_will_emit_c &&
+        same_line_handoff_en &&
+        !same_ftq_tail_carry_c &&
+        f2_ftq_valid_r &&
+        f2_seq_valid &&
+        (final_count == 3'(PIPE_WIDTH)) &&
+        (f2_seq_next_pc != f2_pc_r) &&
+        (f2_seq_next_pc[63:LINE_BITS] == f2_pc_r[63:LINE_BITS]) &&
+        same_line_handoff_ftq_entry_c.pred_ctl_valid &&
+        same_line_handoff_ftq_entry_c.pred_ctl_taken &&
+        (same_line_handoff_ftq_entry_c.pred_ctl_type == BT_COND) &&
+        (same_line_handoff_ftq_entry_c.pred_ctl_offset ==
+         f2_seq_next_pc[5:0]) &&
+        (same_line_handoff_ftq_entry_c.pred_ctl_target < f2_seq_next_pc) &&
+        !predecode_ctl_found &&
+        !bp_branch_found &&
+        !subgroup_split_before_ctl_c &&
+        !straddle_detected &&
+        !remainder_valid_r &&
+        !ftq_need_alloc_c &&
+        !ftq_full &&
+        !redirect_valid &&
+        !frontend_hold &&
+        !backend_stall;
 
     assign packet_bypass_candidate =
         fetch_packet_bypass_en &&
@@ -1774,8 +2220,8 @@ module fetch_unit
         f2_will_emit_c &&
         !redirect_valid &&
         !frontend_hold &&
-        !loop_buffer_capturing &&
-        !loop_buffer_capture_start &&
+        !frontend_replay_blocking &&
+        !frontend_replay_start &&
         !backend_stall;
     assign packet_bypass_owner_match_c =
         packet_bypass_candidate &&
@@ -1801,22 +2247,89 @@ module fetch_unit
                (packet_buf_in.pd_ctl_type != BT_COND))
             : (!packet_bypass_backward_only ||
                !packet_buf_in.pd_ctl_valid);
+    assign packet_bypass_tail_carry_c =
+        same_ftq_tail_bypass_en &&
+        same_ftq_tail_carry_c &&
+        packet_buf_in.valid &&
+        !packet_buf_in.ftq_owner_complete;
     assign packet_bypass_valid =
         packet_bypass_owner_match_c &&
-        // Only bypass packets that also complete their FTQ owner.  A packet
-        // with ftq_owner_complete=0 must be retained in the packet buffer so
-        // the later continuation can retire the FTQ entry in order.
-        packet_buf_in.ftq_owner_complete &&
+        // Normal bypass may pop the FTQ immediately.  A same-FTQ tail-carry
+        // packet may also bypass, but it deliberately does not pop the owner;
+        // the carried tail packet completes the same FTQ entry on the next
+        // cycle.
+        (packet_buf_in.ftq_owner_complete || packet_bypass_tail_carry_c) &&
         packet_bypass_policy_ok;
     assign packet_bypass_ftq_pop =
         packet_bypass_valid &&
         packet_buf_in.ftq_owner_complete;
 
-    assign ftq_pop_valid =
+    assign xs_seq_lookahead_c =
+        xs_seq_lookahead_en &&
+        packet_bypass_valid &&
+        f2_will_emit_c &&
+        f2_seq_valid &&
+        (final_count > 3'd0) &&
+        (f2_seq_next_pc != f2_pc_r) &&
+        (f2_seq_next_pc[63:LINE_BITS] != f2_pc_r[63:LINE_BITS]) &&
+        !(bp_branch_found && bp_taken && !subgroup_split_before_ctl_c) &&
+        !subgroup_split_before_ctl_c &&
+        !straddle_detected &&
+        !remainder_valid_r &&
+        !line_straddle_advance_c &&
+        !redirect_valid &&
+        !frontend_hold &&
+        !backend_stall &&
+        !ftq_full &&
+        (!ftq_last_alloc_valid_r ||
+         (f2_seq_next_pc != ftq_last_alloc_req_pc_r)) &&
+        (ftq_count <= xs_seq_lookahead_limit);
+
+    assign xs_same_line_lookahead_c =
+        xs_same_line_lookahead_en &&
+        packet_bypass_valid &&
+        xs_same_line_alloc_ok_c &&
+        f2_will_emit_c &&
+        f2_seq_valid &&
+        (final_count > 3'd0) &&
+        (f2_seq_next_pc != f2_pc_r) &&
+        (f2_seq_next_pc[63:LINE_BITS] == f2_pc_r[63:LINE_BITS]) &&
+        f2_ftq_valid_r &&
+        !f2_ftq_entry_r.pred_ctl_valid &&
+        !predecode_ctl_found &&
+        !(bp_branch_found && bp_taken && !subgroup_split_before_ctl_c) &&
+        !subgroup_split_before_ctl_c &&
+        !straddle_detected &&
+        !remainder_valid_r &&
+        !line_straddle_advance_c &&
+        !redirect_valid &&
+        !frontend_hold &&
+        !backend_stall &&
+        !ftq_full &&
+        (!ftq_last_alloc_valid_r ||
+         (f2_seq_next_pc != ftq_last_alloc_req_pc_r));
+
+    assign xs_same_line_alloc_ok_c =
+        f1_valid &&
+        !remainder_valid_r &&
+        !line_straddle_advance_c &&
+        !(f2_valid_r && (f2_seq_next_pc == f2_pc_r)) &&
+        (!ftq_last_alloc_valid_r ||
+         (f2_seq_next_pc != ftq_last_alloc_req_pc_r));
+
+    assign ftq_ifu_pop_valid =
+        f2_will_emit_c &&
+        packet_buf_in.valid &&
+        packet_buf_in.ftq_owner_complete &&
+        f2_ftq_owner_live_c &&
+        !redirect_valid &&
+        !frontend_hold;
+    assign ftq_commit_pop_valid =
         (packet_buf_deq &&
          packet_buf_owner_match_c &&
          packet_buf_head.ftq_owner_complete) ||
         packet_bypass_ftq_pop;
+    assign ftq_pop_valid = ftq_ifu_pop_valid;
 
     // =========================================================================
     // BPU redirect to F1
@@ -1897,7 +2410,9 @@ module fetch_unit
             remainder_hw_r    <= 16'h0;
             remainder_pc_r    <= '0;
         end else if (!fe_stall) begin
-            if (straddle_detected && f2_valid_r && f2_data_valid) begin
+            if (straddle_detected &&
+                f2_valid_r &&
+                f2_data_valid) begin
                 // New straddle detected on the current cache line: latch the
                 // first 2 bytes so the next cache line can complete it.
                 remainder_valid_r <= 1'b1;
@@ -1953,8 +2468,9 @@ module fetch_unit
             // redirected to 0x8000239c, but the trailing dead-path straddle
             // left ftq_owner_complete low forever.
             packet_buf_in.ftq_owner_complete =
-                !straddle_detected ||
-                (bp_branch_found && bp_taken && !subgroup_split_before_ctl_c);
+                (!same_ftq_tail_carry_c) &&
+                (!straddle_detected ||
+                 (bp_branch_found && bp_taken && !subgroup_split_before_ctl_c));
             packet_buf_in.ftq_block_pc     = f2_ftq_entry_r.block_pc;
             packet_buf_in.ftq_start_offset = f2_ftq_entry_r.start_offset;
             packet_buf_in.ftq_bp_lookup_pc =
@@ -2052,17 +2568,797 @@ module fetch_unit
         end
     end
 
+`ifdef SIMULATION
+    logic delivery_check_en;
+    logic delivery_strict_en;
+    logic delivery_score_valid_r;
+    logic [FTQ_IDX_BITS-1:0] delivery_score_idx_r;
+    logic [FTQ_EPOCH_BITS-1:0] delivery_score_epoch_r;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] delivery_score_tag_r;
+    logic [63:0] delivery_score_next_pc_r;
+    logic delivery_fire_c;
+    logic delivery_score_owner_match_c;
+    integer delivery_check_owner_switch_count;
+    integer delivery_check_noncontig_count;
+    localparam int DELIVERY_CHECK_PRINT_LIMIT = 16;
+
+    initial begin
+        delivery_check_en = $test$plusargs("FETCH_DELIVERY_CHECK");
+        delivery_strict_en = $test$plusargs("FETCH_DELIVERY_STRICT");
+    end
+
+    assign delivery_fire_c =
+        fetch_packet_out_valid &&
+        fetch_packet_out.valid &&
+        (fetch_packet_out.fetch_count != 3'd0) &&
+        !backend_stall &&
+        !frontend_hold;
+    assign delivery_score_owner_match_c =
+        delivery_score_valid_r &&
+        (fetch_packet_out.ftq_idx == delivery_score_idx_r) &&
+        (fetch_packet_out.ftq_epoch == delivery_score_epoch_r) &&
+        (fetch_packet_out.ftq_alloc_tag == delivery_score_tag_r);
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            delivery_score_valid_r   <= 1'b0;
+            delivery_score_idx_r     <= '0;
+            delivery_score_epoch_r   <= '0;
+            delivery_score_tag_r     <= '0;
+            delivery_score_next_pc_r <= '0;
+            delivery_check_owner_switch_count <= 0;
+            delivery_check_noncontig_count <= 0;
+        end else if (redirect_valid) begin
+            delivery_score_valid_r   <= 1'b0;
+            delivery_score_idx_r     <= '0;
+            delivery_score_epoch_r   <= '0;
+            delivery_score_tag_r     <= '0;
+            delivery_score_next_pc_r <= '0;
+        end else if (delivery_check_en && delivery_fire_c) begin
+            automatic logic [63:0] expected_pc;
+            automatic logic packet_redirect_taken;
+            automatic logic [63:0] packet_redirect_target;
+
+            if (delivery_score_valid_r && !delivery_score_owner_match_c) begin
+                if (delivery_check_owner_switch_count <
+                    DELIVERY_CHECK_PRINT_LIMIT) begin
+                    $display("[FETCH_DELIVERY_CHECK] owner switched before complete old_idx=%0d old_tag=%0d old_next=%016h new_idx=%0d new_tag=%0d new_pc0=%016h",
+                             delivery_score_idx_r,
+                             delivery_score_tag_r,
+                             delivery_score_next_pc_r,
+                             fetch_packet_out.ftq_idx,
+                             fetch_packet_out.ftq_alloc_tag,
+                             fetch_packet_out.fetch_pc[0]);
+                end
+                delivery_check_owner_switch_count <=
+                    delivery_check_owner_switch_count + 1;
+                if (delivery_strict_en)
+                    $fatal(1, "fetch delivery owner switched before completion");
+            end
+
+            expected_pc = delivery_score_owner_match_c
+                ? delivery_score_next_pc_r
+                : (fetch_packet_out.ftq_block_pc +
+                   64'(fetch_packet_out.ftq_start_offset));
+            packet_redirect_taken = 1'b0;
+            packet_redirect_target = '0;
+
+            if (fetch_packet_out.pd_ctl_valid &&
+                (fetch_packet_out.pd_ctl_slot <
+                 fetch_packet_out.fetch_count)) begin
+                case (fetch_packet_out.pd_ctl_type)
+                    BT_COND: begin
+                        if (fetch_packet_out.ftq_pred_valid &&
+                            fetch_packet_out.ftq_pred_taken &&
+                            (fetch_packet_out.ftq_pred_target ==
+                             fetch_packet_out.pd_ctl_target)) begin
+                            packet_redirect_taken = 1'b1;
+                            packet_redirect_target =
+                                fetch_packet_out.pd_ctl_target;
+                        end
+                    end
+                    BT_JAL,
+                    BT_JALR,
+                    BT_CALL,
+                    BT_RET: begin
+                        packet_redirect_taken = 1'b1;
+                        packet_redirect_target =
+                            fetch_packet_out.pd_ctl_target;
+                    end
+                    default: begin
+                    end
+                endcase
+            end
+
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (i < int'(fetch_packet_out.fetch_count)) begin
+                    if (fetch_packet_out.fetch_pc[i] != expected_pc) begin
+                        if (delivery_check_noncontig_count <
+                            DELIVERY_CHECK_PRINT_LIMIT) begin
+                            $display("[FETCH_DELIVERY_CHECK] non-contiguous owner stream idx=%0d tag=%0d slot=%0d expected=%016h got=%016h count=%0d complete=%b bypass=%b deq=%b",
+                                     fetch_packet_out.ftq_idx,
+                                     fetch_packet_out.ftq_alloc_tag,
+                                     i,
+                                     expected_pc,
+                                     fetch_packet_out.fetch_pc[i],
+                                     fetch_packet_out.fetch_count,
+                                     fetch_packet_out.ftq_owner_complete,
+                                     packet_bypass_valid,
+                                     packet_buf_deq);
+                        end
+                        delivery_check_noncontig_count <=
+                            delivery_check_noncontig_count + 1;
+                        if (delivery_strict_en)
+                            $fatal(1, "fetch delivery PC stream is non-contiguous");
+                    end
+                    if (fetch_packet_out.fetch_bp_taken[i]) begin
+                        expected_pc = fetch_packet_out.fetch_bp_target[i];
+                    end else begin
+                        expected_pc = fetch_packet_out.fetch_pc[i] +
+                            (fetch_packet_out.fetch_is_rvc[i] ? 64'd2 : 64'd4);
+                    end
+                end
+            end
+            if (packet_redirect_taken) begin
+                expected_pc = packet_redirect_target;
+            end
+
+            if (fetch_packet_out.ftq_owner_complete) begin
+                delivery_score_valid_r   <= 1'b0;
+                delivery_score_idx_r     <= '0;
+                delivery_score_epoch_r   <= '0;
+                delivery_score_tag_r     <= '0;
+                delivery_score_next_pc_r <= '0;
+            end else begin
+                delivery_score_valid_r   <= 1'b1;
+                delivery_score_idx_r     <= fetch_packet_out.ftq_idx;
+                delivery_score_epoch_r   <= fetch_packet_out.ftq_epoch;
+                delivery_score_tag_r     <= fetch_packet_out.ftq_alloc_tag;
+                delivery_score_next_pc_r <= expected_pc;
+            end
+        end
+    end
+
+    final begin
+        if (delivery_check_en) begin
+            $display("");
+            $display("=== FETCH DELIVERY CHECK ===");
+            $display("strict mode                  : %0d", delivery_strict_en);
+            $display("owner switch before complete : %0d",
+                     delivery_check_owner_switch_count);
+            $display("non-contiguous packet PCs    : %0d",
+                     delivery_check_noncontig_count);
+        end
+    end
+
+    // XiangShan-style catch-up opportunity probe.  This is observation-only:
+    // it counts cycles where F2 is suppressing an already emitted packet while
+    // F1 already names the next packet, the next line is present in the NLPB,
+    // and an independent F1 BTB lookup can name the predicted redirect target.
+    logic xs_catchup_probe_en;
+    logic xs_catchup_trace_en;
+    logic xs_catchup_base_c;
+    logic xs_catchup_fetch0_c;
+    logic xs_catchup_crossline_c;
+    logic xs_catchup_nlpb_c;
+    logic xs_catchup_aux_taken_c;
+    logic xs_catchup_recoverable_c;
+    logic xs_catchup_target_last_c;
+
+    integer xs_catchup_base_cycles;
+    integer xs_catchup_fetch0_cycles;
+    integer xs_catchup_crossline_cycles;
+    integer xs_catchup_nlpb_cycles;
+    integer xs_catchup_aux_taken_cycles;
+    integer xs_catchup_recoverable_cycles;
+    integer xs_catchup_target_last_cycles;
+    integer xs_catchup_ret_cycles;
+    integer xs_same_ftq_tail_bypass_cycles;
+    integer xs_packet_buf_stale_owner_cycles;
+    integer xs_same_line_lookahead_cycles;
+    integer xs_seq_lookahead_cycles;
+    integer xs_ftq_empty_cycles;
+    integer xs_ftq_full_cycles;
+    integer xs_ftq_occ_sum;
+    integer xs_ftq_occ_max;
+    integer xs_ftq_occ_hist [0:5];
+    integer xs_packet_buf_empty_cycles;
+    integer xs_packet_buf_full_cycles;
+    integer xs_packet_buf_occ_sum;
+    integer xs_packet_buf_occ_max;
+    integer xs_packet_buf_occ_hist [0:4];
+    integer xs_ftq_alloc_cycles;
+    integer xs_ftq_pop_cycles;
+    integer xs_ftq_alloc_pop_cycles;
+    integer xs_ic_req_valid_cycles;
+    integer xs_ic_req_stall_frontend_hold_cycles;
+    integer xs_ic_req_stall_packet_full_cycles;
+    integer xs_ic_req_stall_ftq_full_cycles;
+    integer xs_backend_stall_cycles;
+    integer xs_backend_stall_packet_ready_cycles;
+    integer xs_frontend_hold_cycles;
+    integer xs_dup_last_emit_cycles;
+    integer xs_dup_replay_guard_cycles;
+    integer xs_dup_both_reasons_cycles;
+    integer xs_f2_owner_no_head_cycles;
+    integer xs_f2_owner_idx_mismatch_cycles;
+    integer xs_f2_owner_epoch_mismatch_cycles;
+    integer xs_f2_owner_tag_mismatch_cycles;
+    integer xs_f2_owner_live_cycles;
+    integer xs_packet_stale_no_head_cycles;
+    integer xs_packet_stale_idx_mismatch_cycles;
+    integer xs_packet_stale_epoch_mismatch_cycles;
+    integer xs_packet_stale_tag_mismatch_cycles;
+    integer xs_bypass_candidate_cycles;
+    integer xs_bypass_owner_miss_cycles;
+    integer xs_bypass_incomplete_owner_cycles;
+    integer xs_bypass_policy_block_cycles;
+    integer xs_bypass_valid_cycles;
+
+    localparam int XS_CATCHUP_TOPN = 8;
+    logic [63:0] xs_catchup_top_pc [0:XS_CATCHUP_TOPN-1];
+    integer xs_catchup_top_count [0:XS_CATCHUP_TOPN-1];
+    logic [63:0] xs_dup_top_pc [0:XS_CATCHUP_TOPN-1];
+    integer xs_dup_top_count [0:XS_CATCHUP_TOPN-1];
+
+    logic xs_dup_last_emit_c;
+    logic xs_dup_replay_guard_c;
+    logic xs_f2_owner_no_head_c;
+    logic xs_f2_owner_idx_mismatch_c;
+    logic xs_f2_owner_epoch_mismatch_c;
+    logic xs_f2_owner_tag_mismatch_c;
+    logic xs_packet_stale_no_head_c;
+    logic xs_packet_stale_idx_mismatch_c;
+    logic xs_packet_stale_epoch_mismatch_c;
+    logic xs_packet_stale_tag_mismatch_c;
+    logic xs_bypass_incomplete_owner_c;
+    logic xs_bypass_policy_block_c;
+
+    initial begin
+        xs_catchup_probe_en = 1'b0;
+        xs_catchup_trace_en = 1'b0;
+        if ($test$plusargs("PERF_PROFILE") ||
+            $test$plusargs("STAT_DUMP") ||
+            $test$plusargs("TRACE_XS_CATCHUP")) begin
+            xs_catchup_probe_en = 1'b1;
+        end
+        if ($test$plusargs("TRACE_XS_CATCHUP"))
+            xs_catchup_trace_en = 1'b1;
+    end
+
+    assign xs_catchup_base_c =
+        f2_duplicate_suppressed_c &&
+        f2_last_emit_hit_c &&
+        f1_valid &&
+        (f1_pc == f2_last_emit_next_pc_r) &&
+        packet_buf_empty &&
+        !redirect_valid &&
+        !backend_stall &&
+        !frontend_hold &&
+        !fe_stall;
+    assign xs_catchup_fetch0_c =
+        xs_catchup_base_c && (fetch_count == 3'd0);
+    assign xs_catchup_crossline_c =
+        xs_catchup_base_c &&
+        (f1_pc[63:LINE_BITS] != f2_pc_r[63:LINE_BITS]);
+    assign xs_catchup_nlpb_c =
+        xs_catchup_base_c && nlpb_aux_hit_comb;
+    assign xs_catchup_aux_taken_c =
+        xs_catchup_base_c &&
+        f1_aux_pred_ctl_valid_c &&
+        f1_aux_pred_ctl_taken_c;
+    assign xs_catchup_recoverable_c =
+        xs_catchup_fetch0_c &&
+        xs_catchup_crossline_c &&
+        nlpb_aux_hit_comb &&
+        f1_aux_pred_ctl_valid_c &&
+        f1_aux_pred_ctl_taken_c;
+    assign xs_catchup_target_last_c =
+        xs_catchup_recoverable_c &&
+        (f1_aux_pred_ctl_target_c == f2_last_emit_pc_r);
+    assign xs_dup_last_emit_c =
+        f2_duplicate_suppressed_c &&
+        f2_last_emit_valid_r &&
+        (f2_last_emit_pc_r == f2_pc_r);
+    assign xs_dup_replay_guard_c =
+        f2_duplicate_suppressed_c &&
+        f2_replay_block_hit_c;
+    assign xs_f2_owner_no_head_c =
+        f2_ftq_valid_r && !ftq_head_valid;
+    assign xs_f2_owner_idx_mismatch_c =
+        f2_ftq_valid_r && ftq_head_valid &&
+        (f2_ftq_idx_r != ftq_head_idx);
+    assign xs_f2_owner_epoch_mismatch_c =
+        f2_ftq_valid_r && ftq_head_valid &&
+        (f2_ftq_idx_r == ftq_head_idx) &&
+        (f2_ftq_epoch_r != ftq_current_epoch);
+    assign xs_f2_owner_tag_mismatch_c =
+        f2_ftq_valid_r && ftq_head_valid &&
+        (f2_ftq_idx_r == ftq_head_idx) &&
+        (f2_ftq_epoch_r == ftq_current_epoch) &&
+        (f2_ftq_alloc_tag_r != ftq_head_tag);
+    assign xs_packet_stale_no_head_c =
+        packet_buf_valid && packet_buf_head.valid && !ftq_commit_head_valid;
+    assign xs_packet_stale_idx_mismatch_c =
+        packet_buf_valid && packet_buf_head.valid && ftq_commit_head_valid &&
+        (packet_buf_head.ftq_idx != ftq_commit_head_idx);
+    assign xs_packet_stale_epoch_mismatch_c =
+        packet_buf_valid && packet_buf_head.valid && ftq_commit_head_valid &&
+        (packet_buf_head.ftq_idx == ftq_commit_head_idx) &&
+        (packet_buf_head.ftq_epoch != ftq_current_epoch);
+    assign xs_packet_stale_tag_mismatch_c =
+        packet_buf_valid && packet_buf_head.valid && ftq_commit_head_valid &&
+        (packet_buf_head.ftq_idx == ftq_commit_head_idx) &&
+        (packet_buf_head.ftq_epoch == ftq_current_epoch) &&
+        (packet_buf_head.ftq_alloc_tag != ftq_commit_head_tag);
+    assign xs_bypass_incomplete_owner_c =
+        packet_bypass_owner_match_c &&
+        !(packet_buf_in.ftq_owner_complete || packet_bypass_tail_carry_c);
+    assign xs_bypass_policy_block_c =
+        packet_bypass_owner_match_c &&
+        (packet_buf_in.ftq_owner_complete || packet_bypass_tail_carry_c) &&
+        !packet_bypass_policy_ok;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            xs_catchup_base_cycles        <= 0;
+            xs_catchup_fetch0_cycles      <= 0;
+            xs_catchup_crossline_cycles   <= 0;
+            xs_catchup_nlpb_cycles        <= 0;
+            xs_catchup_aux_taken_cycles   <= 0;
+            xs_catchup_recoverable_cycles <= 0;
+            xs_catchup_target_last_cycles <= 0;
+            xs_catchup_ret_cycles         <= 0;
+            xs_same_ftq_tail_bypass_cycles <= 0;
+            xs_packet_buf_stale_owner_cycles <= 0;
+            xs_same_line_lookahead_cycles <= 0;
+            xs_seq_lookahead_cycles       <= 0;
+            xs_ftq_empty_cycles           <= 0;
+            xs_ftq_full_cycles            <= 0;
+            xs_ftq_occ_sum                <= 0;
+            xs_ftq_occ_max                <= 0;
+            xs_packet_buf_empty_cycles    <= 0;
+            xs_packet_buf_full_cycles     <= 0;
+            xs_packet_buf_occ_sum         <= 0;
+            xs_packet_buf_occ_max         <= 0;
+            xs_ftq_alloc_cycles           <= 0;
+            xs_ftq_pop_cycles             <= 0;
+            xs_ftq_alloc_pop_cycles       <= 0;
+            xs_ic_req_valid_cycles        <= 0;
+            xs_ic_req_stall_frontend_hold_cycles <= 0;
+            xs_ic_req_stall_packet_full_cycles   <= 0;
+            xs_ic_req_stall_ftq_full_cycles      <= 0;
+            xs_backend_stall_cycles       <= 0;
+            xs_backend_stall_packet_ready_cycles <= 0;
+            xs_frontend_hold_cycles       <= 0;
+            xs_dup_last_emit_cycles       <= 0;
+            xs_dup_replay_guard_cycles    <= 0;
+            xs_dup_both_reasons_cycles    <= 0;
+            xs_f2_owner_no_head_cycles    <= 0;
+            xs_f2_owner_idx_mismatch_cycles <= 0;
+            xs_f2_owner_epoch_mismatch_cycles <= 0;
+            xs_f2_owner_tag_mismatch_cycles <= 0;
+            xs_f2_owner_live_cycles       <= 0;
+            xs_packet_stale_no_head_cycles <= 0;
+            xs_packet_stale_idx_mismatch_cycles <= 0;
+            xs_packet_stale_epoch_mismatch_cycles <= 0;
+            xs_packet_stale_tag_mismatch_cycles <= 0;
+            xs_bypass_candidate_cycles    <= 0;
+            xs_bypass_owner_miss_cycles   <= 0;
+            xs_bypass_incomplete_owner_cycles <= 0;
+            xs_bypass_policy_block_cycles <= 0;
+            xs_bypass_valid_cycles        <= 0;
+            for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                xs_catchup_top_pc[i]    <= 64'd0;
+                xs_catchup_top_count[i] <= 0;
+                xs_dup_top_pc[i]        <= 64'd0;
+                xs_dup_top_count[i]     <= 0;
+            end
+            for (int i = 0; i < 6; i++) begin
+                xs_ftq_occ_hist[i] <= 0;
+            end
+            for (int i = 0; i < 5; i++) begin
+                xs_packet_buf_occ_hist[i] <= 0;
+            end
+        end else if (xs_catchup_probe_en) begin
+            if (ftq_empty)
+                xs_ftq_empty_cycles <= xs_ftq_empty_cycles + 1;
+            if (ftq_full)
+                xs_ftq_full_cycles <= xs_ftq_full_cycles + 1;
+            xs_ftq_occ_sum <= xs_ftq_occ_sum + int'(ftq_count);
+            if (int'(ftq_count) > xs_ftq_occ_max)
+                xs_ftq_occ_max <= int'(ftq_count);
+            if (ftq_count == '0)
+                xs_ftq_occ_hist[0] <= xs_ftq_occ_hist[0] + 1;
+            else if (ftq_count == (FTQ_IDX_BITS+1)'(1))
+                xs_ftq_occ_hist[1] <= xs_ftq_occ_hist[1] + 1;
+            else if (ftq_count <= (FTQ_IDX_BITS+1)'(3))
+                xs_ftq_occ_hist[2] <= xs_ftq_occ_hist[2] + 1;
+            else if (ftq_count <= (FTQ_IDX_BITS+1)'(7))
+                xs_ftq_occ_hist[3] <= xs_ftq_occ_hist[3] + 1;
+            else if (ftq_count <= (FTQ_IDX_BITS+1)'(15))
+                xs_ftq_occ_hist[4] <= xs_ftq_occ_hist[4] + 1;
+            else
+                xs_ftq_occ_hist[5] <= xs_ftq_occ_hist[5] + 1;
+
+            if (packet_buf_empty)
+                xs_packet_buf_empty_cycles <= xs_packet_buf_empty_cycles + 1;
+            if (packet_buf_full)
+                xs_packet_buf_full_cycles <= xs_packet_buf_full_cycles + 1;
+            xs_packet_buf_occ_sum <=
+                xs_packet_buf_occ_sum + int'(packet_buf_count);
+            if (int'(packet_buf_count) > xs_packet_buf_occ_max)
+                xs_packet_buf_occ_max <= int'(packet_buf_count);
+            if (packet_buf_count == 4'd0)
+                xs_packet_buf_occ_hist[0] <= xs_packet_buf_occ_hist[0] + 1;
+            else if (packet_buf_count == 4'd1)
+                xs_packet_buf_occ_hist[1] <= xs_packet_buf_occ_hist[1] + 1;
+            else if (packet_buf_count <= 4'd3)
+                xs_packet_buf_occ_hist[2] <= xs_packet_buf_occ_hist[2] + 1;
+            else if (packet_buf_count <= 4'd7)
+                xs_packet_buf_occ_hist[3] <= xs_packet_buf_occ_hist[3] + 1;
+            else
+                xs_packet_buf_occ_hist[4] <= xs_packet_buf_occ_hist[4] + 1;
+
+            if (ftq_enq_valid)
+                xs_ftq_alloc_cycles <= xs_ftq_alloc_cycles + 1;
+            if (ftq_pop_valid)
+                xs_ftq_pop_cycles <= xs_ftq_pop_cycles + 1;
+            if (ftq_enq_valid && ftq_pop_valid)
+                xs_ftq_alloc_pop_cycles <= xs_ftq_alloc_pop_cycles + 1;
+            if (ic_req_valid)
+                xs_ic_req_valid_cycles <= xs_ic_req_valid_cycles + 1;
+            if (f1_valid && frontend_hold)
+                xs_ic_req_stall_frontend_hold_cycles <=
+                    xs_ic_req_stall_frontend_hold_cycles + 1;
+            if (f1_valid && packet_buf_full)
+                xs_ic_req_stall_packet_full_cycles <=
+                    xs_ic_req_stall_packet_full_cycles + 1;
+            if (f1_valid && ftq_full && ftq_need_alloc_c)
+                xs_ic_req_stall_ftq_full_cycles <=
+                    xs_ic_req_stall_ftq_full_cycles + 1;
+            if (backend_stall)
+                xs_backend_stall_cycles <= xs_backend_stall_cycles + 1;
+            if (backend_stall && (packet_buf_valid || packet_bypass_valid))
+                xs_backend_stall_packet_ready_cycles <=
+                    xs_backend_stall_packet_ready_cycles + 1;
+            if (frontend_hold)
+                xs_frontend_hold_cycles <= xs_frontend_hold_cycles + 1;
+
+            if (xs_dup_last_emit_c)
+                xs_dup_last_emit_cycles <= xs_dup_last_emit_cycles + 1;
+            if (f2_duplicate_suppressed_c) begin : xs_dup_top_update
+                int hit_idx;
+                int empty_idx;
+                int min_idx;
+                int use_idx;
+                int min_count;
+
+                hit_idx = -1;
+                empty_idx = -1;
+                min_idx = 0;
+                use_idx = -1;
+                min_count = xs_dup_top_count[0];
+                for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                    if ((xs_dup_top_count[i] != 0) &&
+                        (xs_dup_top_pc[i] == f2_pc_r) &&
+                        (hit_idx < 0)) begin
+                        hit_idx = i;
+                    end
+                    if ((xs_dup_top_count[i] == 0) &&
+                        (empty_idx < 0)) begin
+                        empty_idx = i;
+                    end
+                    if (xs_dup_top_count[i] < min_count) begin
+                        min_count = xs_dup_top_count[i];
+                        min_idx = i;
+                    end
+                end
+                if (hit_idx >= 0)
+                    use_idx = hit_idx;
+                else if (empty_idx >= 0)
+                    use_idx = empty_idx;
+                else
+                    use_idx = min_idx;
+
+                xs_dup_top_pc[use_idx] <= f2_pc_r;
+                if (hit_idx >= 0)
+                    xs_dup_top_count[use_idx] <=
+                        xs_dup_top_count[use_idx] + 1;
+                else
+                    xs_dup_top_count[use_idx] <= 1;
+            end
+            if (xs_dup_replay_guard_c)
+                xs_dup_replay_guard_cycles <= xs_dup_replay_guard_cycles + 1;
+            if (xs_dup_last_emit_c && xs_dup_replay_guard_c)
+                xs_dup_both_reasons_cycles <= xs_dup_both_reasons_cycles + 1;
+            if (xs_f2_owner_no_head_c)
+                xs_f2_owner_no_head_cycles <= xs_f2_owner_no_head_cycles + 1;
+            if (xs_f2_owner_idx_mismatch_c)
+                xs_f2_owner_idx_mismatch_cycles <=
+                    xs_f2_owner_idx_mismatch_cycles + 1;
+            if (xs_f2_owner_epoch_mismatch_c)
+                xs_f2_owner_epoch_mismatch_cycles <=
+                    xs_f2_owner_epoch_mismatch_cycles + 1;
+            if (xs_f2_owner_tag_mismatch_c)
+                xs_f2_owner_tag_mismatch_cycles <=
+                    xs_f2_owner_tag_mismatch_cycles + 1;
+            if (f2_ftq_owner_live_c)
+                xs_f2_owner_live_cycles <= xs_f2_owner_live_cycles + 1;
+            if (xs_packet_stale_no_head_c)
+                xs_packet_stale_no_head_cycles <=
+                    xs_packet_stale_no_head_cycles + 1;
+            if (xs_packet_stale_idx_mismatch_c)
+                xs_packet_stale_idx_mismatch_cycles <=
+                    xs_packet_stale_idx_mismatch_cycles + 1;
+            if (xs_packet_stale_epoch_mismatch_c)
+                xs_packet_stale_epoch_mismatch_cycles <=
+                    xs_packet_stale_epoch_mismatch_cycles + 1;
+            if (xs_packet_stale_tag_mismatch_c)
+                xs_packet_stale_tag_mismatch_cycles <=
+                    xs_packet_stale_tag_mismatch_cycles + 1;
+            if (packet_bypass_candidate)
+                xs_bypass_candidate_cycles <= xs_bypass_candidate_cycles + 1;
+            if (packet_bypass_candidate && !packet_bypass_owner_match_c)
+                xs_bypass_owner_miss_cycles <= xs_bypass_owner_miss_cycles + 1;
+            if (xs_bypass_incomplete_owner_c)
+                xs_bypass_incomplete_owner_cycles <=
+                    xs_bypass_incomplete_owner_cycles + 1;
+            if (xs_bypass_policy_block_c)
+                xs_bypass_policy_block_cycles <=
+                    xs_bypass_policy_block_cycles + 1;
+            if (packet_bypass_valid)
+                xs_bypass_valid_cycles <= xs_bypass_valid_cycles + 1;
+
+            if (xs_catchup_base_c)
+                xs_catchup_base_cycles <= xs_catchup_base_cycles + 1;
+            if (xs_catchup_fetch0_c)
+                xs_catchup_fetch0_cycles <= xs_catchup_fetch0_cycles + 1;
+            if (xs_catchup_crossline_c)
+                xs_catchup_crossline_cycles <=
+                    xs_catchup_crossline_cycles + 1;
+            if (xs_catchup_nlpb_c)
+                xs_catchup_nlpb_cycles <= xs_catchup_nlpb_cycles + 1;
+            if (xs_catchup_aux_taken_c)
+                xs_catchup_aux_taken_cycles <=
+                    xs_catchup_aux_taken_cycles + 1;
+            if (xs_catchup_recoverable_c) begin
+                xs_catchup_recoverable_cycles <=
+                    xs_catchup_recoverable_cycles + 1;
+                if (f1_aux_pred_ctl_type_c == BT_RET)
+                    xs_catchup_ret_cycles <= xs_catchup_ret_cycles + 1;
+                begin : xs_catchup_top_update
+                    int hit_idx;
+                    int empty_idx;
+                    int min_idx;
+                    int use_idx;
+                    int min_count;
+
+                    hit_idx = -1;
+                    empty_idx = -1;
+                    min_idx = 0;
+                    use_idx = -1;
+                    min_count = xs_catchup_top_count[0];
+                    for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                        if ((xs_catchup_top_count[i] != 0) &&
+                            (xs_catchup_top_pc[i] == f1_pc) &&
+                            (hit_idx < 0)) begin
+                            hit_idx = i;
+                        end
+                        if ((xs_catchup_top_count[i] == 0) &&
+                            (empty_idx < 0)) begin
+                            empty_idx = i;
+                        end
+                        if (xs_catchup_top_count[i] < min_count) begin
+                            min_count = xs_catchup_top_count[i];
+                            min_idx = i;
+                        end
+                    end
+                    if (hit_idx >= 0)
+                        use_idx = hit_idx;
+                    else if (empty_idx >= 0)
+                        use_idx = empty_idx;
+                    else
+                        use_idx = min_idx;
+
+                    xs_catchup_top_pc[use_idx] <= f1_pc;
+                    if (hit_idx >= 0)
+                        xs_catchup_top_count[use_idx] <=
+                            xs_catchup_top_count[use_idx] + 1;
+                    else
+                        xs_catchup_top_count[use_idx] <= 1;
+                end
+            end
+            if (xs_catchup_target_last_c) begin
+                xs_catchup_target_last_cycles <=
+                    xs_catchup_target_last_cycles + 1;
+            end
+            if (packet_bypass_tail_carry_c)
+                xs_same_ftq_tail_bypass_cycles <=
+                    xs_same_ftq_tail_bypass_cycles + 1;
+            if (packet_buf_stale_owner_c)
+                xs_packet_buf_stale_owner_cycles <=
+                    xs_packet_buf_stale_owner_cycles + 1;
+            if (xs_seq_lookahead_c)
+                xs_seq_lookahead_cycles <= xs_seq_lookahead_cycles + 1;
+            if (xs_same_line_lookahead_c)
+                xs_same_line_lookahead_cycles <=
+                    xs_same_line_lookahead_cycles + 1;
+
+            if (xs_catchup_trace_en && xs_catchup_base_c) begin
+                $display("[XS_CATCHUP] pc=%016h f2_pc=%016h last_next=%016h fetch0=%b cross=%b nlpb=%b aux_v=%b aux_t=%b aux_type=%0d aux_tgt=%016h target_last=%b",
+                         f1_pc,
+                         f2_pc_r,
+                         f2_last_emit_next_pc_r,
+                         xs_catchup_fetch0_c,
+                         xs_catchup_crossline_c,
+                         nlpb_aux_hit_comb,
+                         f1_aux_pred_ctl_valid_c,
+                         f1_aux_pred_ctl_taken_c,
+                         f1_aux_pred_ctl_type_c,
+                         f1_aux_pred_ctl_target_c,
+                         xs_catchup_target_last_c);
+            end
+        end
+    end
+
+    final begin
+        if (xs_catchup_probe_en) begin
+            $display("");
+            $display("=== XS NLPB CATCH-UP PROBE ===");
+            $display("base duplicate cycles       : %0d",
+                     xs_catchup_base_cycles);
+            $display("base with fetch_out=0       : %0d",
+                     xs_catchup_fetch0_cycles);
+            $display("base cross-line             : %0d",
+                     xs_catchup_crossline_cycles);
+            $display("base with NLPB aux hit      : %0d",
+                     xs_catchup_nlpb_cycles);
+            $display("base with aux taken predict : %0d",
+                     xs_catchup_aux_taken_cycles);
+            $display("recoverable cross-line      : %0d",
+                     xs_catchup_recoverable_cycles);
+            $display("recoverable target=last pc  : %0d",
+                     xs_catchup_target_last_cycles);
+            $display("recoverable RET cycles      : %0d",
+                     xs_catchup_ret_cycles);
+            $display("xs same-ftq tail bypass     : %0d",
+                     xs_same_ftq_tail_bypass_cycles);
+            $display("xs packet-buffer stale owner: %0d",
+                     xs_packet_buf_stale_owner_cycles);
+            $display("xs same-line lookahead fires: %0d",
+                     xs_same_line_lookahead_cycles);
+            $display("xs seq-lookahead fires      : %0d",
+                     xs_seq_lookahead_cycles);
+            $display("xs ftq empty cycles         : %0d",
+                     xs_ftq_empty_cycles);
+            $display("xs ftq full cycles          : %0d",
+                     xs_ftq_full_cycles);
+            $display("xs ftq occ sum              : %0d",
+                     xs_ftq_occ_sum);
+            $display("xs ftq occ max              : %0d",
+                     xs_ftq_occ_max);
+            $display("xs ftq occ hist 0           : %0d",
+                     xs_ftq_occ_hist[0]);
+            $display("xs ftq occ hist 1           : %0d",
+                     xs_ftq_occ_hist[1]);
+            $display("xs ftq occ hist 2to3        : %0d",
+                     xs_ftq_occ_hist[2]);
+            $display("xs ftq occ hist 4to7        : %0d",
+                     xs_ftq_occ_hist[3]);
+            $display("xs ftq occ hist 8to15       : %0d",
+                     xs_ftq_occ_hist[4]);
+            $display("xs ftq occ hist 16plus      : %0d",
+                     xs_ftq_occ_hist[5]);
+            $display("xs packet buf empty cycles  : %0d",
+                     xs_packet_buf_empty_cycles);
+            $display("xs packet buf full cycles   : %0d",
+                     xs_packet_buf_full_cycles);
+            $display("xs packet buf occ sum       : %0d",
+                     xs_packet_buf_occ_sum);
+            $display("xs packet buf occ max       : %0d",
+                     xs_packet_buf_occ_max);
+            $display("xs packet buf occ hist 0    : %0d",
+                     xs_packet_buf_occ_hist[0]);
+            $display("xs packet buf occ hist 1    : %0d",
+                     xs_packet_buf_occ_hist[1]);
+            $display("xs packet buf occ hist 2to3 : %0d",
+                     xs_packet_buf_occ_hist[2]);
+            $display("xs packet buf occ hist 4to7 : %0d",
+                     xs_packet_buf_occ_hist[3]);
+            $display("xs packet buf occ hist 8    : %0d",
+                     xs_packet_buf_occ_hist[4]);
+            $display("xs ftq alloc cycles         : %0d",
+                     xs_ftq_alloc_cycles);
+            $display("xs ftq pop cycles           : %0d",
+                     xs_ftq_pop_cycles);
+            $display("xs ftq alloc pop cycles     : %0d",
+                     xs_ftq_alloc_pop_cycles);
+            $display("xs ic req valid cycles      : %0d",
+                     xs_ic_req_valid_cycles);
+            $display("xs ic stall frontend hold   : %0d",
+                     xs_ic_req_stall_frontend_hold_cycles);
+            $display("xs ic stall packet full     : %0d",
+                     xs_ic_req_stall_packet_full_cycles);
+            $display("xs ic stall ftq full        : %0d",
+                     xs_ic_req_stall_ftq_full_cycles);
+            $display("xs backend stall cycles     : %0d",
+                     xs_backend_stall_cycles);
+            $display("xs backend stall pkt ready  : %0d",
+                     xs_backend_stall_packet_ready_cycles);
+            $display("xs frontend hold cycles     : %0d",
+                     xs_frontend_hold_cycles);
+            $display("xs dup last emit            : %0d",
+                     xs_dup_last_emit_cycles);
+            $display("xs dup replay guard         : %0d",
+                     xs_dup_replay_guard_cycles);
+            $display("xs dup both reasons         : %0d",
+                     xs_dup_both_reasons_cycles);
+            $display("xs f2 owner live            : %0d",
+                     xs_f2_owner_live_cycles);
+            $display("xs f2 owner no head         : %0d",
+                     xs_f2_owner_no_head_cycles);
+            $display("xs f2 owner idx mismatch    : %0d",
+                     xs_f2_owner_idx_mismatch_cycles);
+            $display("xs f2 owner epoch mismatch  : %0d",
+                     xs_f2_owner_epoch_mismatch_cycles);
+            $display("xs f2 owner tag mismatch    : %0d",
+                     xs_f2_owner_tag_mismatch_cycles);
+            $display("xs packet stale no head     : %0d",
+                     xs_packet_stale_no_head_cycles);
+            $display("xs packet stale idx mismatch: %0d",
+                     xs_packet_stale_idx_mismatch_cycles);
+            $display("xs packet stale epoch mismatch: %0d",
+                     xs_packet_stale_epoch_mismatch_cycles);
+            $display("xs packet stale tag mismatch: %0d",
+                     xs_packet_stale_tag_mismatch_cycles);
+            $display("xs bypass candidate         : %0d",
+                     xs_bypass_candidate_cycles);
+            $display("xs bypass owner miss        : %0d",
+                     xs_bypass_owner_miss_cycles);
+            $display("xs bypass incomplete owner  : %0d",
+                     xs_bypass_incomplete_owner_cycles);
+            $display("xs bypass policy block      : %0d",
+                     xs_bypass_policy_block_cycles);
+            $display("xs bypass valid             : %0d",
+                     xs_bypass_valid_cycles);
+            $display("recoverable top F1 PCs:");
+            for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                if (xs_catchup_top_count[i] != 0) begin
+                    $display("  %016h %0d",
+                             xs_catchup_top_pc[i],
+                             xs_catchup_top_count[i]);
+                end
+            end
+            $display("duplicate-suppressed top F2 PCs:");
+            for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                if (xs_dup_top_count[i] != 0) begin
+                    $display("  %016h %0d",
+                             xs_dup_top_pc[i],
+                             xs_dup_top_count[i]);
+                end
+            end
+        end
+    end
+`endif
+
     // =========================================================================
     // Optional fetch-path trace (debug only)
     // =========================================================================
     logic trace_fetch_en;
     logic trace_fetch_split_en;
+    logic trace_fetch_dup_en;
+    logic trace_xs_tail_en;
     integer trace_fetch_cycle;
     initial begin
         trace_fetch_en = 1'b0;
         trace_fetch_split_en = 1'b0;
+        trace_fetch_dup_en = 1'b0;
+        trace_xs_tail_en = 1'b0;
         if ($test$plusargs("TRACE_FETCH")) trace_fetch_en = 1'b1;
         if ($test$plusargs("TRACE_FETCH_SPLIT")) trace_fetch_split_en = 1'b1;
+        if ($test$plusargs("FETCH_DUP_TRACE")) trace_fetch_dup_en = 1'b1;
+        if ($test$plusargs("TRACE_XS_TAIL")) trace_xs_tail_en = 1'b1;
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -2078,12 +3374,16 @@ module fetch_unit
                   (f1_pc <  64'h0000_0000_8000_2560)) ||
                  ((f1_pc >= 64'h0000_0000_8000_3100) &&
                   (f1_pc <  64'h0000_0000_8000_3400)) ||
+                 ((f1_pc >= 64'h0000_0000_8000_39f0) &&
+                  (f1_pc <  64'h0000_0000_8000_3a80)) ||
                  ((f2_pc_r >= 64'h0000_0000_8000_2000) &&
                   (f2_pc_r <  64'h0000_0000_8000_2470)) ||
                  ((f2_pc_r >= 64'h0000_0000_8000_2500) &&
                   (f2_pc_r <  64'h0000_0000_8000_2560)) ||
                  ((f2_pc_r >= 64'h0000_0000_8000_3100) &&
-                  (f2_pc_r <  64'h0000_0000_8000_3400)))) begin
+                  (f2_pc_r <  64'h0000_0000_8000_3400)) ||
+                 ((f2_pc_r >= 64'h0000_0000_8000_39f0) &&
+                  (f2_pc_r <  64'h0000_0000_8000_3a80)))) begin
                 $display("[FETCH] cyc=%0d f1_pc=%016h ic_req_v=%b ic_req=%016h ic_resp_v=%b ic_hit=%b nlpb_hit=%b f2_v=%b f2_pc=%016h f2_hit=%b f2_type=%0d f2_off=%0d f2_alt_hit=%b f2_alt_type=%0d f2_alt_off=%0d ext=%0d final=%0d emit=%b dup=%b seq_v=%b seq_pc=%016h slh=%b sl_ctl=%b bp=%b bp_taken=%b bp_type=%0d bp_slot=%0d bp_tgt=%016h pd_v=%b pd_slot=%0d pd_type=%0d pd_tgt=%016h ftq_pred_v=%b ftq_pred_t=%b ftq_pred_slot=%0d ftq_pred_type=%0d ftq_sub=%b pd_mm=%b sg_v=%b sg_pc=%016h sg_t=%b sg_parent=%016h sg_owner=%016h ras_tos=%0d ras_push=%b ras_push_addr=%016h ras_pop=%b ras_pop_addr=%016h redir=%b redir_pc=%016h cmt_redir=%b cmt_pc=%016h rem_v=%b cons_rem=%b consd_rem=%b ftq_need=%b ftq_enq=%b ftq_enq_tag=%0d ftq_pop=%b ftq_cnt=%0d ftq_head_v=%b ftq_head=%0d ftq_head_tag=%0d f2_ftq_v=%b f2_ftq=%0d f2_ftq_tag=%0d f2_ftq_blk=%016h pkt_live=%b pkt_ftq_tag=%0d fe_hold=%b fe_stall=%b fetch_out=%0d",
                     trace_fetch_cycle,
                     f1_pc,
@@ -2103,9 +3403,7 @@ module fetch_unit
                     extract_count,
                     final_count,
                     f2_will_emit_c,
-                    ((f2_last_emit_valid_r &&
-                      (f2_last_emit_pc_r == f2_pc_r)) ||
-                     f2_replay_block_hit_c),
+                    f2_duplicate_suppressed_c,
                     f2_seq_valid,
                     f2_seq_next_pc,
                     same_line_handoff_c,
@@ -2159,6 +3457,120 @@ module fetch_unit
                     frontend_hold,
                     fe_stall,
                     fetch_count);
+            end
+            if (trace_fetch_dup_en &&
+                f2_has_emit_payload_c &&
+                !f2_will_emit_c) begin
+                $display("[FETCH_DUP] cyc=%0d pc=%016h last_v=%b last_pc=%016h last_next=%016h replay_hit=%b replay_pc=%016h replay_age=%0d seq_v=%b seq=%016h ext=%0d final=%0d f2_ftq_v=%b f2_ftq=%0d f2_tag=%0d block=%016h pred_v=%b pred_t=%b pred_off=%0d pred_type=%0d pred_target=%016h pd_v=%b pd_slot=%0d pd_type=%0d pd_target=%016h bp=%b bp_taken=%b bp_slot=%0d bp_type=%0d bp_target=%016h same_tail=%b same_handoff=%b rem_v=%b straddle=%b fe_stall=%b fe_hold=%b pkt_v=%b pkt_tag=%0d ftq_head_v=%b ftq_head=%0d ftq_head_tag=%0d ftq_cnt=%0d fetch_out=%0d out_pc0=%016h out_pc1=%016h out_pc2=%016h out_pc3=%016h",
+                    trace_fetch_cycle,
+                    f2_pc_r,
+                    f2_last_emit_valid_r,
+                    f2_last_emit_pc_r,
+                    f2_last_emit_next_pc_r,
+                    f2_replay_block_hit_c,
+                    f2_replay_block_pc_r,
+                    f2_replay_block_age_r,
+                    f2_seq_valid,
+                    f2_seq_next_pc,
+                    extract_count,
+                    final_count,
+                    f2_ftq_valid_r,
+                    f2_ftq_idx_r,
+                    f2_ftq_alloc_tag_r,
+                    f2_ftq_entry_r.block_pc,
+                    f2_ftq_entry_r.pred_ctl_valid,
+                    f2_ftq_entry_r.pred_ctl_taken,
+                    f2_ftq_entry_r.pred_ctl_offset,
+                    f2_ftq_entry_r.pred_ctl_type,
+                    f2_ftq_entry_r.pred_ctl_target,
+                    predecode_ctl_found,
+                    predecode_ctl_slot,
+                    predecode_ctl_type,
+                    predecode_ctl_target,
+                    bp_branch_found,
+                    bp_taken,
+                    bp_branch_slot,
+                    bp_type,
+                    bp_target_addr,
+                    same_ftq_tail_carry_c,
+                    same_line_handoff_c,
+                    remainder_valid_r,
+                    straddle_detected,
+                    fe_stall,
+                    frontend_hold,
+                    packet_buf_valid,
+                    packet_buf_valid ? packet_buf_head.ftq_alloc_tag : '0,
+                    ftq_head_valid,
+                    ftq_head_idx,
+                    ftq_head_tag,
+                    ftq_count,
+                    fetch_count,
+                    fetch_pc[0],
+                    fetch_pc[1],
+                    fetch_pc[2],
+                    fetch_pc[3]);
+            end
+            if (trace_xs_tail_en &&
+                (same_ftq_tail_owner_open_c ||
+                 same_ftq_tail_carry_c ||
+                 ((f2_pc_r >= 64'h0000_0000_8000_36a0) &&
+                  (f2_pc_r <  64'h0000_0000_8000_36f0)) ||
+                 ((fetch_count != 3'd0) &&
+                  (fetch_pc[0] >= 64'h0000_0000_8000_36a0) &&
+                  (fetch_pc[0] <  64'h0000_0000_8000_36f0)))) begin
+                $display("[XS_TAIL] cyc=%0d f1=%016h req=%016h f2=%016h f2_sl=%b data_v=%b ext=%0d final=%0d emit=%b dup=%b last_v=%b last_pc=%016h last_next=%016h seq_v=%b seq=%016h pend=%b open=%b carry=%b bypass=%b tail_bp=%b enq=%b deq=%b pkt_v=%b pkt_empty=%b pkt_full=%b in_done=%b head_done=%b ftq_head_v=%b ftq_head_tag=%0d f2_tag=%0d pred_v=%b pred_t=%b pred_off=%0d pd_v=%b pd_slot=%0d pd_tgt=%016h bp=%b bp_tk=%b bp_tgt=%016h out=%0d out0=%016h out1=%016h out2=%016h out3=%016h in0=%016h in1=%016h in2=%016h in3=%016h head0=%016h head1=%016h head2=%016h head3=%016h",
+                    trace_fetch_cycle,
+                    f1_pc,
+                    ic_req_addr,
+                    f2_pc_r,
+                    f2_same_line_handoff_r,
+                    f2_data_valid,
+                    extract_count,
+                    final_count,
+                    f2_will_emit_c,
+                    f2_duplicate_suppressed_c,
+                    f2_last_emit_valid_r,
+                    f2_last_emit_pc_r,
+                    f2_last_emit_next_pc_r,
+                    f2_seq_valid,
+                    f2_seq_next_pc,
+                    same_ftq_tail_pending_c,
+                    same_ftq_tail_owner_open_c,
+                    same_ftq_tail_carry_c,
+                    packet_bypass_valid,
+                    packet_bypass_tail_carry_c,
+                    packet_buf_enq,
+                    packet_buf_deq,
+                    packet_buf_valid,
+                    packet_buf_empty,
+                    packet_buf_full,
+                    packet_buf_in.ftq_owner_complete,
+                    packet_buf_head.ftq_owner_complete,
+                    ftq_head_valid,
+                    ftq_head_tag,
+                    f2_ftq_alloc_tag_r,
+                    f2_ftq_entry_r.pred_ctl_valid,
+                    f2_ftq_entry_r.pred_ctl_taken,
+                    f2_ftq_entry_r.pred_ctl_offset,
+                    predecode_ctl_found,
+                    predecode_ctl_slot,
+                    predecode_ctl_target,
+                    bp_branch_found,
+                    bp_taken,
+                    bp_target_addr,
+                    fetch_count,
+                    fetch_pc[0],
+                    fetch_pc[1],
+                    fetch_pc[2],
+                    fetch_pc[3],
+                    packet_buf_in.fetch_pc[0],
+                    packet_buf_in.fetch_pc[1],
+                    packet_buf_in.fetch_pc[2],
+                    packet_buf_in.fetch_pc[3],
+                    packet_buf_head.fetch_pc[0],
+                    packet_buf_head.fetch_pc[1],
+                    packet_buf_head.fetch_pc[2],
+                    packet_buf_head.fetch_pc[3]);
             end
             if (trace_fetch_split_en && subgroup_seed_load_c) begin
                 $display("[FETCH_SPLIT] cyc=%0d parent_pc=%016h split_pc=%016h split_tgt=%016h split_slot=%0d split_type=%0d reason=%s pre_pc=%016h pre_tgt=%016h second_pc=%016h second_tgt=%016h ftq_pred_v=%b ftq_pred_t=%b ftq_pred_slot=%0d ftq_pred_type=%0d owner_pred=%b bp_found=%b bp_taken=%b bp_slot=%0d final=%0d ext=%0d",

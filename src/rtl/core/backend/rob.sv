@@ -30,6 +30,7 @@ module rob
     input  logic [PIPE_WIDTH-1:0]   alloc_is_sfence_vma,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_ecall,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_wfi,
+    input  logic [PIPE_WIDTH-1:0]   alloc_is_fused,
     // Sub-classification of the head-stall "other" bucket
     // (perf-instr only; sim-only path uses these arrays).
     input  logic [PIPE_WIDTH-1:0]   alloc_is_mul,
@@ -104,6 +105,7 @@ module rob
     output logic [PIPE_WIDTH-1:0]             head_is_sfence_vma,
     output logic [PIPE_WIDTH-1:0]             head_is_ecall,
     output logic [PIPE_WIDTH-1:0]             head_is_wfi,
+    output logic [PIPE_WIDTH-1:0]             head_is_fused,
     output logic [PIPE_WIDTH-1:0]             head_branch_taken,
     output logic [63:0]                       head_branch_target [0:PIPE_WIDTH-1],
     output logic [63:0]                       head_branch_taken_target [0:PIPE_WIDTH-1],
@@ -215,6 +217,7 @@ module rob
     reg [ROB_DEPTH-1:0]          is_sfence_vma_r;
     reg [ROB_DEPTH-1:0]          is_ecall_r;
     reg [ROB_DEPTH-1:0]          is_wfi_r;
+    reg [ROB_DEPTH-1:0]          is_fused_r;
     // Per-uop FU-type tags used only by SIMULATION head-stall
     // sub-classification (decompose the "other" bucket into
     // mul/div/csr/bru/unknown).  Not used by functional logic.
@@ -496,6 +499,7 @@ module rob
             head_is_sfence_vma[i]    = is_sfence_vma_r[head_idx_w[i]];
             head_is_ecall[i]         = is_ecall_r[head_idx_w[i]];
             head_is_wfi[i]           = is_wfi_r[head_idx_w[i]];
+            head_is_fused[i]         = is_fused_r[head_idx_w[i]];
             head_branch_taken[i]     = branch_taken_r[head_idx_w[i]];
             head_branch_target[i]    = branch_target_packed[head_idx_w[i]*64 +: 64];
             head_branch_taken_target[i] =
@@ -598,6 +602,7 @@ module rob
             is_sfence_vma_r  <= '0;
             is_ecall_r       <= '0;
             is_wfi_r         <= '0;
+            is_fused_r       <= '0;
             is_mul_r         <= '0;
             is_div_r         <= '0;
             is_bru_r         <= '0;
@@ -634,6 +639,7 @@ module rob
             is_sfence_vma_r  <= '0;
             is_ecall_r       <= '0;
             is_wfi_r         <= '0;
+            is_fused_r       <= '0;
             is_mul_r         <= '0;
             is_div_r         <= '0;
             is_bru_r         <= '0;
@@ -660,6 +666,7 @@ module rob
                     is_sfence_vma_r[i] <= 1'b0;
                     is_ecall_r[i]      <= 1'b0;
                     is_wfi_r[i]        <= 1'b0;
+                    is_fused_r[i]      <= 1'b0;
                     is_mul_r[i]        <= 1'b0;
                     is_div_r[i]        <= 1'b0;
                     is_bru_r[i]        <= 1'b0;
@@ -690,6 +697,7 @@ module rob
                     is_sfence_vma_r[head_idx_w[i]] <= 1'b0;
                     is_ecall_r[head_idx_w[i]]   <= 1'b0;
                     is_wfi_r[head_idx_w[i]]     <= 1'b0;
+                    is_fused_r[head_idx_w[i]]   <= 1'b0;
                     is_mul_r[head_idx_w[i]]     <= 1'b0;
                     is_div_r[head_idx_w[i]]     <= 1'b0;
                     is_bru_r[head_idx_w[i]]     <= 1'b0;
@@ -793,6 +801,7 @@ module rob
                     is_sfence_vma_r[ai_w[i]]  <= alloc_is_sfence_vma[i];
                     is_ecall_r[ai_w[i]]       <= alloc_is_ecall[i];
                     is_wfi_r[ai_w[i]]         <= alloc_is_wfi[i];
+                    is_fused_r[ai_w[i]]       <= alloc_is_fused[i];
                     is_mul_r[ai_w[i]]         <= alloc_is_mul[i];
                     is_div_r[ai_w[i]]         <= alloc_is_div[i];
                     is_bru_r[ai_w[i]]         <= alloc_is_bru[i];
@@ -917,6 +926,7 @@ module rob
                     is_sfence_vma_r[head_idx_w[i]] <= 1'b0;
                     is_ecall_r[head_idx_w[i]]   <= 1'b0;
                     is_wfi_r[head_idx_w[i]]     <= 1'b0;
+                    is_fused_r[head_idx_w[i]]   <= 1'b0;
                     is_mul_r[head_idx_w[i]]     <= 1'b0;
                     is_div_r[head_idx_w[i]]     <= 1'b0;
                     is_bru_r[head_idx_w[i]]     <= 1'b0;

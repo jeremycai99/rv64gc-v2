@@ -30,6 +30,7 @@ module commit
     input  logic [PIPE_WIDTH-1:0]   head_is_sfence_vma,
     input  logic [PIPE_WIDTH-1:0]   head_is_ecall,
     input  logic [PIPE_WIDTH-1:0]   head_is_wfi,
+    input  logic [PIPE_WIDTH-1:0]   head_is_fused,
     input  logic [PIPE_WIDTH-1:0]   head_branch_taken,
     input  logic [63:0]             head_branch_target [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   head_branch_mispredict,
@@ -83,7 +84,7 @@ module commit
     input  logic [63:0]             irq_cause,
 
     // Performance counter
-    output logic [2:0]              insn_retired_count  // for minstret
+    output logic [3:0]              insn_retired_count  // architectural instructions for minstret
 );
 
     // =========================================================================
@@ -133,6 +134,7 @@ module commit
     logic       found_ret;      // MRET or SRET
     logic [2:0] store_cnt;
     logic [2:0] load_cnt;
+    logic [3:0] retired_inst_count;
 
     // Per-slot eligibility
     logic [PIPE_WIDTH-1:0] slot_can_commit;
@@ -166,6 +168,7 @@ module commit
         replay_slot      = 3'd0;
         store_cnt        = 3'd0;
         load_cnt         = 3'd0;
+        retired_inst_count = 4'd0;
         scan_stopped     = 1'b0;
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
@@ -198,6 +201,8 @@ module commit
             else if (head_has_exception[i]) begin
                 slot_can_commit[i] = 1'b1;
                 scan_count = scan_count + 3'd1;
+                retired_inst_count = retired_inst_count +
+                    (head_is_fused[i] ? 4'd2 : 4'd1);
                 if (head_is_store[i]) store_cnt = store_cnt + 3'd1;
                 if (head_is_load[i])  load_cnt = load_cnt  + 3'd1;
                 found_exception = 1'b1;
@@ -211,6 +216,8 @@ module commit
             else begin
                 slot_can_commit[i] = 1'b1;
                 scan_count = scan_count + 3'd1;
+                retired_inst_count = retired_inst_count +
+                    (head_is_fused[i] ? 4'd2 : 4'd1);
                 if (head_is_store[i]) store_cnt = store_cnt + 3'd1;
                 if (head_is_load[i])  load_cnt = load_cnt  + 3'd1;
 
@@ -351,7 +358,7 @@ module commit
     assign commit_count      = scan_count;
     assign store_commit_count = store_cnt;
     assign load_commit_count  = load_cnt;
-    assign insn_retired_count = scan_count;
+    assign insn_retired_count = retired_inst_count;
 
     // =========================================================================
     // CSR commit output (at most 1 per cycle, serialized at slot 0)

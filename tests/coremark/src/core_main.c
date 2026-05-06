@@ -120,6 +120,10 @@ main(int argc, char *argv[])
     ee_u16       seedcrc = 0;
     CORE_TICKS   total_time;
     core_results results[MULTITHREAD];
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    ee_s16       total_after_crc = 0;
+    ee_u8        data_type_errors = 0;
+#endif
 #if (MEM_METHOD == MEM_STACK)
     ee_u8 stack_memblock[TOTAL_DATA_SIZE * MULTITHREAD];
 #endif
@@ -355,7 +359,13 @@ for (i = 0; i < MULTITHREAD; i++)
             total_errors += results[i].err;
         }
     }
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    total_after_crc = total_errors;
+    data_type_errors = check_data_types();
+    total_errors += data_type_errors;
+#else
     total_errors += check_data_types();
+#endif
     /* and report results */
     ee_printf("CoreMark Size    : %lu\n", (long unsigned)results[0].size);
     ee_printf("Total ticks      : %lu\n", (long unsigned)total_time);
@@ -378,6 +388,28 @@ for (i = 0; i < MULTITHREAD; i++)
             "ERROR! Must execute for at least 10 secs for a valid result!\n");
         total_errors++;
     }
+
+#if defined(RV64GC_COREMARK_DEBUG_RESULTS)
+    rv64gc_coremark_debug(8, (unsigned long)seedcrc);
+    rv64gc_coremark_debug(9, (unsigned long)(ee_s32)known_id);
+    rv64gc_coremark_debug(10, (unsigned long)results[0].crclist);
+    rv64gc_coremark_debug(11,
+                          (known_id >= 0) ? (unsigned long)list_known_crc[known_id] : 0);
+    rv64gc_coremark_debug(12, (unsigned long)results[0].crcmatrix);
+    rv64gc_coremark_debug(13,
+                          (known_id >= 0) ? (unsigned long)matrix_known_crc[known_id] : 0);
+    rv64gc_coremark_debug(14, (unsigned long)results[0].crcstate);
+    rv64gc_coremark_debug(15,
+                          (known_id >= 0) ? (unsigned long)state_known_crc[known_id] : 0);
+    rv64gc_coremark_debug(16, (unsigned long)results[0].err);
+    rv64gc_coremark_debug(17, (unsigned long)data_type_errors);
+    rv64gc_coremark_debug(18, (unsigned long)(ee_s32)total_after_crc);
+    rv64gc_coremark_debug(19,
+                          (unsigned long)(ee_s32)(total_after_crc + data_type_errors));
+    rv64gc_coremark_debug(20, (unsigned long)time_in_secs(total_time));
+    rv64gc_coremark_debug(21, (unsigned long)(ee_s32)total_errors);
+    rv64gc_coremark_debug(22, (unsigned long)results[0].crc);
+#endif
 
     ee_printf("Iterations       : %lu\n",
               (long unsigned)default_num_contexts * results[0].iterations);
@@ -432,6 +464,7 @@ for (i = 0; i < MULTITHREAD; i++)
         ee_printf(
             "Cannot validate operation for these seed values, please compare "
             "with results on a known platform.\n");
+    rv64gc_coremark_report(results[0].crc, total_errors);
 
 #if (MEM_METHOD == MEM_MALLOC)
     for (i = 0; i < MULTITHREAD; i++)
@@ -441,5 +474,5 @@ for (i = 0; i < MULTITHREAD; i++)
     portable_fini(&(results[0].port));
     gem5_bench_exit();
 
-    return MAIN_RETURN_VAL;
+    return (total_errors == 0) ? 0 : 1;
 }

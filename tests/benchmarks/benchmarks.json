@@ -1,0 +1,38 @@
+{
+  "benchmarks": [
+    {
+      "name": "coremark",
+      "kind": "coremark",
+      "hex": "tests/hex/coremark.hex",
+      "elf": "tests/coremark/coremark.elf",
+      "max_cycles": 50000000,
+      "iterations": 1,
+      "expected_iterations": 1,
+      "expected_checksum": 59156,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "0a0df66ed4b615157ff5ffef3fae58539a1483ac5dbd9b54d25e5047d54a19c7",
+      "expected_elf_sha256": "2a426dc15543b3eb72ab3bbb228ad2470d5783f6354f41e281a666ce3a2cdab7",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Current CoreMark image is built with -DITERATIONS=1. CoreMark/MHz is reported only when the benchmark emits STOP, validation flags are clean, tohost reports PASS, legacy loop-buffer activity is zero, and standalone decoded-op replay activity is zero."
+    },
+    {
+      "name": "dhrystone",
+      "kind": "dhrystone",
+      "hex": "tests/hex/dhrystone.hex",
+      "elf": "tests/dhrystone/dhrystone.elf",
+      "max_cycles": 100000,
+      "iterations": 100,
+      "expected_iterations": 100,
+      "expected_checksum": 24,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "5227bf2e909cb8ee5fda8c600aeda4f019260f60ecf0e76d8d226f8ace66f4a9",
+      "expected_elf_sha256": "f764e76e6ad626e9361a82e6b24b2e35b0c42419f575fcc0abfdafbc82f5a44e",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Dhrystone writes timed mcycle/minstret deltas to the benchmark result block before PASS; scoreable rows require legacy loop-buffer activity and standalone decoded-op replay activity to remain zero."
+    }
+  ]
+}

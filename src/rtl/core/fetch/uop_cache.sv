@@ -1,16 +1,18 @@
 /* file: uop_cache.sv
- Description: Gen-2 µop cache top module.  Replaces (or coexists with)
-              loop_buffer.sv.  Caches post-fusion fetch groups indexed by
-              their start PC; replays from cache when the frontend is idle
-              and a chain of cached groups is available.
+ Description: UOP-cache decoded-op cache. Caches post-fusion fetch
+              groups indexed by their start PC and streams cached groups to
+              rename once the predicted next PC hits. This is an explicit
+              research path and is disabled for Stage 1 signoff until it is
+              tied to live BPU/FTQ validation.
 
               Pipeline:
                 F0  (lookup)   - drive SRAM addr = predicted next-group PC
                 F1  (hit)      - SRAM data + tag compare ready
                 F2  (mux/fill) - emit cached group OR fill from fused output
 
-              Drop-in interface mirrors loop_buffer.sv: outputs `active`,
-              `uoc_insn`, `uoc_count`, `handoff_valid`, `handoff_pc`.
+              `active` means the cache owns the rename input this cycle.
+              `handoff_valid` pulses only when a stream exits and fetch must
+              resume from `handoff_pc`.
 
               See doc/uop_cache_design_2026-04-25.md for the full spec.
  Author: Jeremy Cai
@@ -26,7 +28,7 @@ module uop_cache
 (
     input  logic                clk,
     input  logic                rst_n,
-    input  logic                en,                  // +UOC_ENABLE plusarg
+    input  logic                en,
 
     // Capture-side input (from fusion stage, post-decode)
     input  decoded_insn_t       fused_insn [0:PIPE_WIDTH-1],
@@ -55,6 +57,14 @@ module uop_cache
     output logic                ev_fill_evict_valid,
     output logic                ev_enter_playing,
     output logic                ev_exit_playing_miss,
+    output logic                ev_exit_playing_nohit,
+    output logic                ev_exit_playing_unsafe,
+    output logic                ev_emit,
+    output logic                ev_emit_control,
+    output logic                ev_emit_cond,
+    output logic                ev_emit_jal,
+    output logic                ev_emit_jalr,
+    output logic                ev_emit_pred_taken,
     output logic                ev_invalidate
 );
 
@@ -288,18 +298,12 @@ module uop_cache
     end
 
     // =========================================================================
-    // State machine: IDLE / PLAYING
+    // State machine: IDLE / PLAYING.
     //
-    // IDLE → PLAYING: en + fetch idle (fused_count=0) + hit + no stall + no
-    //                 redirect + hit data contains NO control-flow insn.
-    // PLAYING → IDLE: ALWAYS after 1 cycle (no chain).  Branches require the
-    //                 live BPU to update predictions — chained playback over
-    //                 cached bp_target is stale and self-livelocks.
-    //
-    // Conservative first-cut: emit at most one cached group per fetch-bubble
-    // entry, and only for groups consisting purely of straight-line work.
-    // This still recovers some of the ~25% net frontend bubble while keeping
-    // BPU-driven control flow authoritative.  Future tuning can broaden this.
+    // IDLE -> PLAYING: the predicted next fetch group hits in the cache.
+    // PLAYING: keep streaming cached groups while the next predicted PC hits.
+    // PLAYING -> IDLE: miss/unsafe group; redirect fetch to the first group
+    // that the UOP cache cannot serve.
     // =========================================================================
     typedef enum logic {
         UOC_IDLE    = 1'b0,
@@ -308,90 +312,102 @@ module uop_cache
 
     uoc_state_e state_r, state_next_c;
 
-    // Safe-to-playback guard: refuse if hit data contains:
-    //   (a) Any control flow (conditional branch, JAL, JALR, or bp_taken).
-    //       Reason: cached bp_target is stale; live BPU must rule.
-    //   (b) Any fused µop. Reason: handoff_pc accounting needs the byte
-    //       span of each insn; fused insns consume 8 bytes (RVI+RVI) but
-    //       my next-PC formula only knows is_rvc. Conservatively skip.
-    //   (c) Any system/exception/memory-barrier insn (CSR, FENCE, ECALL).
-    //       Reason: these have side effects on machine state that should
-    //       be re-validated by the live decode path each time.
-    logic hit_data_has_ctrl_c;
+    // Stage-1 safety policy: the UOP cache may bypass decode, but it
+    // must not become the branch predictor. Control-flow groups need live
+    // BPU/FTQ validation before this path can safely replay them by default.
+`ifndef SYNTHESIS
+    bit sim_uoc_allow_partial_groups;
+    bit sim_uoc_allow_control_groups;
+    initial begin
+        sim_uoc_allow_partial_groups =
+            $test$plusargs("UOC_ALLOW_PARTIAL_GROUPS") ||
+            $test$plusargs("UOC_UNSAFE_STREAM");
+        sim_uoc_allow_control_groups =
+            $test$plusargs("UOC_ALLOW_CONTROL") ||
+            $test$plusargs("UOC_UNSAFE_STREAM");
+    end
+    logic uoc_allow_partial_groups;
+    logic uoc_allow_control_groups;
+    assign uoc_allow_partial_groups = sim_uoc_allow_partial_groups;
+    assign uoc_allow_control_groups = sim_uoc_allow_control_groups;
+`else
+    localparam logic uoc_allow_partial_groups = 1'b0;
+    localparam logic uoc_allow_control_groups = 1'b0;
+`endif
+
+    // Replay guard: default to full straight-line groups only. Refuse groups
+    // whose next-PC accounting or architectural side effects need live
+    // BPU/FTQ validation.
+    logic hit_data_unplayable_c;
     always_comb begin
-        hit_data_has_ctrl_c = 1'b0;
+        hit_data_unplayable_c =
+            (hit_count_c == 3'd0) ||
+            (!uoc_allow_partial_groups && (hit_count_c != 3'(PIPE_WIDTH)));
         for (int u = 0; u < UOC_PER_ENTRY; u++) begin
             if (3'(u) < hit_count_c) begin
-                if (hit_data_c[u].is_branch || hit_data_c[u].is_jal   ||
-                    hit_data_c[u].is_jalr   || hit_data_c[u].bp_taken ||
-                    hit_data_c[u].is_fused  ||
+                if (hit_data_c[u].is_fused  ||
+                    (!uoc_allow_control_groups &&
+                     (hit_data_c[u].is_branch ||
+                      hit_data_c[u].is_jal ||
+                      hit_data_c[u].is_jalr)) ||
                     hit_data_c[u].is_csr    || hit_data_c[u].is_fence ||
                     hit_data_c[u].is_fence_i|| hit_data_c[u].is_ecall ||
                     hit_data_c[u].is_ebreak || hit_data_c[u].is_mret  ||
                     hit_data_c[u].is_sret   || hit_data_c[u].is_sfence_vma ||
                     hit_data_c[u].is_wfi    || hit_data_c[u].is_amo   ||
-                    // Memory ops: avoid replaying loads/stores via cache —
-                    // duplicate dispatch through any racey handoff path
-                    // would double-issue them, corrupting state.
-                    hit_data_c[u].is_load   || hit_data_c[u].is_store ||
-                    hit_data_c[u].has_exception) begin
-                    hit_data_has_ctrl_c = 1'b1;
+                    hit_data_c[u].has_exception || !hit_data_c[u].valid) begin
+                    hit_data_unplayable_c = 1'b1;
                 end
             end
         end
     end
 
-    // Track how long fetch has been idle.  Saturating counter; reset to 0
-    // when fused_count > 0.  We only fire UOC after a SUSTAINED idle
-    // period — short transient stalls have shorter recovery than the
-    // pipeline-restart cost of UOC's handoff redirect, so UOC would lose
-    // there.  Long stalls (icache miss, ftq drain) recover slowly enough
-    // that UOC's emit is a net win.
-    localparam int IDLE_THRESHOLD     = 0;
-    localparam int IDLE_THRESHOLD_BITS = 4;     // saturate at 15
+    logic emit_c;
+    logic stream_exit_c;
+    logic emit_has_cond_c;
+    logic emit_has_jal_c;
+    logic emit_has_jalr_c;
+    logic emit_has_pred_taken_c;
 
-    logic [IDLE_THRESHOLD_BITS-1:0] cycles_idle_r;
-    always_ff @(posedge clk) begin
-        if (!rst_n || redirect_valid || invalidate) begin
-            cycles_idle_r <= '0;
-        end else if (fused_count != 3'd0) begin
-            cycles_idle_r <= '0;
-        end else if (cycles_idle_r != {IDLE_THRESHOLD_BITS{1'b1}}) begin
-            cycles_idle_r <= cycles_idle_r + 1'b1;
-        end
-    end
-
-    // Long-stall detector: also pulse only on the cycle of crossing the
-    // threshold (so we fire AT MOST once per idle period — single-emit
-    // policy preserved; protects against ping-pong with fetch resume).
-    logic long_stall_first_c;
-    assign long_stall_first_c =
-        (fused_count == 3'd0) && (cycles_idle_r == IDLE_THRESHOLD[IDLE_THRESHOLD_BITS-1:0]);
-
-    logic enter_playing_c;
-
-    // Common safe-emit predicate.
-    logic safe_emit_c;
-    assign safe_emit_c =
-        en && hit_c && !hit_data_has_ctrl_c &&
+    assign emit_c =
+        en && hit_c && !hit_data_unplayable_c &&
         !stall && !redirect_valid && !invalidate;
 
-    // Single-emit policy: only enter on long-stall (idle ≥ threshold)
-    // first cycle.  Chain mode caused architectural divergence on
-    // CoreMark (suspected: stale bp_* fields in rename_buf snapshot
-    // restore corrupting BPU recovery state).  Future work to validate.
-    assign enter_playing_c =
-        (state_r == UOC_IDLE) && long_stall_first_c && safe_emit_c;
+    assign stream_exit_c =
+        (state_r == UOC_PLAYING) &&
+        !stall && !redirect_valid && !invalidate && !emit_c;
+
+    always_comb begin
+        emit_has_cond_c       = 1'b0;
+        emit_has_jal_c        = 1'b0;
+        emit_has_jalr_c       = 1'b0;
+        emit_has_pred_taken_c = 1'b0;
+        if (emit_c) begin
+            for (int u = 0; u < UOC_PER_ENTRY; u++) begin
+                if (3'(u) < hit_count_c) begin
+                    emit_has_cond_c       |= hit_data_c[u].is_branch;
+                    emit_has_jal_c        |= hit_data_c[u].is_jal;
+                    emit_has_jalr_c       |= hit_data_c[u].is_jalr;
+                    emit_has_pred_taken_c |= hit_data_c[u].bp_taken;
+                end
+            end
+        end
+    end
 
     always_comb begin
         state_next_c = state_r;
         if (redirect_valid || invalidate || !en) begin
             state_next_c = UOC_IDLE;
         end else if (state_r == UOC_IDLE) begin
-            if (enter_playing_c) state_next_c = UOC_PLAYING;
+            if (emit_c) state_next_c = UOC_PLAYING;
         end else begin
-            // Always exit after one cycle — single-emit policy.
-            state_next_c = UOC_IDLE;
+            if (stall) begin
+                state_next_c = UOC_PLAYING;
+            end else if (emit_c) begin
+                state_next_c = UOC_PLAYING;
+            end else begin
+                state_next_c = UOC_IDLE;
+            end
         end
     end
 
@@ -400,8 +416,7 @@ module uop_cache
         else        state_r <= state_next_c;
     end
 
-    // active = emitting from cache this cycle (entry only).
-    assign active = enter_playing_c;
+    assign active = emit_c;
 
     // =========================================================================
     // Output mux: when active, drive uoc_insn/uoc_count from hit_data
@@ -413,17 +428,17 @@ module uop_cache
         uoc_count = active ? hit_count_c : 3'd0;
     end
 
-    // Handoff: pulse on the cycle UOC emits.  Fetch sees redirect_valid
-    // next cycle and resumes from handoff_pc (= post-emit PC of the
-    // emitted group).  Suppressed by higher-priority commit/BRU redirect.
-    assign handoff_valid = active && !redirect_valid && !invalidate;
-    assign handoff_pc    = predicted_next_pc_c;
+    // Handoff: when a stream exits, fetch restarts at the first PC not served
+    // by the UOP cache. For a miss this is lookup_pc_r; for an unsafe hit it is
+    // also lookup_pc_r because the live frontend must decode that exact group.
+    assign handoff_valid = stream_exit_c;
+    assign handoff_pc    = lookup_pc_r;
 
     // =========================================================================
     // Predicted-next-PC update (combinational, drives F0 lookup)
     //
-    // - In PLAYING (about to emit hit_data): next group = end-of-hit_data
-    // - In IDLE with fused_count > 0: next group = end-of-fused
+    // - When emitting hit_data: next group = end-of-hit_data
+    // - Otherwise, when fused_count > 0: next group = end-of-fused
     // - On redirect: next group = redirect_pc
     // - Otherwise: hold previous prediction
     // =========================================================================
@@ -432,7 +447,7 @@ module uop_cache
             predicted_next_pc_c = redirect_pc;
         end else if (active) begin
             predicted_next_pc_c = next_group_pc(hit_data_c, hit_count_c);
-        end else if (fused_count != 3'd0) begin
+        end else if ((state_r == UOC_IDLE) && (fused_count != 3'd0)) begin
             predicted_next_pc_c = next_group_pc(fused_insn, fused_count);
         end else begin
             predicted_next_pc_c = predicted_next_pc_r;
@@ -468,7 +483,8 @@ module uop_cache
     logic [UOC_INDEX_BITS-1:0]  fill_idx_c;
     logic [UOC_TAG_BITS-1:0]    fill_tag_c;
 
-    assign fill_pending_c = en && (fused_count != 3'd0) &&
+    assign fill_pending_c = en && (state_r == UOC_IDLE) && !active &&
+                            (fused_count != 3'd0) &&
                             !redirect_valid && !invalidate;
     assign fill_idx_c     = pc_index(fused_insn[0].pc);
     assign fill_tag_c     = pc_tag(fused_insn[0].pc);
@@ -548,9 +564,16 @@ module uop_cache
     assign ev_miss              = lookup_valid_r && en && !hit_c;
     assign ev_fill              = do_fill_c;
     assign ev_fill_evict_valid  = victim_valid_at_fill_c;
-    assign ev_enter_playing     = enter_playing_c;
-    assign ev_exit_playing_miss = (state_r == UOC_PLAYING) && !hit_c &&
-                                  !redirect_valid && !invalidate;
+    assign ev_enter_playing     = (state_r == UOC_IDLE) && emit_c;
+    assign ev_exit_playing_miss = stream_exit_c;
+    assign ev_exit_playing_nohit  = stream_exit_c && !hit_c;
+    assign ev_exit_playing_unsafe = stream_exit_c && hit_c && hit_data_unplayable_c;
+    assign ev_emit              = emit_c;
+    assign ev_emit_control      = emit_c && (emit_has_cond_c || emit_has_jal_c || emit_has_jalr_c);
+    assign ev_emit_cond         = emit_c && emit_has_cond_c;
+    assign ev_emit_jal          = emit_c && emit_has_jal_c;
+    assign ev_emit_jalr         = emit_c && emit_has_jalr_c;
+    assign ev_emit_pred_taken   = emit_c && emit_has_pred_taken_c;
     assign ev_invalidate        = invalidate;
 
 endmodule

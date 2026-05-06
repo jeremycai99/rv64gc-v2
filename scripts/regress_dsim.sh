@@ -13,6 +13,8 @@
 #     must reach PASS within its small cap.
 #   - End-to-end: dhrystone (iter=100) and coremark (iter=1 + iter=10)
 #     must finish at STOP cleanly — not TIMEOUT, not dsim IterLimit abort.
+#   - Benchmark rows are delegated to tools/run_benchmarks.py in signoff mode,
+#     so checksum/flags/control/image-hash/loop-buffer gates are enforced.
 #
 # IPC is reported but the gating criterion is "finished normally".
 # Cycle caps are sized with reasonable margin over expected length.
@@ -135,10 +137,28 @@ fi
 #       binary (both take 1.65M cycles on 4-wide). The naming dates from the
 #       6-wide era.  The gate criterion is STOP cleanly, not cycle count.
 if (( RUN_BENCH )); then
-    echo "=== Benchmarks (Dhrystone + CoreMark iter1 + iter10) ==="
-    [[ -f tests/hex/dhrystone.hex        ]] && run_test "dhrystone"        tests/hex/dhrystone.hex        70000
-    [[ -f tests/hex/coremark.hex         ]] && run_test "coremark_iter1"   tests/hex/coremark.hex         5000000
-    [[ -f tests/hex/coremark_iter10.hex  ]] && run_test "coremark_iter10"  tests/hex/coremark_iter10.hex  5000000
+    echo "=== Benchmarks (manifest-gated signoff rows) ==="
+    BENCH_PLUSARGS=(--plusarg PERF_PROFILE --plusarg PERF_COUNTERS --plusarg STAT_DUMP)
+    if [[ -n "$EXTRA_PLUSARGS" ]]; then
+        read -r -a EXTRA_PLUSARGS_ARR <<< "$EXTRA_PLUSARGS"
+        for arg in "${EXTRA_PLUSARGS_ARR[@]}"; do
+            BENCH_PLUSARGS+=(--plusarg "$arg")
+        done
+    fi
+    BENCH_RUN_DIR="$LOG_DIR/benchmarks"
+    if python3 tools/run_benchmarks.py \
+        --runner dsim \
+        --run-class signoff \
+        --manifest tests/benchmarks/coverage_expansion.json \
+        --bench dhrystone_100,coremark_iter1,coremark_iter10 \
+        --run-dir "$BENCH_RUN_DIR" \
+        "${BENCH_PLUSARGS[@]}"; then
+        printf '%-32s  %-9s  %s\n' "benchmark_signoff_manifest" "PASS" "$BENCH_RUN_DIR" >> "$SUMMARY"
+        ((PASS_CNT += 3))
+    else
+        printf '%-32s  %-9s  %s\n' "benchmark_signoff_manifest" "FAIL" "$BENCH_RUN_DIR" >> "$SUMMARY"
+        ((FAIL_CNT++))
+    fi
 fi
 
 echo

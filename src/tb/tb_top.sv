@@ -195,7 +195,7 @@ module tb_top
     logic trace_a0map_en;
     logic trace_a5map_en;
     logic trace_spmap_en;
-    logic trace_lb_en;
+    logic trace_uoc_en;
     logic trace_ordv_en;
     logic trace_wdog_en;
     logic trace_lsu_fwd_en;
@@ -210,6 +210,24 @@ module tb_top
     logic trace_ralink_en;
     int   trace_iqld_watch_rob;
     int   trace_listptr_start;
+    // ----------------------------------------------------------------
+    // Golden PC scoreboard (commit-aligned, run_class-independent).
+    //   +EMIT_COMMIT_PC_HEX=<path>  emits one $readmemh-format hex line
+    //                                per committed PC (slot order).
+    //   +CHECK_GOLDEN_PCS=<path>    loads that file and asserts every
+    //                                committed PC matches; emits one
+    //                                [GOLDEN_PC TRIP ...] line on first
+    //                                divergence and $finish(2).
+    // ----------------------------------------------------------------
+    logic        golden_check_en;
+    logic        golden_emit_en;
+    string       golden_check_path;
+    string       golden_emit_path;
+    integer      golden_emit_fd;
+    logic [63:0] golden_q [$];
+    longint      golden_size;
+    longint      golden_seq_r;
+    logic        golden_tripped_r;
     initial begin
         trace_commit_en = 0;
         trace_dep_en    = 0;
@@ -219,7 +237,7 @@ module tb_top
         trace_a0map_en  = 0;
         trace_a5map_en  = 0;
         trace_spmap_en  = 0;
-        trace_lb_en     = 0;
+        trace_uoc_en    = 0;
         trace_ordv_en   = 0;
         trace_wdog_en   = 0;
         trace_lsu_fwd_en = 0;
@@ -242,7 +260,8 @@ module tb_top
         if ($test$plusargs("TRACE_A0MAP"))  trace_a0map_en  = 1;
         if ($test$plusargs("TRACE_A5MAP"))  trace_a5map_en  = 1;
         if ($test$plusargs("TRACE_SPMAP"))  trace_spmap_en  = 1;
-        if ($test$plusargs("TRACE_LB"))     trace_lb_en     = 1;
+        if ($test$plusargs("TRACE_UOC"))
+            trace_uoc_en = 1;
         if ($test$plusargs("TRACE_ORDV"))   trace_ordv_en   = 1;
         if ($test$plusargs("TRACE_WDOG"))   trace_wdog_en   = 1;
         if ($test$plusargs("TRACE_LSU_FWD")) trace_lsu_fwd_en = 1;
@@ -264,6 +283,44 @@ module tb_top
             trace_iqld_watch_en = 1;
         if (trace_iqld_watch_en)
             $display("[TRACE_CFG] iqld_watch_rob=%0d", trace_iqld_watch_rob);
+
+        // Golden PC scoreboard plusargs
+        golden_check_en  = 0;
+        golden_emit_en   = 0;
+        golden_emit_fd   = 0;
+        golden_seq_r     = 0;
+        golden_tripped_r = 0;
+        golden_size      = 0;
+        if ($value$plusargs("CHECK_GOLDEN_PCS=%s", golden_check_path)) begin
+            integer       fd;
+            logic [63:0]  tmp_pc;
+            int           rc;
+            fd = $fopen(golden_check_path, "r");
+            if (fd == 0) begin
+                $display("[GOLDEN_PC ERROR] cannot open %s for read",
+                    golden_check_path);
+                $finish(2);
+            end
+            while (!$feof(fd)) begin
+                rc = $fscanf(fd, "%h", tmp_pc);
+                if (rc == 1) golden_q.push_back(tmp_pc);
+            end
+            $fclose(fd);
+            golden_size = golden_q.size();
+            golden_check_en = (golden_size > 0);
+            $display("[GOLDEN_PC LOADED] path=%s entries=%0d",
+                golden_check_path, golden_size);
+        end
+        if ($value$plusargs("EMIT_COMMIT_PC_HEX=%s", golden_emit_path)) begin
+            golden_emit_fd = $fopen(golden_emit_path, "w");
+            if (golden_emit_fd == 0) begin
+                $display("[GOLDEN_PC ERROR] cannot open %s for write",
+                    golden_emit_path);
+                $finish(2);
+            end
+            golden_emit_en = 1;
+            $display("[GOLDEN_PC EMITTING] path=%s", golden_emit_path);
+        end
     end
 
     function automatic logic [7:0] tb_byte_mask(
@@ -413,13 +470,14 @@ module tb_top
     integer frontend_hist [0:6];
     // Split the effective frontend histogram by source
     integer fused_hist [0:6];
-    integer lb_replay_hist [0:6];
-    // Loop buffer body-length histogram while active; bucket 6 means >=6
-    integer lb_body_hist [0:6];
+    integer uoc_replay_hist [0:6];
+    // Decoded-op replay group-size histogram while active; bucket 6 means >=6
+    integer uoc_group_hist [0:6];
     // Commit histogram: cycles where commit_count = N
     integer commit_hist [0:6];
-    // Loop buffer active cycles
-    integer lb_active_cycles;
+    // Standalone decoded-op replay active cycles. Scoreable Stage 1 rows
+    // require this to remain zero.
+    integer uoc_active_cycles;
     // µop cache counters
     integer uoc_lookup_total;
     integer uoc_hit_total;
@@ -428,6 +486,17 @@ module tb_top
     integer uoc_fill_evict_total;
     integer uoc_enter_playing_total;
     integer uoc_exit_miss_total;
+    integer uoc_exit_nohit_total;
+    integer uoc_exit_unsafe_total;
+    integer uoc_emit_total;
+    integer uoc_emit_control_total;
+    integer uoc_emit_cond_total;
+    integer uoc_emit_jal_total;
+    integer uoc_emit_jalr_total;
+    integer uoc_emit_pred_taken_total;
+    integer uoc_emit_uops_total;
+    integer uoc_emit_control_uops_total;
+    integer uoc_active_flush_total;
     integer uoc_invalidate_total;
     // Stall counters
     integer rename_stall_cyc;
@@ -447,11 +516,11 @@ module tb_top
     integer backend_stall_cyc;
     integer flush_cyc;
     integer perf_total_cyc;
-    integer lb_commit_no_load_cyc;
-    integer lb_commit_no_load_run;
-    integer lb_commit_no_load_run_max;
+    integer uoc_commit_no_load_cyc;
+    integer uoc_commit_no_load_run;
+    integer uoc_commit_no_load_run_max;
     integer fetch_zero_total_cyc;
-    integer fetch_zero_lb_hold_cyc;
+    integer fetch_zero_frontend_hold_cyc;
     integer fetch_zero_redirect_cyc;
     integer fetch_zero_pkt_empty_cyc;
     integer fetch_zero_pkt_valid_cyc;
@@ -545,7 +614,7 @@ module tb_top
     integer pc_div_min_unique;
     integer pc_div_max_unique;
 `ifdef SIMULATION
-    integer lb_mixedpath_cyc;
+    integer uoc_mixedpath_cyc;
 `endif
     // Rename stall source breakdown: fires when rename stalls, tags the
     // first missing resource on slot 0 (other slots typically cascade).
@@ -671,11 +740,11 @@ module tb_top
                 fetch_hist[i]     <= 0;
                 frontend_hist[i]  <= 0;
                 fused_hist[i]     <= 0;
-                lb_replay_hist[i] <= 0;
-                lb_body_hist[i]   <= 0;
+                uoc_replay_hist[i] <= 0;
+                uoc_group_hist[i]  <= 0;
                 commit_hist[i]    <= 0;
             end
-            lb_active_cycles   <= 0;
+            uoc_active_cycles  <= 0;
             uoc_lookup_total          <= 0;
             uoc_hit_total             <= 0;
             uoc_miss_total            <= 0;
@@ -683,6 +752,17 @@ module tb_top
             uoc_fill_evict_total      <= 0;
             uoc_enter_playing_total   <= 0;
             uoc_exit_miss_total       <= 0;
+            uoc_exit_nohit_total      <= 0;
+            uoc_exit_unsafe_total     <= 0;
+            uoc_emit_total            <= 0;
+            uoc_emit_control_total    <= 0;
+            uoc_emit_cond_total       <= 0;
+            uoc_emit_jal_total        <= 0;
+            uoc_emit_jalr_total       <= 0;
+            uoc_emit_pred_taken_total <= 0;
+            uoc_emit_uops_total       <= 0;
+            uoc_emit_control_uops_total <= 0;
+            uoc_active_flush_total    <= 0;
             uoc_invalidate_total      <= 0;
             rename_stall_cyc   <= 0;
             rob_full_cyc       <= 0;
@@ -698,11 +778,11 @@ module tb_top
             backend_stall_cyc  <= 0;
             flush_cyc          <= 0;
             perf_total_cyc     <= 0;
-            lb_commit_no_load_cyc <= 0;
-            lb_commit_no_load_run <= 0;
-            lb_commit_no_load_run_max <= 0;
+            uoc_commit_no_load_cyc <= 0;
+            uoc_commit_no_load_run <= 0;
+            uoc_commit_no_load_run_max <= 0;
             fetch_zero_total_cyc <= 0;
-            fetch_zero_lb_hold_cyc <= 0;
+            fetch_zero_frontend_hold_cyc <= 0;
             fetch_zero_redirect_cyc <= 0;
             fetch_zero_pkt_empty_cyc <= 0;
             fetch_zero_pkt_valid_cyc <= 0;
@@ -828,7 +908,7 @@ module tb_top
             pc_div_min_unique   <= 64;
             pc_div_max_unique   <= 0;
 `ifdef SIMULATION
-            lb_mixedpath_cyc    <= 0;
+            uoc_mixedpath_cyc   <= 0;
 `endif
             stall_preg_cyc     <= 0;
             stall_ckpt_cyc     <= 0;
@@ -855,7 +935,7 @@ module tb_top
             perf_total_cyc    <= perf_total_cyc + 1;
             frontend_bin = int'(u_core.rename_dec_count);
             if (frontend_bin > 6) frontend_bin = 6;
-            body_bin = int'(u_core.u_loop_buffer.body_len_r);
+            body_bin = int'(u_core.uoc_count);
             if (body_bin > 6) body_bin = 6;
             sq_addr_only_pending_now = 0;
             load_lat_pending_now = 0;
@@ -865,7 +945,8 @@ module tb_top
             fetch_hist[u_core.fetch_count]        <= fetch_hist[u_core.fetch_count] + 1;
             frontend_hist[frontend_bin]           <= frontend_hist[frontend_bin] + 1;
             commit_hist[u_core.commit_count]      <= commit_hist[u_core.commit_count] + 1;
-            if (u_core.lb_active)       lb_active_cycles  <= lb_active_cycles + 1;
+            if (u_core.uoc_active)
+                uoc_active_cycles <= uoc_active_cycles + 1;
             // µop cache telemetry
             if (u_core.uoc_ev_lookup)            uoc_lookup_total        <= uoc_lookup_total + 1;
             if (u_core.uoc_ev_hit)               uoc_hit_total           <= uoc_hit_total + 1;
@@ -874,10 +955,31 @@ module tb_top
             if (u_core.uoc_ev_fill_evict_valid)  uoc_fill_evict_total    <= uoc_fill_evict_total + 1;
             if (u_core.uoc_ev_enter_playing)     uoc_enter_playing_total <= uoc_enter_playing_total + 1;
             if (u_core.uoc_ev_exit_playing_miss) uoc_exit_miss_total     <= uoc_exit_miss_total + 1;
+            if (u_core.uoc_ev_exit_playing_nohit)  uoc_exit_nohit_total  <= uoc_exit_nohit_total + 1;
+            if (u_core.uoc_ev_exit_playing_unsafe) uoc_exit_unsafe_total <= uoc_exit_unsafe_total + 1;
+            if (u_core.uoc_ev_emit)                uoc_emit_total        <= uoc_emit_total + 1;
+            if (u_core.uoc_ev_emit_control)        uoc_emit_control_total <= uoc_emit_control_total + 1;
+            if (u_core.uoc_ev_emit_cond)           uoc_emit_cond_total   <= uoc_emit_cond_total + 1;
+            if (u_core.uoc_ev_emit_jal)            uoc_emit_jal_total    <= uoc_emit_jal_total + 1;
+            if (u_core.uoc_ev_emit_jalr)           uoc_emit_jalr_total   <= uoc_emit_jalr_total + 1;
+            if (u_core.uoc_ev_emit_pred_taken)     uoc_emit_pred_taken_total <= uoc_emit_pred_taken_total + 1;
+            if (u_core.uoc_active && u_core.flush_out.valid)
+                uoc_active_flush_total <= uoc_active_flush_total + 1;
             if (u_core.uoc_ev_invalidate)        uoc_invalidate_total    <= uoc_invalidate_total + 1;
-            if (u_core.lb_active) begin
-                lb_replay_hist[u_core.lb_count] <= lb_replay_hist[u_core.lb_count] + 1;
-                lb_body_hist[body_bin]          <= lb_body_hist[body_bin] + 1;
+            if (u_core.uoc_active) begin
+                uoc_replay_hist[u_core.uoc_count] <=
+                    uoc_replay_hist[u_core.uoc_count] + 1;
+                uoc_group_hist[body_bin] <= uoc_group_hist[body_bin] + 1;
+                for (int u = 0; u < PIPE_WIDTH; u++) begin
+                    if ((3'(u) < u_core.uoc_count) && u_core.uoc_insn[u].valid) begin
+                        uoc_emit_uops_total <= uoc_emit_uops_total + 1;
+                        if (u_core.uoc_insn[u].is_branch ||
+                            u_core.uoc_insn[u].is_jal ||
+                            u_core.uoc_insn[u].is_jalr) begin
+                            uoc_emit_control_uops_total <= uoc_emit_control_uops_total + 1;
+                        end
+                    end
+                end
             end else begin
                 fused_hist[int'(u_core.fused_count)] <=
                     fused_hist[int'(u_core.fused_count)] + 1;
@@ -936,24 +1038,25 @@ module tb_top
             end
             if (u_core.backend_stall)   backend_stall_cyc <= backend_stall_cyc + 1;
             if (u_core.flush_out.valid) flush_cyc         <= flush_cyc + 1;
-            if (u_core.lb_active &&
+            if (u_core.uoc_active &&
                 (u_core.commit_count != 3'd0) &&
                 (u_core.load_commit_count == 3'd0)) begin
-                lb_commit_no_load_cyc <= lb_commit_no_load_cyc + 1;
-                lb_commit_no_load_run <= lb_commit_no_load_run + 1;
-                if ((lb_commit_no_load_run + 1) > lb_commit_no_load_run_max)
-                    lb_commit_no_load_run_max <= lb_commit_no_load_run + 1;
+                uoc_commit_no_load_cyc <= uoc_commit_no_load_cyc + 1;
+                uoc_commit_no_load_run <= uoc_commit_no_load_run + 1;
+                if ((uoc_commit_no_load_run + 1) > uoc_commit_no_load_run_max)
+                    uoc_commit_no_load_run_max <= uoc_commit_no_load_run + 1;
             end else begin
-                lb_commit_no_load_run <= 0;
+                uoc_commit_no_load_run <= 0;
             end
 `ifdef SIMULATION
-            if (u_core.lb_active && u_core.u_loop_buffer.sim_pb_mixedpath_c)
-                lb_mixedpath_cyc <= lb_mixedpath_cyc + 1;
+            if (u_core.uoc_active && 1'b0)
+                uoc_mixedpath_cyc <= uoc_mixedpath_cyc + 1;
 `endif
             if (u_core.fetch_count == 3'd0) begin
                 fetch_zero_total_cyc <= fetch_zero_total_cyc + 1;
                 if (u_core.u_fetch_unit.frontend_hold) begin
-                    fetch_zero_lb_hold_cyc <= fetch_zero_lb_hold_cyc + 1;
+                    fetch_zero_frontend_hold_cyc <=
+                        fetch_zero_frontend_hold_cyc + 1;
                 end else if (u_core.flush_out.valid || u_core.bru_early_redirect) begin
                     fetch_zero_redirect_cyc <= fetch_zero_redirect_cyc + 1;
                 end else if (!u_core.u_fetch_unit.packet_buf_valid) begin
@@ -1476,21 +1579,21 @@ module tb_top
             for (int i = 0; i <= 6; i++)
                 $display("  frontend=%0d : %0d (%0d%%)", i, frontend_hist[i],
                          (perf_total_cyc > 0) ? (frontend_hist[i] * 100 / perf_total_cyc) : 0);
-            $display("Decode-path histogram (non-LB cycles, fused_count):");
+            $display("Decode-path histogram (non-UOC cycles, fused_count):");
             for (int i = 0; i <= 6; i++)
                 $display("  fused=%0d : %0d", i, fused_hist[i]);
-            $display("Loop-buffer replay histogram (LB-active cycles, lb_count):");
+            $display("Decoded-op replay histogram (UOC-active cycles, uoc_count):");
             for (int i = 0; i <= 6; i++)
-                $display("  lb_emit=%0d : %0d", i, lb_replay_hist[i]);
-            $display("Loop-buffer body-length histogram (LB-active cycles, 6=>=6):");
+                $display("  uoc_emit=%0d : %0d", i, uoc_replay_hist[i]);
+            $display("Decoded-op replay group-size histogram (UOC-active cycles, 6=>=6):");
             for (int i = 0; i <= 6; i++)
                 if (i < 6)
-                    $display("  lb_body=%0d : %0d", i, lb_body_hist[i]);
+                    $display("  uoc_group=%0d : %0d", i, uoc_group_hist[i]);
                 else
-                    $display("  lb_body>=6 : %0d", lb_body_hist[i]);
+                    $display("  uoc_group>=6 : %0d", uoc_group_hist[i]);
             $display("Fetch=0 breakdown:");
             $display("  total                     : %0d", fetch_zero_total_cyc);
-            $display("  loop_buffer_hold          : %0d", fetch_zero_lb_hold_cyc);
+            $display("  frontend_hold             : %0d", fetch_zero_frontend_hold_cyc);
             $display("  redirect_recovery         : %0d", fetch_zero_redirect_cyc);
             $display("  packet_empty              : %0d", fetch_zero_pkt_empty_cyc);
             $display("  packet_valid_zeroout      : %0d", fetch_zero_pkt_valid_cyc);
@@ -1519,9 +1622,12 @@ module tb_top
             for (int i = 0; i <= 6; i++)
                 $display("  commit=%0d: %0d (%0d%%)", i, commit_hist[i],
                          (perf_total_cyc > 0) ? (commit_hist[i] * 100 / perf_total_cyc) : 0);
-            $display("Loop buffer active: %0d cycles (%0d%%)",
-                     lb_active_cycles,
-                     (perf_total_cyc > 0) ? (lb_active_cycles * 100 / perf_total_cyc) : 0);
+            // Kept for the benchmark harness gate. The legacy loop buffer RTL
+            // is not instantiated in the pipeline, so this must remain zero.
+            $display("Loop buffer active: 0 cycles (0%%)");
+            $display("Standalone decoded-op replay active: %0d cycles (%0d%%)",
+                     uoc_active_cycles,
+                     (perf_total_cyc > 0) ? (uoc_active_cycles * 100 / perf_total_cyc) : 0);
             $display("UOC telemetry:");
             $display("  lookups        : %0d", uoc_lookup_total);
             $display("  hits           : %0d (%0d%%)",
@@ -1532,12 +1638,27 @@ module tb_top
             $display("  fills_evicting : %0d", uoc_fill_evict_total);
             $display("  enter_playing  : %0d", uoc_enter_playing_total);
             $display("  exit_on_miss   : %0d", uoc_exit_miss_total);
+            $display("  exit_nohit/unsafe: %0d / %0d",
+                     uoc_exit_nohit_total,
+                     uoc_exit_unsafe_total);
+            $display("  emit groups/control: %0d / %0d",
+                     uoc_emit_total,
+                     uoc_emit_control_total);
+            $display("  emit cond/jal/jalr : %0d / %0d / %0d",
+                     uoc_emit_cond_total,
+                     uoc_emit_jal_total,
+                     uoc_emit_jalr_total);
+            $display("  emit pred_taken    : %0d", uoc_emit_pred_taken_total);
+            $display("  emit uops/control  : %0d / %0d",
+                     uoc_emit_uops_total,
+                     uoc_emit_control_uops_total);
+            $display("  active_flush_cycles: %0d", uoc_active_flush_total);
             $display("  invalidates    : %0d", uoc_invalidate_total);
-            $display("Loop-buffer forward-progress summary:");
-            $display("  commit_no_load cycles       : %0d", lb_commit_no_load_cyc);
-            $display("  commit_no_load max run      : %0d", lb_commit_no_load_run_max);
+            $display("Decoded-op replay forward-progress summary:");
+            $display("  commit_no_load cycles       : %0d", uoc_commit_no_load_cyc);
+            $display("  commit_no_load max run      : %0d", uoc_commit_no_load_run_max);
 `ifdef SIMULATION
-            $display("  mixed-path replay cycles    : %0d", lb_mixedpath_cyc);
+            $display("  mixed-path replay cycles    : %0d", uoc_mixedpath_cyc);
 `endif
             $display("Committed PC diversity (%0d-cycle 64-bin windows):",
                      PC_DIV_WINDOW_CYC);
@@ -1753,8 +1874,8 @@ module tb_top
     logic [63:0] trace_prev_crat_s10_data;
     logic       trace_prev_free2;
     logic       trace_prev_cmt2;
-    logic [1:0] trace_prev_lb_state;
-    logic       trace_prev_lb_active;
+    logic [1:0] trace_prev_uoc_state;
+    logic       trace_prev_uoc_active;
     logic [63:0] trace_sq_alloc_pc [0:SQ_DEPTH-1];
     logic [ROB_IDX_BITS-1:0] trace_sq_alloc_rob [0:SQ_DEPTH-1];
     logic [63:0] trace_csb_pc [0:CSB_DEPTH-1];
@@ -1788,8 +1909,8 @@ module tb_top
             trace_prev_crat_s10_data <= 64'd0;
             trace_prev_free2   <= 1'b0;
             trace_prev_cmt2    <= 1'b0;
-            trace_prev_lb_state  <= 2'd0;
-            trace_prev_lb_active <= 1'b0;
+            trace_prev_uoc_state  <= 2'd0;
+            trace_prev_uoc_active <= 1'b0;
             for (int i = 0; i <= 20; i++) begin
                 cm_progress_count[i] <= 0;
             end
@@ -1972,9 +2093,9 @@ module tb_top
                     u_core.flush_out.redirect_pc,
                     u_core.flush_out.full_flush);
             end
-            if (trace_lb_en) begin
-                automatic logic hot_lb_window;
-                hot_lb_window = 1'b0;
+            if (trace_uoc_en) begin
+                automatic logic hot_uoc_window;
+                hot_uoc_window = 1'b0;
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (u_core.fused_insn[i].valid &&
                         (((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2000) &&
@@ -1985,28 +2106,24 @@ module tb_top
 	                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_21a0)) ||
 	                         ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2440) &&
 	                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_24d0)))) begin
-                        hot_lb_window = 1'b1;
+                        hot_uoc_window = 1'b1;
                     end
                 end
-                if (hot_lb_window ||
+                if (hot_uoc_window ||
 `ifdef SIMULATION
-                    u_core.u_loop_buffer.sim_pb_mixedpath_c ||
+                    1'b0 ||
 `endif
-                    u_core.backward_branch_taken ||
-                    (u_core.lb_active != trace_prev_lb_active) ||
-                    (u_core.u_loop_buffer.state_r != trace_prev_lb_state) ||
+                    1'b0 ||
+                    (u_core.uoc_active != trace_prev_uoc_active) ||
+                    (u_core.u_uop_cache.state_r != trace_prev_uoc_state) ||
                     u_core.bru_early_redirect ||
                     u_core.flush_out.valid) begin
-                    $display("[LBDBG] cyc=%0d state=%0d active=%b bwd=%b fused_count=%0d lb_count=%0d loop_start=%0d body_len=%0d rd_ptr=%0d bru_redir=%b bru_pc=%016h flush=%b fl_pc=%016h",
+                    $display("[UOCDBG] cyc=%0d state=%0d active=%b fused_count=%0d uoc_count=%0d bru_redir=%b bru_pc=%016h flush=%b fl_pc=%016h",
                         trace_cycle,
-                        u_core.u_loop_buffer.state_r,
-                        u_core.lb_active,
-                        u_core.backward_branch_taken,
+                        u_core.u_uop_cache.state_r,
+                        u_core.uoc_active,
                         u_core.fused_count,
-                        u_core.lb_count,
-                        u_core.u_loop_buffer.loop_start_r,
-                        u_core.u_loop_buffer.body_len_r,
-                        u_core.u_loop_buffer.rd_ptr_r,
+                        u_core.uoc_count,
                         u_core.bru_early_redirect,
                         u_core.bru_target,
                         u_core.flush_out.valid,
@@ -2014,19 +2131,19 @@ module tb_top
                     for (int i = 0; i < PIPE_WIDTH; i++) begin
                         automatic decoded_insn_t trace_insn;
                         automatic logic trace_valid;
-                        automatic logic trace_from_lb;
+                        automatic logic trace_from_uoc;
 
-                        trace_from_lb = u_core.lb_active;
-                        trace_insn = trace_from_lb ? u_core.lb_insn[i]
-                                                   : u_core.fused_insn[i];
-                        trace_valid = trace_from_lb ? (i < int'(u_core.lb_count))
-                                                    : u_core.fused_insn[i].valid;
+                        trace_from_uoc = u_core.uoc_active;
+                        trace_insn = trace_from_uoc ? u_core.uoc_insn[i]
+                                                    : u_core.fused_insn[i];
+                        trace_valid = trace_from_uoc ? (i < int'(u_core.uoc_count))
+                                                     : u_core.fused_insn[i].valid;
 
                         if (trace_valid) begin
-                            $display("[LBSLOT%0d] cyc=%0d src=%s pc=%016h br=%b jal=%b jalr=%b bp_tk=%b bp_tgt=%016h fused=%b",
+                            $display("[UOCSLOT%0d] cyc=%0d src=%s pc=%016h br=%b jal=%b jalr=%b bp_tk=%b bp_tgt=%016h fused=%b",
                                 i,
                                 trace_cycle,
-                                trace_from_lb ? "lb" : "fe",
+                                trace_from_uoc ? "uoc" : "fe",
                                 trace_insn.pc,
                                 trace_insn.is_branch,
                                 trace_insn.is_jal,
@@ -2037,8 +2154,8 @@ module tb_top
                         end
                     end
                 end
-                trace_prev_lb_state  <= u_core.u_loop_buffer.state_r;
-                trace_prev_lb_active <= u_core.lb_active;
+                trace_prev_uoc_state  <= u_core.u_uop_cache.state_r;
+                trace_prev_uoc_active <= u_core.uoc_active;
             end
             if (trace_a0map_en) begin
                 if ((u_core.u_rename.u_rat.rat_table[10] != trace_prev_rat_a0) ||
@@ -2367,7 +2484,7 @@ module tb_top
                 if (u_core.u_fetch_unit.f2_valid_r &&
                     u_core.u_fetch_unit.f2_data_valid &&
                     tb_coremark_list_ptr_pc(u_core.u_fetch_unit.f2_pc_r)) begin
-                    $display("[LPF2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h bp=%b bp_tk=%b bp_slot=%0d bp_tgt=%016h sg_v=%b sg_pc=%016h pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b bypass=%b lb_active=%b rn_stall=%b fe_stall=%b flush=%b",
+                    $display("[LPF2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h bp=%b bp_tk=%b bp_slot=%0d bp_tgt=%016h sg_v=%b sg_pc=%016h pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b bypass=%b uoc_active=%b rn_stall=%b fe_stall=%b flush=%b",
                         trace_cycle,
                         u_core.u_fetch_unit.f2_pc_r,
                         u_core.u_fetch_unit.extract_count,
@@ -2389,7 +2506,7 @@ module tb_top
                         u_core.u_fetch_unit.fetch_count,
                         u_core.u_fetch_unit.packet_buf_valid,
                         u_core.u_fetch_unit.packet_bypass_valid,
-                        u_core.lb_active,
+                        u_core.uoc_active,
                         u_core.rename_stall,
                         u_core.frontend_backend_stall,
                         u_core.flush_out.valid);
@@ -2412,7 +2529,7 @@ module tb_top
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if ((i < int'(u_core.u_fetch_unit.fetch_count)) &&
                         tb_coremark_list_ptr_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
-                        $display("[LPFETCH] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b bypass=%b lb_active=%b rn_stall=%b fe_stall=%b flush=%b",
+                        $display("[LPFETCH] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b bypass=%b uoc_active=%b rn_stall=%b fe_stall=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.u_fetch_unit.fetch_pc[i],
@@ -2422,7 +2539,7 @@ module tb_top
                             u_core.u_fetch_unit.fetch_packet_out.fetch_count,
                             u_core.u_fetch_unit.packet_buf_valid,
                             u_core.u_fetch_unit.packet_bypass_valid,
-                            u_core.lb_active,
+                            u_core.uoc_active,
                             u_core.rename_stall,
                             u_core.frontend_backend_stall,
                             u_core.flush_out.valid);
@@ -2452,7 +2569,7 @@ module tb_top
                     if ((i < int'(u_core.fused_count)) &&
                         u_core.fused_insn[i].valid &&
                         tb_coremark_list_ptr_pc(u_core.fused_insn[i].pc)) begin
-                        $display("[LPFUSED] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rdv=%b rd=%0d rs1v=%b rs1=%0d rs2v=%b rs2=%0d br=%b bp_tk=%b bp_tgt=%016h count=%0d lb_active=%b flush=%b",
+                        $display("[LPFUSED] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rdv=%b rd=%0d rs1v=%b rs1=%0d rs2v=%b rs2=%0d br=%b bp_tk=%b bp_tgt=%016h count=%0d uoc_active=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.fused_insn[i].pc,
@@ -2468,13 +2585,13 @@ module tb_top
                             u_core.fused_insn[i].bp_taken,
                             u_core.fused_insn[i].bp_target,
                             u_core.fused_count,
-                            u_core.lb_active,
+                            u_core.uoc_active,
                             u_core.flush_out.valid);
                     end
                     if ((i < int'(u_core.rename_dec_count)) &&
                         u_core.rename_dec_in[i].valid &&
                         tb_coremark_list_ptr_pc(u_core.rename_dec_in[i].pc)) begin
-                        $display("[LPRENIN] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rdv=%b rd=%0d rs1v=%b rs1=%0d rs2v=%b rs2=%0d br=%b bp_tk=%b bp_tgt=%016h count=%0d lb_active=%b rn_stall=%b hold=%b work=%b adv=%b flush=%b",
+                        $display("[LPRENIN] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rdv=%b rd=%0d rs1v=%b rs1=%0d rs2v=%b rs2=%0d br=%b bp_tk=%b bp_tgt=%016h count=%0d uoc_active=%b rn_stall=%b hold=%b work=%b adv=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.rename_dec_in[i].pc,
@@ -2490,7 +2607,7 @@ module tb_top
                             u_core.rename_dec_in[i].bp_taken,
                             u_core.rename_dec_in[i].bp_target,
                             u_core.rename_dec_count,
-                            u_core.lb_active,
+                            u_core.uoc_active,
                             u_core.rename_stall,
                             u_core.u_rename.hold_valid,
                             u_core.u_rename.work_valid,
@@ -2668,7 +2785,7 @@ module tb_top
                 if (u_core.u_fetch_unit.f2_valid_r &&
                     u_core.u_fetch_unit.f2_data_valid &&
                     tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.f2_pc_r)) begin
-                    $display("[CM_FETCH_F2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h strad=%b pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b bypass=%b lb_active=%b stall=%b flush=%b",
+                    $display("[CM_FETCH_F2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h strad=%b pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b bypass=%b uoc_active=%b stall=%b flush=%b",
                         trace_cycle,
                         u_core.u_fetch_unit.f2_pc_r,
                         u_core.u_fetch_unit.extract_count,
@@ -2685,7 +2802,7 @@ module tb_top
                         u_core.u_fetch_unit.fetch_count,
                         u_core.u_fetch_unit.packet_buf_valid,
                         u_core.u_fetch_unit.packet_bypass_valid,
-                        u_core.lb_active,
+                        u_core.uoc_active,
                         u_core.frontend_backend_stall,
                         u_core.flush_out.valid);
                     for (int i = 0; i < PIPE_WIDTH; i++) begin
@@ -2705,7 +2822,7 @@ module tb_top
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if ((i < int'(u_core.u_fetch_unit.fetch_count)) &&
                         tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
-                        $display("[CM_FETCH_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b bypass=%b lb_active=%b stall=%b flush=%b",
+                        $display("[CM_FETCH_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b bypass=%b uoc_active=%b stall=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.u_fetch_unit.fetch_pc[i],
@@ -2715,7 +2832,7 @@ module tb_top
                             u_core.u_fetch_unit.fetch_packet_out.fetch_count,
                             u_core.u_fetch_unit.packet_buf_valid,
                             u_core.u_fetch_unit.packet_bypass_valid,
-                            u_core.lb_active,
+                            u_core.uoc_active,
                             u_core.frontend_backend_stall,
                             u_core.flush_out.valid);
                     end
@@ -2742,7 +2859,7 @@ module tb_top
                     if ((i < int'(u_core.fused_count)) &&
                         u_core.fused_insn[i].valid &&
                         tb_coremark_bad_fetch_pc(u_core.fused_insn[i].pc)) begin
-                        $display("[CM_FUSED] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d rdv=%b jal=%b jalr=%b br=%b load=%b store=%b count=%0d lb_active=%b flush=%b",
+                        $display("[CM_FUSED] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d rdv=%b jal=%b jalr=%b br=%b load=%b store=%b count=%0d uoc_active=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.fused_insn[i].pc,
@@ -2756,13 +2873,13 @@ module tb_top
                             u_core.fused_insn[i].is_load,
                             u_core.fused_insn[i].is_store,
                             u_core.fused_count,
-                            u_core.lb_active,
+                            u_core.uoc_active,
                             u_core.flush_out.valid);
                     end
                     if ((i < int'(u_core.rename_dec_count)) &&
                         u_core.rename_dec_in[i].valid &&
                         tb_coremark_bad_fetch_pc(u_core.rename_dec_in[i].pc)) begin
-                        $display("[CM_RENAME_IN] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d rdv=%b jal=%b jalr=%b br=%b load=%b store=%b count=%0d lb_active=%b flush=%b",
+                        $display("[CM_RENAME_IN] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d rdv=%b jal=%b jalr=%b br=%b load=%b store=%b count=%0d uoc_active=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.rename_dec_in[i].pc,
@@ -2776,13 +2893,13 @@ module tb_top
                             u_core.rename_dec_in[i].is_load,
                             u_core.rename_dec_in[i].is_store,
                             u_core.rename_dec_count,
-                            u_core.lb_active,
+                            u_core.uoc_active,
                             u_core.flush_out.valid);
                     end
                     if ((i < int'(u_core.ren_count_w)) &&
                         u_core.ren_insn[i].base.valid &&
                         tb_coremark_bad_fetch_pc(u_core.ren_insn[i].base.pc)) begin
-                        $display("[CM_RENAME_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d pdst=%0d rob=%0d jal=%b jalr=%b br=%b load=%b store=%b count=%0d lb_active=%b flush=%b",
+                        $display("[CM_RENAME_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b rd=%0d pdst=%0d rob=%0d jal=%b jalr=%b br=%b load=%b store=%b count=%0d uoc_active=%b flush=%b",
                             trace_cycle,
                             i,
                             u_core.ren_insn[i].base.pc,
@@ -2797,19 +2914,19 @@ module tb_top
                             u_core.ren_insn[i].base.is_load,
                             u_core.ren_insn[i].base.is_store,
                             u_core.ren_count_w,
-                            u_core.lb_active,
+                            u_core.uoc_active,
                             u_core.flush_out.valid);
                     end
                 end
                 if ((lowpc_next_count < 120) &&
                     u_core.bru_early_redirect &&
                     tb_low_text_pc(u_core.bru_early_target)) begin
-                    $display("[LOWPC] cyc=%0d n=%0d stage=bru_redirect pc=%016h lb_active=%b lb_state=%0d flush=%b redir=%016h bru0=%b bru1=%b",
+                    $display("[LOWPC] cyc=%0d n=%0d stage=bru_redirect pc=%016h uoc_active=%b uoc_state=%0d flush=%b redir=%016h bru0=%b bru1=%b",
                         trace_cycle,
                         lowpc_next_count,
                         u_core.bru_early_target,
-                        u_core.lb_active,
-                        u_core.u_loop_buffer.state_r,
+                        u_core.uoc_active,
+                        u_core.u_uop_cache.state_r,
                         u_core.flush_out.valid,
                         u_core.flush_out.redirect_pc,
                         u_core.bru0_early_redirect,
@@ -2819,12 +2936,12 @@ module tb_top
                 if ((lowpc_next_count < 120) &&
                     u_core.flush_out.valid &&
                     tb_low_text_pc(u_core.flush_out.redirect_pc)) begin
-                    $display("[LOWPC] cyc=%0d n=%0d stage=flush pc=%016h lb_active=%b lb_state=%0d full=%b bru_redir=%b bru_pc=%016h",
+                    $display("[LOWPC] cyc=%0d n=%0d stage=flush pc=%016h uoc_active=%b uoc_state=%0d full=%b bru_redir=%b bru_pc=%016h",
                         trace_cycle,
                         lowpc_next_count,
                         u_core.flush_out.redirect_pc,
-                        u_core.lb_active,
-                        u_core.u_loop_buffer.state_r,
+                        u_core.uoc_active,
+                        u_core.u_uop_cache.state_r,
                         u_core.flush_out.full_flush,
                         u_core.bru_early_redirect,
                         u_core.bru_early_target);
@@ -2834,13 +2951,13 @@ module tb_top
                     if ((lowpc_next_count < 120) &&
                         (i < int'(u_core.u_fetch_unit.fetch_count)) &&
                         tb_low_text_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
-                        $display("[LOWPC] cyc=%0d n=%0d stage=fetch slot=%0d pc=%016h lb_active=%b lb_state=%0d flush=%b redir=%016h bru_redir=%b bru_pc=%016h fetch_count=%0d",
+                        $display("[LOWPC] cyc=%0d n=%0d stage=fetch slot=%0d pc=%016h uoc_active=%b uoc_state=%0d flush=%b redir=%016h bru_redir=%b bru_pc=%016h fetch_count=%0d",
                             trace_cycle,
                             lowpc_next_count,
                             i,
                             u_core.u_fetch_unit.fetch_pc[i],
-                            u_core.lb_active,
-                            u_core.u_loop_buffer.state_r,
+                            u_core.uoc_active,
+                            u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.bru_early_redirect,
@@ -2852,13 +2969,13 @@ module tb_top
                         (i < int'(u_core.dec_count_out)) &&
                         u_core.dec_insn_out[i].valid &&
                         tb_low_text_pc(u_core.dec_insn_out[i].pc)) begin
-                        $display("[LOWPC] cyc=%0d n=%0d stage=decode slot=%0d pc=%016h lb_active=%b lb_state=%0d flush=%b redir=%016h dec_count=%0d",
+                        $display("[LOWPC] cyc=%0d n=%0d stage=decode slot=%0d pc=%016h uoc_active=%b uoc_state=%0d flush=%b redir=%016h dec_count=%0d",
                             trace_cycle,
                             lowpc_next_count,
                             i,
                             u_core.dec_insn_out[i].pc,
-                            u_core.lb_active,
-                            u_core.u_loop_buffer.state_r,
+                            u_core.uoc_active,
+                            u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.dec_count_out);
@@ -2868,13 +2985,13 @@ module tb_top
                         (i < int'(u_core.fused_count)) &&
                         u_core.fused_insn[i].valid &&
                         tb_low_text_pc(u_core.fused_insn[i].pc)) begin
-                        $display("[LOWPC] cyc=%0d n=%0d stage=fused slot=%0d pc=%016h lb_active=%b lb_state=%0d flush=%b redir=%016h fused_count=%0d br=%b jal=%b jalr=%b bp_tk=%b bp_tgt=%016h",
+                        $display("[LOWPC] cyc=%0d n=%0d stage=fused slot=%0d pc=%016h uoc_active=%b uoc_state=%0d flush=%b redir=%016h fused_count=%0d br=%b jal=%b jalr=%b bp_tk=%b bp_tgt=%016h",
                             trace_cycle,
                             lowpc_next_count,
                             i,
                             u_core.fused_insn[i].pc,
-                            u_core.lb_active,
-                            u_core.u_loop_buffer.state_r,
+                            u_core.uoc_active,
+                            u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.fused_count,
@@ -2886,37 +3003,35 @@ module tb_top
                         lowpc_next_count++;
                     end
                     if ((lowpc_next_count < 120) &&
-                        u_core.lb_active &&
-                        (i < int'(u_core.lb_count)) &&
-                        u_core.lb_insn[i].valid &&
-                        tb_low_text_pc(u_core.lb_insn[i].pc)) begin
-                        $display("[LOWPC] cyc=%0d n=%0d stage=lb slot=%0d pc=%016h lb_state=%0d flush=%b redir=%016h lb_count=%0d rd_ptr=%0d body_len=%0d br=%b bp_tk=%b bp_tgt=%016h",
+                        u_core.uoc_active &&
+                        (i < int'(u_core.uoc_count)) &&
+                        u_core.uoc_insn[i].valid &&
+                        tb_low_text_pc(u_core.uoc_insn[i].pc)) begin
+                        $display("[LOWPC] cyc=%0d n=%0d stage=uoc slot=%0d pc=%016h uoc_state=%0d flush=%b redir=%016h uoc_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
                             trace_cycle,
                             lowpc_next_count,
                             i,
-                            u_core.lb_insn[i].pc,
-                            u_core.u_loop_buffer.state_r,
+                            u_core.uoc_insn[i].pc,
+                            u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
-                            u_core.lb_count,
-                            u_core.u_loop_buffer.rd_ptr_r,
-                            u_core.u_loop_buffer.body_len_r,
-                            u_core.lb_insn[i].is_branch,
-                            u_core.lb_insn[i].bp_taken,
-                            u_core.lb_insn[i].bp_target);
+                            u_core.uoc_count,
+                            u_core.uoc_insn[i].is_branch,
+                            u_core.uoc_insn[i].bp_taken,
+                            u_core.uoc_insn[i].bp_target);
                         lowpc_next_count++;
                     end
                     if ((lowpc_next_count < 120) &&
                         (i < int'(u_core.rename_dec_count)) &&
                         u_core.rename_dec_in[i].valid &&
                         tb_low_text_pc(u_core.rename_dec_in[i].pc)) begin
-                        $display("[LOWPC] cyc=%0d n=%0d stage=rename_in slot=%0d pc=%016h src_lb=%b lb_state=%0d flush=%b redir=%016h ren_dec_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
+                        $display("[LOWPC] cyc=%0d n=%0d stage=rename_in slot=%0d pc=%016h src_uoc=%b uoc_state=%0d flush=%b redir=%016h ren_dec_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
                             trace_cycle,
                             lowpc_next_count,
                             i,
                             u_core.rename_dec_in[i].pc,
-                            u_core.lb_active,
-                            u_core.u_loop_buffer.state_r,
+                            u_core.uoc_active,
+                            u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.rename_dec_count,
@@ -2929,14 +3044,14 @@ module tb_top
                         (i < int'(u_core.ren_count_w)) &&
                         u_core.ren_insn[i].base.valid &&
                         tb_low_text_pc(u_core.ren_insn[i].base.pc)) begin
-                        $display("[LOWPC] cyc=%0d n=%0d stage=rename_out slot=%0d pc=%016h rob=%0d lb_active=%b lb_state=%0d flush=%b redir=%016h ren_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
+                        $display("[LOWPC] cyc=%0d n=%0d stage=rename_out slot=%0d pc=%016h rob=%0d uoc_active=%b uoc_state=%0d flush=%b redir=%016h ren_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
                             trace_cycle,
                             lowpc_next_count,
                             i,
                             u_core.ren_insn[i].base.pc,
                             u_core.ren_insn[i].rob_idx,
-                            u_core.lb_active,
-                            u_core.u_loop_buffer.state_r,
+                            u_core.uoc_active,
+                            u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.ren_count_w,
@@ -2949,15 +3064,15 @@ module tb_top
                         (i < int'(u_core.dq_deq_count)) &&
                         u_core.dq_deq_data[i].base.valid &&
                         tb_low_text_pc(u_core.dq_deq_data[i].base.pc)) begin
-                        $display("[LOWPC] cyc=%0d n=%0d stage=dq_deq slot=%0d pc=%016h rob=%0d iq=%0d lb_active=%b lb_state=%0d flush=%b redir=%016h deq_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
+                        $display("[LOWPC] cyc=%0d n=%0d stage=dq_deq slot=%0d pc=%016h rob=%0d iq=%0d uoc_active=%b uoc_state=%0d flush=%b redir=%016h deq_count=%0d br=%b bp_tk=%b bp_tgt=%016h",
                             trace_cycle,
                             lowpc_next_count,
                             i,
                             u_core.dq_deq_data[i].base.pc,
                             u_core.dq_deq_data[i].rob_idx,
                             u_core.dq_deq_iq_target[i],
-                            u_core.lb_active,
-                            u_core.u_loop_buffer.state_r,
+                            u_core.uoc_active,
+                            u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.dq_deq_count,
@@ -2969,14 +3084,14 @@ module tb_top
                     if ((lowpc_next_count < 120) &&
                         u_core.commit_out[i].valid &&
                         tb_low_text_pc(u_core.rob_head_pc[i])) begin
-                        $display("[LOWPC] cyc=%0d n=%0d stage=commit slot=%0d pc=%016h cc=%0d lb_active=%b lb_state=%0d flush=%b redir=%016h br=%b tk=%b tgt=%016h mis=%b",
+                        $display("[LOWPC] cyc=%0d n=%0d stage=commit slot=%0d pc=%016h cc=%0d uoc_active=%b uoc_state=%0d flush=%b redir=%016h br=%b tk=%b tgt=%016h mis=%b",
                             trace_cycle,
                             lowpc_next_count,
                             i,
                             u_core.rob_head_pc[i],
                             u_core.commit_count,
-                            u_core.lb_active,
-                            u_core.u_loop_buffer.state_r,
+                            u_core.uoc_active,
+                            u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.rob_head_is_branch[i],
@@ -3209,10 +3324,11 @@ module tb_top
                         // tgt    = post-resolve target field as written by BRU (taken_target when taken,
                         //          fall-through when not — same field as before, kept for back-compat).
                         if (trace_commit_en) begin
-                            $display("[CPC] cyc=%0d slot=%0d pc=%016h ty=%02h br=%b tk=%b tgt=%016h act=%016h mis=%b",
+                            $display("[CPC] cyc=%0d slot=%0d pc=%016h ty=%02h fused=%b br=%b tk=%b tgt=%016h act=%016h mis=%b",
                                 trace_cycle, i,
                                 u_core.rob_head_pc[i],
                                 ty,
+                                u_core.rob_head_is_fused[i],
                                 u_core.rob_head_is_branch[i],
                                 u_core.rob_head_branch_taken[i],
                                 u_core.rob_head_branch_target[i],
@@ -3372,6 +3488,43 @@ module tb_top
                     uoplife_seq_counter <= uoplife_seq_counter + 64'(uoplife_seq_off);
                 end
             end
+            // -----------------------------------------------------------------
+            // Golden PC scoreboard: commit-aligned check/emit.
+            // -----------------------------------------------------------------
+            // Independent of TRACE_* gates. Runs when +CHECK_GOLDEN_PCS or
+            // +EMIT_COMMIT_PC_HEX is set. Uses u_core.rob_head_pc[i] which is
+            // already exposed for commit-hotspot tracing.
+            if ((golden_check_en || golden_emit_en) &&
+                (u_core.commit_count > 3'd0) && !golden_tripped_r) begin
+                automatic int golden_seq_off;
+                golden_seq_off = 0;
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if (u_core.commit_out[i].valid) begin
+                        automatic logic [63:0] cmt_pc;
+                        automatic longint      sidx;
+                        cmt_pc = u_core.rob_head_pc[i];
+                        if (golden_emit_en) begin
+                            $fwrite(golden_emit_fd, "%016h\n", cmt_pc);
+                        end
+                        if (golden_check_en) begin
+                            sidx = golden_seq_r + 64'(golden_seq_off);
+                            if (sidx >= golden_size) begin
+                                $display("[GOLDEN_PC TRIP] cycle=%0d seq=%0d reason=overflow size=%0d actual=%016h",
+                                    trace_cycle, sidx, golden_size, cmt_pc);
+                                golden_tripped_r <= 1'b1;
+                                $finish(2);
+                            end else if (golden_q[sidx] != cmt_pc) begin
+                                $display("[GOLDEN_PC TRIP] cycle=%0d seq=%0d expected=%016h actual=%016h",
+                                    trace_cycle, sidx, golden_q[sidx], cmt_pc);
+                                golden_tripped_r <= 1'b1;
+                                $finish(2);
+                            end
+                        end
+                        golden_seq_off = golden_seq_off + 1;
+                    end
+                end
+                golden_seq_r <= golden_seq_r + 64'(golden_seq_off);
+            end
             if (trace_commit_en && u_core.flush_out.valid) begin
                 $display("[FLUSH] cyc=%0d redirect_pc=%016h full=%b",
                     trace_cycle,
@@ -3400,6 +3553,10 @@ module tb_top
                 automatic int pipe_iss0_cnt;
                 automatic int pipe_iss1_cnt;
                 automatic int pipe_iss2_cnt;
+                automatic int pipe_load_cnt;
+                automatic int pipe_sta_cnt;
+                automatic int pipe_std_cnt;
+                automatic int pipe_issue_total;
                 automatic int pipe_free_cnt;
                 automatic int pipe_ckpt_cnt;
                 automatic int pipe_reason;
@@ -3407,6 +3564,12 @@ module tb_top
                 pipe_iss0_cnt = $countones(u_core.iq0_issue_valid);
                 pipe_iss1_cnt = $countones(u_core.iq1_issue_valid);
                 pipe_iss2_cnt = $countones(u_core.iq2_issue_valid);
+                pipe_load_cnt = $countones(u_core.iq_load_issue_valid);
+                pipe_sta_cnt  = u_core.routed_sta_valid ? 1 : 0;
+                pipe_std_cnt  = u_core.routed_std_valid ? 1 : 0;
+                pipe_issue_total = pipe_iss0_cnt + pipe_iss1_cnt +
+                                   pipe_iss2_cnt + pipe_load_cnt +
+                                   pipe_sta_cnt + pipe_std_cnt;
                 pipe_free_cnt = $countones(u_core.u_rename.u_free_list.free_bitmap);
                 pipe_ckpt_cnt = $countones(u_core.u_rename.u_checkpoint.occupied);
                 pipe_reason   = 0;
@@ -3436,6 +3599,35 @@ module tb_top
                     pipe_iss0_cnt,
                     pipe_iss1_cnt,
                     pipe_iss2_cnt,
+                    pipe_cdb_cnt,
+                    u_core.commit_count,
+                    u_core.rob_head_idx,
+                    u_core.rob_tail_idx,
+                    u_core.u_rob.count_r,
+                    u_core.u_iq0.count_r,
+                    u_core.u_iq1.count_r,
+                    u_core.u_iq2.count_r,
+                    u_core.u_lsu.u_load_queue.count_r,
+                    u_core.u_lsu.u_store_queue.count_r,
+                    pipe_free_cnt,
+                    pipe_ckpt_cnt,
+                    u_core.flush_out.valid,
+                    u_core.replay_valid,
+                    pipe_reason);
+                $display("[PIPE schema=pipe.v2] cyc=%0d rst=%b fetch=%0d decode=%0d rename=%0d dispatch=%0d issue0=%0d issue1=%0d issue2=%0d issue_load=%0d issue_sta=%0d issue_std=%0d issue_total=%0d cdb=%0d commit=%0d rob_head=%0d rob_tail=%0d rob_cnt=%0d iq0=%0d iq1=%0d iq2=%0d lq=%0d sq=%0d free=%0d ckpt=%0d flush=%b replay=%b reason=%0d",
+                    trace_cycle,
+                    !rst_n,
+                    u_core.fetch_count,
+                    u_core.dec_count_out,
+                    u_core.ren_count_w,
+                    u_core.dq_deq_count,
+                    pipe_iss0_cnt,
+                    pipe_iss1_cnt,
+                    pipe_iss2_cnt,
+                    pipe_load_cnt,
+                    pipe_sta_cnt,
+                    pipe_std_cnt,
+                    pipe_issue_total,
                     pipe_cdb_cnt,
                     u_core.commit_count,
                     u_core.rob_head_idx,
@@ -4382,7 +4574,8 @@ module tb_top
             // IC miss: f2 stage was valid but icache didn't deliver data
             if (u_core.u_fetch_unit.f2_valid_r && !u_core.u_fetch_unit.ic_resp_valid)
                 pc_icache_miss <= pc_icache_miss + 1;
-            if (u_core.lb_active) pc_total_flushed <= pc_total_flushed + 1; // reuse as LB active counter
+            if (u_core.uoc_active)
+                pc_total_flushed <= pc_total_flushed + 1; // decoded-op replay active counter
             if (u_core.u_fetch_unit.f2_bpu_redirect)
                 pc_bpu_redirect <= pc_bpu_redirect + 1;
             if (u_core.flush_out.valid)
@@ -4457,6 +4650,20 @@ module tb_top
             $display("  IC miss (f2 valid, no data) : %0d", pc_icache_miss);
             $display("  BPU redirects (taken br)    : %0d", pc_bpu_redirect);
             $display("  Backend redirects (flush)   : %0d", pc_backend_redirect);
+        end
+    end
+
+    // ----------------------------------------------------------------
+    // Golden PC scoreboard finalization (close emit file, declare OK)
+    // ----------------------------------------------------------------
+    final begin
+        if (golden_emit_en && golden_emit_fd != 0) begin
+            $fclose(golden_emit_fd);
+            $display("[GOLDEN_PC EMIT_DONE] seq=%0d", golden_seq_r);
+        end
+        if (golden_check_en && !golden_tripped_r) begin
+            $display("[GOLDEN_PC OK] seq=%0d size=%0d",
+                golden_seq_r, golden_size);
         end
     end
 

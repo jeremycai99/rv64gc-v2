@@ -162,11 +162,8 @@ module rv64gc_core_top
     logic [4:0]  fetch_bp_ras_tos;
     logic [63:0] fetch_bp_ras_top;
     logic [GHR_BITS-1:0] fetch_bp_ghr;
-    logic          lb_active;
-    logic          lb_capturing;
-    logic          lb_handoff_valid;
-    logic [63:0]   lb_handoff_pc;
-    // µop cache (gen-2) signals; gated on +UOC_ENABLE plusarg below.
+    // Standalone UOP-cache decoded-op replay path. Disabled for Stage 1 signoff
+    // until decoded delivery is tied to live BPU/FTQ validation.
     logic          uoc_active;
     logic          uoc_handoff_valid;
     logic [63:0]   uoc_handoff_pc;
@@ -175,6 +172,10 @@ module rv64gc_core_top
     logic          uoc_ev_lookup, uoc_ev_hit, uoc_ev_miss;
     logic          uoc_ev_fill, uoc_ev_fill_evict_valid;
     logic          uoc_ev_enter_playing, uoc_ev_exit_playing_miss;
+    logic          uoc_ev_exit_playing_nohit, uoc_ev_exit_playing_unsafe;
+    logic          uoc_ev_emit, uoc_ev_emit_control;
+    logic          uoc_ev_emit_cond, uoc_ev_emit_jal, uoc_ev_emit_jalr;
+    logic          uoc_ev_emit_pred_taken;
     logic          uoc_ev_invalidate;
     logic [GHR_BITS-1:0] ghr_out;
     logic                ghr_restore_valid_fe;
@@ -266,8 +267,13 @@ module rv64gc_core_top
         $test$plusargs("ENABLE_BRU_EARLY_REDIRECT") &&
         !$test$plusargs("DISABLE_BRU_EARLY_REDIRECT") &&
         !$test$plusargs("DISABLE_BRU1_EARLY_REDIRECT");
-    // Gen-2 µop cache: parallel-path bring-up; OFF unless plusarg set.
-    initial sim_uoc_enable = $test$plusargs("UOC_ENABLE");
+    // Stage 1 signs off the FTQ/IFU/fetch-packet frontend path. The UOP cache
+    // remains an explicit unsafe research path until replay is tied to live
+    // BPU/FTQ validation.
+    initial sim_uoc_enable =
+        $test$plusargs("ENABLE_UOC") &&
+        $test$plusargs("UOC_UNSAFE_STREAM") &&
+        !$test$plusargs("DISABLE_UOC");
 `else
     localparam logic sim_bpu_exec_misp_update = 1'b0;
     localparam logic sim_exec_partial_branch_recovery = 1'b0;
@@ -282,7 +288,6 @@ module rv64gc_core_top
     logic        bru_redirect_quarantine_r;
     logic        bru_redirect_quarantine;
     logic        keep_early_frontend;
-    logic        backward_branch_taken;
 
     // FENCE.I signal
     logic        fence_i_signal;
@@ -304,17 +309,14 @@ module rv64gc_core_top
         .fetch_bp_ras_top       (fetch_bp_ras_top),
         .fetch_bp_ghr           (fetch_bp_ghr),
         .backend_stall          (frontend_backend_stall),
-        // Phase-5 convergence: when loop-buffer playback owns rename input,
-        // quiesce fetch traffic and let redirect/flush restart the frontend.
-        // Same applies for µop cache playback when +UOC_ENABLE.
-        .frontend_hold          (lb_active || uoc_active),
-        .loop_buffer_capturing  (lb_capturing),
-        .loop_buffer_capture_start(backward_branch_taken),
-        // Redirect priority: commit flush > LB handoff > UOC handoff.
-        .redirect_valid         (frontend_flush_valid || lb_handoff_valid ||
-                                 uoc_handoff_valid),
+        // When UOP-cache playback owns rename input, quiesce fetch traffic and
+        // let the stream-exit redirect restart the live frontend.
+        .frontend_hold          (uoc_active),
+        .frontend_replay_blocking(1'b0),
+        .frontend_replay_start   (1'b0),
+        // Redirect priority: commit/BRU flush > UOP-cache stream handoff.
+        .redirect_valid         (frontend_flush_valid || uoc_handoff_valid),
         .redirect_pc            (frontend_flush_valid ? frontend_flush_pc :
-                                 lb_handoff_valid     ? lb_handoff_pc :
                                                         uoc_handoff_pc),
         .bpu_update_valid       (bpu_update_valid),
         .bpu_update_pc          (bpu_update_pc),
@@ -375,7 +377,7 @@ module rv64gc_core_top
         .dec_insn       (dec_insn_out),
         .dec_count      (dec_count_out),
         .stall          (frontend_backend_stall),
-        .flush          (frontend_flush_valid || lb_handoff_valid)
+        .flush          (frontend_flush_valid || uoc_handoff_valid)
     );
 
     // =========================================================================
@@ -391,73 +393,16 @@ module rv64gc_core_top
         .dec_count_out  (fused_count)
     );
 
-    // =========================================================================
-    // 4. LOOP BUFFER
-    // =========================================================================
-    decoded_insn_t lb_insn [0:PIPE_WIDTH-1];
-    logic [2:0]    lb_count;
-
-    // Detect backward taken branch for loop buffer trigger.
-    // Combinational: must fire same cycle as the branch is decoded so the
-    // loop buffer captures the loop body starting from the correct PC.
-    // (A prior registered version was a Verilator eval-scheduling workaround;
-    //  on xsim that workaround dropped loop-buffer activation to ~0% and
-    //  starved fetch 52% of cycles on CoreMark.)
-    always_comb begin
-        backward_branch_taken = 1'b0;
-        for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if (3'(i) < fused_count &&
-                fused_insn[i].bp_taken &&
-                fused_insn[i].is_branch &&
-                !fused_insn[i].bp_from_subgroup &&
-                (fused_insn[i].bp_target < fused_insn[i].pc)) begin
-                backward_branch_taken = 1'b1;
-            end
-        end
-    end
-
     // Rename stall signal
     logic rename_stall;
 
-    // µop cache and loop buffer COEXIST: LB captures backward-taken loops
-    // (its specialty); UOC captures arbitrary PC-indexed groups.  The mux
-    // below prefers UOC over LB only when UOC is actively emitting, so LB
-    // continues to provide its existing benefit on tight loops while UOC
-    // fills bubbles outside the LB pattern.
-    loop_buffer u_loop_buffer (
-        .clk                    (clk),
-        .rst_n                  (rst_n),
-        .dec_insn               (fused_insn),
-        .dec_count              (fused_count),
-        .backward_branch_taken  (backward_branch_taken),
-        .lb_insn                (lb_insn),
-        .lb_count               (lb_count),
-        .active                 (lb_active),
-        .capturing              (lb_capturing),
-        .handoff_valid          (lb_handoff_valid),
-        .handoff_pc             (lb_handoff_pc),
-        // Phase-5 convergence: loop-buffer playback must obey the same
-        // frontend redirect epoch as fetch. Commit flushes and BRU early
-        // redirects both terminate the current playback/capture state.
-        .invalidate             (frontend_flush_valid),
-        .redirect_valid         (frontend_flush_valid),
-        .redirect_pc            (frontend_flush_pc),
-        .stall                  (rename_stall)
-    );
-
     // =========================================================================
-    // 4b. µop CACHE (gen-2)
-    //
-    // Parallel-path bring-up: instantiated unconditionally, but only emits
-    // (active=1) when sim_uoc_enable.  When enabled, supersedes LB.
+    // 4. UOP CACHE / DECODED-OP CACHE
     // =========================================================================
     uop_cache u_uop_cache (
         .clk                    (clk),
         .rst_n                  (rst_n),
-        // Disable UOC firing while the loop buffer is actively playing or
-        // capturing — they share the rename input mux and the frontend
-        // hold signal; coordinated mutual exclusion keeps both happy.
-        .en                     (sim_uoc_enable && !lb_active && !lb_capturing),
+        .en                     (sim_uoc_enable),
         .fused_insn             (fused_insn),
         .fused_count            (fused_count),
         .uoc_insn               (uoc_insn),
@@ -467,7 +412,7 @@ module rv64gc_core_top
         .handoff_pc             (uoc_handoff_pc),
         .redirect_valid         (frontend_flush_valid),
         .redirect_pc            (frontend_flush_pc),
-        .invalidate             (frontend_flush_valid && fence_i_signal),
+        .invalidate             (fence_i_signal),
         .stall                  (rename_stall),
         .ev_lookup              (uoc_ev_lookup),
         .ev_hit                 (uoc_ev_hit),
@@ -476,11 +421,18 @@ module rv64gc_core_top
         .ev_fill_evict_valid    (uoc_ev_fill_evict_valid),
         .ev_enter_playing       (uoc_ev_enter_playing),
         .ev_exit_playing_miss   (uoc_ev_exit_playing_miss),
+        .ev_exit_playing_nohit  (uoc_ev_exit_playing_nohit),
+        .ev_exit_playing_unsafe (uoc_ev_exit_playing_unsafe),
+        .ev_emit                (uoc_ev_emit),
+        .ev_emit_control        (uoc_ev_emit_control),
+        .ev_emit_cond           (uoc_ev_emit_cond),
+        .ev_emit_jal            (uoc_ev_emit_jal),
+        .ev_emit_jalr           (uoc_ev_emit_jalr),
+        .ev_emit_pred_taken     (uoc_ev_emit_pred_taken),
         .ev_invalidate          (uoc_ev_invalidate)
     );
 
-    // Mux: bru-quarantine > UOC > LB > fused (uoc/lb mutually exclusive
-    // by gating above; the explicit ordering keeps the priority readable)
+    // Mux: bru-quarantine > UOP-cache > fused.
     decoded_insn_t rename_dec_in [0:PIPE_WIDTH-1];
     logic [2:0]    rename_dec_count;
 
@@ -493,10 +445,6 @@ module rv64gc_core_top
             for (int i = 0; i < PIPE_WIDTH; i++)
                 rename_dec_in[i] = uoc_insn[i];
             rename_dec_count = uoc_count;
-        end else if (lb_active) begin
-            for (int i = 0; i < PIPE_WIDTH; i++)
-                rename_dec_in[i] = lb_insn[i];
-            rename_dec_count = lb_count;
         end else begin
             for (int i = 0; i < PIPE_WIDTH; i++)
                 rename_dec_in[i] = fused_insn[i];
@@ -532,6 +480,7 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]   rob_head_is_sfence_vma;
     logic [PIPE_WIDTH-1:0]   rob_head_is_ecall;
     logic [PIPE_WIDTH-1:0]   rob_head_is_wfi;
+    logic [PIPE_WIDTH-1:0]   rob_head_is_fused;
     logic [PIPE_WIDTH-1:0]   rob_head_branch_taken;
     logic [63:0]             rob_head_branch_target [0:PIPE_WIDTH-1];
     logic [63:0]             rob_head_branch_taken_target [0:PIPE_WIDTH-1];
@@ -546,7 +495,7 @@ module rv64gc_core_top
     commit_t                 commit_out [0:PIPE_WIDTH-1];
     logic [2:0]              store_commit_count;
     logic [2:0]              load_commit_count;
-    logic [2:0]              insn_retired_count;
+    logic [3:0]              insn_retired_count;
 
     // =========================================================================
     // Rename buffer: parallel to ROB, stores pdst/old_pdst/rd_arch
@@ -1264,6 +1213,7 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_sfence_vma;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_ecall;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_wfi;
+    logic [PIPE_WIDTH-1:0]  rob_alloc_is_fused;
     // Per-uop FU-type tags driven into the ROB to support sub-classification
     // of the SIMULATION-only "other" head-stall bucket (mul/div/bru).
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_mul;
@@ -1316,6 +1266,7 @@ module rv64gc_core_top
             rob_alloc_is_sfence_vma[i] = ren_insn[i].base.is_sfence_vma;
             rob_alloc_is_ecall[i]    = ren_insn[i].base.is_ecall;
             rob_alloc_is_wfi[i]      = ren_insn[i].base.is_wfi;
+            rob_alloc_is_fused[i]    = ren_insn[i].base.is_fused;
             rob_alloc_is_mul[i]      = ren_insn[i].base.is_mul;
             rob_alloc_is_div[i]      = ren_insn[i].base.is_div;
             rob_alloc_is_bru[i]      = (ren_insn[i].base.fu_type == FU_BRU);
@@ -1367,6 +1318,7 @@ module rv64gc_core_top
         .alloc_is_sfence_vma    (rob_alloc_is_sfence_vma),
         .alloc_is_ecall         (rob_alloc_is_ecall),
         .alloc_is_wfi           (rob_alloc_is_wfi),
+        .alloc_is_fused         (rob_alloc_is_fused),
         .alloc_is_mul           (rob_alloc_is_mul),
         .alloc_is_div           (rob_alloc_is_div),
         .alloc_is_bru           (rob_alloc_is_bru),
@@ -1413,6 +1365,7 @@ module rv64gc_core_top
         .head_is_sfence_vma     (rob_head_is_sfence_vma),
         .head_is_ecall          (rob_head_is_ecall),
         .head_is_wfi            (rob_head_is_wfi),
+        .head_is_fused          (rob_head_is_fused),
         .head_branch_taken      (rob_head_branch_taken),
         .head_branch_target     (rob_head_branch_target),
         .head_branch_taken_target (rob_head_branch_taken_target),
@@ -2185,6 +2138,7 @@ module rv64gc_core_top
         .op          (iq0_issue_data[0].br_op),
         .is_fused    (iq0_issue_data[0].is_fused),
         .fusion_type (iq0_issue_data[0].fusion_type),
+        .fused_imm   (iq0_issue_data[0].fused_imm),
         .bp_taken    (iq0_issue_data[0].bp_taken),
         .bp_target   (iq0_issue_data[0].bp_target),
         .is_rvc      (iq0_issue_data[0].is_rvc),
@@ -2213,6 +2167,7 @@ module rv64gc_core_top
         .op          (iq0_issue_data[1].br_op),
         .is_fused    (iq0_issue_data[1].is_fused),
         .fusion_type (iq0_issue_data[1].fusion_type),
+        .fused_imm   (iq0_issue_data[1].fused_imm),
         .bp_taken    (iq0_issue_data[1].bp_taken),
         .bp_target   (iq0_issue_data[1].bp_target),
         .is_rvc      (iq0_issue_data[1].is_rvc),
@@ -2267,10 +2222,9 @@ module rv64gc_core_top
             !commit_flush.valid &&
             bru_redirect_quarantine_r &&
             // Partial recovery must not suppress the later commit flush while
-            // loop-buffer playback/capture is active; that full flush is the
-            // safety valve that breaks bad captured hot-loop paths.
-            !lb_active &&
-            !lb_capturing &&
+            // UOP-cache replay is active; that full flush is the safety valve
+            // that breaks stale speculative hot-loop paths.
+            !uoc_active &&
             ((cdb_valid_r[0] && cdb_is_branch_r[0] &&
               cdb_branch_mispredict_r[0]) ||
              (cdb_valid_r[1] && cdb_is_branch_r[1] &&
@@ -3753,6 +3707,7 @@ module rv64gc_core_top
         .head_is_sfence_vma     (rob_head_is_sfence_vma),
         .head_is_ecall          (rob_head_is_ecall),
         .head_is_wfi            (rob_head_is_wfi),
+        .head_is_fused          (rob_head_is_fused),
         .head_branch_taken      (rob_head_branch_taken),
         .head_branch_target     (rob_head_branch_target),
         .head_branch_mispredict (rob_head_branch_mispredict),
@@ -3891,9 +3846,7 @@ module rv64gc_core_top
                     is_cond_branch &&
                     rob_head_branch_mispredict[i]) begin
                     commit_bpu_tage_update_valid = 1'b1;
-                    commit_bpu_tage_update_pc =
-                        rb_head_bp_owner[i] ? rb_head_bp_lookup_pc[i]
-                                            : rob_head_pc[i];
+                    commit_bpu_tage_update_pc = rob_head_pc[i];
                     commit_bpu_tage_update_taken = rob_head_branch_taken[i];
                     commit_bpu_tage_update_mispredict =
                         rob_head_branch_mispredict[i];
@@ -3913,9 +3866,7 @@ module rv64gc_core_top
                     commit_out[i].valid &&
                     is_cond_branch) begin
                     commit_bpu_tage_update_valid = 1'b1;
-                    commit_bpu_tage_update_pc =
-                        rb_head_bp_owner[i] ? rb_head_bp_lookup_pc[i]
-                                            : rob_head_pc[i];
+                    commit_bpu_tage_update_pc = rob_head_pc[i];
                     commit_bpu_tage_update_taken = rob_head_branch_taken[i];
                     commit_bpu_tage_update_mispredict =
                         rob_head_branch_mispredict[i];

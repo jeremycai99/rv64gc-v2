@@ -1,5 +1,6 @@
 /* Bare-metal RV64IM CoreMark port */
 #include "coremark.h"
+#include "../benchmarks/bench_mmio.h"
 
 #ifdef GEM5_M5OPS
 #include <gem5/m5ops.h>
@@ -29,12 +30,34 @@ void portable_fini(core_portable *p) {
     (void)p;
 }
 
+ee_s32 portme_sys1(void) {
+    return 0x0;
+}
+
+ee_s32 portme_sys2(void) {
+    return 0x0;
+}
+
+ee_s32 portme_sys3(void) {
+    return 0x66;
+}
+
+ee_s32 portme_sys4(void) {
+    return ITERATIONS;
+}
+
+ee_s32 portme_sys5(void) {
+    return 0;
+}
+
 void start_time(void) {
+    rv64gc_bench_begin(RV64GC_BENCH_ID_COREMARK, (unsigned long)ITERATIONS);
     t_start = (CORE_TICKS)read_mcycle();
 }
 
 void stop_time(void) {
     t_end = (CORE_TICKS)read_mcycle();
+    rv64gc_bench_stop();
 }
 
 CORE_TICKS get_time(void) {
@@ -69,4 +92,29 @@ void gem5_bench_exit(void) {
 #ifdef GEM5_M5OPS
     m5_exit(0);
 #endif
+}
+
+void rv64gc_coremark_debug(unsigned long index, unsigned long value) {
+    rv64gc_bench_write(index, value);
+}
+
+void rv64gc_coremark_abort(unsigned long index, unsigned long value) {
+    rv64gc_coremark_debug(index, value);
+    rv64gc_bench_write(RV64GC_BENCH_REG_FLAGS, RV64GC_BENCH_FLAG_ERROR);
+    rv64gc_bench_stop();
+    *(volatile unsigned long *)0x80001000UL = 3UL;
+    while (1) {
+    }
+}
+
+void rv64gc_coremark_report(ee_u32 checksum, ee_s32 total_errors) {
+    unsigned long flags = 0;
+
+    if (total_errors > 0)
+        flags |= RV64GC_BENCH_FLAG_ERROR;
+    if (total_errors < 0)
+        flags |= RV64GC_BENCH_FLAG_UNVALIDATED;
+
+    rv64gc_bench_write(RV64GC_BENCH_REG_CHECKSUM, (unsigned long)checksum);
+    rv64gc_bench_write(RV64GC_BENCH_REG_FLAGS, flags);
 }

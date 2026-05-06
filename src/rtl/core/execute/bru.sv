@@ -15,6 +15,7 @@ module bru
     input  br_op_e      op,
     input  logic        is_fused,      // fused compare-and-branch uop
     input  logic [2:0]  fusion_type,   // which fused pattern
+    input  logic [63:0] fused_imm,      // first-op immediate for fused SLTI/SLTIU
     input  logic        bp_taken,      // predicted taken
     input  logic [63:0] bp_target,     // predicted target
     input  logic        is_rvc,        // compressed instruction (PC+2 for link)
@@ -47,9 +48,15 @@ module bru
     // =========================================================================
     // Fused compare-and-branch evaluation
     // =========================================================================
-    // Fusion patterns combine SLT/SLTU + BEQ/BNE into a single uop.
-    // The comparison operand is either rs2 (register) or imm (immediate).
+    // Fusion patterns combine SLT/SLTU/SLTI/SLTIU + BEQ/BNE into a single uop.
+    // Conditional-branch imm remains the redirect offset; fused_imm carries the
+    // compare immediate for SLTI/SLTIU forms.
     logic fused_taken;
+    logic fused_slti_signed_lt;
+    logic fused_sltiu_lt;
+    assign fused_slti_signed_lt = ($signed(operand_a) < $signed(fused_imm));
+    assign fused_sltiu_lt       = (operand_a < fused_imm);
+
     always_comb begin
         fused_taken = 1'b0;
         case (fusion_type)
@@ -57,8 +64,10 @@ module bru
             3'd1: fused_taken = (operand_a < operand_b);                     // SLTU + BNE -> branch if a < b unsigned
             3'd2: fused_taken = ($signed(operand_a) >= $signed(operand_b));  // SLT + BEQ  -> branch if a >= b signed
             3'd3: fused_taken = (operand_a >= operand_b);                    // SLTU + BEQ -> branch if a >= b unsigned
-            3'd4: fused_taken = ($signed(operand_a) < $signed(imm));         // SLTI + BNE -> branch if a < imm signed
-            3'd5: fused_taken = (operand_a < imm);                           // SLTIU + BNE -> branch if a < imm unsigned
+            3'd4: fused_taken = (op == BR_EQ) ? !fused_slti_signed_lt
+                                               :  fused_slti_signed_lt;       // SLTI + BEQ/BNE
+            3'd5: fused_taken = (op == BR_EQ) ? !fused_sltiu_lt
+                                               :  fused_sltiu_lt;             // SLTIU + BEQ/BNE
             3'd6: fused_taken = (operand_a[31:0] != 32'd0);                // SEXT.W + BNE -> branch if word != 0
             3'd7: fused_taken = (operand_a[31:0] == 32'd0);                // SEXT.W + BEQ -> branch if word == 0
             default: fused_taken = 1'b0;

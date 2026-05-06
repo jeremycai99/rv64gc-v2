@@ -1,0 +1,118 @@
+{
+  "notes": "Stage 1 long-run signoff manifest. These rows are scoreable only under tools/run_benchmarks.py --run-class signoff, with endpoint identity intact, legacy loop-buffer activity zero, canonical standalone decoded-op replay telemetry present and zero, and no standalone UOC, same-tail, or local lookahead replay plusargs. counter_invariants are checked on every run_class (signoff and dse); counter_targets_stage1 are checked only on signoff.",
+  "schema_extensions": {
+    "counter_invariants": "Per-counter {min,max} bounds that MUST hold on every run regardless of class. Use to lock in structural invariants (e.g. owner-identity counters that must remain zero post-FTQ-split).",
+    "counter_targets_stage1": "Per-counter {min,max} bounds enforced only when --run-class signoff. Use to encode Stage 1 acceptance gates beyond flags+checksum so the doc-level pass condition is machine-checkable.",
+    "golden_pc_path": "Optional. Path to a $readmemh-format file of expected commit PCs (one 16-hex-digit PC per line). When present and run_benchmarks.py forwards +CHECK_GOLDEN_PCS, the testbench asserts every retired PC matches the golden stream and finishes with [GOLDEN_PC TRIP] on first divergence."
+  },
+  "benchmarks": [
+    {
+      "name": "dhrystone_100_checkedin",
+      "kind": "dhrystone",
+      "hex": "tests/hex/dhrystone.hex",
+      "elf": "tests/dhrystone/dhrystone.elf",
+      "max_cycles": 200000,
+      "iterations": 100,
+      "expected_iterations": 100,
+      "expected_checksum": 24,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "5227bf2e909cb8ee5fda8c600aeda4f019260f60ecf0e76d8d226f8ace66f4a9",
+      "expected_elf_sha256": "f764e76e6ad626e9361a82e6b24b2e35b0c42419f575fcc0abfdafbc82f5a44e",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "notes": "Portable checked-in Dhrystone endpoint guard.",
+      "golden_pc_path": "tests/golden_pc/dhrystone_100_checkedin.golden.hex"
+    },
+    {
+      "name": "dhrystone_300_stage1_anchor",
+      "kind": "dhrystone",
+      "hex": "benchmark_results/20260506_stage1_anchor_cont/dhrystone300.hex",
+      "elf": "benchmark_results/20260506_stage1_anchor_cont/dhrystone300.elf",
+      "max_cycles": 300000,
+      "iterations": 300,
+      "expected_iterations": 300,
+      "expected_checksum": 24,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "26d541addf59d385dcd47621c5004f495b2659db83f623f32c59c516928f7b91",
+      "expected_elf_sha256": "0411f5643cff6c67dd1d44237ce45da211605ef4810013c65504299a386cc70c",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "notes": "Stage 1 Dhrystone-300 apples-to-apples anchor image; hash-gated to prevent stale-image drift. counter_targets_stage1 left empty; populate when Stage 1 RTL work starts converging on numerical bounds (proposed: dup_last_emit max 5000, packet_empty_noemit_dup max 3000, ftq_occ_max min 4).",
+      "golden_pc_path": "tests/golden_pc/dhrystone_300_stage1_anchor.golden.hex"
+    },
+    {
+      "name": "coremark_iter10_checkedin",
+      "kind": "coremark",
+      "hex": "tests/hex/coremark_iter10.hex",
+      "elf": "tests/coremark/coremark_iter10.elf",
+      "max_cycles": 5000000,
+      "iterations": 10,
+      "expected_iterations": 10,
+      "expected_checksum": 64687,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "4a56738137c608f47de6fb38d6c9662c9c6f5193a3bc240d7c66e569273cc763",
+      "expected_elf_sha256": "7c2d2cf08f462f009851d1a093bcc17cf70fe938eafe61db323145bd05e53d9e",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "notes": "Heavy CoreMark signoff row. CoreMark/MHz is scoreable only with checksum 64687 and flags=0. counter_targets_stage1 left empty; populate when Stage 1 RTL work starts converging (proposed: dup_last_emit max 50000, packet_empty_noemit_dup max 50000, f2_owner_no_head max 5000, ftq_occ_max min 4, packet_buf_occ_max min 2).",
+      "golden_pc_path": "tests/golden_pc/coremark_iter10_checkedin.golden.hex"
+    }
+  ]
+}

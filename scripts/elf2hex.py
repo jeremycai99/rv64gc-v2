@@ -48,13 +48,14 @@ def binary_to_hex(data, output_path):
 
 
 def get_elf_entry_and_load_addr(elf_path, objdump="riscv64-unknown-elf-objdump"):
-    """Get the lowest load address from the ELF program headers."""
+    """Get the lowest load address of sections objcopy will place in binary."""
     cmd = [objdump, "-h", elf_path]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         return None
 
     min_lma = None
+    candidate = None
     for line in result.stdout.split("\n"):
         parts = line.split()
         # Section header lines: Idx Name Size VMA LMA File-off Algn
@@ -62,10 +63,17 @@ def get_elf_entry_and_load_addr(elf_path, objdump="riscv64-unknown-elf-objdump")
             try:
                 lma = int(parts[4], 16)
                 size = int(parts[2], 16)
-                if size > 0 and (min_lma is None or lma < min_lma):
-                    min_lma = lma
+                candidate = (lma, size)
             except (ValueError, IndexError):
+                candidate = None
                 continue
+        elif candidate is not None:
+            flags = {flag.strip() for flag in line.split(",")}
+            lma, size = candidate
+            if size > 0 and "ALLOC" in flags and "CONTENTS" in flags:
+                if min_lma is None or lma < min_lma:
+                    min_lma = lma
+            candidate = None
     return min_lma
 
 

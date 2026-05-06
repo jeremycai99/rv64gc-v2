@@ -10,6 +10,7 @@ CC="${CC:-riscv64-unknown-elf-gcc}"
 ELF2HEX="${ELF2HEX:-python3 $ROOT/scripts/elf2hex.py}"
 OUT_ELF="${1:-$DHRY_DIR/dhrystone.elf}"
 OUT_HEX="${2:-$ROOT/tests/hex/dhrystone.hex}"
+NUM_RUNS="${NUM_RUNS:-100}"
 
 CFLAGS=(
   -O2
@@ -17,13 +18,19 @@ CFLAGS=(
   -mabi=lp64d
   -mcmodel=medany
   -ffreestanding
+  -fno-pic
+  -fno-pie
   -fno-builtin
   -fno-common
+  -fno-asynchronous-unwind-tables
+  -fno-unwind-tables
   -nostdlib
   -nostartfiles
   -static
+  -no-pie
+  -Wl,--build-id=none
   -I"$SRC_DIR"
-  -DNUM_RUNS=100
+  -DNUM_RUNS="$NUM_RUNS"
 )
 
 # Dhrystone needs a full .bss clear and return-code-aware tohost handling.

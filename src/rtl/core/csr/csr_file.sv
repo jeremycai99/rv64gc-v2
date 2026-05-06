@@ -47,7 +47,7 @@ module csr_file
     output logic [63:0] irq_cause,
 
     // Performance counters
-    input  logic [2:0]  insn_retired_count,  // from commit
+    input  logic [3:0]  insn_retired_count,  // architectural instructions from commit
     output logic [63:0] mcycle_val,
     output logic [63:0] minstret_val,
 
@@ -399,7 +399,7 @@ module csr_file
             if (!mcountinhibit_r[0])
                 mcycle_r   <= mcycle_r + 64'd1;
             if (!mcountinhibit_r[2])
-                minstret_r <= minstret_r + {61'd0, insn_retired_count};
+                minstret_r <= minstret_r + {60'd0, insn_retired_count};
 
             // Priority: trap > mret/sret > csr-write
             if (trap_valid) begin

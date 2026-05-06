@@ -1,0 +1,139 @@
+{
+  "benchmarks": [
+    {
+      "name": "probe_independent_quad",
+      "kind": "micro_width",
+      "hex": "tests/hex/probe_independent_quad.hex",
+      "max_cycles": 50000,
+      "notes": "Independent ALU issue/retire ceiling probe."
+    },
+    {
+      "name": "probe_alu_chain_8",
+      "kind": "micro_bypass",
+      "hex": "tests/hex/probe_alu_chain_8.hex",
+      "max_cycles": 50000,
+      "notes": "Dependent ALU chain for bypass and wakeup latency coverage."
+    },
+    {
+      "name": "probe_dhry_call_mimic",
+      "kind": "micro_call_load",
+      "hex": "tests/hex/probe_dhry_call_mimic.hex",
+      "max_cycles": 80000,
+      "notes": "Dhrystone-like call, return, and load-use behavior."
+    },
+    {
+      "name": "probe_bpu_data_dep_branch",
+      "kind": "micro_branch",
+      "hex": "tests/hex/probe_bpu_data_dep_branch.hex",
+      "max_cycles": 80000,
+      "notes": "Data-dependent branch predictor and redirect coverage."
+    },
+    {
+      "name": "probe_mixed_branch_dense",
+      "kind": "micro_branch",
+      "hex": "tests/hex/probe_mixed_branch_dense.hex",
+      "max_cycles": 100000,
+      "notes": "Dense mixed branch stream for frontend redirect pressure."
+    },
+    {
+      "name": "probe_string_retire_hotspot",
+      "kind": "micro_string_retire",
+      "hex": "tests/hex/probe_string_retire_hotspot.hex",
+      "max_cycles": 150000,
+      "notes": "Step-3 focused reproducer for Dhrystone strcpy/strcmp byte loops and return/head-retire stalls."
+    },
+    {
+      "name": "probe_state_crc_branch_hotspot",
+      "kind": "micro_state_crc_branch",
+      "hex": "tests/hex/probe_state_crc_branch_hotspot.hex",
+      "max_cycles": 200000,
+      "notes": "Step-3 focused reproducer for CoreMark core_state_transition and crc16 branch-ready stalls."
+    },
+    {
+      "name": "probe_matrix_bitextract_store_hotspot",
+      "kind": "micro_matrix_store",
+      "hex": "tests/hex/probe_matrix_bitextract_store_hotspot.hex",
+      "max_cycles": 200000,
+      "notes": "Step-3 focused reproducer for CoreMark matrix bitextract MUL/store readiness stalls."
+    },
+    {
+      "name": "bench_loop_100",
+      "kind": "micro_loop",
+      "hex": "tests/hex/bench_loop_100.hex",
+      "max_cycles": 100000,
+      "notes": "Simple taken-loop throughput check."
+    },
+    {
+      "name": "test_table",
+      "kind": "c_control",
+      "hex": "tests/hex/test_table.hex",
+      "max_cycles": 100000,
+      "notes": "C jump-table/control-flow pattern."
+    },
+    {
+      "name": "test_struct",
+      "kind": "c_memory",
+      "hex": "tests/hex/test_struct.hex",
+      "max_cycles": 100000,
+      "notes": "C struct and linked-list style memory access."
+    },
+    {
+      "name": "test_array",
+      "kind": "c_memory",
+      "hex": "tests/hex/test_array.hex",
+      "max_cycles": 100000,
+      "notes": "Stack array loops and memory dependence coverage."
+    },
+    {
+      "name": "dhrystone_100",
+      "kind": "dhrystone",
+      "hex": "tests/hex/dhrystone.hex",
+      "elf": "tests/dhrystone/dhrystone.elf",
+      "max_cycles": 200000,
+      "iterations": 100,
+      "expected_iterations": 100,
+      "expected_checksum": 24,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "5227bf2e909cb8ee5fda8c600aeda4f019260f60ecf0e76d8d226f8ace66f4a9",
+      "expected_elf_sha256": "f764e76e6ad626e9361a82e6b24b2e35b0c42419f575fcc0abfdafbc82f5a44e",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Existing checked-in Dhrystone coverage row."
+    },
+    {
+      "name": "coremark_iter1",
+      "kind": "coremark",
+      "hex": "tests/hex/coremark.hex",
+      "elf": "tests/coremark/coremark.elf",
+      "max_cycles": 1000000,
+      "iterations": 1,
+      "expected_iterations": 1,
+      "expected_checksum": 59156,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "0a0df66ed4b615157ff5ffef3fae58539a1483ac5dbd9b54d25e5047d54a19c7",
+      "expected_elf_sha256": "2a426dc15543b3eb72ab3bbb228ad2470d5783f6354f41e281a666ce3a2cdab7",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Existing checked-in CoreMark row."
+    },
+    {
+      "name": "coremark_iter10",
+      "kind": "coremark",
+      "hex": "tests/hex/coremark_iter10.hex",
+      "elf": "tests/coremark/coremark_iter10.elf",
+      "max_cycles": 3000000,
+      "iterations": 10,
+      "expected_iterations": 10,
+      "expected_checksum": 64687,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "4a56738137c608f47de6fb38d6c9662c9c6f5193a3bc240d7c66e569273cc763",
+      "expected_elf_sha256": "7c2d2cf08f462f009851d1a093bcc17cf70fe938eafe61db323145bd05e53d9e",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Valid heavier CoreMark row; use for signoff instead of iteration 3."
+    }
+  ]
+}
