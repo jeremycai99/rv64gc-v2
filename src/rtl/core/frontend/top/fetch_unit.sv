@@ -2176,102 +2176,44 @@ module fetch_unit
     // =========================================================================
     // Fetch packet construction and fetch-buffered output to decode
     // =========================================================================
-    logic        packet_owner_from_subgroup_c;
-
-    always_comb begin
-        packet_owner_from_subgroup_c = f2_work_ftq_entry_c.pred_from_subgroup;
-
-        // The subgroup seed is cleared as soon as the split request issues, so
-        // the eventual packet can no longer rely on the FTQ bit alone. Recover
-        // subgroup ownership from the live seed relation at packet build time.
-        if (subgroup_seed_valid_r &&
-            (f2_work_pc_c == subgroup_seed_parent_pc_r) &&
-            predecode_ctl_found &&
-            (predecode_ctl_pc == subgroup_seed_owner_pc_r)) begin
-            packet_owner_from_subgroup_c = 1'b1;
-        end
-    end
-
-    always_comb begin
-        packet_buf_enq =
-            f2_will_emit_c &&
-            !redirect_valid &&
-            !frontend_hold;
-        packet_buf_in  = '0;
-
-        if (f2_will_emit_c) begin
-            packet_buf_in.valid            = 1'b1;
-            packet_buf_in.ftq_idx          = f2_work_ftq_idx_c;
-            packet_buf_in.ftq_epoch        = f2_work_ftq_epoch_c;
-            packet_buf_in.ftq_alloc_tag    = f2_work_ftq_alloc_tag_c;
-            // A line-end straddle only keeps FTQ ownership open when the
-            // frontend still needs the sequential continuation. If this packet
-            // already ends in a taken redirect, the post-branch straddling
-            // bytes are dead path and must not block FTQ pop. The Dhrystone
-            // livelock at tag 387 was exactly this case: CALL at 0x8000213a
-            // redirected to 0x8000239c, but the trailing dead-path straddle
-            // left ftq_owner_complete low forever.
-            packet_buf_in.ftq_owner_complete = f2_work_owner_complete_c;
-            packet_buf_in.ftq_block_pc     = f2_work_ftq_entry_c.block_pc;
-            packet_buf_in.ftq_start_offset = f2_work_ftq_entry_c.start_offset;
-            packet_buf_in.ifu_line_addr    = f2_ifu_line_addr_c;
-            packet_buf_in.ifu_line_reused  = f2_line_state_use_c;
-            packet_buf_in.ftq_bp_lookup_pc =
-                f2_work_ftq_entry_c.block_pc +
-                64'(f2_work_ftq_entry_c.start_offset);
-            packet_buf_in.ftq_pred_valid   =
-                f2_work_ftq_entry_c.pred_ctl_valid;
-            packet_buf_in.ftq_pred_taken   =
-                f2_work_ftq_entry_c.pred_ctl_taken;
-            packet_buf_in.ftq_pred_offset  =
-                f2_work_ftq_entry_c.pred_ctl_offset;
-            packet_buf_in.ftq_pred_type    =
-                f2_work_ftq_entry_c.pred_ctl_type;
-            packet_buf_in.ftq_pred_target  =
-                f2_work_ftq_entry_c.pred_ctl_target;
-            packet_buf_in.ftq_pred_from_subgroup =
-                packet_owner_from_subgroup_c;
-            packet_buf_in.pd_ctl_valid     =
-                predecode_ctl_found && (predecode_ctl_slot < final_count);
-            packet_buf_in.pd_ctl_slot      = predecode_ctl_slot;
-            packet_buf_in.pd_ctl_type      = predecode_ctl_type;
-            packet_buf_in.pd_ctl_target    = predecode_ctl_target;
-            packet_buf_in.fetch_count      = final_count;
-            // The fetch packet now carries the request-time repair snapshot
-            // owned by its FTQ entry instead of the live frontend state.
-            if (f2_work_ftq_valid_c) begin
-                packet_buf_in.fetch_bp_ras_tos =
-                    f2_work_ftq_entry_c.ras_tos_snapshot;
-                packet_buf_in.fetch_bp_ras_top =
-                    f2_work_ftq_entry_c.ras_top_snapshot;
-                packet_buf_in.fetch_bp_ghr =
-                    f2_work_ftq_entry_c.ghr_snapshot;
-            end else begin
-                packet_buf_in.fetch_bp_ras_tos = ras_tos;
-                packet_buf_in.fetch_bp_ras_top = ras_pop_addr;
-                packet_buf_in.fetch_bp_ghr     = f2_ghr_snapshot_r;
-            end
-
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (3'(i) < final_count && slot_valid[i]) begin
-                    packet_buf_in.fetch_insn[i] =
-                        slot_is_rvc[i] ? decomp_out[i] : raw_insn[i];
-                    packet_buf_in.fetch_pc[i]     = slot_pc[i];
-                    packet_buf_in.fetch_is_rvc[i] = slot_is_rvc[i];
-
-                    if (bp_branch_found && bp_taken &&
-                        !subgroup_split_before_ctl_c &&
-                        (3'(i) == bp_branch_slot)) begin
-                        packet_buf_in.fetch_bp_taken[i]  = 1'b1;
-                        packet_buf_in.fetch_bp_target[i] = bp_target_addr;
-                    end else begin
-                        packet_buf_in.fetch_bp_taken[i]  = 1'b0;
-                        packet_buf_in.fetch_bp_target[i] = '0;
-                    end
-                end
-            end
-        end
-    end
+    instr_compact u_instr_compact (
+        .will_emit_i                  (f2_will_emit_c),
+        .redirect_i                   (redirect_valid),
+        .frontend_hold_i              (frontend_hold),
+        .ftq_idx_i                    (f2_work_ftq_idx_c),
+        .ftq_epoch_i                  (f2_work_ftq_epoch_c),
+        .ftq_alloc_tag_i              (f2_work_ftq_alloc_tag_c),
+        .ftq_owner_complete_i         (f2_work_owner_complete_c),
+        .ftq_entry_i                  (f2_work_ftq_entry_c),
+        .ftq_valid_i                  (f2_work_ftq_valid_c),
+        .ifu_line_addr_i              (f2_ifu_line_addr_c),
+        .ifu_line_reused_i            (f2_line_state_use_c),
+        .subgroup_seed_valid_i        (subgroup_seed_valid_r),
+        .subgroup_seed_parent_pc_i    (subgroup_seed_parent_pc_r),
+        .subgroup_seed_owner_pc_i     (subgroup_seed_owner_pc_r),
+        .work_pc_i                    (f2_work_pc_c),
+        .pd_ctl_found_i               (predecode_ctl_found),
+        .pd_ctl_slot_i                (predecode_ctl_slot),
+        .pd_ctl_type_i                (predecode_ctl_type),
+        .pd_ctl_pc_i                  (predecode_ctl_pc),
+        .pd_ctl_target_i              (predecode_ctl_target),
+        .final_count_i                (final_count),
+        .slot_valid_i                 (slot_valid),
+        .raw_insn_i                   (raw_insn),
+        .decomp_insn_i                (decomp_out),
+        .slot_is_rvc_i                (slot_is_rvc),
+        .slot_pc_i                    (slot_pc),
+        .bp_branch_found_i            (bp_branch_found),
+        .bp_taken_i                   (bp_taken),
+        .bp_branch_slot_i             (bp_branch_slot),
+        .bp_target_i                  (bp_target_addr),
+        .subgroup_split_before_ctl_i  (subgroup_split_before_ctl_c),
+        .ras_tos_i                    (ras_tos),
+        .ras_top_i                    (ras_pop_addr),
+        .ghr_i                        (f2_ghr_snapshot_r),
+        .packet_enq_o                 (packet_buf_enq),
+        .packet_o                     (packet_buf_in)
+    );
 
     always_comb begin
         fetch_count      = 3'd0;

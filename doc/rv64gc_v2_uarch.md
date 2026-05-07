@@ -415,6 +415,11 @@ These are the structural constraint points that any optimization needs to be awa
   `FETCH_PACKET_BYPASS2` direct-bypass control surface has been removed; the
   current debug/profiling signal is an IBuffer flow-through observation, not an
   alternate decode data path.
+- **Instruction helper leaves:** `frontend/instr/instr_boundary.sv`,
+  `frontend/instr/rvc_expander.sv`, `frontend/instr/predecode.sv`, and
+  `frontend/instr/instr_compact.sv` hold parcel extraction, compressed
+  expansion, control-flow predecode, and mechanical fetch-packet assembly.
+  Prediction ownership and redirect policy still live above these helpers.
 - **Current runahead precondition:** the IFU work cursor is still conservative
   and mirror-locked to the registered F1/F2 flow. Before F1 can run ahead by
   default, this cursor must become the independently advanced work item for the
