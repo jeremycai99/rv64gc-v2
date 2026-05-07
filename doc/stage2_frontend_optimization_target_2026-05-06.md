@@ -259,6 +259,112 @@ Interpretation:
   past, that predicted-control PC. This is a general frontend ownership rule,
   not a benchmark-PC rule.
 
+## C910-Inspired Optimization Options, 2026-05-07
+
+OpenC910 is useful as a high-performance RISC-V reference, but it should not be
+treated as a block-level blueprint for rv64gc-v2. The most important correction
+from the RTL readout is that C910 is not a 6-wide decode machine. The C910 IFU
+delivers three instruction slots to IDU, and the ID stage instantiates three
+main decoders. C910 then expands into up to four internal ID/IR slots and feeds
+a wider heterogeneous backend. The lesson for rv64gc-v2 is therefore not
+"widen decode first"; it is "make frontend supply, branch ownership, and
+internal useful work per slot strong enough that nominal decode width is not
+the limiter."
+
+Local C910 references:
+
+- `openc910/C910_RTL_FACTORY/gen_rtl/ifu/rtl/ct_ifu_top.v`: IFU exports
+  `ifu_idu_ib_inst0/1/2_data` only.
+- `openc910/C910_RTL_FACTORY/gen_rtl/idu/rtl/ct_idu_id_dp.v`: three primary
+  `ct_idu_id_decd` instances.
+- `openc910/C910_RTL_FACTORY/gen_rtl/idu/rtl/ct_idu_id_ctrl.v`: four
+  `ctrl_id_pipedown_inst0..3_vld` internal slots after split/expansion.
+- `openc910/C910_RTL_FACTORY/gen_rtl/idu/rtl/ct_idu_ir_ctrl.v`: four IR
+  allocation slots.
+- `openc910/C910_RTL_FACTORY/gen_rtl/ifu/rtl/ct_ifu_ibuf.v`: 32-entry
+  instruction buffer.
+- `openc910/C910_RTL_FACTORY/gen_rtl/ifu/rtl/ct_ifu_lbuf.v`: 16-entry line or
+  loop buffer.
+- `openc910/C910_RTL_FACTORY/gen_rtl/ifu/rtl/ct_ifu_pcfifo_if.v`: PC and
+  branch metadata FIFO feeding later branch validation/training.
+- `openc910/C910_RTL_FACTORY/gen_rtl/pmu/rtl/ct_hpcp_top.v`: PMU event model
+  including frontend stall, backend stall, I-cache access/miss, BHT/jump/BTB
+  mispredicts, D-cache misses, LSU stalls, scheduler latch failures, and IR
+  instruction type counts.
+
+Transferable options, ordered by leverage:
+
+| Option | C910 reference idea | rv64gc-v2 application | Acceptance signal | Verdict |
+|---|---|---|---|---|
+| Selective predicted-control ownership | Branch metadata is carried separately from raw fetch bytes through PCFIFO-like ownership. | Prevent same-owner cursor progress from crossing a predicted-control PC, but do not blindly split every packet before every predicted control. Preserve useful branch-packet packing. | Golden PC clean on Dhrystone and CoreMark, lower predicted-control block count, lower `packet_empty_noemit_dup`, no redirect increase. | Do next as a selective mechanism. The later unconditional split trial proves the blunt version is too expensive. |
+| Real FTQ/IBuffer elasticity | C910 has a much deeper IBUF and separate PC/control metadata. | Make FTQ occupancy exceed one and make the decode-facing IBuffer hold real packets instead of flow-through only. Retire duplicate guard only after duplicates are structurally impossible. | `ftq_occ_max > 1`, `packet_buf_occ_max > 0`, lower `ftq_empty_cycles` and frontend zero cycles, no owner/delivery violations. | Do after owner splitting or in parallel if scoped. This is the main path to true frontend runahead. |
+| Early fetch-line metadata | C910 predecodes around fetch-line positions before the 3-wide ID boundary and stores predecode metadata near I-cache. | Strengthen `instr_boundary`, `predecode`, and `instr_compact` so each line has reliable RVC boundaries, first/second control candidates, fallthrough/remainder identity, and predicted-control slot metadata. | Lower boundary/remainder stalls, fewer conservative predicted-control blocks, no compressed fallthrough skips under golden PC. | High value. This is safer than reviving a loop buffer. |
+| BPU/FTQ training metadata cleanup | C910 keeps retired branch details and prediction hit/miss signals visible to PMU/training. | Make FTQ writeback/training metadata explicit for control type, predicted slot, target, fallthrough, GHR/RAS snapshot, and validation result. | Lower branch recovery or unchanged recovery while frontend supply improves; clearer per-control mispredict counters. | High value, especially before indirect or uBTB work. |
+| Uop/fusion accounting | C910's 3 decode to 4 internal slots shows decode width and internal work width are different. | Track useful architectural instructions, internal uops, fused pairs, UOC hits, and decode slot waste separately. Optimize effective work per frontend slot instead of raw slot count. | Higher commit/useful-op density, stable retired instruction count, no benchmark-specific transforms. | Medium-high. Do after frontend delivery correctness is stable. |
+| Typed issue/ready instrumentation | C910 has typed issue queues and PMU-visible latch-fail/backend-stall events. | Add or refine counters for integer issue starvation, memory issue starvation, wakeup/select blocked, PRF write port pressure, CDB pressure, and load-use wait. | Backend stall attribution becomes specific enough to pick an execution or LSU DSE. | Defer until frontend gate reaches a ceiling. |
+| LSU and memory-system DSE | C910 has a mature banked LSU/cache path and PMU-visible load/store miss/stall events. | Consider load-use latency, store-load forwarding, memory dependence prediction, D-cache bank conflicts, and fill bypass only if post-frontend counters point there. | Backend or memory stall dominates after frontend supply improves. | Defer. Do not open this before frontend evidence saturates. |
+| Loop buffer | C910 has a line/loop buffer. | Do not import a loop buffer as the main Stage 2 mechanism. If any loop-local optimization returns later, it must be line-metadata based and owner-clean, not a separate PC owner. | Must improve broad benchmarks and pass strict owner/golden PC. | Reject for now. Prior rv64gc-v2 evidence says correctness risk exceeds benefit. |
+
+The immediate C910-inspired Stage 2 path is:
+
+1. Selective predicted-control ownership, not unconditional branch-boundary splitting.
+2. FTQ/IBuffer elasticity with nonzero runahead.
+3. Early fetch-line metadata and predecode-cache style reuse.
+4. BPU/FTQ training metadata cleanup.
+5. Uop/fusion accounting, then backend/LSU DSE only if counters demand it.
+
+## C910 Performance Modeling Readout
+
+The public OpenC910 release does not include a full internal performance model
+or design-space study. What it does include is enough to infer the modeling
+style used for released benchmark claims and local simulation:
+
+1. Architectural target specs are published at the product/datasheet level.
+   `openc910/doc/openc910_datasheet.pdf` describes C910 as an RV64GC
+   12-stage out-of-order multiple-issue core with 64KB I-cache, 64KB D-cache,
+   1MB L2, AXI4-128, hardware cache coherency, and PMU support. This is a
+   product capability statement, not a bottleneck model.
+2. The simulation environment has benchmark cases, including CoreMark. The
+   local CoreMark case uses `VCUNT_SIM`, reads the RISC-V `time` CSR through
+   `get_vtimer()`, measures only the benchmark iterate window, and reports
+   `(iterations/sec)/MHz` as `1000000 / cycles_per_iteration`.
+3. The released CoreMark build is compiler-heavy and C910-specific:
+   `-O3 -mtune=c910 -static -funroll-all-loops -finline-limit=500
+   -fgcse-sm -fno-schedule-insns ... -DITERATIONS=10000`. That means public
+   or repo-local CoreMark/MHz numbers are not pure microarchitecture numbers;
+   they include compiler scheduling and C910-tuned code generation.
+4. The architectural PMU is broad. `ct_hpcp_top.v` exposes selectable events
+   for I-cache access/miss, I-TLB/D-TLB/JTLB miss, BHT and jump mispredict,
+   BTB target miss, frontend stall, backend stall, D-cache read/write
+   access/miss, LSU cross-4K/other stalls, SQ replay/discard, scheduler latch
+   failures, IR instruction type counts, sync/fence stalls, interrupts, and
+   retired branch/control details.
+5. The PMU event selector is generic: `ct_hpcp_event.v` supports 42 event
+   indices using a 6-bit event selector. This suggests the intended modeling
+   loop is benchmark timing plus selectable hardware counter attribution, not
+   only endpoint cycle counts.
+
+For rv64gc-v2, the matching methodology should be stricter than simply chasing
+CoreMark/MHz:
+
+1. Keep the same timed-window discipline: measure only the benchmark region,
+   not reset, loading, UART, or harness setup.
+2. Keep golden PC and endpoint checks on every performance row.
+3. Report CoreMark and Dhrystone with compiler flags and image hash.
+4. For every accepted RTL row, report at least:
+   `frontend_zero`, `packet_empty_noemit_dup`, `packet_empty_f2_data`,
+   predicted-control block count, FTQ/IBuffer occupancy, redirect recovery,
+   I-cache wait, backend stall, commit-width histogram, retired instruction
+   count, and any new PMU-style bottleneck counters.
+5. Treat C910-style PMU categories as the model taxonomy:
+   frontend supply, branch prediction/recovery, cache/TLB, backend issue,
+   memory ordering/replay, and useful internal work per decoded slot.
+
+Verdict: C910 gives us a good performance-modeling pattern, but not a
+drop-in answer. The correct rv64gc-v2 adaptation is benchmark-window timing
+plus PMU-grade bottleneck counters, with strict correctness invariants kept on
+while each architecture option is swept.
+
 Rejected follow-up trial:
 
 - `benchmark_results/20260507_trial_pred_ctl_owner_split_dhrystone`
