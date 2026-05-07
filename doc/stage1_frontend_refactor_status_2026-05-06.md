@@ -132,17 +132,22 @@ re-pairing current-cycle request PC with older FTQ metadata.
 - Build: `./build_dsim.sh` passed.
 - Strict/profiled smoke artifact:
   `benchmark_results/20260506_icq_ftq_entry_carry_smoke/`.
+- Carried-entry invariant smoke artifact:
+  `benchmark_results/20260506_icq_ftq_entry_invariant_smoke/`.
 
 | Workload | Status | Timed cycles | Timed instret | Metric | Notes |
 |---|---|---:|---:|---:|---|
 | Dhrystone 100 | PASS | 27,093 | 48,436 | 2.100734 DMIPS/MHz | strict owner/delivery clean |
 | CoreMark 1 | PASS | 209,058 | 318,379 | 4.783362 CM/MHz | strict owner/delivery clean |
 
-Key counters remain structurally clean: `xs_f2_owner_idx_mismatch=0`,
-`xs_f2_owner_epoch_mismatch=0`, `xs_f2_owner_tag_mismatch=0`,
-`xs_packet_buffer_stale_owner=0`, `packet_stale_* = 0`, `ftq_occ_max=1`, and
-`packet_buf_occ_max=0`. Verdict: accept as an ownership-carry checkpoint only;
-it intentionally does not claim performance movement.
+The new invariant checks that an ICQ head carrying the current FTQ
+IFU-writeback owner also carries the same full FTQ entry snapshot as the FTQ
+owner view. Key counters remain structurally clean:
+`xs_f2_owner_idx_mismatch=0`, `xs_f2_owner_epoch_mismatch=0`,
+`xs_f2_owner_tag_mismatch=0`, `xs_packet_buffer_stale_owner=0`,
+`packet_stale_* = 0`, `ftq_occ_max=1`, and `packet_buf_occ_max=0`. Verdict:
+accept as an ownership-carry checkpoint only; it intentionally does not claim
+performance movement.
 
 ## Bottleneck (data-driven)
 

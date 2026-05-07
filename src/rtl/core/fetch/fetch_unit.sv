@@ -4013,6 +4013,23 @@ module fetch_unit
         else $error("[INVARIANT_D] queue line/IFU work line mismatch: deq_line=%014h work_line=%014h work_pc=%016h",
                     icq_deq_line_addr, f2_work_line_addr_c, f2_work_pc_c);
 
+    // Invariant D1: when an ICQ head names the current FTQ IFU-writeback
+    // owner, its carried FTQ entry snapshot must match the FTQ owner view. This
+    // proves the response queue has a coherent request object before the IFU
+    // cursor starts consuming entries directly from it.
+    property p_icq_owner_entry_matches_ftq_wb;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        icq_deq_owner_match_c |->
+        (icq_deq_ftq_entry == ftq_ifu_wb_owner_entry);
+    endproperty
+    a_icq_owner_entry_matches_ftq_wb:
+        assert property (p_icq_owner_entry_matches_ftq_wb)
+        else $error("[INVARIANT_D1] ICQ carried FTQ entry mismatch: deq_idx=%h deq_tag=%h wb_idx=%h wb_tag=%h",
+                    icq_deq_ftq_idx,
+                    icq_deq_ftq_alloc_tag,
+                    ftq_ifu_wb_owner_idx,
+                    ftq_ifu_wb_owner_tag);
+
     // Invariant D2: if the frontend is reusing a same-line response, the
     // line-state record must still name the same line as the work cursor's PC.
     property p_same_line_reuse_has_line_state;
