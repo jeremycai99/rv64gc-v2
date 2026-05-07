@@ -72,10 +72,10 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/include/isa_pkg.sv \
      src/rtl/core/include/uarch_pkg.sv \
      src/rtl/sim/mem_if_pkg.sv \
-     src/rtl/core/fetch/rvc_decompress.sv \
-     src/rtl/core/fetch/rvc_expander.sv \
-     src/rtl/core/fetch/predecode.sv \
-     src/rtl/core/fetch/instr_boundary.sv \
+     src/rtl/core/frontend/instr/rvc_decompress.sv \
+     src/rtl/core/frontend/instr/rvc_expander.sv \
+     src/rtl/core/frontend/instr/predecode.sv \
+     src/rtl/core/frontend/instr/instr_boundary.sv \
      src/rtl/core/bpu/btb.sv \
      src/rtl/core/bpu/ras.sv \
      src/rtl/core/bpu/tage_sc_l.sv \
@@ -83,10 +83,10 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/cache/icache_data_ram.sv \
      src/rtl/core/cache/icache.sv \
      src/rtl/core/cache/icache_resp_queue.sv \
-     src/rtl/core/fetch/next_line_prefetch_buffer.sv \
-     src/rtl/core/fetch/ftq.sv \
-     src/rtl/core/fetch/fetch_packet_buffer.sv \
-     src/rtl/core/fetch/fetch_unit.sv \
+     src/rtl/core/frontend/ifu/next_line_prefetch_buffer.sv \
+     src/rtl/core/frontend/ftq/ftq.sv \
+     src/rtl/core/frontend/ibuffer/fetch_packet_buffer.sv \
+     src/rtl/core/frontend/top/fetch_unit.sv \
      src/rtl/core/decode/decode_slice.sv \
      src/rtl/core/decode/decode.sv \
      src/rtl/core/decode/fusion_detector.sv \

@@ -361,7 +361,7 @@ These are the structural constraint points that any optimization needs to be awa
 
 ## 2. Front-End
 
-### 2.1 Fetch Unit (`src/rtl/core/fetch/fetch_unit.sv`)
+### 2.1 Frontend Integration (`src/rtl/core/frontend/top/fetch_unit.sv`)
 
 - **Width:** 16 bytes/cycle (`FETCH_BYTES = 16`); up to 4 instructions (RVC: up to 8 if all compressed)
 - **Current pipeline:** 2 stages (IF1: PC gen + L1I tag/data probe + BPU lookup; IF2: way mux + predecode).
@@ -466,7 +466,7 @@ These are the structural constraint points that any optimization needs to be awa
 - **Pop:** ret instructions at predict time
 - **Restore:** on flush, RAS depth is restored from checkpoint
 
-### 2.5 NLP — Next-Line Prefetch Buffer (`src/rtl/core/fetch/next_line_prefetch_buffer.sv`)
+### 2.5 NLP — Next-Line Prefetch Buffer (`src/rtl/core/frontend/ifu/next_line_prefetch_buffer.sv`)
 
 - **Entries:** 4 (`NUM_ENTRIES=4`)
 - **Purpose:** small prefetch buffer for sequential-access lines (warm-cache helper, not primary predictor)
@@ -501,7 +501,8 @@ These are the structural constraint points that any optimization needs to be awa
 ### 2.8 Decode (`src/rtl/core/decode/decode.sv`, `decode_slice.sv`)
 
 - **Width:** 4 slices/cycle
-- **RVC handling:** `rvc_decompress.sv` expands compressed to 32-bit equivalents pre-decode
+- **RVC handling:** `src/rtl/core/frontend/instr/rvc_decompress.sv`
+  expands compressed to 32-bit equivalents pre-decode
 - **Output:** 4 decoded uops with `fu_type` (ALU/BRU/MUL/DIV/LOAD/STA/STD/CSR), source/dest arch regs, immediate, control flags
 
 ### 2.9 Fusion Detector (`src/rtl/core/decode/fusion_detector.sv`)
@@ -539,7 +540,8 @@ These are the structural constraint points that any optimization needs to be awa
   drained by invalid/stale FTQ epoch metadata. It accepts a replacement response
   on a full-plus-pop cycle so a one-cycle I-cache response is not dropped when
   F2 frees a slot at the same edge.
-- **Owner-aware IBuffer** (`fetch_packet_buffer.sv`): current buffer between
+- **Owner-aware IBuffer**
+  (`src/rtl/core/frontend/ibuffer/fetch_packet_buffer.sv`): current buffer between
   IF2 and decode; stores complete fetch packets with per-packet FTQ
   idx/epoch/alloc-tag, block PC, start offset, IFU line address/reuse bit,
   per-slot PCs, predicted-control metadata, and `owner_complete`. The IFU line

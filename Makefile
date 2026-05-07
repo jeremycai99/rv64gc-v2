@@ -97,7 +97,7 @@ $(eval $(call MODULE_TB_RULE,regfile,\
 
 # Fetch (Phase 5)
 $(eval $(call MODULE_TB_RULE,fetch,\
-    $(RTL_DIR)/core/fetch/fetch.sv))
+    $(RTL_DIR)/core/frontend/top/fetch_unit.sv))
 
 # Decode (Phase 6)
 $(eval $(call MODULE_TB_RULE,decode,\
@@ -122,20 +122,20 @@ $(eval $(call MODULE_TB_RULE,lsu,\
 # All RTL source files (order matters for packages)
 RTL_FILES = \
     $(RTL_DIR)/sim/mem_if_pkg.sv \
-    $(RTL_DIR)/core/fetch/rvc_decompress.sv \
-    $(RTL_DIR)/core/fetch/rvc_expander.sv \
-    $(RTL_DIR)/core/fetch/predecode.sv \
-    $(RTL_DIR)/core/fetch/instr_boundary.sv \
+    $(RTL_DIR)/core/frontend/instr/rvc_decompress.sv \
+    $(RTL_DIR)/core/frontend/instr/rvc_expander.sv \
+    $(RTL_DIR)/core/frontend/instr/predecode.sv \
+    $(RTL_DIR)/core/frontend/instr/instr_boundary.sv \
     $(RTL_DIR)/core/bpu/btb.sv \
     $(RTL_DIR)/core/bpu/ras.sv \
     $(RTL_DIR)/core/bpu/tage_sc_l.sv \
 	$(RTL_DIR)/core/cache/icache_tag_ram.sv \
 	$(RTL_DIR)/core/cache/icache_data_ram.sv \
 	$(RTL_DIR)/core/cache/icache.sv \
-	$(RTL_DIR)/core/fetch/next_line_prefetch_buffer.sv \
-	$(RTL_DIR)/core/fetch/ftq.sv \
-	$(RTL_DIR)/core/fetch/fetch_packet_buffer.sv \
-	$(RTL_DIR)/core/fetch/fetch_unit.sv \
+	$(RTL_DIR)/core/frontend/ifu/next_line_prefetch_buffer.sv \
+	$(RTL_DIR)/core/frontend/ftq/ftq.sv \
+	$(RTL_DIR)/core/frontend/ibuffer/fetch_packet_buffer.sv \
+	$(RTL_DIR)/core/frontend/top/fetch_unit.sv \
     $(RTL_DIR)/core/decode/decode_slice.sv \
     $(RTL_DIR)/core/decode/decode.sv \
     $(RTL_DIR)/core/decode/fusion_detector.sv \

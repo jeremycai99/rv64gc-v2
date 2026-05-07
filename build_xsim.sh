@@ -55,10 +55,10 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/include/isa_pkg.sv" \
       "$P/src/rtl/core/include/uarch_pkg.sv" \
       "$P/src/rtl/sim/mem_if_pkg.sv" \
-      "$P/src/rtl/core/fetch/rvc_decompress.sv" \
-      "$P/src/rtl/core/fetch/rvc_expander.sv" \
-      "$P/src/rtl/core/fetch/predecode.sv" \
-      "$P/src/rtl/core/fetch/instr_boundary.sv" \
+      "$P/src/rtl/core/frontend/instr/rvc_decompress.sv" \
+      "$P/src/rtl/core/frontend/instr/rvc_expander.sv" \
+      "$P/src/rtl/core/frontend/instr/predecode.sv" \
+      "$P/src/rtl/core/frontend/instr/instr_boundary.sv" \
       "$P/src/rtl/core/bpu/btb.sv" \
       "$P/src/rtl/core/bpu/ras.sv" \
       "$P/src/rtl/core/bpu/tage_sc_l.sv" \
@@ -66,10 +66,10 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/cache/icache_data_ram.sv" \
       "$P/src/rtl/core/cache/icache.sv" \
       "$P/src/rtl/core/cache/icache_resp_queue.sv" \
-      "$P/src/rtl/core/fetch/next_line_prefetch_buffer.sv" \
-      "$P/src/rtl/core/fetch/ftq.sv" \
-      "$P/src/rtl/core/fetch/fetch_packet_buffer.sv" \
-      "$P/src/rtl/core/fetch/fetch_unit.sv" \
+      "$P/src/rtl/core/frontend/ifu/next_line_prefetch_buffer.sv" \
+      "$P/src/rtl/core/frontend/ftq/ftq.sv" \
+      "$P/src/rtl/core/frontend/ibuffer/fetch_packet_buffer.sv" \
+      "$P/src/rtl/core/frontend/top/fetch_unit.sv" \
       "$P/src/rtl/core/decode/decode_slice.sv" \
       "$P/src/rtl/core/decode/decode.sv" \
       "$P/src/rtl/core/decode/fusion_detector.sv" \
