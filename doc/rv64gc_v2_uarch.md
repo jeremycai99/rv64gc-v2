@@ -153,6 +153,13 @@ Current default RTL:
   same-line continuation also keeps the current owner live; the first emitted
   packet records that the owner has been delivered to the commit/decode side,
   while final owner completion is delayed until the continuation is exhausted.
+  Same-owner cursor advance is allowed only after a real packet enqueue under a
+  live IFU-writeback owner, on the same cache line, with no active
+  remainder/straddle transition. If the FTQ owner has predicted-control
+  metadata, the cursor may advance only when the next packet is entirely before
+  that predicted-control PC or starts exactly at it; it must not advance to a
+  PC that would make the predicted control a passenger behind earlier
+  instructions.
   The next XiangShan-style split is to make this cursor-to-FTQ handoff more
   complete under explicit owner/completion rules.
 - `frontend/ifu/ifu_duplicate_guard.sv` contains the legacy same-packet

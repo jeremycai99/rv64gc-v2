@@ -210,6 +210,8 @@ module ifu
         owner_live_c;
     assign pred_control_outside_next_packet_c =
         !work_r.ftq_entry.pred_ctl_valid ||
+        ({1'b0, seq_next_pc_i[5:0]} ==
+         {1'b0, work_r.ftq_entry.pred_ctl_offset}) ||
         (({1'b0, seq_next_pc_i[5:0]} + 7'd16) <=
          {1'b0, work_r.ftq_entry.pred_ctl_offset});
     assign work_same_owner_advance_c =

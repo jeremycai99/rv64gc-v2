@@ -282,6 +282,36 @@ that unconditional branch-boundary splitting is too blunt. The next candidate
 needs a selective predicted-control mechanism that preserves useful packet
 packing while preventing the specific fall-through skip hazard.
 
+Accepted follow-up trial:
+
+- `benchmark_results/20260507_trial_pred_ctl_start_advance_dhrystone`
+- `benchmark_results/20260507_trial_pred_ctl_start_advance_coremark`
+- `benchmark_results/20260507_pred_ctl_start_broad_smoke`
+
+The accepted RTL keeps packet packing intact and only relaxes the IFU
+same-owner rule when the next packet starts exactly at the FTQ predicted-control
+PC. That case does not carry the control as a passenger behind earlier
+straight-line instructions, so it avoids the CoreMark fall-through skip hazard
+that invalidated the earlier broad same-owner shortcut.
+
+| Workload | Prior accepted timed cycles | New timed cycles | Metric |
+|---|---:|---:|---:|
+| Dhrystone 100 | 26,080 | 22,290 | 2.553396 DMIPS/MHz |
+| CoreMark 1 | 199,331 | 196,124 | 5.098815 CoreMark/MHz |
+
+Key counter movement versus the prior accepted row:
+
+| Workload | `packet_empty_noemit_dup` | `packet_empty_f2_data` | Same-owner advanced | Same-owner no-emit block |
+|---|---:|---:|---:|---:|
+| Dhrystone 100 | 8,067 -> 4,111 | 8,379 -> 4,423 | 1,042 -> 5,004 | 4,868 -> 906 |
+| CoreMark 1 | 70,972 -> 66,694 | 74,161 -> 69,884 | 12,718 -> 17,323 | 21,074 -> 16,701 |
+
+All 12 broader smoke probes passed with strict owner/delivery checks and
+profiling enabled: frontend mixed-branch, data-dependent branch, call/return,
+taken-loop, jump-table, memory struct/array, backend independent/chain, and the
+three hotspot probes. This is still DSE evidence rather than final signoff, but
+it is no longer a two-benchmark-only datapoint.
+
 ## Current Architecture State
 
 rv64gc-v2 is already aligned with the intended XiangShan/BOOM-style ownership
