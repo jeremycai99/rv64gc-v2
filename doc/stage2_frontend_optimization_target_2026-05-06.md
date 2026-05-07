@@ -146,6 +146,45 @@ event that updates PC, line ownership, completion state, and prediction boundary
 metadata together. A local work-PC edit is not enough evidence to abandon the
 architectural path.
 
+Accepted RTL slice, 2026-05-07:
+
+- Implemented an owned same-owner IFU work advance in `ifu.sv`. The cursor may
+  advance to `seq_next_pc` only when the emitted packet enqueues, the current
+  FTQ writeback owner is live, no remainder or straddle transition is active,
+  the next PC stays on the same line, and a predicted-control owner cannot
+  place its predicted control in the next maximum 4-wide packet window.
+- Added `INVARIANT_I` in the simulation frontend assertions: a same-owner
+  advance must keep the same FTQ owner and load the previous cycle's
+  `seq_next_pc`.
+- Rejected sub-variants:
+  - Owner-live plus enqueue gating alone still trips CoreMark at sequence 7,056.
+  - Allowing advance before, but close to, a predicted control also trips the
+    same CoreMark fall-through PC.
+  - Control-free-only gating passes both rows but captures only part of the
+    opportunity: Dhrystone +3.1% DMIPS/MHz, CoreMark +0.9% CoreMark/MHz.
+
+Accepted result directories:
+
+- `benchmark_results/20260507_trial_pred_ctl_distance_same_owner_final_dhrystone`
+- `benchmark_results/20260507_trial_pred_ctl_distance_same_owner_final_coremark`
+
+| Workload | Baseline timed cycles | Accepted timed cycles | Metric delta | Correctness |
+|---|---:|---:|---:|---|
+| Dhrystone 100 | 27,093 | 26,080 | +3.9% DMIPS/MHz | PASS, golden PC OK, strict owner/delivery clean |
+| CoreMark 1 | 209,058 | 199,331 | +4.9% CoreMark/MHz | PASS, golden PC OK, strict owner/delivery clean |
+
+Key counter movement:
+
+| Workload | `packet_empty_noemit_dup` | `packet_empty_f2_data` | Redirect recovery |
+|---|---:|---:|---:|
+| Dhrystone 100 | 9,098 -> 8,067 | 9,410 -> 8,379 | 126 -> 126 |
+| CoreMark 1 | 82,614 -> 70,972 | 85,756 -> 74,161 | 2,969 -> 2,995 |
+
+This is a valid performance iteration, not just a counter probe: both endpoint
+identity and golden PC streams pass. It does not close the full Stage 1 gap by
+itself, but it proves the same-owner IFU cursor direction is real when bounded
+by predicted-control reachability.
+
 ## Current Architecture State
 
 rv64gc-v2 is already aligned with the intended XiangShan/BOOM-style ownership
@@ -155,7 +194,7 @@ split in direction, but not yet in depth:
 |---|---|---|
 | BPU | Prediction is still coupled to F2 packet progress. | F1 does not yet build a sustained predicted owner stream. |
 | FTQ | Allocation, IFU request, IFU writeback, and commit/training views are structurally split. | The split is not yet used to maintain deeper demand runahead. |
-| IFU work cursor | A stateful `ifu_work_item_t` exists and carries PC, line address, and FTQ identity. | It is still mirror-locked to F2 by SVA and must be decoupled from raw F2 register progress. |
+| IFU work cursor | A stateful `ifu_work_item_t` exists and carries PC, line address, and FTQ identity. Same-owner advance is now allowed when the next packet is outside the predicted-control hazard window. | It still needs deeper owner runahead and eventual removal of duplicate suppression as a correctness crutch. |
 | IBuffer | `fetch_packet_buffer.sv` is the owner-aware decode-facing packet boundary. | Capacity must be used as the runahead limit, not just as a pass-through buffer. |
 
 Therefore the next work is not to add these objects from scratch. The next work
@@ -169,7 +208,7 @@ These are the options worth keeping in the active Stage 2 plan.
 | Option | Status | Expected benefit | Guardrail / enable condition |
 |---|---|---|---|
 | Baseline counter pass | Required first | Prevents another stale methodology loop. | Capture current RTL counters before changing default behavior. |
-| Decouple existing IFU work cursor | Primary | Allows IFU extraction/progress by FTQ owner instead of raw F2 mirror state. | Cursor carries idx/epoch/tag/current PC; no identity inferred from ICQ request PC. |
+| Decouple existing IFU work cursor | In progress, first accepted slice landed | Allows IFU extraction/progress by FTQ owner instead of raw F2 mirror state. | Keep same-owner advance bounded by live owner, same line, real packet enqueue, and predicted-control reachability. |
 | Capacity-bounded BPU/F1 runahead | Primary after cursor decoupling | Lets F1 allocate/fetch ahead when FTQ, ICQ, and IBuffer have room. | Initial depth 1-2; limit derived from occupancy and epoch safety, not benchmark PCs. |
 | Owner-aware IBuffer elasticity | Primary support work | Absorbs decode/backend bubbles while IFU continues producing packets. | Complete packets carry FTQ identity and owner-complete metadata; strict delivery remains clean. |
 | Early IFU prediction validation | Workable after runahead | Repairs wrong predicted control closer to fetch. | Owner-tagged writeback to FTQ; redirect counters must not become dominant. |

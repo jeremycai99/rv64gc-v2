@@ -51,7 +51,8 @@ module fetch_frontend_assertions
     input logic [FTQ_IDX_BITS-1:0]          ftq_next_ifu_owner_idx,
     input logic [FTQ_ALLOC_TAG_BITS-1:0]    ftq_next_ifu_owner_tag,
     input logic                             ifu_work_redirect_next_owner_match_c,
-    input logic [63:0]                      f2_bpu_target
+    input logic [63:0]                      f2_bpu_target,
+    input logic                             ifu_work_same_owner_advance_c
 );
 
     property p_f2_pc_matches_resp_source;
@@ -212,6 +213,23 @@ module fetch_frontend_assertions
                     f2_work_ftq_idx_c,
                     f2_work_ftq_alloc_tag_c);
 
+    property p_ifu_same_owner_advance_keeps_owner;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        ifu_work_same_owner_advance_c |=>
+        (f2_work_valid_c &&
+         f2_work_ftq_valid_c &&
+         (f2_work_pc_c == $past(f2_seq_next_pc)) &&
+         (f2_work_ftq_idx_c == $past(f2_work_ftq_idx_c)) &&
+         (f2_work_ftq_epoch_c == $past(f2_work_ftq_epoch_c)) &&
+         (f2_work_ftq_alloc_tag_c == $past(f2_work_ftq_alloc_tag_c)));
+    endproperty
+    a_ifu_same_owner_advance_keeps_owner:
+        assert property (p_ifu_same_owner_advance_keeps_owner)
+        else $error("[INVARIANT_I] IFU same-owner advance lost owner: pc=%016h idx=%h tag=%h",
+                    f2_work_pc_c,
+                    f2_work_ftq_idx_c,
+                    f2_work_ftq_alloc_tag_c);
+
 endmodule
 
 bind fetch_top fetch_frontend_assertions u_fetch_frontend_assertions (
@@ -257,6 +275,7 @@ bind fetch_top fetch_frontend_assertions u_fetch_frontend_assertions (
     .ftq_next_ifu_owner_idx               (ftq_next_ifu_owner_idx),
     .ftq_next_ifu_owner_tag               (ftq_next_ifu_owner_tag),
     .ifu_work_redirect_next_owner_match_c (ifu_work_redirect_next_owner_match_c),
-    .f2_bpu_target                        (f2_bpu_target)
+    .f2_bpu_target                        (f2_bpu_target),
+    .ifu_work_same_owner_advance_c        (ifu_work_same_owner_advance_c)
 );
 `endif

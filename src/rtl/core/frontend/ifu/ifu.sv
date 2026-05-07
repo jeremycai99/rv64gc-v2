@@ -89,7 +89,8 @@ module ifu
     output logic                          work_redirect_keep_owner_o,
     output logic                          work_take_ftq_next_owner_o,
     output logic                          work_take_request_owner_o,
-    output logic                          work_take_remainder_request_owner_o
+    output logic                          work_take_remainder_request_owner_o,
+    output logic                          work_same_owner_advance_o
 );
 
     typedef struct packed {
@@ -127,6 +128,8 @@ module ifu
     logic        owner_completion_candidate_c;
     logic        owner_delivery_push_c;
     logic        ftq_ifu_pop_valid_c;
+    logic        work_same_owner_advance_c;
+    logic        pred_control_outside_next_packet_c;
 
     assign f1_valid_o              = f1_valid_r;
     assign f1_pc_o                 = f1_pc_r;
@@ -149,6 +152,7 @@ module ifu
         redirect_without_owner_successor_c;
     assign owner_completion_candidate_o = owner_completion_candidate_c;
     assign owner_delivery_push_o        = owner_delivery_push_c;
+    assign work_same_owner_advance_o    = work_same_owner_advance_c;
 
     assign work_valid_o         = work_r.valid;
     assign work_pc_o            = work_r.pc;
@@ -204,6 +208,23 @@ module ifu
     assign ftq_ifu_pop_valid_c =
         owner_completion_candidate_c &&
         owner_live_c;
+    assign pred_control_outside_next_packet_c =
+        !work_r.ftq_entry.pred_ctl_valid ||
+        (({1'b0, seq_next_pc_i[5:0]} + 7'd16) <=
+         {1'b0, work_r.ftq_entry.pred_ctl_offset});
+    assign work_same_owner_advance_c =
+        same_owner_continue_i &&
+        seq_valid_i &&
+        will_emit_i &&
+        packet_enq_i &&
+        owner_live_c &&
+        work_r.ftq_valid &&
+        !owner_complete_i &&
+        pred_control_outside_next_packet_c &&
+        !line_straddle_advance_i &&
+        !consume_remainder_i &&
+        !consumed_remainder_r &&
+        (seq_next_pc_i[63:LINE_BITS] == work_r.line_addr);
 
     assign owner_live_c =
         work_r.ftq_valid &&
@@ -333,6 +354,8 @@ module ifu
                     work_pc_next = seq_next_pc_i;
                 else if (consumed_remainder_r)
                     work_pc_next = post_remainder_pc_r;
+                else if (work_same_owner_advance_c)
+                    work_pc_next = seq_next_pc_i;
                 else
                     work_pc_next = f1_pc_r;
 

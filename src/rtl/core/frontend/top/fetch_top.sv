@@ -273,6 +273,7 @@ module fetch_top
     logic                                  ifu_work_take_ftq_next_owner_c;
     logic                                  ifu_work_take_request_owner_c;
     logic                                  ifu_work_take_remainder_request_owner_c;
+    logic                                  ifu_work_same_owner_advance_c;
 
     ifu u_ifu (
         .clk                                      (clk),
@@ -348,7 +349,8 @@ module fetch_top
         .work_redirect_keep_owner_o               (ifu_work_redirect_keep_owner_c),
         .work_take_ftq_next_owner_o               (ifu_work_take_ftq_next_owner_c),
         .work_take_request_owner_o                (ifu_work_take_request_owner_c),
-        .work_take_remainder_request_owner_o      (ifu_work_take_remainder_request_owner_c)
+        .work_take_remainder_request_owner_o      (ifu_work_take_remainder_request_owner_c),
+        .work_same_owner_advance_o                (ifu_work_same_owner_advance_c)
     );
 
     ifu_line_fetch #(.ICQ_DEPTH(ICQ_DEPTH)) u_ifu_line_fetch (
