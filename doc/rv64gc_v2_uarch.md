@@ -463,21 +463,23 @@ These are the structural constraint points that any optimization needs to be awa
   predicted-control validation, static-control override, subgroup split
   selection, owner-complete classification, RAS/GHR action requests, and the
   registered subgroup seed state used to carry branch-owner prediction metadata
-  into the following request.
+  into the following request. The production subgroup-split defaults are fixed
+  in RTL; old simulation plusarg controls for disabling this behavior have been
+  retired from the core.
 - **BPU boundary:** `core/bpu/bpu.sv` owns BTB, TAGE, RAS, GHR repair, request
   prediction assembly, aux prediction observation, and the BPU-to-FTQ request
   entry adapter. `fetch_top.sv` consumes the assembled FTQ entry instead of
   locally rebuilding predictor metadata.
 - **Simulation boundary:** `src/rtl/sim/fetch_delivery_checker.sv`,
-  `src/rtl/sim/fetch_owner_checker.sv`, and
-  `src/rtl/sim/fetch_frontend_profiler.sv`, and
+  `src/rtl/sim/fetch_owner_checker.sv`,
+  `src/rtl/sim/fetch_frontend_profiler.sv`,
   `src/rtl/sim/fetch_trace_probe.sv`, and
-  `src/rtl/sim/fetch_frontend_assertions.sv` bind to `fetch_top` in simulation
-  and own the strict delivery stream checker, same-line owner contract checker,
+  `src/rtl/sim/fetch_frontend_assertions.sv` bind to `fetch_top` in simulation.
+  They own the strict delivery stream checker, same-line owner contract checker,
   frontend performance/profile counters, optional fetch trace output, and
-  frontend timing invariants. This keeps checker, profiler, trace, assertion
-  `$display`, `$fatal`, `$error`, and plusarg handling out of the frontend
-  integration RTL.
+  frontend timing invariants. This keeps checker, profiler, trace, and
+  assertion `$display`, `$fatal`, `$error`, and plusarg handling out of the
+  frontend integration RTL.
 - **Current runahead precondition:** the IFU work cursor is still conservative
   and mirror-locked to the registered F1/F2 flow. Before F1 can run ahead by
   default, this cursor must become the independently advanced work item for the

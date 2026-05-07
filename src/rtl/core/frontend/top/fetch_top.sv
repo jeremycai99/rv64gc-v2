@@ -251,35 +251,10 @@ module fetch_top
     logic        subgroup_split_owner_cond_en;
     logic        subgroup_split_slot3_ftq_taken_only_en;
 
-`ifdef SIMULATION
-    logic sim_subgroup_split_second_ctl_en;
-    logic sim_subgroup_split_any_second_ctl_en;
-    logic sim_subgroup_split_owner_cond_en;
-    logic sim_subgroup_split_slot3_ftq_taken_only_en;
-    initial begin
-        sim_subgroup_split_second_ctl_en =
-            !$test$plusargs("DISABLE_SUBGROUP_SPLIT_SECOND_CTL");
-        sim_subgroup_split_any_second_ctl_en =
-            !$test$plusargs("DISABLE_SPLIT_ANY_SECOND_CTL");
-        sim_subgroup_split_owner_cond_en =
-            !$test$plusargs("DISABLE_SUBGROUP_SPLIT_OWNER_COND");
-        sim_subgroup_split_slot3_ftq_taken_only_en =
-            $test$plusargs("SPLIT_SLOT3_FTQ_TAKEN_ONLY");
-    end
-    assign subgroup_split_second_ctl_en =
-        sim_subgroup_split_second_ctl_en;
-    assign subgroup_split_any_second_ctl_en =
-        sim_subgroup_split_any_second_ctl_en;
-    assign subgroup_split_owner_cond_en =
-        sim_subgroup_split_owner_cond_en;
-    assign subgroup_split_slot3_ftq_taken_only_en =
-        sim_subgroup_split_slot3_ftq_taken_only_en;
-`else
     assign subgroup_split_second_ctl_en = 1'b1;
     assign subgroup_split_any_second_ctl_en = 1'b1;
     assign subgroup_split_owner_cond_en = 1'b1;
     assign subgroup_split_slot3_ftq_taken_only_en = 1'b0;
-`endif
 
     // IFU owns the conservative F1 request and FTQ allocation boundary. It
     // still issues only under the existing lockstep conditions; this slice only
