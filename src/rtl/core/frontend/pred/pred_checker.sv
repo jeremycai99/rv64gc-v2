@@ -54,11 +54,6 @@ module pred_checker
     input  logic [63:0]                  second_ctl_target_i,
     input  logic                         owner_cond_pred_found_i,
 
-    input  logic                         subgroup_split_second_ctl_en_i,
-    input  logic                         subgroup_split_any_second_ctl_en_i,
-    input  logic                         subgroup_split_owner_cond_en_i,
-    input  logic                         subgroup_split_slot3_ftq_taken_only_en_i,
-
     input  logic                         seq_valid_i,
     input  logic                         consume_remainder_i,
     input  logic                         redirect_without_owner_successor_i,
@@ -115,6 +110,10 @@ module pred_checker
     localparam logic [2:0] BT_JALR = 3'd2;
     localparam logic [2:0] BT_CALL = 3'd3;
     localparam logic [2:0] BT_RET  = 3'd4;
+    localparam logic SUBGROUP_SPLIT_SECOND_CTL_EN = 1'b1;
+    localparam logic SUBGROUP_SPLIT_ANY_SECOND_CTL_EN = 1'b1;
+    localparam logic SUBGROUP_SPLIT_OWNER_COND_EN = 1'b1;
+    localparam logic SUBGROUP_SPLIT_SLOT3_FTQ_TAKEN_ONLY_EN = 1'b0;
 
     logic        second_ctl_backward_cond_c;
     logic        btb_pred_found_c;
@@ -439,14 +438,14 @@ module pred_checker
 
         // If the earliest conditional is not predicted taken, do not carry a
         // later control-flow instruction as an unpredicted passenger.
-        if (subgroup_split_second_ctl_en_i &&
+        if (SUBGROUP_SPLIT_SECOND_CTL_EN &&
             valid_i &&
             pd_ctl_found_i &&
             second_ctl_found_i &&
             (pd_ctl_type_i == BT_COND) &&
             !(bp_branch_found_o && bp_taken_o &&
               (bp_branch_slot_o <= second_ctl_slot_i)) &&
-            (subgroup_split_any_second_ctl_en_i ||
+            (SUBGROUP_SPLIT_ANY_SECOND_CTL_EN ||
              (pd_ctl_slot_i == 3'd0) ||
              second_ctl_backward_cond_c)) begin
             subgroup_split_before_ctl_o = 1'b1;
@@ -458,7 +457,7 @@ module pred_checker
 
         // Split before a later owner conditional so the next request can be
         // branch-owned.
-        end else if (subgroup_split_owner_cond_en_i &&
+        end else if (SUBGROUP_SPLIT_OWNER_COND_EN &&
             valid_i &&
             pd_ctl_found_i &&
             (pd_ctl_type_i == BT_COND) &&
@@ -476,7 +475,7 @@ module pred_checker
             end else if ((pd_ctl_slot_i == 3'd3) &&
                          ftq_pred_ctl_valid_o &&
                          (ftq_pred_ctl_type_o == BT_COND) &&
-                         (!subgroup_split_slot3_ftq_taken_only_en_i ||
+                         (!SUBGROUP_SPLIT_SLOT3_FTQ_TAKEN_ONLY_EN ||
                           ftq_pred_ctl_taken_o) &&
                          (ftq_pred_ctl_slot_o == pd_ctl_slot_i)) begin
                 if (!(bp_branch_found_o &&

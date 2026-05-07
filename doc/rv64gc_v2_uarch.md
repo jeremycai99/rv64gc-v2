@@ -472,9 +472,10 @@ These are the structural constraint points that any optimization needs to be awa
   predicted-control validation, static-control override, subgroup split
   selection, owner-complete classification, RAS/GHR action requests, and the
   registered subgroup seed state used to carry branch-owner prediction metadata
-  into the following request. The production subgroup-split defaults are fixed
-  in RTL; old simulation plusarg controls for disabling this behavior have been
-  retired from the core.
+  into the following request. The production subgroup-split defaults are owned
+  inside `pred_checker.sv`; `fetch_top.sv` no longer wires fixed production
+  policy controls through the integration layer. Old simulation plusarg
+  controls for disabling this behavior have been retired from the core.
 - **BPU boundary:** `core/bpu/bpu.sv` owns BTB, TAGE, RAS, GHR repair, request
   prediction assembly, aux prediction observation, the BPU-to-FTQ request entry
   adapter, and the registered F1 to F2 BTB/TAGE/GHR snapshot. `fetch_top.sv`

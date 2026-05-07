@@ -239,16 +239,6 @@ module fetch_top
     logic        packet_buf_owner_match_c;
     logic        packet_buf_head_owner_complete_c;
     logic        remainder_valid_r;
-    logic        subgroup_split_second_ctl_en;
-    logic        subgroup_split_any_second_ctl_en;
-    logic        subgroup_split_owner_cond_en;
-    logic        subgroup_split_slot3_ftq_taken_only_en;
-
-    assign subgroup_split_second_ctl_en = 1'b1;
-    assign subgroup_split_any_second_ctl_en = 1'b1;
-    assign subgroup_split_owner_cond_en = 1'b1;
-    assign subgroup_split_slot3_ftq_taken_only_en = 1'b0;
-
     // IFU owns the conservative F1 request and FTQ allocation boundary. It
     // still issues only under the existing lockstep conditions; this slice only
     // moves the boundary out of the integration wrapper.
@@ -879,10 +869,6 @@ module fetch_top
         .second_ctl_pc_i                          (second_ctl_pc),
         .second_ctl_target_i                      (second_ctl_target),
         .owner_cond_pred_found_i                  (owner_cond_pred_found),
-        .subgroup_split_second_ctl_en_i           (subgroup_split_second_ctl_en),
-        .subgroup_split_any_second_ctl_en_i       (subgroup_split_any_second_ctl_en),
-        .subgroup_split_owner_cond_en_i           (subgroup_split_owner_cond_en),
-        .subgroup_split_slot3_ftq_taken_only_en_i (subgroup_split_slot3_ftq_taken_only_en),
         .seq_valid_i                              (f2_seq_valid),
         .consume_remainder_i                      (consume_remainder_c),
         .redirect_without_owner_successor_i       (f2_redirect_without_owner_successor_c),
