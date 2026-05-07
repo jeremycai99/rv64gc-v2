@@ -126,9 +126,9 @@ RTL_FILES = \
     $(RTL_DIR)/core/fetch/rvc_expander.sv \
     $(RTL_DIR)/core/fetch/predecode.sv \
     $(RTL_DIR)/core/fetch/instr_boundary.sv \
-    $(RTL_DIR)/core/fetch/btb.sv \
-    $(RTL_DIR)/core/fetch/ras.sv \
-    $(RTL_DIR)/core/fetch/tage_sc_l.sv \
+    $(RTL_DIR)/core/bpu/btb.sv \
+    $(RTL_DIR)/core/bpu/ras.sv \
+    $(RTL_DIR)/core/bpu/tage_sc_l.sv \
 	$(RTL_DIR)/core/cache/icache_tag_ram.sv \
 	$(RTL_DIR)/core/cache/icache_data_ram.sv \
 	$(RTL_DIR)/core/cache/icache.sv \

@@ -76,9 +76,9 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/fetch/rvc_expander.sv \
      src/rtl/core/fetch/predecode.sv \
      src/rtl/core/fetch/instr_boundary.sv \
-     src/rtl/core/fetch/btb.sv \
-     src/rtl/core/fetch/ras.sv \
-     src/rtl/core/fetch/tage_sc_l.sv \
+     src/rtl/core/bpu/btb.sv \
+     src/rtl/core/bpu/ras.sv \
+     src/rtl/core/bpu/tage_sc_l.sv \
      src/rtl/core/cache/icache_tag_ram.sv \
      src/rtl/core/cache/icache_data_ram.sv \
      src/rtl/core/cache/icache.sv \

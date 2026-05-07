@@ -59,9 +59,9 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/fetch/rvc_expander.sv" \
       "$P/src/rtl/core/fetch/predecode.sv" \
       "$P/src/rtl/core/fetch/instr_boundary.sv" \
-      "$P/src/rtl/core/fetch/btb.sv" \
-      "$P/src/rtl/core/fetch/ras.sv" \
-      "$P/src/rtl/core/fetch/tage_sc_l.sv" \
+      "$P/src/rtl/core/bpu/btb.sv" \
+      "$P/src/rtl/core/bpu/ras.sv" \
+      "$P/src/rtl/core/bpu/tage_sc_l.sv" \
       "$P/src/rtl/core/cache/icache_tag_ram.sv" \
       "$P/src/rtl/core/cache/icache_data_ram.sv" \
       "$P/src/rtl/core/cache/icache.sv" \

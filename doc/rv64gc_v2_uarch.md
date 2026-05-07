@@ -439,7 +439,7 @@ These are the structural constraint points that any optimization needs to be awa
   direction shortcuts, sequential lookahead, weak static branch bias, and
   decode/rename/commit widening.
 
-### 2.2 BPU: TAGE-SC-L (`src/rtl/core/fetch/tage_sc_l.sv`)
+### 2.2 BPU: TAGE-SC-L (`src/rtl/core/bpu/tage_sc_l.sv`)
 
 - **Bimodal base table:** 4096 entries (`TAGE_BASE_ENTRIES`)
 - **Tagged tables:** 4 tables × 256 entries each (`TAGE_NUM_TABLES=4`, `TAGE_TABLE_ENTRIES=256`), 12-bit tags
@@ -451,7 +451,7 @@ These are the structural constraint points that any optimization needs to be awa
   predictor, and RAS. Comparative sizing notes live in the reference-core audit
   docs, not in this spec.
 
-### 2.3 BTB (`src/rtl/core/fetch/btb.sv`)
+### 2.3 BTB (`src/rtl/core/bpu/btb.sv`)
 
 - **Geometry:** 2048 entries, 8-way set-associative, 256 sets (`BTB_ENTRIES=2048`, `BTB_WAYS=8`, `BTB_SETS=256`)
 - **Indexed by:** cache-line address; per-line stores byte offset of each control-flow site
@@ -459,7 +459,7 @@ These are the structural constraint points that any optimization needs to be awa
 - **Read latency:** combinational (same cycle as fetch)
 - **Lookup output:** primary hit + alternate hit (for two control transfers in same line)
 
-### 2.4 RAS (`src/rtl/core/fetch/ras.sv`)
+### 2.4 RAS (`src/rtl/core/bpu/ras.sv`)
 
 - **Depth:** 24 (`RAS_DEPTH`)
 - **Push:** call instructions at predict time
