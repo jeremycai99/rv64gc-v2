@@ -62,6 +62,20 @@ module bpu
     input  logic [GHR_BITS-1:0]     ghr_restore_val_i,
     output logic [GHR_BITS-1:0]     ghr_o,
 
+    input  logic                    f2_stall_i,
+    input  logic                    f2_redirect_i,
+    input  logic                    f2_ghr_hold_i,
+    output logic                    f2_btb_hit_o,
+    output logic [63:0]             f2_btb_target_o,
+    output logic [2:0]              f2_btb_type_o,
+    output logic [5:0]              f2_btb_offset_o,
+    output logic                    f2_btb_alt_hit_o,
+    output logic [63:0]             f2_btb_alt_target_o,
+    output logic [2:0]              f2_btb_alt_type_o,
+    output logic [5:0]              f2_btb_alt_offset_o,
+    output logic                    f2_tage_taken_o,
+    output logic [GHR_BITS-1:0]     f2_ghr_snapshot_o,
+
     input  logic                    subgroup_seed_hit_i,
     input  logic                    subgroup_seed_pred_valid_i,
     input  logic                    subgroup_seed_pred_taken_i,
@@ -177,6 +191,34 @@ module bpu
         .restore_top_valid  (ras_restore_top_valid_i),
         .restore_top_addr   (ras_restore_top_addr_i)
     );
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            f2_btb_hit_o        <= 1'b0;
+            f2_btb_target_o     <= '0;
+            f2_btb_type_o       <= '0;
+            f2_btb_offset_o     <= '0;
+            f2_btb_alt_hit_o    <= 1'b0;
+            f2_btb_alt_target_o <= '0;
+            f2_btb_alt_type_o   <= '0;
+            f2_btb_alt_offset_o <= '0;
+            f2_tage_taken_o     <= 1'b0;
+            f2_ghr_snapshot_o   <= '0;
+        end else if (!flush_i && !f2_stall_i) begin
+            f2_btb_hit_o        <= btb_hit_o;
+            f2_btb_target_o     <= btb_target_o;
+            f2_btb_type_o       <= btb_type_o;
+            f2_btb_offset_o     <= btb_offset_o;
+            f2_btb_alt_hit_o    <= btb_alt_hit_o;
+            f2_btb_alt_target_o <= btb_alt_target_o;
+            f2_btb_alt_type_o   <= btb_alt_type_o;
+            f2_btb_alt_offset_o <= btb_alt_offset_o;
+            f2_tage_taken_o     <= tage_pred_taken_o;
+            if (f2_redirect_i || !f2_ghr_hold_i) begin
+                f2_ghr_snapshot_o <= ghr_o;
+            end
+        end
+    end
 
     always_comb begin
         req_pred_ctl_valid_c  = 1'b0;

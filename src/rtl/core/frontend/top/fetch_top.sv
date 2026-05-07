@@ -557,6 +557,16 @@ module fetch_top
     logic [63:0] predecode_ctl_pc;
     logic [63:0] predecode_ctl_target;
     logic [GHR_BITS-1:0] f2_ghr_snapshot_r;
+    logic        f2_bpu_ghr_hold_c;
+    logic        f2_btb_hit_r;
+    logic [63:0] f2_btb_target_r;
+    logic [2:0]  f2_btb_type_r;
+    logic [5:0]  f2_btb_offset_r;
+    logic        f2_btb_alt_hit_r;
+    logic [63:0] f2_btb_alt_target_r;
+    logic [2:0]  f2_btb_alt_type_r;
+    logic [5:0]  f2_btb_alt_offset_r;
+    logic        f2_tage_taken_r;
     logic        tage_pred_taken;
     logic        tage_pred_confident;
     logic        owner_tage_pred_taken;
@@ -573,6 +583,9 @@ module fetch_top
     logic [5:0]  f1_aux_pred_ctl_offset_c;
     logic [2:0]  f1_aux_pred_ctl_type_c;
     logic [63:0] f1_aux_pred_ctl_target_c;
+
+    assign f2_bpu_ghr_hold_c =
+        line_straddle_advance_c || consume_remainder_c || consumed_remainder_r;
 
     bpu u_bpu (
         .clk                         (clk),
@@ -621,6 +634,19 @@ module fetch_top
         .ghr_restore_valid_i         (ghr_restore_valid),
         .ghr_restore_val_i           (ghr_restore_val),
         .ghr_o                       (ghr_out),
+        .f2_stall_i                  (fe_stall),
+        .f2_redirect_i               (f2_bpu_redirect),
+        .f2_ghr_hold_i               (f2_bpu_ghr_hold_c),
+        .f2_btb_hit_o                (f2_btb_hit_r),
+        .f2_btb_target_o             (f2_btb_target_r),
+        .f2_btb_type_o               (f2_btb_type_r),
+        .f2_btb_offset_o             (f2_btb_offset_r),
+        .f2_btb_alt_hit_o            (f2_btb_alt_hit_r),
+        .f2_btb_alt_target_o         (f2_btb_alt_target_r),
+        .f2_btb_alt_type_o           (f2_btb_alt_type_r),
+        .f2_btb_alt_offset_o         (f2_btb_alt_offset_r),
+        .f2_tage_taken_o             (f2_tage_taken_r),
+        .f2_ghr_snapshot_o           (f2_ghr_snapshot_r),
         .subgroup_seed_hit_i         (subgroup_seed_hit_c),
         .subgroup_seed_pred_valid_i  (subgroup_seed_pred_valid_r),
         .subgroup_seed_pred_taken_i  (subgroup_seed_pred_taken_r),
@@ -644,18 +670,6 @@ module fetch_top
         .ras_restore_top_addr_i      (ras_restore_top_addr)
     );
 
-    // =========================================================================
-    // F1 -> F2 pipeline registers
-    // =========================================================================
-    logic        f2_btb_hit_r;
-    logic [63:0] f2_btb_target_r;
-    logic [2:0]  f2_btb_type_r;
-    logic [5:0]  f2_btb_offset_r;
-    logic        f2_btb_alt_hit_r;
-    logic [63:0] f2_btb_alt_target_r;
-    logic [2:0]  f2_btb_alt_type_r;
-    logic [5:0]  f2_btb_alt_offset_r;
-    logic        f2_tage_taken_r;
     // Boundary outputs are driven by instr_boundary and consumed by the IFU
     // cursor policy before the leaf instance appears later in the file.
     logic [2:0]  extract_count;
@@ -737,55 +751,16 @@ module fetch_top
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            f2_btb_hit_r        <= 1'b0;
-            f2_btb_target_r     <= '0;
-            f2_btb_type_r       <= '0;
-            f2_btb_offset_r     <= '0;
-            f2_btb_alt_hit_r    <= 1'b0;
-            f2_btb_alt_target_r <= '0;
-            f2_btb_alt_type_r   <= '0;
-            f2_btb_alt_offset_r <= '0;
-            f2_tage_taken_r     <= 1'b0;
-            f2_ghr_snapshot_r   <= '0;
             consumed_remainder_r <= 1'b0;
             post_remainder_pc_r  <= '0;
         end else if (redirect_valid) begin
             // Flush cursor-adjacent state on redirect.
             consumed_remainder_r <= 1'b0;
         end else if (f2_bpu_redirect && !fe_stall) begin
-            // BPU redirect: the IFU work cursor is redirected to the target.
-            // Latch predictor metadata for the redirected-to fetch group.
-            // BTB/TAGE lookup follows ic_req_addr, which already points at
-            // f2_bpu_target in this cycle.
-            f2_btb_hit_r        <= btb_hit;
-            f2_btb_target_r     <= btb_target;
-            f2_btb_type_r       <= btb_branch_type;
-            f2_btb_offset_r     <= btb_branch_offset;
-            f2_btb_alt_hit_r    <= btb_alt_hit;
-            f2_btb_alt_target_r <= btb_alt_target;
-            f2_btb_alt_type_r   <= btb_alt_branch_type;
-            f2_btb_alt_offset_r <= btb_alt_branch_offset;
-            f2_tage_taken_r     <= tage_pred_taken;
-            f2_ghr_snapshot_r   <= ghr_out;
+            // BPU redirect redirects the IFU work cursor to the target.
             consumed_remainder_r <= 1'b0;
         end else begin
             if (!fe_stall) begin
-                f2_btb_hit_r        <= btb_hit;
-                f2_btb_target_r     <= btb_target;
-                f2_btb_type_r       <= btb_branch_type;
-                f2_btb_offset_r     <= btb_branch_offset;
-                f2_btb_alt_hit_r    <= btb_alt_hit;
-                f2_btb_alt_target_r <= btb_alt_target;
-                f2_btb_alt_type_r   <= btb_alt_branch_type;
-                f2_btb_alt_offset_r <= btb_alt_branch_offset;
-                f2_tage_taken_r     <= tage_pred_taken;
-                if (line_straddle_advance_c || consume_remainder_c ||
-                    consumed_remainder_r) begin
-                    f2_ghr_snapshot_r <= f2_ghr_snapshot_r;
-                end else begin
-                    f2_ghr_snapshot_r <= ghr_out;
-                end
-
                 // Latch the consume event and the post-remainder PC so the
                 // next cycle can also advance f1_pc in lock-step.
                 if (consume_remainder_c) begin

@@ -1,8 +1,8 @@
 # RV64GC v2 Microarchitecture Specification
 
 **Status:** CURRENT (4-wide OoO implementation; supersedes original 6-wide spec)
-**Last revised:** 2026-05-06
-**Repo HEAD at revision:** `master @ a6a0443`
+**Last revised:** 2026-05-07
+**Repo HEAD at revision:** current checked-in revision
 **Authoritative sources:** `src/rtl/core/include/rv64gc_pkg.sv` (parameters); `src/rtl/core/rv64gc_core_top.sv` (top-level wiring); per-module RTL.
 
 > ## Scope
@@ -77,9 +77,10 @@ Current default RTL:
 
 - `src/rtl/core/bpu/bpu.sv` is the BPU integration wrapper. It owns the direct
   BTB, TAGE-SC-L, and RAS leaf instances, including lookup/update/restore
-  wiring and speculative GHR update routing. The frontend integration layer
-  still assembles the FTQ prediction entry from the BPU outputs while the final
-  top-level split is in progress.
+  wiring, speculative GHR update routing, request-time FTQ prediction entry
+  assembly, auxiliary prediction observation, and the registered F1 to F2
+  predictor metadata snapshot consumed by prediction checking and packet
+  construction.
 - F1 PC generation is still coupled to F2 packet progress and architectural
   redirect priority.
 - `ftq.sv` tracks allocated-not-requested, requested-not-written-back, and
@@ -467,9 +468,10 @@ These are the structural constraint points that any optimization needs to be awa
   in RTL; old simulation plusarg controls for disabling this behavior have been
   retired from the core.
 - **BPU boundary:** `core/bpu/bpu.sv` owns BTB, TAGE, RAS, GHR repair, request
-  prediction assembly, aux prediction observation, and the BPU-to-FTQ request
-  entry adapter. `fetch_top.sv` consumes the assembled FTQ entry instead of
-  locally rebuilding predictor metadata.
+  prediction assembly, aux prediction observation, the BPU-to-FTQ request entry
+  adapter, and the registered F1 to F2 BTB/TAGE/GHR snapshot. `fetch_top.sv`
+  consumes the assembled FTQ entry and registered F2 predictor metadata instead
+  of locally rebuilding predictor state.
 - **Simulation boundary:** `src/rtl/sim/fetch_delivery_checker.sv`,
   `src/rtl/sim/fetch_owner_checker.sv`,
   `src/rtl/sim/fetch_frontend_profiler.sv`,
