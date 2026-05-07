@@ -77,6 +77,7 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/frontend/instr/predecode.sv \
      src/rtl/core/frontend/instr/instr_boundary.sv \
      src/rtl/core/frontend/instr/instr_compact.sv \
+     src/rtl/core/frontend/pred/pred_checker.sv \
      src/rtl/core/bpu/btb.sv \
      src/rtl/core/bpu/ras.sv \
      src/rtl/core/bpu/tage_sc_l.sv \

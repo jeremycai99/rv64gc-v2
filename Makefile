@@ -127,6 +127,7 @@ RTL_FILES = \
     $(RTL_DIR)/core/frontend/instr/predecode.sv \
     $(RTL_DIR)/core/frontend/instr/instr_boundary.sv \
     $(RTL_DIR)/core/frontend/instr/instr_compact.sv \
+    $(RTL_DIR)/core/frontend/pred/pred_checker.sv \
     $(RTL_DIR)/core/bpu/btb.sv \
     $(RTL_DIR)/core/bpu/ras.sv \
     $(RTL_DIR)/core/bpu/tage_sc_l.sv \

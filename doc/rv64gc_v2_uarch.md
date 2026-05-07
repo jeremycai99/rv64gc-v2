@@ -420,6 +420,11 @@ These are the structural constraint points that any optimization needs to be awa
   `frontend/instr/instr_compact.sv` hold parcel extraction, compressed
   expansion, control-flow predecode, and mechanical fetch-packet assembly.
   Prediction ownership and redirect policy still live above these helpers.
+- **Prediction checker leaf:** `frontend/pred/pred_checker.sv` validates the
+  FTQ-predicted control against predecode, selects the packet cut point,
+  requests predicted redirects, and emits the associated RAS/GHR actions.
+  Persistent subgroup seed state and IFU cursor state remain in the integration
+  layer until the stateful IFU/BPU split.
 - **Current runahead precondition:** the IFU work cursor is still conservative
   and mirror-locked to the registered F1/F2 flow. Before F1 can run ahead by
   default, this cursor must become the independently advanced work item for the

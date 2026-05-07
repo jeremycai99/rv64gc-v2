@@ -60,6 +60,7 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/frontend/instr/predecode.sv" \
       "$P/src/rtl/core/frontend/instr/instr_boundary.sv" \
       "$P/src/rtl/core/frontend/instr/instr_compact.sv" \
+      "$P/src/rtl/core/frontend/pred/pred_checker.sv" \
       "$P/src/rtl/core/bpu/btb.sv" \
       "$P/src/rtl/core/bpu/ras.sv" \
       "$P/src/rtl/core/bpu/tage_sc_l.sv" \

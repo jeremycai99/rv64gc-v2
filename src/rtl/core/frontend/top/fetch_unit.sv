@@ -122,6 +122,9 @@ module fetch_unit
     logic        bp_branch_found;
     logic        bp_taken;
     logic [63:0] bp_target_addr;
+    logic [2:0]  bp_branch_slot;
+    logic [2:0]  bp_type;
+    logic [2:0]  final_count;
     logic        subgroup_split_before_ctl_c;
 
     // consumed_remainder_r: latched when the current cycle's extraction
@@ -1459,7 +1462,6 @@ module fetch_unit
     logic [2:0]  second_ctl_type;
     logic [63:0] second_ctl_pc;
     logic [63:0] second_ctl_target;
-    logic        second_ctl_backward_cond;
     logic        ftq_pred_ctl_valid;
     logic        ftq_pred_ctl_slot_match;
     logic        ftq_pred_ctl_taken;
@@ -1551,64 +1553,81 @@ module fetch_unit
         .owner_cond_pred_target_o(owner_cond_pred_target)
     );
 
-    always_comb begin
-        ftq_pred_ctl_valid      = 1'b0;
-        ftq_pred_ctl_slot_match = 1'b0;
-        ftq_pred_ctl_taken      = 1'b0;
-        ftq_pred_ctl_slot       = 3'd0;
-        ftq_pred_ctl_type       = BT_COND;
-        ftq_pred_ctl_target     = '0;
-
-        if (f2_work_ftq_valid_c && f2_work_ftq_entry_c.pred_ctl_valid) begin
-            ftq_pred_ctl_valid  = 1'b1;
-            ftq_pred_ctl_taken  = f2_work_ftq_entry_c.pred_ctl_taken;
-            ftq_pred_ctl_type   = f2_work_ftq_entry_c.pred_ctl_type;
-            ftq_pred_ctl_target = f2_work_ftq_entry_c.pred_ctl_target;
-
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (slot_valid[i] &&
-                    (slot_pc[i][5:0] ==
-                     f2_work_ftq_entry_c.pred_ctl_offset)) begin
-                    ftq_pred_ctl_slot_match = 1'b1;
-                    ftq_pred_ctl_slot       = 3'(i);
-                end
-            end
-
-            if (!ftq_pred_ctl_slot_match) begin
-                ftq_pred_ctl_valid  = 1'b0;
-                ftq_pred_ctl_taken  = 1'b0;
-                ftq_pred_ctl_target = '0;
-            end
-        end
-    end
+    pred_checker u_pred_checker (
+        .valid_i                                  (f2_work_valid_c && f2_data_valid),
+        .will_emit_i                              (f2_will_emit_c),
+        .redirect_i                               (redirect_valid),
+        .stall_i                                  (fe_stall),
+        .extract_count_i                          (extract_count),
+        .slot_valid_i                             (slot_valid),
+        .slot_is_rvc_i                            (slot_is_rvc),
+        .slot_pc_i                                (slot_pc),
+        .ftq_valid_i                              (f2_work_ftq_valid_c),
+        .ftq_entry_i                              (f2_work_ftq_entry_c),
+        .btb_hit_i                                (f2_btb_hit_r),
+        .btb_target_i                             (f2_btb_target_r),
+        .btb_type_i                               (f2_btb_type_r),
+        .btb_offset_i                             (f2_btb_offset_r),
+        .btb_alt_hit_i                            (f2_btb_alt_hit_r),
+        .btb_alt_target_i                         (f2_btb_alt_target_r),
+        .btb_alt_type_i                           (f2_btb_alt_type_r),
+        .btb_alt_offset_i                         (f2_btb_alt_offset_r),
+        .tage_taken_i                             (f2_tage_taken_r),
+        .ras_tos_i                                (ras_tos),
+        .ras_pop_addr_i                           (ras_pop_addr),
+        .pd_ctl_found_i                           (predecode_ctl_found),
+        .pd_ctl_slot_i                            (predecode_ctl_slot),
+        .pd_ctl_type_i                            (predecode_ctl_type),
+        .pd_ctl_pc_i                              (predecode_ctl_pc),
+        .pd_ctl_target_i                          (predecode_ctl_target),
+        .second_ctl_found_i                       (second_ctl_found),
+        .second_ctl_slot_i                        (second_ctl_slot),
+        .second_ctl_type_i                        (second_ctl_type),
+        .second_ctl_pc_i                          (second_ctl_pc),
+        .second_ctl_target_i                      (second_ctl_target),
+        .owner_cond_pred_found_i                  (owner_cond_pred_found),
+        .subgroup_split_second_ctl_en_i           (subgroup_split_second_ctl_en),
+        .subgroup_split_any_second_ctl_en_i       (subgroup_split_any_second_ctl_en),
+        .subgroup_split_owner_cond_en_i           (subgroup_split_owner_cond_en),
+        .subgroup_split_slot3_ftq_taken_only_en_i (subgroup_split_slot3_ftq_taken_only_en),
+        .seq_valid_i                              (f2_seq_valid),
+        .consume_remainder_i                      (consume_remainder_c),
+        .redirect_without_owner_successor_i       (f2_redirect_without_owner_successor_c),
+        .same_owner_continue_i                    (f2_same_owner_continue_c),
+        .straddle_detected_i                      (straddle_detected),
+        .ftq_pred_ctl_valid_o                     (ftq_pred_ctl_valid),
+        .ftq_pred_ctl_slot_match_o                (ftq_pred_ctl_slot_match),
+        .ftq_pred_ctl_taken_o                     (ftq_pred_ctl_taken),
+        .ftq_pred_ctl_slot_o                      (ftq_pred_ctl_slot),
+        .ftq_pred_ctl_type_o                      (ftq_pred_ctl_type),
+        .ftq_pred_ctl_target_o                    (ftq_pred_ctl_target),
+        .pd_pred_mismatch_o                       (pd_pred_mismatch),
+        .bp_branch_found_o                        (bp_branch_found),
+        .bp_taken_o                               (bp_taken),
+        .bp_branch_slot_o                         (bp_branch_slot),
+        .bp_type_o                                (bp_type),
+        .bp_target_o                              (bp_target_addr),
+        .subgroup_split_before_ctl_o              (subgroup_split_before_ctl_c),
+        .subgroup_split_seed_o                    (subgroup_split_seed_c),
+        .subgroup_split_slot_o                    (subgroup_split_slot_c),
+        .subgroup_split_type_o                    (subgroup_split_type_c),
+        .subgroup_split_pc_o                      (subgroup_split_pc_c),
+        .subgroup_split_target_o                  (subgroup_split_target_c),
+        .subgroup_seed_load_o                     (subgroup_seed_load_c),
+        .subgroup_seed_pred_taken_o               (subgroup_seed_pred_taken_c),
+        .final_count_o                            (final_count),
+        .owner_complete_o                         (f2_work_owner_complete_c),
+        .req_redirect_o                           (req_redirect_c),
+        .bpu_target_o                             (f2_bpu_target),
+        .ras_push_valid_o                         (ras_push_valid),
+        .ras_push_addr_o                          (ras_push_addr),
+        .ras_pop_valid_o                          (ras_pop_valid),
+        .tage_spec_update_valid_o                 (tage_spec_update_valid),
+        .tage_spec_taken_o                        (tage_spec_taken)
+    );
 
     assign subgroup_seed_hit_c =
         subgroup_seed_valid_r && (req_pc_c == subgroup_seed_pc_r);
-    assign subgroup_seed_load_c =
-        f2_work_valid_c &&
-        f2_data_valid &&
-        f2_will_emit_c &&
-        !redirect_valid &&
-        subgroup_split_before_ctl_c &&
-        subgroup_split_seed_c &&
-        (subgroup_split_type_c == BT_COND) &&
-        f2_seq_valid;
-    assign subgroup_seed_pred_taken_c =
-        (ftq_pred_ctl_valid &&
-         (ftq_pred_ctl_slot == subgroup_split_slot_c) &&
-         (ftq_pred_ctl_type == subgroup_split_type_c))
-           ? ftq_pred_ctl_taken
-            : (((subgroup_split_slot_c == predecode_ctl_slot) &&
-                (subgroup_split_pc_c == predecode_ctl_pc) &&
-                (subgroup_split_target_c == predecode_ctl_target))
-                   ? owner_cond_pred_found
-                   : 1'b0);
-
-    assign second_ctl_backward_cond =
-        second_ctl_found &&
-        (second_ctl_type == BT_COND) &&
-        (second_ctl_target != 64'd0) &&
-        (second_ctl_target < second_ctl_pc);
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -1648,382 +1667,13 @@ module fetch_unit
         end
     end
 
-    always_comb begin
-        pd_pred_mismatch = 1'b0;
-
-        if (predecode_ctl_found != ftq_pred_ctl_valid) begin
-            pd_pred_mismatch = 1'b1;
-        end else if (predecode_ctl_found && ftq_pred_ctl_valid) begin
-            if ((predecode_ctl_slot != ftq_pred_ctl_slot) ||
-                (predecode_ctl_type != ftq_pred_ctl_type)) begin
-                pd_pred_mismatch = 1'b1;
-            end else begin
-                case (predecode_ctl_type)
-                    BT_COND,
-                    BT_JAL,
-                    BT_RET: begin
-                        if (predecode_ctl_target != ftq_pred_ctl_target)
-                            pd_pred_mismatch = 1'b1;
-                    end
-                    default: begin
-                    end
-                endcase
-            end
-        end
-    end
-
-    // =========================================================================
-    // F2: Branch prediction resolution
-    //
-    // Scan extracted instructions for the branch predicted by BTB. If BTB hit
-    // in F1 and TAGE predicts taken, truncate fetch at the branch and redirect
-    // to the predicted target. For RET, use RAS pop address as target.
-    // For CALL, push return address onto RAS.
-    // =========================================================================
-    logic        btb_pred_found;
-    logic        btb_slot_matched;
-    logic [2:0]  btb_branch_slot;
-    logic [63:0] btb_target_addr;
-    logic        btb_taken;
-    logic [2:0]  btb_truncated_count;
-    logic [2:0]  btb_pred_type;
-    logic        btb_alt_pred_found;
-    logic        btb_alt_slot_matched;
-    logic [2:0]  btb_alt_branch_slot;
-    logic [63:0] btb_alt_target_addr;
-    logic [2:0]  btb_alt_truncated_count;
-    logic        static_jal_found;
-    logic [2:0]  static_jal_slot;
-    logic [63:0] static_jal_target;
-    logic [2:0]  static_jal_type;
-    logic        static_ret_found;
-    logic [2:0]  static_ret_slot;
-    logic [63:0] static_ret_target;
-    logic        static_ctl_found;
-    logic [2:0]  static_ctl_slot;
-    logic [63:0] static_ctl_target;
-    logic [2:0]  static_ctl_type;
-    logic [2:0]  bp_branch_slot;
-    logic [2:0]  bp_truncated_count;
-    logic [2:0]  bp_type;
-
-    always_comb begin
-        btb_pred_found     = 1'b0;
-        btb_slot_matched   = 1'b0;
-        btb_branch_slot    = 3'd0;
-        btb_target_addr    = '0;
-        btb_taken          = 1'b0;
-        btb_truncated_count = extract_count;
-        btb_pred_type      = BT_COND;
-        btb_alt_pred_found   = 1'b0;
-        btb_alt_slot_matched = 1'b0;
-        btb_alt_branch_slot  = 3'd0;
-        btb_alt_target_addr  = '0;
-        btb_alt_truncated_count = extract_count;
-
-        if (f2_work_valid_c && f2_data_valid &&
-            f2_btb_hit_r) begin
-            case (f2_btb_type_r)
-                BT_COND: begin
-                    if (f2_tage_taken_r) begin
-                        btb_pred_found  = 1'b1;
-                        btb_taken       = 1'b1;
-                        btb_target_addr = f2_btb_target_r;
-                        btb_pred_type   = BT_COND;
-                    end
-                end
-                BT_JAL: begin
-                    btb_pred_found  = 1'b1;
-                    btb_taken       = 1'b1;
-                    btb_target_addr = f2_btb_target_r;
-                    btb_pred_type   = BT_JAL;
-                end
-                BT_JALR: begin
-                    btb_pred_found  = 1'b1;
-                    btb_taken       = 1'b1;
-                    btb_target_addr = f2_btb_target_r;
-                    btb_pred_type   = BT_JALR;
-                end
-                BT_CALL: begin
-                    btb_pred_found  = 1'b1;
-                    btb_taken       = 1'b1;
-                    btb_target_addr = f2_btb_target_r;
-                    btb_pred_type   = BT_CALL;
-                end
-                BT_RET: begin
-                    if ((ras_tos != 5'd0) && (ras_pop_addr != 64'd0)) begin
-                        btb_pred_found  = 1'b1;
-                        btb_taken       = 1'b1;
-                        btb_target_addr = ras_pop_addr;
-                        btb_pred_type   = BT_RET;
-                    end
-                end
-                default: begin
-                    btb_pred_found = 1'b0;
-                end
-            endcase
-
-            if (btb_pred_found && btb_taken) begin
-                btb_truncated_count = extract_count;
-
-                for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if (slot_valid[i] &&
-                        (slot_pc[i][5:0] == f2_btb_offset_r)) begin
-                        btb_branch_slot     = 3'(i);
-                        btb_truncated_count = 3'(i + 1);
-                        btb_slot_matched    = 1'b1;
-                    end
-                end
-
-                if (!btb_slot_matched) begin
-                    btb_pred_found = 1'b0;
-                    btb_taken      = 1'b0;
-                end
-            end
-        end
-
-        if (f2_work_valid_c && f2_data_valid &&
-            f2_btb_alt_hit_r) begin
-            case (f2_btb_alt_type_r)
-                BT_JAL,
-                BT_JALR,
-                BT_CALL: begin
-                    btb_alt_pred_found = 1'b1;
-                    btb_alt_target_addr = f2_btb_alt_target_r;
-                end
-                BT_RET: begin
-                    if ((ras_tos != 5'd0) && (ras_pop_addr != 64'd0)) begin
-                        btb_alt_pred_found = 1'b1;
-                        btb_alt_target_addr = ras_pop_addr;
-                    end
-                end
-                default: begin
-                    btb_alt_pred_found = 1'b0;
-                end
-            endcase
-
-            if (btb_alt_pred_found) begin
-                btb_alt_truncated_count = extract_count;
-
-                for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if (slot_valid[i] &&
-                        (slot_pc[i][5:0] == f2_btb_alt_offset_r)) begin
-                        btb_alt_branch_slot     = 3'(i);
-                        btb_alt_truncated_count = 3'(i + 1);
-                        btb_alt_slot_matched    = 1'b1;
-                    end
-                end
-
-                if (!btb_alt_slot_matched) begin
-                    btb_alt_pred_found = 1'b0;
-                end
-            end
-        end
-
-        if ((!btb_pred_found || !btb_taken) && btb_alt_pred_found) begin
-            btb_pred_found      = 1'b1;
-            btb_taken           = 1'b1;
-            btb_branch_slot     = btb_alt_branch_slot;
-            btb_target_addr     = btb_alt_target_addr;
-            btb_truncated_count = btb_alt_truncated_count;
-            btb_pred_type       = f2_btb_alt_type_r;
-        end
-    end
-
-    always_comb begin
-        static_jal_found  = 1'b0;
-        static_jal_slot   = 3'd0;
-        static_jal_target = '0;
-        static_jal_type   = BT_JAL;
-
-        if (f2_work_valid_c &&
-            f2_data_valid &&
-            predecode_ctl_found &&
-            ((predecode_ctl_type == BT_JAL) ||
-             (predecode_ctl_type == BT_CALL)) &&
-            (predecode_ctl_target != 64'd0)) begin
-            static_jal_found  = 1'b1;
-            static_jal_slot   = predecode_ctl_slot;
-            static_jal_target = predecode_ctl_target;
-            static_jal_type   = predecode_ctl_type;
-        end
-    end
-
-    always_comb begin
-        static_ret_found  = 1'b0;
-        static_ret_slot   = 3'd0;
-        static_ret_target = '0;
-
-        if (f2_work_valid_c &&
-            f2_data_valid &&
-            predecode_ctl_found &&
-            (predecode_ctl_type == BT_RET) &&
-            (predecode_ctl_target != 64'd0)) begin
-            static_ret_found  = 1'b1;
-            static_ret_slot   = predecode_ctl_slot;
-            static_ret_target = predecode_ctl_target;
-        end
-    end
-
-    always_comb begin
-        static_ctl_found  = 1'b0;
-        static_ctl_slot   = 3'd0;
-        static_ctl_target = '0;
-        static_ctl_type   = BT_JAL;
-
-        if (static_jal_found) begin
-            static_ctl_found  = 1'b1;
-            static_ctl_slot   = static_jal_slot;
-            static_ctl_target = static_jal_target;
-            static_ctl_type   = static_jal_type;
-        end
-
-        if (static_ret_found &&
-            (!static_ctl_found || (static_ret_slot < static_ctl_slot))) begin
-            static_ctl_found  = 1'b1;
-            static_ctl_slot   = static_ret_slot;
-            static_ctl_target = static_ret_target;
-            static_ctl_type   = BT_RET;
-        end
-    end
-
-    always_comb begin
-        bp_branch_found    = 1'b0;
-        bp_branch_slot     = 3'd0;
-        bp_target_addr     = '0;
-        bp_taken           = 1'b0;
-        bp_truncated_count = extract_count;
-        bp_type            = BT_COND;
-
-        if (btb_pred_found && btb_taken) begin
-            bp_branch_found    = 1'b1;
-            bp_branch_slot     = btb_branch_slot;
-            bp_target_addr     = btb_target_addr;
-            bp_taken           = 1'b1;
-            bp_truncated_count = btb_truncated_count;
-            bp_type            = btb_pred_type;
-        end
-
-        // A subgroup FTQ entry can carry the owning conditional's prediction
-        // even before the BTB has a matching entry.  Use it only when the
-        // current predecode confirms the same live branch.
-        if (ftq_pred_ctl_valid &&
-            ftq_pred_ctl_taken &&
-            (ftq_pred_ctl_type == BT_COND) &&
-            predecode_ctl_found &&
-            (predecode_ctl_type == BT_COND) &&
-            (predecode_ctl_slot == ftq_pred_ctl_slot) &&
-            (predecode_ctl_target == ftq_pred_ctl_target) &&
-            (!bp_branch_found || (ftq_pred_ctl_slot < bp_branch_slot))) begin
-            bp_branch_found    = 1'b1;
-            bp_branch_slot     = ftq_pred_ctl_slot;
-            bp_target_addr     = ftq_pred_ctl_target;
-            bp_taken           = 1'b1;
-            bp_truncated_count = 3'(ftq_pred_ctl_slot + 1);
-            bp_type            = BT_COND;
-        end
-
-        if (static_ctl_found &&
-            (!bp_branch_found || (static_ctl_slot < bp_branch_slot))) begin
-            bp_branch_found    = 1'b1;
-            bp_branch_slot     = static_ctl_slot;
-            bp_target_addr     = static_ctl_target;
-            bp_taken           = 1'b1;
-            bp_truncated_count = 3'(static_ctl_slot + 1);
-            bp_type            = static_ctl_type;
-        end
-    end
-
-    always_comb begin
-        subgroup_split_before_ctl_c = 1'b0;
-        subgroup_split_seed_c       = 1'b1;
-        subgroup_split_slot_c       = predecode_ctl_slot;
-        subgroup_split_type_c       = predecode_ctl_type;
-        subgroup_split_pc_c         = predecode_ctl_pc;
-        subgroup_split_target_c     = predecode_ctl_target;
-
-        // If the earliest conditional is not predicted taken, do not carry a
-        // later control-flow instruction as an unpredicted passenger. Split
-        // before the second CFI so the next request gets its own BTB/TAGE
-        // lookup and can redirect independently.
-        if (subgroup_split_second_ctl_en &&
-            f2_work_valid_c &&
-            f2_data_valid &&
-            predecode_ctl_found &&
-            second_ctl_found &&
-            (predecode_ctl_type == BT_COND) &&
-            !(bp_branch_found && bp_taken &&
-              (bp_branch_slot <= second_ctl_slot)) &&
-            (subgroup_split_any_second_ctl_en ||
-             (predecode_ctl_slot == 3'd0) ||
-             second_ctl_backward_cond)) begin
-            subgroup_split_before_ctl_c = 1'b1;
-            subgroup_split_seed_c       = 1'b0;
-            subgroup_split_slot_c       = second_ctl_slot;
-            subgroup_split_type_c       = second_ctl_type;
-            subgroup_split_pc_c         = second_ctl_pc;
-            subgroup_split_target_c     = second_ctl_target;
-
-        // Split before a later owner conditional so the next request can be
-        // branch-owned. Slot-1 conditionals only get the handoff when they are
-        // likely taken; an untaken forward branch can remain in the parent
-        // packet without creating a one-instruction subgroup.
-        end else if (subgroup_split_owner_cond_en &&
-            f2_work_valid_c &&
-            f2_data_valid &&
-            predecode_ctl_found &&
-            (predecode_ctl_type == BT_COND) &&
-            (predecode_ctl_slot != 3'd0)) begin
-            if (predecode_ctl_slot == 3'd1) begin
-                if (!(bp_branch_found &&
-                      bp_taken &&
-                      (bp_type == BT_COND) &&
-                      (bp_branch_slot == predecode_ctl_slot)) &&
-                    (owner_cond_pred_found ||
-                     ((predecode_ctl_target != 64'd0) &&
-                      (predecode_ctl_target < predecode_ctl_pc)))) begin
-                    subgroup_split_before_ctl_c = 1'b1;
-                end
-            end else if ((predecode_ctl_slot == 3'd3) &&
-                         ftq_pred_ctl_valid &&
-                         (ftq_pred_ctl_type == BT_COND) &&
-                         (!subgroup_split_slot3_ftq_taken_only_en ||
-                          ftq_pred_ctl_taken) &&
-                         (ftq_pred_ctl_slot == predecode_ctl_slot)) begin
-                if (!(bp_branch_found &&
-                      bp_taken &&
-                      (bp_type == BT_COND) &&
-                      (bp_branch_slot == predecode_ctl_slot))) begin
-                    subgroup_split_before_ctl_c = 1'b1;
-                end
-            end else if (owner_cond_pred_found) begin
-                if (!ftq_pred_ctl_valid ||
-                    (predecode_ctl_slot < ftq_pred_ctl_slot) ||
-                    pd_pred_mismatch) begin
-                    subgroup_split_before_ctl_c = 1'b1;
-                end
-            end
-        end
-
-    end
-
     // =========================================================================
     // Compute sequential next PC from bytes consumed
     // =========================================================================
     logic [63:0] last_slot_pc;
     logic        last_slot_rvc;
-    logic [2:0]  final_count;
 
     always_comb begin
-        // Use branch-truncated count if a taken branch was found
-        if (subgroup_split_before_ctl_c) begin
-            final_count = subgroup_split_slot_c;
-        end else if (bp_branch_found && bp_taken) begin
-            final_count = bp_truncated_count;
-        end else begin
-            final_count = extract_count;
-        end
-
         // Compute sequential next PC based on the last instruction delivered
         if (final_count > 3'd0) begin
             automatic int last_idx;
@@ -2073,12 +1723,6 @@ module fetch_unit
         req_redirect_c &&
         !ftq_enq_valid &&
         (ftq_count_ifu_to_wb <= {{FTQ_IDX_BITS{1'b0}}, 1'b1});
-    assign f2_work_owner_complete_c =
-        !consume_remainder_c &&
-        !f2_redirect_without_owner_successor_c &&
-        !f2_same_owner_continue_c &&
-        (!straddle_detected ||
-         (bp_branch_found && bp_taken && !subgroup_split_before_ctl_c));
 
     // Decode no longer consumes a separate packet_buf_in bypass. Flow-through
     // is an IBuffer-owned empty-buffer delivery observation.
@@ -2115,63 +1759,7 @@ module fetch_unit
     // =========================================================================
     // BPU redirect to F1
     // =========================================================================
-    assign req_redirect_c  = f2_will_emit_c &&
-                             bp_branch_found && bp_taken &&
-                             !subgroup_split_before_ctl_c &&
-                             !redirect_valid;
     assign f2_bpu_redirect = req_redirect_c && !fe_stall;
-    assign f2_bpu_target   = bp_target_addr;
-
-    // =========================================================================
-    // RAS push/pop control
-    //
-    // Push on CALL (return address = branch PC + 4 or +2 for RVC).
-    // Pop on RET.
-    // Only active when F2 is delivering valid instructions and not stalled.
-    // =========================================================================
-    always_comb begin
-        ras_push_valid = 1'b0;
-        ras_push_addr  = '0;
-        ras_pop_valid  = 1'b0;
-
-        if (f2_will_emit_c &&
-            bp_branch_found && bp_taken &&
-            !subgroup_split_before_ctl_c &&
-            !fe_stall && !redirect_valid) begin
-            if (bp_type == BT_CALL) begin
-                ras_push_valid = 1'b1;
-                // Push return address: PC of the call + instruction size
-                ras_push_addr  = slot_pc[bp_branch_slot]
-                                 + (slot_is_rvc[bp_branch_slot] ? 64'd2 : 64'd4);
-            end else if (bp_type == BT_RET) begin
-                ras_pop_valid = 1'b1;
-            end
-        end
-    end
-
-    // =========================================================================
-    // Speculative GHR update
-    //
-    // When a conditional branch is predicted, speculatively shift the GHR.
-    // =========================================================================
-    always_comb begin
-        tage_spec_update_valid = 1'b0;
-        tage_spec_taken        = 1'b0;
-
-        if (f2_work_valid_c &&
-            f2_data_valid &&
-            f2_will_emit_c &&
-            predecode_ctl_found &&
-            (predecode_ctl_type == BT_COND) &&
-            (predecode_ctl_slot < final_count) &&
-            !fe_stall && !redirect_valid) begin
-            tage_spec_update_valid = 1'b1;
-            tage_spec_taken =
-                bp_branch_found && bp_taken &&
-                (bp_type == BT_COND) &&
-                (bp_branch_slot == predecode_ctl_slot);
-        end
-    end
 
     // =========================================================================
     // Fetch packet construction and fetch-buffered output to decode
