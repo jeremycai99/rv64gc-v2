@@ -40,6 +40,7 @@ module icache_resp_queue
     input  logic [FTQ_IDX_BITS-1:0]       resp_ftq_idx_i,
     input  logic [FTQ_EPOCH_BITS-1:0]     resp_ftq_epoch_i,
     input  logic [FTQ_ALLOC_TAG_BITS-1:0] resp_ftq_alloc_tag_i,
+    input  ftq_entry_t                    resp_ftq_entry_i,
 
     // To F2 (FIFO order)
     input  logic                          deq_ready_i,
@@ -52,6 +53,7 @@ module icache_resp_queue
     output logic [FTQ_IDX_BITS-1:0]       deq_ftq_idx_o,
     output logic [FTQ_EPOCH_BITS-1:0]     deq_ftq_epoch_o,
     output logic [FTQ_ALLOC_TAG_BITS-1:0] deq_ftq_alloc_tag_o,
+    output ftq_entry_t                    deq_ftq_entry_o,
 
     // Status (for backpressure to F1 fire)
     output logic                          full,
@@ -67,6 +69,7 @@ module icache_resp_queue
         logic [FTQ_IDX_BITS-1:0]       ftq_idx;
         logic [FTQ_EPOCH_BITS-1:0]     ftq_epoch;
         logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_alloc_tag;
+        ftq_entry_t                    ftq_entry;
     } resp_entry_t;
 
     localparam int PTR_W = (DEPTH > 1) ? $clog2(DEPTH) : 1;
@@ -107,6 +110,7 @@ module icache_resp_queue
             deq_ftq_idx_o       = mem_r[rd_ptr_r].ftq_idx;
             deq_ftq_epoch_o     = mem_r[rd_ptr_r].ftq_epoch;
             deq_ftq_alloc_tag_o = mem_r[rd_ptr_r].ftq_alloc_tag;
+            deq_ftq_entry_o     = mem_r[rd_ptr_r].ftq_entry;
         end else if (resp_valid_i) begin
             // Bypass: empty queue passes the incoming response straight to F2
             deq_data_o          = resp_data_i;
@@ -116,6 +120,7 @@ module icache_resp_queue
             deq_ftq_idx_o       = resp_ftq_idx_i;
             deq_ftq_epoch_o     = resp_ftq_epoch_i;
             deq_ftq_alloc_tag_o = resp_ftq_alloc_tag_i;
+            deq_ftq_entry_o     = resp_ftq_entry_i;
         end else begin
             deq_data_o          = '0;
             deq_hit_o           = 1'b0;
@@ -124,6 +129,7 @@ module icache_resp_queue
             deq_ftq_idx_o       = '0;
             deq_ftq_epoch_o     = '0;
             deq_ftq_alloc_tag_o = '0;
+            deq_ftq_entry_o     = '0;
         end
     end
     assign deq_line_addr_o = deq_pc_o[63:LINE_BITS];
@@ -157,6 +163,7 @@ module icache_resp_queue
                 mem_r[wr_ptr_r].ftq_idx       <= resp_ftq_idx_i;
                 mem_r[wr_ptr_r].ftq_epoch     <= resp_ftq_epoch_i;
                 mem_r[wr_ptr_r].ftq_alloc_tag <= resp_ftq_alloc_tag_i;
+                mem_r[wr_ptr_r].ftq_entry     <= resp_ftq_entry_i;
             end
 
             // Update pointers

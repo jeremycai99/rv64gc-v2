@@ -121,6 +121,29 @@ and does not provide Stage 1 performance evidence. The next implementation
 must create capacity-owned BPU/F1 runahead and nonzero IBuffer occupancy before
 any performance claim is valid.
 
+## ICQ FTQ-Entry Carry Checkpoint, 2026-05-06
+
+The current accepted ICQ slice carries the full FTQ entry snapshot with each
+I-cache response queue entry, alongside request PC and idx/epoch/tag. This is a
+behavior-neutral preparation step for a later ICQ-driven IFU cursor load: the
+future handoff can consume PC and FTQ metadata as one request object instead of
+re-pairing current-cycle request PC with older FTQ metadata.
+
+- Build: `./build_dsim.sh` passed.
+- Strict/profiled smoke artifact:
+  `benchmark_results/20260506_icq_ftq_entry_carry_smoke/`.
+
+| Workload | Status | Timed cycles | Timed instret | Metric | Notes |
+|---|---|---:|---:|---:|---|
+| Dhrystone 100 | PASS | 27,093 | 48,436 | 2.100734 DMIPS/MHz | strict owner/delivery clean |
+| CoreMark 1 | PASS | 209,058 | 318,379 | 4.783362 CM/MHz | strict owner/delivery clean |
+
+Key counters remain structurally clean: `xs_f2_owner_idx_mismatch=0`,
+`xs_f2_owner_epoch_mismatch=0`, `xs_f2_owner_tag_mismatch=0`,
+`xs_packet_buffer_stale_owner=0`, `packet_stale_* = 0`, `ftq_occ_max=1`, and
+`packet_buf_occ_max=0`. Verdict: accept as an ownership-carry checkpoint only;
+it intentionally does not claim performance movement.
+
 ## Bottleneck (data-driven)
 
 `tools/bubble_attribution.py` on cm10 (commit-stage classification):
@@ -247,11 +270,17 @@ The next session should use this order:
    packet still makes that owner visible to the IBuffer/commit side. This fixes
    stale-owner accounting, but the run regressed timing and left `ftq_occ_max`
    at 1 and `packet_buf_occ_max` at 0, so it is not performance evidence.
-6. **Then enable bounded BPU/F1 runahead.** F1 can advance from BPU prediction
+6. **Carry complete FTQ request metadata through the ICQ.** Done on
+   2026-05-06. The response queue now carries request PC, FTQ idx/epoch/tag,
+   and the full FTQ entry snapshot. This is the accepted replacement for the
+   rejected flow-through owner queue wrapper: later cursor handoff must consume
+   this coherent request object instead of re-pairing PC and FTQ metadata from
+   separate phases.
+7. **Then enable bounded BPU/F1 runahead.** F1 can advance from BPU prediction
    only when FTQ allocation and IBuffer capacity are available. The runahead
    limit should initially be small and derived from FTQ/IBuffer occupancy, not
    benchmark PCs.
-7. **Measure the intended counters.** The improvement claim is valid only if
+8. **Measure the intended counters.** The improvement claim is valid only if
    `packet_empty_noemit_dup`, `xs_dup_last_emit`, frontend bubbles, and shallow
    FTQ occupancy move in the expected direction while endpoint identity and
    owner-invariant counters remain clean.
@@ -1003,6 +1032,7 @@ python3 tools/run_benchmarks.py --runner dsim --goal stage1 --run-class signoff 
 | `icache_resp_queue.sv` | b97adb1, bcf9b5c, working tree 2026-05-06 | F1/F2 response elasticity, transparent F2 consumption, full-plus-pop enqueue |
 | `fetch_packet_t.ifu_line_*` + `FETCH_OWNER_CHECK` | working tree 2026-05-06 | Explicit IFU line identity and same-line owner contract checking |
 | ICQ response-line output | working tree 2026-05-06 | Response line address is explicit and feeds packet IFU line metadata |
+| ICQ FTQ-entry carry | working tree 2026-05-06 | I-cache response queue carries request PC, FTQ idx/epoch/tag, and full FTQ entry snapshot so future cursor handoff has one coherent request object |
 | FTQ enqueue-ready boundary | working tree 2026-05-06 | `ftq_enq_ready` is wired into IFU request-ready and fetch stall; request allocation and IFU request-pop now share the FTQ valid/ready contract |
 | FTQ IFU-to-writeback count | working tree 2026-05-06 | `ftq.sv` exposes requested-not-written-back owner occupancy as a separate count for future bounded runahead rules |
 | IFU owner-policy SVA | working tree 2026-05-06 | Invariants F/G/H check request-pop ready/enqueue alignment, FTQ next-owner cursor loads, and matching redirect next-owner loads |

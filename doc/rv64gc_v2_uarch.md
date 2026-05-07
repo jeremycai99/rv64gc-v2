@@ -102,8 +102,11 @@ Current default RTL:
   The IFU accepts a queue head only when its explicit response-line address
   matches the current IFU work cursor line. Responses with invalid or stale FTQ
   epoch metadata are drained by the FTQ flush/epoch rule and are never exposed
-  as instruction data. Same-line owners may consume the local F2 line-state
-  record without treating the queue head as the owner cursor.
+  as instruction data. Each queue entry carries the request PC, FTQ
+  idx/epoch/alloc-tag, and full FTQ entry snapshot so a future cursor handoff
+  can load PC and owner metadata as one object instead of pairing signals from
+  different request phases. Same-line owners may consume the local F2
+  line-state record without treating the queue head as the owner cursor.
 - `fetch_unit.sv` now has a stateful IFU work item carrying valid, PC,
   FTQ idx/epoch/alloc-tag, FTQ entry, line identity, delivery state, and
   completion fields.
@@ -526,12 +529,12 @@ These are the structural constraint points that any optimization needs to be awa
   the IFU/IBuffer boundary before proactive F1 runahead is enabled.
 - **I-cache response queue** (`icache_resp_queue.sv`): 4-entry line-response
   FIFO. It is an elasticity mechanism, not the architectural owner. It may
-  carry request PC, explicit response-line address, plus FTQ identity, but it
-  must not decide correctness by local stale-entry filtering. F2 accepts only
-  matching-line responses; flushed responses are drained by invalid/stale FTQ
-  epoch metadata. It accepts a replacement response on a full-plus-pop cycle so
-  a one-cycle I-cache response is not dropped when F2 frees a slot at the same
-  edge.
+  carry request PC, explicit response-line address, FTQ identity, and the full
+  FTQ entry snapshot, but it must not decide correctness by local stale-entry
+  filtering. F2 accepts only matching-line responses; flushed responses are
+  drained by invalid/stale FTQ epoch metadata. It accepts a replacement response
+  on a full-plus-pop cycle so a one-cycle I-cache response is not dropped when
+  F2 frees a slot at the same edge.
 - **Owner-aware IBuffer** (`fetch_packet_buffer.sv`): current buffer between
   IF2 and decode; stores complete fetch packets with per-packet FTQ
   idx/epoch/alloc-tag, block PC, start offset, IFU line address/reuse bit,

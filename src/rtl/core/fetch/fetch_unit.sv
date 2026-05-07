@@ -224,6 +224,7 @@ module fetch_unit
     logic [FTQ_IDX_BITS-1:0]              ic_req_ftq_pipe_idx_r;
     logic [FTQ_EPOCH_BITS-1:0]            ic_req_ftq_pipe_epoch_r;
     logic [FTQ_ALLOC_TAG_BITS-1:0]        ic_req_ftq_pipe_alloc_tag_r;
+    ftq_entry_t                           ic_req_ftq_pipe_entry_r;
     logic        icq_full;
     logic        icq_empty;
     logic [ICQ_COUNT_BITS-1:0] icq_count;
@@ -526,6 +527,7 @@ module fetch_unit
             ic_req_ftq_pipe_idx_r        <= '0;
             ic_req_ftq_pipe_epoch_r      <= '0;
             ic_req_ftq_pipe_alloc_tag_r  <= '0;
+            ic_req_ftq_pipe_entry_r      <= '0;
         end else if (redirect_valid) begin
             ic_req_ftq_pipe_valid_r      <= 1'b0;
         end else begin
@@ -539,6 +541,7 @@ module fetch_unit
                 ic_req_ftq_pipe_idx_r        <= ftq_enq_idx;
                 ic_req_ftq_pipe_epoch_r      <= ftq_enq_epoch;
                 ic_req_ftq_pipe_alloc_tag_r  <= ftq_enq_tag;
+                ic_req_ftq_pipe_entry_r      <= ftq_enq_entry_c;
             end
         end
     end
@@ -554,6 +557,7 @@ module fetch_unit
     logic [FTQ_IDX_BITS-1:0]               icq_deq_ftq_idx;
     logic [FTQ_EPOCH_BITS-1:0]             icq_deq_ftq_epoch;
     logic [FTQ_ALLOC_TAG_BITS-1:0]         icq_deq_ftq_alloc_tag;
+    ftq_entry_t                            icq_deq_ftq_entry;
     logic                                  icq_deq_ready;
     logic                                  icq_line_matches_f2_c;
     logic                                  icq_deq_owner_match_c;
@@ -629,6 +633,7 @@ module fetch_unit
         .resp_ftq_idx_i(ic_req_ftq_pipe_idx_r),
         .resp_ftq_epoch_i(ic_req_ftq_pipe_epoch_r),
         .resp_ftq_alloc_tag_i(ic_req_ftq_pipe_alloc_tag_r),
+        .resp_ftq_entry_i(ic_req_ftq_pipe_entry_r),
         .deq_ready_i(icq_deq_ready),
         .deq_valid_o(icq_deq_valid),
         .deq_data_o(icq_deq_data),
@@ -639,6 +644,7 @@ module fetch_unit
         .deq_ftq_idx_o(icq_deq_ftq_idx),
         .deq_ftq_epoch_o(icq_deq_ftq_epoch),
         .deq_ftq_alloc_tag_o(icq_deq_ftq_alloc_tag),
+        .deq_ftq_entry_o(icq_deq_ftq_entry),
         .full(icq_full),
         .empty(icq_empty),
         .count(icq_count)
