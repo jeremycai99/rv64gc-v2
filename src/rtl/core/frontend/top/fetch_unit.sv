@@ -542,7 +542,7 @@ module fetch_unit
     );
 
     // =========================================================================
-    // BTB instance (combinational lookup in F1)
+    // BPU wrapper: BTB, TAGE, and RAS lookup/update
     // =========================================================================
     logic        btb_hit;
     logic [63:0] btb_target;
@@ -560,114 +560,77 @@ module fetch_unit
     logic [63:0] f1_aux_btb_alt_target;
     logic [2:0]  f1_aux_btb_alt_type;
     logic [5:0]  f1_aux_btb_alt_offset;
-    logic        btb_update_valid;
-    logic        tage_update_valid;
-
-    btb u_btb (
-        .clk           (clk),
-        .rst_n         (rst_n),
-        .lookup_pc     (ic_req_addr),
-        .hit           (btb_hit),
-        .target        (btb_target),
-        .branch_type   (btb_branch_type),
-        .branch_offset (btb_branch_offset),
-        .alt_hit       (btb_alt_hit),
-        .alt_target    (btb_alt_target),
-        .alt_branch_type  (btb_alt_branch_type),
-        .alt_branch_offset(btb_alt_branch_offset),
-        .aux_lookup_pc (f1_pc),
-        .aux_hit       (f1_aux_btb_hit),
-        .aux_target    (f1_aux_btb_target),
-        .aux_branch_type  (f1_aux_btb_type),
-        .aux_branch_offset(f1_aux_btb_offset),
-        .aux_alt_hit       (f1_aux_btb_alt_hit),
-        .aux_alt_target    (f1_aux_btb_alt_target),
-        .aux_alt_branch_type  (f1_aux_btb_alt_type),
-        .aux_alt_branch_offset(f1_aux_btb_alt_offset),
-        .update_valid  (btb_update_valid),
-        .update_pc     (bpu_update_pc),
-        .update_target (bpu_update_target),
-        .update_type   (bpu_update_type),
-        .flush         (1'b0)
-    );
-
-    // =========================================================================
-    // TAGE-SC-L instance (combinational lookup in F1 plus an auxiliary
-    // branch-PC lookup used after IFU predecode identifies the owner
-    // conditional on BTB-miss subgroups).
-    // =========================================================================
     logic [63:0] predecode_ctl_pc;
     logic [63:0] predecode_ctl_target;
     logic [GHR_BITS-1:0] f2_ghr_snapshot_r;
-    logic [63:0] tage_lookup_pc;
-    logic [63:0] tage_lookup_target;
-    logic tage_pred_taken;
-    logic tage_pred_confident;
-    logic owner_tage_pred_taken;
-    logic owner_tage_pred_confident;
-
-    // Speculative GHR update: when we predict a branch as taken in F2
-    logic tage_spec_update_valid;
-    logic tage_spec_taken;
-
-    assign btb_update_valid  = bpu_update_valid;
-    assign tage_update_valid = bpu_tage_update_valid;
-    assign tage_lookup_pc =
-        (btb_hit && (btb_branch_type == BT_COND))
-            ? {req_block_pc_c[63:LINE_BITS], btb_branch_offset}
-            : ic_req_addr;
-    assign tage_lookup_target =
-        (btb_hit && (btb_branch_type == BT_COND)) ? btb_target : 64'd0;
-
-    tage_sc_l u_tage_sc_l (
-        .clk              (clk),
-        .rst_n            (rst_n),
-        .pc               (tage_lookup_pc),
-        .target           (tage_lookup_target),
-        .pred_taken       (tage_pred_taken),
-        .pred_confident   (tage_pred_confident),
-        .aux_pc           (predecode_ctl_pc),
-        .aux_target       (predecode_ctl_target),
-        .aux_ghr          (f2_ghr_snapshot_r),
-        .aux_pred_taken   (owner_tage_pred_taken),
-        .aux_pred_confident(owner_tage_pred_confident),
-        .update_valid     (tage_update_valid),
-        .update_pc        (bpu_tage_update_pc),
-        .update_target    (bpu_tage_update_target),
-        .update_taken     (bpu_tage_update_taken),
-        .update_mispredict(bpu_tage_update_mispredict),
-        .update_ghr       (bpu_tage_update_ghr),
-        .spec_update_valid(tage_spec_update_valid),
-        .spec_taken       (tage_spec_taken),
-        .spec_pc          (predecode_ctl_pc),
-        .spec_target      (predecode_ctl_target),
-        .ghr_restore_valid(ghr_restore_valid),
-        .ghr_restore_val  (ghr_restore_val),
-        .ghr_out          (ghr_out),
-        .flush            (redirect_valid)
-    );
-
-    // =========================================================================
-    // RAS instance
-    // =========================================================================
+    logic        tage_pred_taken;
+    logic        tage_pred_confident;
+    logic        owner_tage_pred_taken;
+    logic        owner_tage_pred_confident;
     logic        ras_push_valid;
     logic [63:0] ras_push_addr;
     logic        ras_pop_valid;
     logic [63:0] ras_pop_addr;
     logic [4:0]  ras_tos;
+    logic        tage_spec_update_valid;
+    logic        tage_spec_taken;
 
-    ras u_ras (
-        .clk          (clk),
-        .rst_n        (rst_n),
-        .push_valid   (ras_push_valid),
-        .push_addr    (ras_push_addr),
-        .pop_valid    (ras_pop_valid),
-        .pop_addr     (ras_pop_addr),
-        .tos          (ras_tos),
-        .restore_valid(ras_restore_valid),
-        .restore_tos  (ras_restore_tos),
-        .restore_top_valid(ras_restore_top_valid),
-        .restore_top_addr (ras_restore_top_addr)
+    bpu u_bpu (
+        .clk                         (clk),
+        .rst_n                       (rst_n),
+        .flush_i                     (redirect_valid),
+        .lookup_pc_i                 (ic_req_addr),
+        .lookup_block_pc_i           (req_block_pc_c),
+        .aux_lookup_pc_i             (f1_pc),
+        .btb_hit_o                   (btb_hit),
+        .btb_target_o                (btb_target),
+        .btb_type_o                  (btb_branch_type),
+        .btb_offset_o                (btb_branch_offset),
+        .btb_alt_hit_o               (btb_alt_hit),
+        .btb_alt_target_o            (btb_alt_target),
+        .btb_alt_type_o              (btb_alt_branch_type),
+        .btb_alt_offset_o            (btb_alt_branch_offset),
+        .aux_btb_hit_o               (f1_aux_btb_hit),
+        .aux_btb_target_o            (f1_aux_btb_target),
+        .aux_btb_type_o              (f1_aux_btb_type),
+        .aux_btb_offset_o            (f1_aux_btb_offset),
+        .aux_btb_alt_hit_o           (f1_aux_btb_alt_hit),
+        .aux_btb_alt_target_o        (f1_aux_btb_alt_target),
+        .aux_btb_alt_type_o          (f1_aux_btb_alt_type),
+        .aux_btb_alt_offset_o        (f1_aux_btb_alt_offset),
+        .tage_pred_taken_o           (tage_pred_taken),
+        .tage_pred_confident_o       (tage_pred_confident),
+        .aux_tage_pc_i               (predecode_ctl_pc),
+        .aux_tage_target_i           (predecode_ctl_target),
+        .aux_tage_ghr_i              (f2_ghr_snapshot_r),
+        .aux_tage_pred_taken_o       (owner_tage_pred_taken),
+        .aux_tage_pred_confident_o   (owner_tage_pred_confident),
+        .btb_update_valid_i          (bpu_update_valid),
+        .btb_update_pc_i             (bpu_update_pc),
+        .btb_update_target_i         (bpu_update_target),
+        .btb_update_type_i           (bpu_update_type),
+        .tage_update_valid_i         (bpu_tage_update_valid),
+        .tage_update_pc_i            (bpu_tage_update_pc),
+        .tage_update_target_i        (bpu_tage_update_target),
+        .tage_update_taken_i         (bpu_tage_update_taken),
+        .tage_update_mispredict_i    (bpu_tage_update_mispredict),
+        .tage_update_ghr_i           (bpu_tage_update_ghr),
+        .tage_spec_update_valid_i    (tage_spec_update_valid),
+        .tage_spec_taken_i           (tage_spec_taken),
+        .tage_spec_pc_i              (predecode_ctl_pc),
+        .tage_spec_target_i          (predecode_ctl_target),
+        .ghr_restore_valid_i         (ghr_restore_valid),
+        .ghr_restore_val_i           (ghr_restore_val),
+        .ghr_o                       (ghr_out),
+        .ras_push_valid_i            (ras_push_valid),
+        .ras_push_addr_i             (ras_push_addr),
+        .ras_pop_valid_i             (ras_pop_valid),
+        .ras_pop_addr_o              (ras_pop_addr),
+        .ras_tos_o                   (ras_tos),
+        .ras_restore_valid_i         (ras_restore_valid),
+        .ras_restore_tos_i           (ras_restore_tos),
+        .ras_restore_top_valid_i     (ras_restore_top_valid),
+        .ras_restore_top_addr_i      (ras_restore_top_addr)
     );
 
     always_comb begin

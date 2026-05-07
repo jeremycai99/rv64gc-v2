@@ -63,6 +63,8 @@ Local source anchors:
 
 - rv64gc-v2 widths: `src/rtl/core/include/rv64gc_pkg.sv`.
 - rv64gc-v2 distributed issue topology: `src/rtl/core/rv64gc_core_top.sv`.
+- Branch predictor wrapper: `src/rtl/core/bpu/bpu.sv`, with BTB, TAGE, and
+  RAS leaves in `src/rtl/core/bpu/`.
 
 ### 1.3 Frontend Ownership Model
 
@@ -73,6 +75,11 @@ metadata, and delivery accounting.
 
 Current default RTL:
 
+- `src/rtl/core/bpu/bpu.sv` is the BPU integration wrapper. It owns the direct
+  BTB, TAGE-SC-L, and RAS leaf instances, including lookup/update/restore
+  wiring and speculative GHR update routing. The frontend integration layer
+  still assembles the FTQ prediction entry from the BPU outputs while the final
+  top-level split is in progress.
 - F1 PC generation is still coupled to F2 packet progress and architectural
   redirect priority.
 - `ftq.sv` tracks allocated-not-requested, requested-not-written-back, and

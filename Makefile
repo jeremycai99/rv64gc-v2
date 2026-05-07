@@ -131,6 +131,7 @@ RTL_FILES = \
     $(RTL_DIR)/core/bpu/btb.sv \
     $(RTL_DIR)/core/bpu/ras.sv \
     $(RTL_DIR)/core/bpu/tage_sc_l.sv \
+    $(RTL_DIR)/core/bpu/bpu.sv \
 	$(RTL_DIR)/core/cache/icache_tag_ram.sv \
 	$(RTL_DIR)/core/cache/icache_data_ram.sv \
 	$(RTL_DIR)/core/cache/icache.sv \

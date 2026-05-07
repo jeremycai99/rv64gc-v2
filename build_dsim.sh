@@ -81,6 +81,7 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/bpu/btb.sv \
      src/rtl/core/bpu/ras.sv \
      src/rtl/core/bpu/tage_sc_l.sv \
+     src/rtl/core/bpu/bpu.sv \
      src/rtl/core/cache/icache_tag_ram.sv \
      src/rtl/core/cache/icache_data_ram.sv \
      src/rtl/core/cache/icache.sv \
