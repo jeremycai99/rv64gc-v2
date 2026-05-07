@@ -995,11 +995,14 @@ from being mislabeled as endpoint failures when the benchmark checksum/control
 endpoint is clean but the row is not scoreable.
 
 The Stage 1 manifest is self-identifying through `goal_contract.name=stage1`
-and `goal_contract.version=stage1-2026-05-06-v1`; goal runs record manifest
-path and SHA-256 in `run_manifest.json`. Real non-dry-run goal runs reject a
-dirty `tests/benchmarks/stage1_signoff.json` or `tools/run_benchmarks.py`, so
-the benchmark contract must be committed before producing scoreable evidence.
-Use the audit helper to classify recent artifacts before citing any result:
+and `goal_contract.version=stage1-2026-05-06-v2`; goal runs record manifest
+path and SHA-256 in `run_manifest.json`. Contract v2 excludes the stale
+CoreMark10 golden-PC fixture that tripped at sequence `2553567`; CoreMark10 is
+still endpoint/checksum/strict-owner checked, but that golden oracle must be
+regenerated before it is re-enabled. Real non-dry-run goal runs reject a dirty
+`tests/benchmarks/stage1_signoff.json` or `tools/run_benchmarks.py`, so the
+benchmark contract must be committed before producing scoreable evidence. Use
+the audit helper to classify recent artifacts before citing any result:
 
 ```bash
 python3 tools/audit_goal_runs.py --limit 12

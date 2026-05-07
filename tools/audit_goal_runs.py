@@ -12,7 +12,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS_ROOT = REPO_ROOT / "benchmark_results"
 STAGE1_MANIFEST = REPO_ROOT / "tests" / "benchmarks" / "stage1_signoff.json"
-STAGE1_CONTRACT_VERSION = "stage1-2026-05-06-v1"
+STAGE1_CONTRACT_VERSION = "stage1-2026-05-06-v2"
 STAGE1_REQUIRED_PLUSARGS = {
     "FETCH_DELIVERY_CHECK",
     "FETCH_DELIVERY_STRICT",

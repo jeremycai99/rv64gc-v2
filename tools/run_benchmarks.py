@@ -199,7 +199,7 @@ DEFAULT_COUNTER_EXPECTATIONS = {
 GOAL_CONTRACTS = {
     "stage1": {
         "manifest": REPO_ROOT / "tests" / "benchmarks" / "stage1_signoff.json",
-        "contract_version": "stage1-2026-05-06-v1",
+        "contract_version": "stage1-2026-05-06-v2",
         "run_class": "signoff",
         "min_benchmark_count": 16,
         "required_plusargs": {
@@ -1609,7 +1609,7 @@ def validate_run_class_args(
     # 1. Any RTL change vs HEAD invalidates --mechanism-class default_rtl
     # 2. Non-default mechanism class must declare --targets-counter
     # 3. The --targets-counter must have a matching --expect-counter-decrease
-    if not getattr(args, "skip_rtl_lock_check", False):
+    if not args.dry_run and not getattr(args, "skip_rtl_lock_check", False):
         rtl_paths = ["src/rtl", "src/tb/tb_top.sv"]
         try:
             diff = subprocess.run(

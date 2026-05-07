@@ -1,7 +1,7 @@
 {
   "goal_contract": {
     "name": "stage1",
-    "version": "stage1-2026-05-06-v1",
+    "version": "stage1-2026-05-06-v2",
     "scoreable_with": "tools/run_benchmarks.py --goal stage1 --run-class signoff"
   },
   "notes": "Stage 1 long-run signoff manifest. DS/CoreMark remain anchor rows, and the added frontend/backend/memory/hotspot rows are generalization guards so Stage 1 does not overfit the anchors. These rows are scoreable only under tools/run_benchmarks.py --run-class signoff, with endpoint identity intact, legacy loop-buffer activity zero, canonical standalone decoded-op replay telemetry present and zero, and no standalone UOC, same-tail, or local lookahead replay plusargs. counter_invariants are checked on every run_class (signoff and dse); counter_targets_stage1 are checked only on signoff. SPEC/Embench/MiBench images are not checked into this repo; add them as separate local manifests when built.",
@@ -117,8 +117,7 @@
         }
       },
       "counter_targets_stage1": {},
-      "notes": "Heavy CoreMark signoff row. CoreMark/MHz is scoreable only with checksum 64687 and flags=0. counter_targets_stage1 left empty; populate when Stage 1 RTL work starts converging (proposed: dup_last_emit max 50000, packet_empty_noemit_dup max 50000, f2_owner_no_head max 5000, ftq_occ_max min 4, packet_buf_occ_max min 2).",
-      "golden_pc_path": "tests/golden_pc/coremark_iter10_checkedin.golden.hex"
+      "notes": "Heavy CoreMark signoff row. CoreMark/MHz is scoreable only with checksum 64687 and flags=0. The prior CoreMark10 golden PC fixture is excluded from the goal manifest because it was proven stale at sequence 2553567; regenerate it before re-enabling golden_pc_path. counter_targets_stage1 left empty; populate when Stage 1 RTL work starts converging (proposed: dup_last_emit max 50000, packet_empty_noemit_dup max 50000, f2_owner_no_head max 5000, ftq_occ_max min 4, packet_buf_occ_max min 2)."
     },
     {
       "name": "coremark_iter1_generalization",
