@@ -12,14 +12,20 @@ module ifu
     input  logic                          rst_n,
     input  logic                          redirect_i,
     input  logic [63:0]                   redirect_pc_i,
-    input  logic                          stall_i,
 
+    input  logic                          frontend_hold_i,
+    input  logic                          packet_buf_full_i,
+    input  logic                          icq_full_i,
+    input  logic                          ftq_enq_ready_i,
+    input  logic                          remainder_valid_i,
+    input  logic                          same_owner_continue_i,
+    input  logic                          last_alloc_valid_i,
+    input  logic [63:0]                   last_alloc_req_pc_i,
+    input  logic                          req_redirect_i,
     input  logic                          duplicate_suppressed_i,
     input  logic [63:0]                   duplicate_next_pc_i,
     input  logic                          pc_consumed_i,
 
-    input  logic                          req_owner_valid_i,
-    input  logic [63:0]                   req_pc_i,
     input  logic [FTQ_IDX_BITS-1:0]       req_owner_idx_i,
     input  logic [FTQ_EPOCH_BITS-1:0]     req_owner_epoch_i,
     input  logic [FTQ_ALLOC_TAG_BITS-1:0] req_owner_tag_i,
@@ -45,6 +51,17 @@ module ifu
 
     output logic                          f1_valid_o,
     output logic [63:0]                   f1_pc_o,
+    output logic [63:0]                   req_pc_o,
+    output logic [63:0]                   req_block_pc_o,
+    output logic                          ftq_need_alloc_o,
+    output logic                          ifu_req_valid_o,
+    output logic                          ifu_req_ready_o,
+    output logic                          ifu_req_fire_o,
+    output logic                          ftq_enq_valid_o,
+    output logic                          ftq_ifu_req_pop_valid_o,
+    output logic                          ic_req_valid_o,
+    output logic [63:0]                   ic_req_addr_o,
+    output logic                          fe_stall_o,
 
     output logic                          work_valid_o,
     output logic [63:0]                   work_pc_o,
@@ -85,9 +102,27 @@ module ifu
     logic        f1_valid_r;
     logic [63:0] next_pc_c;
     logic        next_valid_c;
+    logic [63:0] req_pc_c;
+    logic [63:0] req_block_pc_c;
+    logic        ftq_need_alloc_c;
+    logic        ftq_enq_valid_c;
+    logic        ifu_req_ready_c;
+    logic        ifu_req_fire_c;
+    logic        fe_stall_c;
 
-    assign f1_valid_o = f1_valid_r;
-    assign f1_pc_o    = f1_pc_r;
+    assign f1_valid_o              = f1_valid_r;
+    assign f1_pc_o                 = f1_pc_r;
+    assign req_pc_o                = req_pc_c;
+    assign req_block_pc_o          = req_block_pc_c;
+    assign ftq_need_alloc_o        = ftq_need_alloc_c;
+    assign ifu_req_valid_o         = ftq_enq_valid_c;
+    assign ifu_req_ready_o         = ifu_req_ready_c;
+    assign ifu_req_fire_o          = ifu_req_fire_c;
+    assign ftq_enq_valid_o         = ftq_enq_valid_c;
+    assign ftq_ifu_req_pop_valid_o = ifu_req_fire_c;
+    assign ic_req_valid_o          = f1_valid_r && !fe_stall_c;
+    assign ic_req_addr_o           = req_pc_c;
+    assign fe_stall_o              = fe_stall_c;
 
     assign work_valid_o         = work_r.valid;
     assign work_pc_o            = work_r.pc;
@@ -100,8 +135,31 @@ module ifu
     assign work_line_addr_o     = work_r.line_addr;
     assign work_owner_delivered_o = work_r.owner_delivered;
 
+    assign req_pc_c = (req_redirect_i && !redirect_i)
+                      ? bpu_target_i
+                      : (line_straddle_advance_i
+                            ? seq_next_pc_i
+                            : f1_pc_r);
+    assign req_block_pc_c = {req_pc_c[63:LINE_BITS], {LINE_BITS{1'b0}}};
+    assign ftq_need_alloc_c =
+        !redirect_i &&
+        f1_valid_r &&
+        !remainder_valid_i &&
+        !line_straddle_advance_i &&
+        !same_owner_continue_i &&
+        (req_redirect_i || !(work_r.valid && (req_pc_c == work_r.pc))) &&
+        (req_redirect_i || !last_alloc_valid_i ||
+         (req_pc_c != last_alloc_req_pc_i));
+    assign fe_stall_c = frontend_hold_i ||
+                        packet_buf_full_i ||
+                        icq_full_i ||
+                        (ftq_need_alloc_c && !ftq_enq_ready_i);
+    assign ftq_enq_valid_c = f1_valid_r && !fe_stall_c && ftq_need_alloc_c;
+    assign ifu_req_ready_c = ftq_enq_ready_i && !icq_full_i && !packet_buf_full_i;
+    assign ifu_req_fire_c = ftq_enq_valid_c && ifu_req_ready_c;
+
     assign work_redirect_o =
-        bpu_redirect_i && !stall_i;
+        bpu_redirect_i && !fe_stall_c;
     assign work_redirect_next_owner_match_o =
         work_redirect_o &&
         ftq_next_owner_valid_i &&
@@ -111,29 +169,29 @@ module ifu
     assign work_redirect_enq_owner_o =
         work_redirect_o &&
         !work_redirect_next_owner_match_o &&
-        req_owner_valid_i;
+        ftq_enq_valid_c;
     assign work_redirect_keep_owner_o =
         work_redirect_o &&
         !work_redirect_next_owner_match_o &&
-        !req_owner_valid_i;
+        !ftq_enq_valid_c;
     assign work_take_ftq_next_owner_o =
         !work_redirect_o &&
-        !stall_i &&
+        !fe_stall_c &&
         ftq_ifu_pop_valid_i &&
         ftq_next_owner_valid_i &&
         seq_valid_i;
     assign work_take_remainder_request_owner_o =
         !work_redirect_o &&
-        !stall_i &&
+        !fe_stall_c &&
         consumed_remainder_i &&
-        req_owner_valid_i;
+        ftq_enq_valid_c;
     assign work_take_request_owner_o =
         !work_redirect_o &&
-        !stall_i &&
+        !fe_stall_c &&
         !(line_straddle_advance_i ||
           consume_remainder_i ||
           consumed_remainder_i) &&
-        req_owner_valid_i;
+        ftq_enq_valid_c;
 
     always_comb begin
         if (redirect_i) begin
@@ -202,7 +260,7 @@ module ifu
                 work_next_c.ftq_entry     = work_r.ftq_entry;
                 work_next_c.owner_delivered = work_owner_delivered_next;
             end
-        end else if (!stall_i) begin
+        end else if (!fe_stall_c) begin
             if (work_take_ftq_next_owner_o) begin
                 work_next_c = '0;
                 work_next_c.valid         = 1'b1;
@@ -228,7 +286,7 @@ module ifu
                     consume_remainder_i ||
                     consumed_remainder_i) begin
                     if (work_take_remainder_request_owner_o) begin
-                        work_pc_next            = req_pc_i;
+                        work_pc_next            = req_pc_c;
                         work_ftq_valid_next     = 1'b1;
                         work_ftq_idx_next       = req_owner_idx_i;
                         work_ftq_epoch_next     = req_owner_epoch_i;
@@ -237,7 +295,7 @@ module ifu
                         work_owner_delivered_next = 1'b0;
                     end
                 end else if (work_take_request_owner_o) begin
-                    work_pc_next            = req_pc_i;
+                    work_pc_next            = req_pc_c;
                     work_ftq_valid_next     = 1'b1;
                     work_ftq_idx_next       = req_owner_idx_i;
                     work_ftq_epoch_next     = req_owner_epoch_i;
@@ -277,7 +335,7 @@ module ifu
             if (redirect_i) begin
                 f1_pc_r    <= redirect_pc_i;
                 f1_valid_r <= 1'b1;
-            end else if (!stall_i) begin
+            end else if (!fe_stall_c) begin
                 if (bpu_redirect_i)
                     f1_pc_r <= bpu_target_i;
                 else if (consumed_remainder_i)

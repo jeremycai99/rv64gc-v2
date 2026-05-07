@@ -171,7 +171,6 @@ module fetch_unit
     logic        fetch_packet_out_valid;
     fetch_packet_t fetch_packet_out;
     logic        ftq_need_alloc_c;
-    logic        ftq_normal_enq_valid;
     logic        ftq_enq_valid;
     logic        ftq_enq_ready;
     logic        ifu_req_valid_c;
@@ -287,52 +286,9 @@ module fetch_unit
     assign subgroup_split_slot3_ftq_taken_only_en = 1'b0;
 `endif
 
-    // Monolithic IFU request boundary.  The IFU may accept a new owner only
-    // when the response queue can absorb the coming line and the IBuffer has
-    // room for eventual packet delivery. This is the structural backpressure
-    // point for bounded runahead.
-    assign ifu_req_valid_c = ftq_enq_valid;
-    assign ifu_req_ready_c = ftq_enq_ready && !icq_full && !packet_buf_full;
-    assign ifu_req_fire_c  = ifu_req_valid_c && ifu_req_ready_c;
-
-    // The FTQ handles same-cycle alloc-to-IFU transfer when the allocated owner
-    // is not yet visible in the registered allocation-to-request region.
-    assign ftq_ifu_req_pop_valid = ifu_req_fire_c;
-
-    assign req_pc_c = (req_redirect_c && !redirect_valid)
-                      ? f2_bpu_target
-                      : (line_straddle_advance_c
-                            ? f2_seq_next_pc
-                            : f1_pc);
-    assign req_block_pc_c = {req_pc_c[63:LINE_BITS], {LINE_BITS{1'b0}}};
-    assign ftq_need_alloc_c =
-        !redirect_valid &&
-        f1_valid &&
-        !remainder_valid_r &&
-        !line_straddle_advance_c &&
-        !f2_same_owner_continue_c &&
-        // The live F2 group already owns this exact request PC. Re-allocating
-        // a fresh FTQ entry for it creates a tag with no distinct packet to
-        // pair against. A predicted redirect is different: it starts a new
-        // dynamic fetch block even when the target PC matches a recently
-        // allocated loop-body PC, so it must get a fresh owner tag.
-        (req_redirect_c || !(f2_work_valid_c && (req_pc_c == f2_work_pc_c))) &&
-        (req_redirect_c || !ftq_last_alloc_valid_r ||
-         (req_pc_c != ftq_last_alloc_req_pc_r));
-
-    // Request to I-cache: issue when F1 is valid and not stalled
-    assign fe_stall    = frontend_hold ||
-                         packet_buf_full ||
-                         icq_full ||
-                         (ftq_need_alloc_c && !ftq_enq_ready);
-    assign ic_req_valid = f1_valid && !fe_stall;
-    // On BPU redirect, bypass f1_pc and send the redirect target directly
-    // to the icache.  This reduces the taken-branch fetch bubble from 2
-    // cycles to 1: the icache starts the new lookup in the SAME cycle as
-    // the redirect instead of waiting for f1_pc to update next cycle.
-    assign ic_req_addr  = req_pc_c;
-    assign ftq_normal_enq_valid = ic_req_valid && ftq_need_alloc_c;
-    assign ftq_enq_valid = ftq_normal_enq_valid;
+    // IFU owns the conservative F1 request and FTQ allocation boundary. It
+    // still issues only under the existing lockstep conditions; this slice only
+    // moves the boundary out of the integration wrapper.
     assign ftq_enq_entry_c = req_ftq_entry_c;
 
     // I-cache, NLPB, ICQ association, and same-line line-state reuse now live
@@ -377,12 +333,18 @@ module fetch_unit
         .rst_n                                    (rst_n),
         .redirect_i                               (redirect_valid),
         .redirect_pc_i                            (redirect_pc),
-        .stall_i                                  (fe_stall),
+        .frontend_hold_i                          (frontend_hold),
+        .packet_buf_full_i                        (packet_buf_full),
+        .icq_full_i                               (icq_full),
+        .ftq_enq_ready_i                          (ftq_enq_ready),
+        .remainder_valid_i                        (remainder_valid_r),
+        .same_owner_continue_i                    (f2_same_owner_continue_c),
+        .last_alloc_valid_i                       (ftq_last_alloc_valid_r),
+        .last_alloc_req_pc_i                      (ftq_last_alloc_req_pc_r),
+        .req_redirect_i                           (req_redirect_c),
         .duplicate_suppressed_i                   (f2_duplicate_suppressed_c),
         .duplicate_next_pc_i                      (f2_duplicate_next_pc_c),
         .pc_consumed_i                            (f2_pc_consumed_c),
-        .req_owner_valid_i                        (ftq_enq_valid),
-        .req_pc_i                                 (req_pc_c),
         .req_owner_idx_i                          (ftq_enq_idx),
         .req_owner_epoch_i                        (ftq_enq_epoch),
         .req_owner_tag_i                          (ftq_enq_tag),
@@ -404,6 +366,17 @@ module fetch_unit
         .owner_delivery_push_i                    (f2_owner_delivery_push_c),
         .f1_valid_o                               (f1_valid),
         .f1_pc_o                                  (f1_pc),
+        .req_pc_o                                 (req_pc_c),
+        .req_block_pc_o                           (req_block_pc_c),
+        .ftq_need_alloc_o                         (ftq_need_alloc_c),
+        .ifu_req_valid_o                          (ifu_req_valid_c),
+        .ifu_req_ready_o                          (ifu_req_ready_c),
+        .ifu_req_fire_o                           (ifu_req_fire_c),
+        .ftq_enq_valid_o                          (ftq_enq_valid),
+        .ftq_ifu_req_pop_valid_o                  (ftq_ifu_req_pop_valid),
+        .ic_req_valid_o                           (ic_req_valid),
+        .ic_req_addr_o                            (ic_req_addr),
+        .fe_stall_o                               (fe_stall),
         .work_valid_o                             (f2_work_valid_c),
         .work_pc_o                                (f2_work_pc_c),
         .work_ftq_valid_o                         (f2_work_ftq_valid_c),
