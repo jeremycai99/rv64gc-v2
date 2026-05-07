@@ -97,6 +97,7 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/sim/fetch_delivery_checker.sv \
      src/rtl/sim/fetch_owner_checker.sv \
      src/rtl/sim/fetch_frontend_profiler.sv \
+     src/rtl/sim/fetch_trace_probe.sv \
      src/rtl/core/decode/decode_slice.sv \
      src/rtl/core/decode/decode.sv \
      src/rtl/core/decode/fusion_detector.sv \
