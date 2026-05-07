@@ -147,6 +147,7 @@ RTL_FILES = \
 	$(RTL_DIR)/sim/fetch_owner_checker.sv \
 	$(RTL_DIR)/sim/fetch_frontend_profiler.sv \
 	$(RTL_DIR)/sim/fetch_trace_probe.sv \
+	$(RTL_DIR)/sim/fetch_frontend_assertions.sv \
     $(RTL_DIR)/core/decode/decode_slice.sv \
     $(RTL_DIR)/core/decode/decode.sv \
     $(RTL_DIR)/core/decode/fusion_detector.sv \

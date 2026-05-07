@@ -471,11 +471,13 @@ These are the structural constraint points that any optimization needs to be awa
 - **Simulation boundary:** `src/rtl/sim/fetch_delivery_checker.sv`,
   `src/rtl/sim/fetch_owner_checker.sv`, and
   `src/rtl/sim/fetch_frontend_profiler.sv`, and
-  `src/rtl/sim/fetch_trace_probe.sv` bind to `fetch_top` in simulation and own
-  the strict delivery stream checker, same-line owner contract checker,
-  frontend performance/profile counters, and optional fetch trace output. This
-  keeps checker, profiler, and trace `$display`, `$fatal`, and plusarg handling
-  out of the frontend integration RTL.
+  `src/rtl/sim/fetch_trace_probe.sv`, and
+  `src/rtl/sim/fetch_frontend_assertions.sv` bind to `fetch_top` in simulation
+  and own the strict delivery stream checker, same-line owner contract checker,
+  frontend performance/profile counters, optional fetch trace output, and
+  frontend timing invariants. This keeps checker, profiler, trace, assertion
+  `$display`, `$fatal`, `$error`, and plusarg handling out of the frontend
+  integration RTL.
 - **Current runahead precondition:** the IFU work cursor is still conservative
   and mirror-locked to the registered F1/F2 flow. Before F1 can run ahead by
   default, this cursor must become the independently advanced work item for the
