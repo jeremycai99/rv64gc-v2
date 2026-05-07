@@ -22,8 +22,10 @@ module ifu_line_fetch
     input  logic [63:0]                   aux_lookup_addr_i,
     input  logic                          f1_valid_i,
     input  logic                          stall_i,
+    input  logic                          work_valid_i,
     input  logic                          work_line_valid_i,
     input  logic [63:LINE_BITS]           work_line_addr_i,
+    input  logic [FTQ_EPOCH_BITS-1:0]     current_epoch_i,
 
     input  logic                          req_owner_valid_i,
     input  logic [FTQ_IDX_BITS-1:0]       req_owner_idx_i,
@@ -31,7 +33,6 @@ module ifu_line_fetch
     input  logic [FTQ_ALLOC_TAG_BITS-1:0] req_owner_alloc_tag_i,
     input  ftq_entry_t                    req_owner_entry_i,
 
-    input  logic                          icq_deq_ready_i,
     output logic                          icq_deq_valid_o,
     output logic [511:0]                  icq_deq_data_o,
     output logic                          icq_deq_hit_o,
@@ -45,6 +46,17 @@ module ifu_line_fetch
     output logic                          icq_full_o,
     output logic                          icq_empty_o,
     output logic [ICQ_COUNT_BITS-1:0]     icq_count_o,
+
+    output logic                          line_resp_valid_o,
+    output logic [511:0]                  line_resp_data_o,
+    output logic                          line_resp_hit_o,
+    output logic                          data_valid_o,
+    output logic [511:0]                  data_line_o,
+    output logic [63:LINE_BITS]           data_line_addr_o,
+    output logic                          data_line_reused_o,
+    output logic                          line_state_valid_o,
+    output logic [63:LINE_BITS]           line_state_addr_o,
+    output logic [FTQ_EPOCH_BITS-1:0]     line_state_epoch_o,
 
     output logic                          nlpb_hit_o,
     output logic                          nlpb_aux_hit_o,
@@ -86,6 +98,15 @@ module ifu_line_fetch
     logic [FTQ_EPOCH_BITS-1:0] ic_req_ftq_pipe_epoch_r;
     logic [FTQ_ALLOC_TAG_BITS-1:0] ic_req_ftq_pipe_alloc_tag_r;
     ftq_entry_t   ic_req_ftq_pipe_entry_r;
+    logic         icq_line_matches_work_c;
+    logic         icq_deq_stale_c;
+    logic         icq_deq_ready_c;
+    logic         line_state_valid_r;
+    logic [63:LINE_BITS] line_state_addr_r;
+    logic [511:0] line_state_data_r;
+    logic [FTQ_EPOCH_BITS-1:0] line_state_epoch_r;
+    logic         line_state_match_c;
+    logic         line_state_use_c;
 
     assign nlpb_trigger      = ic_resp_valid_comb && ic_resp_hit_comb;
     assign nlpb_trigger_addr = {req_addr_i[63:6], 6'b0};
@@ -99,6 +120,39 @@ module ifu_line_fetch
     assign merged_resp_hit_c   = ic_resp_hit_comb || nlpb_resp_match_c;
     assign nlpb_hit_o        = nlpb_hit_comb;
     assign nlpb_aux_hit_o    = nlpb_aux_hit_comb;
+    assign icq_line_matches_work_c =
+        icq_deq_valid_o &&
+        work_line_valid_i &&
+        (icq_deq_line_addr_o == work_line_addr_i);
+    assign icq_deq_stale_c =
+        icq_deq_valid_o &&
+        (!icq_deq_ftq_valid_o ||
+         (icq_deq_ftq_epoch_o != current_epoch_i));
+    assign icq_deq_ready_c =
+        icq_line_matches_work_c ||
+        icq_deq_stale_c;
+    assign line_resp_valid_o =
+        icq_deq_valid_o &&
+        icq_deq_ready_c &&
+        !icq_deq_stale_c;
+    assign line_resp_data_o = icq_deq_data_o;
+    assign line_resp_hit_o  = icq_deq_hit_o;
+    assign line_state_match_c =
+        line_state_valid_r &&
+        work_line_valid_i &&
+        (line_state_addr_r == work_line_addr_i) &&
+        (line_state_epoch_r == current_epoch_i);
+    assign line_state_use_c = line_state_match_c && !line_resp_valid_o;
+    assign data_valid_o =
+        line_state_use_c || line_resp_valid_o;
+    assign data_line_o =
+        line_state_use_c ? line_state_data_r : line_resp_data_o;
+    assign data_line_addr_o =
+        line_state_use_c ? line_state_addr_r : icq_deq_line_addr_o;
+    assign data_line_reused_o = line_state_use_c;
+    assign line_state_valid_o = line_state_valid_r;
+    assign line_state_addr_o  = line_state_addr_r;
+    assign line_state_epoch_o = line_state_epoch_r;
 
     icache u_icache (
         .clk            (clk),
@@ -151,11 +205,19 @@ module ifu_line_fetch
             ic_req_ftq_pipe_epoch_r     <= '0;
             ic_req_ftq_pipe_alloc_tag_r <= '0;
             ic_req_ftq_pipe_entry_r     <= '0;
+            line_state_valid_r          <= 1'b0;
+            line_state_addr_r           <= '0;
+            line_state_data_r           <= '0;
+            line_state_epoch_r          <= '0;
         end else if (flush_i) begin
             nlpb_resp_valid_r <= 1'b0;
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
             ic_req_ftq_pipe_valid_r <= 1'b0;
+            line_state_valid_r <= 1'b0;
+            line_state_addr_r  <= '0;
+            line_state_data_r  <= '0;
+            line_state_epoch_r <= '0;
         end else begin
             nlpb_resp_valid_r <= f1_valid_i && !stall_i && nlpb_hit_comb;
             nlpb_resp_addr_r  <= {req_addr_i[63:LINE_BITS], {LINE_BITS{1'b0}}};
@@ -167,6 +229,17 @@ module ifu_line_fetch
                 ic_req_ftq_pipe_epoch_r     <= req_owner_epoch_i;
                 ic_req_ftq_pipe_alloc_tag_r <= req_owner_alloc_tag_i;
                 ic_req_ftq_pipe_entry_r     <= req_owner_entry_i;
+            end
+            if (fence_i) begin
+                line_state_valid_r <= 1'b0;
+                line_state_addr_r  <= '0;
+                line_state_data_r  <= '0;
+                line_state_epoch_r <= '0;
+            end else if (work_valid_i && line_resp_valid_o) begin
+                line_state_valid_r <= 1'b1;
+                line_state_addr_r  <= icq_deq_line_addr_o;
+                line_state_data_r  <= line_resp_data_o;
+                line_state_epoch_r <= current_epoch_i;
             end
         end
     end
@@ -184,7 +257,7 @@ module ifu_line_fetch
         .resp_ftq_epoch_i    (ic_req_ftq_pipe_epoch_r),
         .resp_ftq_alloc_tag_i(ic_req_ftq_pipe_alloc_tag_r),
         .resp_ftq_entry_i    (ic_req_ftq_pipe_entry_r),
-        .deq_ready_i         (icq_deq_ready_i),
+        .deq_ready_i         (icq_deq_ready_c),
         .deq_valid_o         (icq_deq_valid_o),
         .deq_data_o          (icq_deq_data_o),
         .deq_hit_o           (icq_deq_hit_o),

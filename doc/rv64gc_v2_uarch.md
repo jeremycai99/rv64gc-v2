@@ -404,16 +404,16 @@ These are the structural constraint points that any optimization needs to be awa
   dropped one-cycle I-cache responses.
 - **Current line-fetch adapter boundary:** `frontend/ifu/ifu_line_fetch.sv`
   owns the I-cache, next-line prefetch buffer, request-owner retime, and
-  `icache_resp_queue` response association. It keeps `icache.sv` itself as a
-  separate cache block and exposes the ICQ head plus status back to the current
-  integration layer. Same-line line-state reuse and IFU work-cursor policy
-  still remain in `fetch_unit.sv` until the next stateful IFU split.
-- **Current line-state boundary:** F2 records a separate line-state register for
-  the consumed response line (line address, data, hit, and epoch). Packet
-  metadata is sourced from this line identity, while FTQ idx/epoch/tag remain
-  the owner cursor. The extraction datapath may consume the line-state record
-  when the line and epoch match `ifu_work_r.line_addr`; otherwise it waits for
-  an accepted queue response.
+  `icache_resp_queue` response association. It also owns the line-qualified
+  ICQ pop rule, stale epoch drain, and same-line line-state reuse. It keeps
+  `icache.sv` itself as a separate cache block and exposes the accepted line
+  data plus ICQ head metadata back to the current integration layer.
+- **Current line-state boundary:** `ifu_line_fetch.sv` records a separate
+  line-state register for the consumed response line (line address, data, and
+  epoch). Packet metadata is sourced from this line identity, while FTQ
+  idx/epoch/tag remain the owner cursor in `fetch_unit.sv`. The extraction
+  datapath may consume the line-state record when the line and epoch match the
+  IFU work cursor line; otherwise it waits for an accepted queue response.
 - **Current IBuffer boundary:** `frontend/ibuffer/ibuffer.sv` is the
   decode-facing packet boundary and currently wraps the existing
   `fetch_packet_buffer` FIFO implementation. It is the only packet source for

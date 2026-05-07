@@ -387,9 +387,9 @@ module fetch_unit
     assign ftq_enq_valid = ftq_normal_enq_valid;
     assign ftq_enq_entry_c = req_ftq_entry_c;
 
-    // I-cache, NLPB, and ICQ association now live behind ifu_line_fetch.
-    // Line-state reuse remains in fetch_unit.sv until the next stateful IFU
-    // slice.
+    // I-cache, NLPB, ICQ association, and same-line line-state reuse now live
+    // behind ifu_line_fetch. The IFU work cursor remains here until the next
+    // stateful IFU slice.
     logic        nlpb_hit_comb;
     logic        nlpb_aux_hit_comb;
 
@@ -405,16 +405,10 @@ module fetch_unit
     logic [FTQ_EPOCH_BITS-1:0]             icq_deq_ftq_epoch;
     logic [FTQ_ALLOC_TAG_BITS-1:0]         icq_deq_ftq_alloc_tag;
     ftq_entry_t                            icq_deq_ftq_entry;
-    logic                                  icq_deq_ready;
-    logic                                  icq_line_matches_f2_c;
     logic                                  icq_deq_owner_match_c;
-    logic                                  icq_deq_stale_c;
-    logic                                  f2_line_state_valid_r;
-    logic [63:LINE_BITS]                   f2_line_state_addr_r;
-    logic [511:0]                          f2_line_state_data_r;
-    logic                                  f2_line_state_hit_r;
-    logic [FTQ_EPOCH_BITS-1:0]             f2_line_state_epoch_r;
-    logic                                  f2_line_state_match_c;
+    logic                                  f2_line_state_valid_c;
+    logic [63:LINE_BITS]                   f2_line_state_addr_c;
+    logic [FTQ_EPOCH_BITS-1:0]             f2_line_state_epoch_c;
     logic                                  f2_line_state_use_c;
     logic [63:LINE_BITS]                   f2_ifu_line_addr_c;
     typedef struct packed {
@@ -489,14 +483,15 @@ module fetch_unit
         .aux_lookup_addr_i      (f1_pc),
         .f1_valid_i             (f1_valid),
         .stall_i                (fe_stall),
+        .work_valid_i           (f2_work_valid_c),
         .work_line_valid_i      (f2_work_line_valid_c),
         .work_line_addr_i       (f2_work_line_addr_c),
+        .current_epoch_i        (ftq_current_epoch),
         .req_owner_valid_i      (ftq_enq_valid),
         .req_owner_idx_i        (ftq_enq_idx),
         .req_owner_epoch_i      (ftq_enq_epoch),
         .req_owner_alloc_tag_i  (ftq_enq_tag),
         .req_owner_entry_i      (ftq_enq_entry_c),
-        .icq_deq_ready_i        (icq_deq_ready),
         .icq_deq_valid_o        (icq_deq_valid),
         .icq_deq_data_o         (icq_deq_data),
         .icq_deq_hit_o          (icq_deq_hit),
@@ -510,6 +505,16 @@ module fetch_unit
         .icq_full_o             (icq_full),
         .icq_empty_o            (icq_empty),
         .icq_count_o            (icq_count),
+        .line_resp_valid_o      (ic_resp_valid),
+        .line_resp_data_o       (ic_resp_data),
+        .line_resp_hit_o        (ic_resp_hit),
+        .data_valid_o           (f2_data_valid),
+        .data_line_o            (f2_data_line),
+        .data_line_addr_o       (f2_ifu_line_addr_c),
+        .data_line_reused_o     (f2_line_state_use_c),
+        .line_state_valid_o     (f2_line_state_valid_c),
+        .line_state_addr_o      (f2_line_state_addr_c),
+        .line_state_epoch_o     (f2_line_state_epoch_c),
         .nlpb_hit_o             (nlpb_hit_comb),
         .nlpb_aux_hit_o         (nlpb_aux_hit_comb),
         .icache_fill_req_valid  (icache_fill_req_valid),
@@ -526,10 +531,6 @@ module fetch_unit
         .pf_l2_resp_data        (pf_l2_resp_data)
     );
 
-    assign icq_line_matches_f2_c =
-        icq_deq_valid &&
-        f2_work_line_valid_c &&
-        (icq_deq_line_addr == f2_work_line_addr_c);
     assign icq_deq_owner_match_c =
         icq_deq_valid &&
         icq_deq_ftq_valid &&
@@ -537,39 +538,6 @@ module fetch_unit
         (icq_deq_ftq_idx == ftq_ifu_wb_owner_idx) &&
         (icq_deq_ftq_epoch == ftq_current_epoch) &&
         (icq_deq_ftq_alloc_tag == ftq_ifu_wb_owner_tag);
-    assign icq_deq_stale_c =
-        icq_deq_valid &&
-        (!icq_deq_ftq_valid ||
-         (icq_deq_ftq_epoch != ftq_current_epoch));
-    assign f2_line_state_match_c =
-        f2_line_state_valid_r &&
-        f2_work_line_valid_c &&
-        (f2_line_state_addr_r == f2_work_line_addr_c) &&
-        (f2_line_state_epoch_r == ftq_current_epoch);
-
-    // IFU only accepts a queue head when the line belongs to the work cursor.
-    // A same-line owner may reuse the line-state record without popping a
-    // future-line ICQ head. Owner equality is observed separately because the
-    // current FTQ IFU-writeback pointer can lag the ICQ head during legal
-    // frontend handoff timing.
-    // Responses from flushed or unowned requests are drained as stale entries,
-    // but never exposed as F2 data.
-    assign icq_deq_ready =
-        icq_line_matches_f2_c ||
-        icq_deq_stale_c;
-    assign ic_resp_valid =
-        icq_deq_valid && icq_deq_ready && !icq_deq_stale_c;
-    assign ic_resp_data  = icq_deq_data;
-    assign ic_resp_hit   = icq_deq_hit;
-    assign f2_line_state_use_c = f2_line_state_match_c && !ic_resp_valid;
-    assign f2_data_valid =
-        f2_line_state_use_c || ic_resp_valid;
-    assign f2_data_line  =
-        f2_line_state_use_c ? f2_line_state_data_r : ic_resp_data;
-    assign f2_ifu_line_addr_c =
-        f2_line_state_use_c
-            ? f2_line_state_addr_r
-            : icq_deq_line_addr;
     assign f2_work_valid_c         = ifu_work_r.valid;
     assign f2_work_pc_c            = ifu_work_r.pc;
     assign f2_work_ftq_valid_c     = ifu_work_r.ftq_valid;
@@ -621,31 +589,6 @@ module fetch_unit
           consumed_remainder_r) &&
         ftq_enq_valid;
     assign packet_buf_deq = !backend_stall && !frontend_hold;
-
-    // IFU line-data lifetime is tracked separately from the FTQ owner cursor.
-    // Same-line owners may share this physical line record, but every emitted
-    // packet still carries the current FTQ idx/epoch/tag from the work cursor.
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            f2_line_state_valid_r <= 1'b0;
-            f2_line_state_addr_r  <= '0;
-            f2_line_state_data_r  <= '0;
-            f2_line_state_hit_r   <= 1'b0;
-            f2_line_state_epoch_r <= '0;
-        end else if (redirect_valid || fence_i) begin
-            f2_line_state_valid_r <= 1'b0;
-            f2_line_state_addr_r  <= '0;
-            f2_line_state_data_r  <= '0;
-            f2_line_state_hit_r   <= 1'b0;
-            f2_line_state_epoch_r <= '0;
-        end else if (f2_work_valid_c && ic_resp_valid) begin
-            f2_line_state_valid_r <= 1'b1;
-            f2_line_state_addr_r  <= icq_deq_line_addr;
-            f2_line_state_data_r  <= ic_resp_data;
-            f2_line_state_hit_r   <= ic_resp_hit;
-            f2_line_state_epoch_r <= ftq_current_epoch;
-        end
-    end
 
     ftq u_ftq (
         .clk          (clk),
@@ -3212,19 +3155,19 @@ module fetch_unit
     property p_same_line_reuse_has_line_state;
         @(posedge clk) disable iff (!rst_n || redirect_valid)
         f2_line_state_use_c |->
-        (f2_line_state_valid_r &&
+        (f2_line_state_valid_c &&
          f2_work_line_valid_c &&
-         (f2_line_state_addr_r == f2_work_line_addr_c) &&
-         (f2_line_state_epoch_r == ftq_current_epoch));
+         (f2_line_state_addr_c == f2_work_line_addr_c) &&
+         (f2_line_state_epoch_c == ftq_current_epoch));
     endproperty
     a_same_line_reuse_has_line_state:
         assert property (p_same_line_reuse_has_line_state)
         else $error("[INVARIANT_D2] same-line reuse missing line state: state_v=%b state_line=%014h work_line=%014h work_pc=%016h state_epoch=%h ftq_epoch=%h",
-                    f2_line_state_valid_r,
-                    f2_line_state_addr_r,
+                    f2_line_state_valid_c,
+                    f2_line_state_addr_c,
                     f2_work_line_addr_c,
                     f2_work_pc_c,
-                    f2_line_state_epoch_r,
+                    f2_line_state_epoch_c,
                     ftq_current_epoch);
 
     // Invariant D3: the IFU work cursor's cached line identity must describe
