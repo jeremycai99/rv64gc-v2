@@ -397,7 +397,10 @@ These are the structural constraint points that any optimization needs to be awa
   instantiated by `rv64gc_core_top.sv`. `frontend/ifu/ifu.sv` is the
   instruction fetch unit block inside that integration layer. A monolithic
   `fetch_unit.sv` is not part of the target structure; any compatibility name
-  in this area means the split is incomplete and should be retired.
+  in this area means the split is incomplete and should be retired. The
+  integration top is wire-only RTL: frontend policy and state live in BPU, FTQ,
+  IFU, line-fetch, prediction-checker, instruction-helper, and IBuffer blocks,
+  while simulation checkers bind from `src/rtl/sim/`.
 - **Current advance model:** F1 is still coupled to F2 packet progress. This
   means the BPU can predict a target, but the frontend generally does not build
   a multi-entry predicted-block stream ahead of decode.

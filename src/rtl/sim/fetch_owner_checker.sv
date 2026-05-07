@@ -397,7 +397,7 @@ bind fetch_top fetch_owner_checker u_fetch_owner_checker (
     .ftq_enq_idx                 (ftq_enq_idx),
     .ftq_enq_epoch               (ftq_enq_epoch),
     .ftq_enq_tag                 (ftq_enq_tag),
-    .ftq_enq_entry_c             (ftq_enq_entry_c),
+    .ftq_enq_entry_c             (req_ftq_entry_c),
     .fetch_packet_out_valid      (fetch_packet_out_valid),
     .fetch_packet_out            (fetch_packet_out),
     .backend_stall               (backend_stall),

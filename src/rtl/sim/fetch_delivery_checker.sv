@@ -262,7 +262,7 @@ bind fetch_top fetch_delivery_checker u_fetch_delivery_checker (
     .ftq_enq_valid               (ftq_enq_valid),
     .ftq_enq_idx                 (ftq_enq_idx),
     .ftq_enq_tag                 (ftq_enq_tag),
-    .ftq_enq_entry_c             (ftq_enq_entry_c),
+    .ftq_enq_entry_c             (req_ftq_entry_c),
     .ftq_ifu_pop_valid           (ftq_ifu_pop_valid),
     .ftq_count_ifu_to_wb         (ftq_count_ifu_to_wb),
     .ftq_next_ifu_owner_valid    (ftq_next_ifu_owner_valid),

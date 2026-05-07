@@ -171,7 +171,6 @@ module fetch_top
     logic        ifu_req_valid_c;
     logic        ifu_req_ready_c;
     logic        ifu_req_fire_c;
-    logic        ftq_pop_valid;
     logic        ftq_ifu_req_pop_valid;
     logic        ftq_delivery_push_valid;
     logic        ftq_ifu_pop_valid;
@@ -233,17 +232,11 @@ module fetch_top
     ftq_entry_t  ftq_next_ifu_owner_entry;
     ftq_entry_t  ftq_commit_head_entry;
     ftq_entry_t  ftq_commit_owner_entry;
-    ftq_entry_t  ftq_enq_entry_c;
     fetch_packet_t packet_buf_in;
     fetch_packet_t packet_buf_head;
     logic        packet_buf_owner_match_c;
     logic        packet_buf_head_owner_complete_c;
     logic        remainder_valid_r;
-    // IFU owns the conservative F1 request and FTQ allocation boundary. It
-    // still issues only under the existing lockstep conditions; this slice only
-    // moves the boundary out of the integration wrapper.
-    assign ftq_enq_entry_c = req_ftq_entry_c;
-
     // I-cache, NLPB, ICQ association, and same-line line-state reuse now live
     // behind ifu_line_fetch. The IFU work cursor remains here until the next
     // stateful IFU slice.
@@ -300,7 +293,7 @@ module fetch_top
         .req_owner_idx_i                          (ftq_enq_idx),
         .req_owner_epoch_i                        (ftq_enq_epoch),
         .req_owner_tag_i                          (ftq_enq_tag),
-        .req_owner_entry_i                        (ftq_enq_entry_c),
+        .req_owner_entry_i                        (req_ftq_entry_c),
         .bpu_redirect_i                           (f2_bpu_redirect),
         .bpu_target_i                             (f2_bpu_target),
         .ftq_next_owner_valid_i                   (ftq_next_ifu_owner_valid),
@@ -379,7 +372,7 @@ module fetch_top
         .req_owner_idx_i        (ftq_enq_idx),
         .req_owner_epoch_i      (ftq_enq_epoch),
         .req_owner_alloc_tag_i  (ftq_enq_tag),
-        .req_owner_entry_i      (ftq_enq_entry_c),
+        .req_owner_entry_i      (req_ftq_entry_c),
         .icq_deq_valid_o        (icq_deq_valid),
         .icq_deq_data_o         (icq_deq_data),
         .icq_deq_hit_o          (icq_deq_hit),
@@ -425,7 +418,7 @@ module fetch_top
         .rst_n        (rst_n),
         .flush        (redirect_valid),
         .enq_valid    (ftq_enq_valid),
-        .enq_entry    (ftq_enq_entry_c),
+        .enq_entry    (req_ftq_entry_c),
         .enq_ready    (ftq_enq_ready),
         .enq_idx      (ftq_enq_idx),
         .enq_epoch    (ftq_enq_epoch),
@@ -892,8 +885,6 @@ module fetch_top
         .tage_spec_update_valid_o                 (tage_spec_update_valid),
         .tage_spec_taken_o                        (tage_spec_taken)
     );
-
-    assign ftq_pop_valid = ftq_ifu_pop_valid;
 
     // =========================================================================
     // Fetch packet construction and fetch-buffered output to decode

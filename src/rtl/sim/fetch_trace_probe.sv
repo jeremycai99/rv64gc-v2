@@ -396,7 +396,7 @@ bind fetch_top fetch_trace_probe u_fetch_trace_probe (
     .ftq_need_alloc_c                (ftq_need_alloc_c),
     .ftq_enq_valid                   (ftq_enq_valid),
     .ftq_enq_tag                     (ftq_enq_tag),
-    .ftq_pop_valid                   (ftq_pop_valid),
+    .ftq_pop_valid                   (ftq_ifu_pop_valid),
     .ftq_count                       (ftq_count),
     .ftq_head_valid                  (ftq_head_valid),
     .ftq_head_idx                    (ftq_head_idx),

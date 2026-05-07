@@ -734,7 +734,7 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .packet_buf_full                 (packet_buf_full),
     .packet_buf_count                (packet_buf_count),
     .ftq_enq_valid                   (ftq_enq_valid),
-    .ftq_pop_valid                   (ftq_pop_valid),
+    .ftq_pop_valid                   (ftq_ifu_pop_valid),
     .ic_req_valid                    (ic_req_valid),
     .ftq_need_alloc_c                (ftq_need_alloc_c),
     .f2_ftq_owner_live_c             (f2_ftq_owner_live_c),
