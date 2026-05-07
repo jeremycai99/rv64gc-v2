@@ -403,11 +403,11 @@ These are the structural constraint points that any optimization needs to be awa
   still accept an enqueue on a full cycle when the head also pops, avoiding
   dropped one-cycle I-cache responses.
 - **Current line-fetch adapter boundary:** `frontend/ifu/ifu_line_fetch.sv`
-  owns the I-cache plus next-line prefetch buffer request/response adapter. It
-  presents a merged line-response stream to the remaining integration logic
-  while keeping `icache.sv` itself as a separate cache block. The
-  `icache_resp_queue` and same-line line-state reuse policy still remain in the
-  integration layer until the next stateful IFU split.
+  owns the I-cache, next-line prefetch buffer, request-owner retime, and
+  `icache_resp_queue` response association. It keeps `icache.sv` itself as a
+  separate cache block and exposes the ICQ head plus status back to the current
+  integration layer. Same-line line-state reuse and IFU work-cursor policy
+  still remain in `fetch_unit.sv` until the next stateful IFU split.
 - **Current line-state boundary:** F2 records a separate line-state register for
   the consumed response line (line address, data, hit, and epoch). Packet
   metadata is sourced from this line identity, while FTQ idx/epoch/tag remain
@@ -555,13 +555,14 @@ These are the structural constraint points that any optimization needs to be awa
   a capacity-bounded FTQ/IBuffer-driven work item. These belong in `ftq.sv` and
   the IFU/IBuffer boundary before proactive F1 runahead is enabled.
 - **I-cache response queue** (`icache_resp_queue.sv`): 4-entry line-response
-  FIFO. It is an elasticity mechanism, not the architectural owner. It may
-  carry request PC, explicit response-line address, FTQ identity, and the full
-  FTQ entry snapshot, but it must not decide correctness by local stale-entry
-  filtering. F2 accepts only matching-line responses; flushed responses are
-  drained by invalid/stale FTQ epoch metadata. It accepts a replacement response
-  on a full-plus-pop cycle so a one-cycle I-cache response is not dropped when
-  F2 frees a slot at the same edge.
+  FIFO instantiated by `frontend/ifu/ifu_line_fetch.sv`. It is an elasticity
+  mechanism, not the architectural owner. It carries request PC, explicit
+  response-line address, FTQ identity, and the full FTQ entry snapshot, but it
+  must not decide correctness by local stale-entry filtering. F2 accepts only
+  matching-line responses; flushed responses are drained by invalid/stale FTQ
+  epoch metadata. It accepts a replacement response on a full-plus-pop cycle so
+  a one-cycle I-cache response is not dropped when F2 frees a slot at the same
+  edge.
 - **Owner-aware IBuffer**
   (`src/rtl/core/frontend/ibuffer/ibuffer.sv`): current wrapper between IF2 and
   decode; wraps `fetch_packet_buffer.sv`, which stores complete fetch packets
