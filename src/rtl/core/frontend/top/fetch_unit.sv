@@ -783,50 +783,44 @@ module fetch_unit
     logic        f2_last_emit_valid_r;
     logic [63:0] f2_last_emit_pc_r;
     logic [63:0] f2_last_emit_next_pc_r;
-    logic        f2_last_emit_ftq_valid_r;
-    logic [FTQ_IDX_BITS-1:0] f2_last_emit_ftq_idx_r;
-    logic [FTQ_EPOCH_BITS-1:0] f2_last_emit_ftq_epoch_r;
-    logic [FTQ_ALLOC_TAG_BITS-1:0] f2_last_emit_ftq_alloc_tag_r;
-    logic        f2_replay_block_valid_r;
     logic [63:0] f2_replay_block_pc_r;
-    logic        f2_replay_block_ftq_valid_r;
-    logic [FTQ_IDX_BITS-1:0] f2_replay_block_ftq_idx_r;
-    logic [FTQ_EPOCH_BITS-1:0] f2_replay_block_ftq_epoch_r;
-    logic [FTQ_ALLOC_TAG_BITS-1:0] f2_replay_block_ftq_alloc_tag_r;
     logic [1:0]  f2_replay_block_age_r;
-    logic        f2_last_emit_owner_match_c;
     logic        f2_last_emit_hit_c;
-    logic        f2_replay_block_owner_match_c;
     logic        f2_replay_block_hit_c;
     assign f2_has_emit_payload_c = f2_work_valid_c && f2_data_valid &&
                                    (extract_count > 3'd0);
-    assign f2_last_emit_owner_match_c =
-        (f2_last_emit_ftq_valid_r && f2_work_ftq_valid_c &&
-         (f2_last_emit_ftq_idx_r == f2_work_ftq_idx_c) &&
-         (f2_last_emit_ftq_epoch_r == f2_work_ftq_epoch_c) &&
-         (f2_last_emit_ftq_alloc_tag_r == f2_work_ftq_alloc_tag_c)) ||
-        (!f2_last_emit_ftq_valid_r && !f2_work_ftq_valid_c);
-    assign f2_last_emit_hit_c =
-        f2_last_emit_valid_r &&
-        (f2_last_emit_pc_r == f2_work_pc_c) &&
-        f2_last_emit_owner_match_c;
-    assign f2_replay_block_owner_match_c =
-        (f2_replay_block_ftq_valid_r && f2_work_ftq_valid_c &&
-         (f2_replay_block_ftq_idx_r == f2_work_ftq_idx_c) &&
-         (f2_replay_block_ftq_epoch_r == f2_work_ftq_epoch_c) &&
-         (f2_replay_block_ftq_alloc_tag_r == f2_work_ftq_alloc_tag_c)) ||
-        (!f2_replay_block_ftq_valid_r && !f2_work_ftq_valid_c);
-    assign f2_replay_block_hit_c =
-        f2_replay_block_valid_r &&
-        (f2_replay_block_pc_r == f2_work_pc_c) &&
-        f2_replay_block_owner_match_c;
-    assign f2_duplicate_suppressed_c =
-        f2_has_emit_payload_c &&
-        (f2_last_emit_hit_c || f2_replay_block_hit_c);
-    assign f2_duplicate_next_pc_c =
-        f2_last_emit_hit_c
-            ? f2_last_emit_next_pc_r
-            : (f2_seq_valid ? f2_seq_next_pc : f1_pc);
+
+    ifu_duplicate_guard u_ifu_duplicate_guard (
+        .clk                          (clk),
+        .rst_n                        (rst_n),
+        .redirect_i                   (redirect_valid),
+        .bpu_redirect_i               (f2_bpu_redirect),
+        .stall_i                      (fe_stall),
+        .will_emit_i                  (f2_will_emit_c),
+        .has_emit_payload_i           (f2_has_emit_payload_c),
+        .bp_branch_found_i            (bp_branch_found),
+        .bp_taken_i                   (bp_taken),
+        .subgroup_split_before_ctl_i  (subgroup_split_before_ctl_c),
+        .bp_target_i                  (bp_target_addr),
+        .seq_valid_i                  (f2_seq_valid),
+        .seq_next_pc_i                (f2_seq_next_pc),
+        .f1_pc_i                      (f1_pc),
+        .bpu_target_i                 (f2_bpu_target),
+        .work_ftq_valid_i             (f2_work_ftq_valid_c),
+        .work_pc_i                    (f2_work_pc_c),
+        .work_ftq_idx_i               (f2_work_ftq_idx_c),
+        .work_ftq_epoch_i             (f2_work_ftq_epoch_c),
+        .work_ftq_alloc_tag_i         (f2_work_ftq_alloc_tag_c),
+        .duplicate_suppressed_o       (f2_duplicate_suppressed_c),
+        .duplicate_next_pc_o          (f2_duplicate_next_pc_c),
+        .last_emit_hit_o              (f2_last_emit_hit_c),
+        .replay_block_hit_o           (f2_replay_block_hit_c),
+        .last_emit_valid_o            (f2_last_emit_valid_r),
+        .last_emit_pc_o               (f2_last_emit_pc_r),
+        .last_emit_next_pc_o          (f2_last_emit_next_pc_r),
+        .replay_block_pc_o            (f2_replay_block_pc_r),
+        .replay_block_age_o           (f2_replay_block_age_r)
+    );
     // Iteration alpha' (2026-05-05): explicit packet-buffer backpressure.
     // F2 must not emit unless the IBuffer can accept the packet. The buffer can
     // now accept on a full+dequeue cycle and can flow through when empty, so use
@@ -869,31 +863,9 @@ module fetch_unit
             f2_ghr_snapshot_r   <= '0;
             consumed_remainder_r <= 1'b0;
             post_remainder_pc_r  <= '0;
-            f2_last_emit_valid_r <= 1'b0;
-            f2_last_emit_pc_r    <= '0;
-            f2_last_emit_next_pc_r <= '0;
-            f2_last_emit_ftq_valid_r <= 1'b0;
-            f2_last_emit_ftq_idx_r <= '0;
-            f2_last_emit_ftq_epoch_r <= '0;
-            f2_last_emit_ftq_alloc_tag_r <= '0;
-            f2_replay_block_valid_r <= 1'b0;
-            f2_replay_block_pc_r    <= '0;
-            f2_replay_block_ftq_valid_r <= 1'b0;
-            f2_replay_block_ftq_idx_r <= '0;
-            f2_replay_block_ftq_epoch_r <= '0;
-            f2_replay_block_ftq_alloc_tag_r <= '0;
-            f2_replay_block_age_r   <= '0;
         end else if (redirect_valid) begin
-            // Flush cursor-adjacent state on redirect and clear the
-            // duplicate-suppress flag.
+            // Flush cursor-adjacent state on redirect.
             consumed_remainder_r <= 1'b0;
-            f2_last_emit_valid_r <= 1'b0;
-            f2_last_emit_ftq_valid_r <= 1'b0;
-            f2_replay_block_valid_r <= 1'b0;
-            f2_replay_block_ftq_valid_r <= 1'b0;
-            f2_last_emit_next_pc_r <= '0;
-            f2_replay_block_pc_r    <= '0;
-            f2_replay_block_age_r   <= '0;
         end else if (f2_bpu_redirect && !fe_stall) begin
             // BPU redirect: the IFU work cursor is redirected to the target.
             // Latch predictor metadata for the redirected-to fetch group.
@@ -910,69 +882,7 @@ module fetch_unit
             f2_tage_taken_r     <= tage_pred_taken;
             f2_ghr_snapshot_r   <= ghr_out;
             consumed_remainder_r <= 1'b0;
-            // The redirecting packet was emitted this cycle.  Remember its
-            // PC across the redirect so a lagging f1->f2 handoff cannot
-            // replay the same packet after the target packet has started.
-            // For a self-targeting branch, allow the PC to emit repeatedly.
-            f2_last_emit_valid_r <= (f2_bpu_target != f2_work_pc_c);
-            f2_last_emit_pc_r    <= f2_work_pc_c;
-            f2_last_emit_next_pc_r <= f2_bpu_target;
-            f2_last_emit_ftq_valid_r <= f2_work_ftq_valid_c;
-            f2_last_emit_ftq_idx_r <= f2_work_ftq_idx_c;
-            f2_last_emit_ftq_epoch_r <= f2_work_ftq_epoch_c;
-            f2_last_emit_ftq_alloc_tag_r <= f2_work_ftq_alloc_tag_c;
-            f2_replay_block_valid_r <= (f2_bpu_target != f2_work_pc_c);
-            f2_replay_block_pc_r    <= f2_work_pc_c;
-            f2_replay_block_ftq_valid_r <= f2_work_ftq_valid_c;
-            f2_replay_block_ftq_idx_r <= f2_work_ftq_idx_c;
-            f2_replay_block_ftq_epoch_r <= f2_work_ftq_epoch_c;
-            f2_replay_block_ftq_alloc_tag_r <= f2_work_ftq_alloc_tag_c;
-            f2_replay_block_age_r   <= 2'd2;
         end else begin
-            // Duplicate suppression must track any packet that was actually
-            // emitted, even if F1/F2 state is frozen by fe_stall. Otherwise a
-            // held F2 group can be enqueued multiple times with identical PC
-            // and stale ownership metadata, which is exactly the bad
-            // Dhrystone tail-pair signature seen at 0x80002178/0x8000217a.
-            if (f2_will_emit_c) begin
-                f2_last_emit_valid_r <= 1'b1;
-                f2_last_emit_pc_r    <= f2_work_pc_c;
-                f2_last_emit_ftq_valid_r <= f2_work_ftq_valid_c;
-                f2_last_emit_ftq_idx_r <= f2_work_ftq_idx_c;
-                f2_last_emit_ftq_epoch_r <= f2_work_ftq_epoch_c;
-                f2_last_emit_ftq_alloc_tag_r <= f2_work_ftq_alloc_tag_c;
-                if (bp_branch_found && bp_taken &&
-                    !subgroup_split_before_ctl_c && !redirect_valid) begin
-                    f2_last_emit_next_pc_r <= bp_target_addr;
-                end else if (f2_seq_valid) begin
-                    f2_last_emit_next_pc_r <= f2_seq_next_pc;
-                end else begin
-                    f2_last_emit_next_pc_r <= f1_pc;
-                end
-            end
-            if (f2_replay_block_valid_r && !fe_stall) begin
-                if (f2_will_emit_c &&
-                    ((f2_work_pc_c != f2_replay_block_pc_r) ||
-                     !f2_replay_block_owner_match_c)) begin
-                    // Once the redirected-to packet has emitted, the blocked
-                    // PC may be reached again by a real tight-loop iteration.
-                    // Keeping the guard alive for a fixed age turns that real
-                    // return into a frontend bubble.
-                    f2_replay_block_valid_r <= 1'b0;
-                    f2_replay_block_ftq_valid_r <= 1'b0;
-                    f2_replay_block_age_r   <= '0;
-                end else if (f2_replay_block_hit_c && f2_has_emit_payload_c) begin
-                    f2_replay_block_valid_r <= 1'b0;
-                    f2_replay_block_ftq_valid_r <= 1'b0;
-                    f2_replay_block_age_r   <= '0;
-                end else if (f2_replay_block_age_r == 2'd0) begin
-                    f2_replay_block_valid_r <= 1'b0;
-                    f2_replay_block_ftq_valid_r <= 1'b0;
-                end else begin
-                    f2_replay_block_age_r <= f2_replay_block_age_r - 2'd1;
-                end
-            end
-
             if (!fe_stall) begin
                 f2_btb_hit_r        <= btb_hit;
                 f2_btb_target_r     <= btb_target;

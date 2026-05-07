@@ -150,6 +150,11 @@ Current default RTL:
   while final owner completion is delayed until the continuation is exhausted.
   The next XiangShan-style split is to make this cursor-to-FTQ handoff more
   complete under explicit owner/completion rules.
+- `frontend/ifu/ifu_duplicate_guard.sv` contains the legacy same-packet
+  duplicate and replay suppression state. It is kept as a behavior-preserving
+  IFU helper while the frontend remains conservative; the intended endpoint is
+  still to make this structurally unnecessary once FTQ, IFU, and IBuffer
+  ownership fully prevent duplicate packet production.
 - `frontend/ibuffer/ibuffer.sv` is the decode-facing owner-aware IBuffer
   boundary. It currently wraps `fetch_packet_buffer.sv`, which stores complete
   fetch packets with FTQ idx/epoch/alloc-tag and explicit

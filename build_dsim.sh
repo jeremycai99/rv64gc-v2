@@ -88,6 +88,7 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/cache/icache_resp_queue.sv \
      src/rtl/core/frontend/ifu/next_line_prefetch_buffer.sv \
      src/rtl/core/frontend/ifu/ifu_line_fetch.sv \
+     src/rtl/core/frontend/ifu/ifu_duplicate_guard.sv \
      src/rtl/core/frontend/ifu/ifu.sv \
      src/rtl/core/frontend/ftq/ftq.sv \
      src/rtl/core/frontend/ibuffer/fetch_packet_buffer.sv \
