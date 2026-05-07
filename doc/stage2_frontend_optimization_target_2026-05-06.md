@@ -103,6 +103,30 @@ Immediate follow-up before the next RTL change:
    duplicate guard enabled until that path passes CoreMark endpoint and golden
    PC checks.
 
+Follow-up result:
+
+- A clean CoreMark 1 golden PC stream was generated from the post-refactor
+  baseline: `benchmark_results/20260507_stage2_coremark_iter1_baseline.golden.hex`.
+  It contains 332,110 committed PCs and has sha256
+  `9746a895591ff24d2f50d2cb244f04ee7760406e310ddf1e6a1bb50eab9911ff`.
+- Rerunning the same-owner emit-gated cursor trial with that golden stream
+  fails at the first architectural divergence instead of timing out:
+  sequence 7,056 expected `0x0000000080002ffe`, actual
+  `0x0000000080003000`.
+- The failing window is a mixed-width CoreMark loop tail:
+  `0x80002ffa: bne`, `0x80002ffe: c.addiw`, `0x80003000: addw`.
+  Baseline emits and retires `0x80002ffe` correctly in this window and reports
+  `GOLDEN_PC OK` through the same partial run. The trial skips the compressed
+  fall-through instruction while existing owner/stale counters remain clean.
+
+Revised verdict: this is not a scoreable performance iteration. The regression
+is caused by an incomplete cursor change, not by benchmark methodology. The
+one-line advance changes the work PC without atomically advancing the full IFU
+work item: owner identity, ICQ line response association, prediction snapshot,
+branch/remainder boundary state, and completion/writeback state. Future trials
+must pass golden PC checks on both Dhrystone and CoreMark, and any benchmark
+regression invalidates the row even if another benchmark improves.
+
 ## Current Architecture State
 
 rv64gc-v2 is already aligned with the intended XiangShan/BOOM-style ownership
