@@ -64,6 +64,7 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/bpu/btb.sv" \
       "$P/src/rtl/core/bpu/ras.sv" \
       "$P/src/rtl/core/bpu/tage_sc_l.sv" \
+      "$P/src/rtl/core/bpu/bpu.sv" \
       "$P/src/rtl/core/cache/icache_tag_ram.sv" \
       "$P/src/rtl/core/cache/icache_data_ram.sv" \
       "$P/src/rtl/core/cache/icache.sv" \
@@ -71,10 +72,16 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/frontend/ifu/next_line_prefetch_buffer.sv" \
       "$P/src/rtl/core/frontend/ifu/ifu_line_fetch.sv" \
       "$P/src/rtl/core/frontend/ifu/ifu.sv" \
+      "$P/src/rtl/core/frontend/ifu/ifu_duplicate_guard.sv" \
       "$P/src/rtl/core/frontend/ftq/ftq.sv" \
       "$P/src/rtl/core/frontend/ibuffer/fetch_packet_buffer.sv" \
       "$P/src/rtl/core/frontend/ibuffer/ibuffer.sv" \
-      "$P/src/rtl/core/frontend/top/fetch_unit.sv" \
+      "$P/src/rtl/core/frontend/top/fetch_top.sv" \
+      "$P/src/rtl/sim/fetch_delivery_checker.sv" \
+      "$P/src/rtl/sim/fetch_owner_checker.sv" \
+      "$P/src/rtl/sim/fetch_frontend_profiler.sv" \
+      "$P/src/rtl/sim/fetch_trace_probe.sv" \
+      "$P/src/rtl/sim/fetch_frontend_assertions.sv" \
       "$P/src/rtl/core/decode/decode_slice.sv" \
       "$P/src/rtl/core/decode/decode.sv" \
       "$P/src/rtl/core/decode/fusion_detector.sv" \

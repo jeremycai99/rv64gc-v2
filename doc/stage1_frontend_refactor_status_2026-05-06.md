@@ -1184,7 +1184,7 @@ python3 tools/run_benchmarks.py --runner dsim --goal stage1 --run-class signoff 
 | IBuffer flow-through | working tree 2026-05-06 | Empty-buffer same-cycle decode delivery is owned by `fetch_packet_buffer`; the old separate `packet_buf_in` decode bypass no longer feeds `fetch_packet_out` |
 | Packet flow-through naming | working tree 2026-05-06 | Stale `FETCH_PACKET_BYPASS2*` direct-bypass controls removed; frontend fast-path counters and trace labels now use flow-through naming |
 | Local shortcut controls and logic | working tree 2026-05-06 | Opt-in same-line, same-tail, sequential-lookahead, weak-bias, and direct packet-policy/tail paths removed from `fetch_top.sv`; stale harness summary columns were removed; remaining runahead work must be FTQ/IBuffer capacity-owned |
-| `build_xsim.sh` frontend file list | working tree 2026-05-06 | XSim fallback includes `icache_resp_queue.sv` |
+| `build_xsim.sh` frontend file list | working tree 2026-05-07 | XSim fallback uses `fetch_top.sv`, includes `bpu.sv`, `ifu_duplicate_guard.sv`, `icache_resp_queue.sv`, and the frontend checker/profiler/trace/assertion bind modules |
 | ASIC-clean endpoint split | working tree 2026-05-05 | Removed fixed `tohost` ports from `rv64gc_core_top.sv` and magic `tohost` policy from D-cache |
 | `tools/sim_platform.py` + `tests/sim_platform/stage1_broad.json` | working tree 2026-05-05 | Broad coverage preparation layer; keeps ABI/image handling in the harness |
 
