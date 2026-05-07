@@ -1506,22 +1506,16 @@ module fetch_unit
     // =========================================================================
     // RVC decompression: 6 instances (one per slot)
     // =========================================================================
-    logic [15:0] decomp_in  [0:PIPE_WIDTH-1];
     logic [31:0] decomp_out [0:PIPE_WIDTH-1];
     logic        decomp_is_rvc [0:PIPE_WIDTH-1];
     logic        decomp_illegal [0:PIPE_WIDTH-1];
 
-    genvar gi;
-    generate
-        for (gi = 0; gi < PIPE_WIDTH; gi++) begin : gen_rvc_decomp
-            rvc_decompress u_rvc_decomp (
-                .insn_in (raw_hw[gi]),
-                .insn_out(decomp_out[gi]),
-                .is_rvc  (decomp_is_rvc[gi]),
-                .illegal (decomp_illegal[gi])
-            );
-        end
-    endgenerate
+    rvc_expander u_rvc_expander (
+        .raw_hw_i        (raw_hw),
+        .decomp_out_o    (decomp_out),
+        .decomp_is_rvc_o (decomp_is_rvc),
+        .decomp_illegal_o(decomp_illegal)
+    );
 
     // =========================================================================
     // IFU predecode: derive the earliest control-flow instruction from the
