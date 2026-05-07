@@ -233,18 +233,31 @@ CoreMark gains 9,727 timed cycles while reducing `packet_empty_noemit_dup` by
 11,642 cycles. Redirect recovery changes only 2,969 -> 2,995 cycles, so the
 accepted improvement is also frontend supply, not hidden redirect behavior.
 
-Next bubble-analysis gap: add explicit counters for same-owner advance
-eligibility and block reasons:
+Same-owner block-reason counters were added and rerun on the accepted RTL with
+the same strict owner/delivery and golden PC checks:
 
-- eligible and advanced
-- blocked by predicted-control reachability
-- blocked by owner not live
-- blocked by packet not enqueued
-- blocked by remainder or straddle
+- `benchmark_results/20260507_same_owner_block_counters_dhrystone`
+- `benchmark_results/20260507_same_owner_block_counters_coremark`
 
-Those counters will quantify how much of the remaining Dhrystone/CM bubble is
-recoverable by a real predicted-control owner split, as opposed to needing
-deeper FTQ/IBuffer runahead.
+| Workload | Candidate | Emit candidate | Advanced | No emit | No enqueue | Predicted-control window | Remainder/straddle | Owner not live | Owner complete | Cross-line | Other |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | 10,782 | 5,914 | 1,042 | 4,868 | 3 | 4,664 | 205 | 0 | 0 | 0 | 0 |
+| CoreMark 1 | 56,352 | 35,278 | 12,718 | 21,074 | 264 | 19,292 | 3,004 | 0 | 0 | 0 | 0 |
+
+Interpretation:
+
+- The accepted same-owner cursor slice is performance-active but still leaves
+  most recoverable emit candidates blocked by predicted-control reachability.
+- Owner liveness, owner completion, and cross-line conditions are not the
+  current limiter; their counts are zero in both rows.
+- Packet enqueue backpressure is also negligible. `xs_packet_buf_occ_max`
+  remains 0 and backend stalls remain 0, so the issue is not decode-side
+  pressure.
+- The next architecture-level trial should therefore be predicted-control
+  owner splitting: make the packet/FTQ boundary stop before an owned predicted
+  conditional when needed, then allow the IFU cursor to advance up to, but not
+  past, that predicted-control PC. This is a general frontend ownership rule,
+  not a benchmark-PC rule.
 
 ## Current Architecture State
 

@@ -57,6 +57,17 @@ module fetch_frontend_profiler
     input logic                             ic_req_valid,
     input logic                             ftq_need_alloc_c,
     input logic                             f2_ftq_owner_live_c,
+    input logic                             f2_same_owner_continue_c,
+    input logic                             f2_seq_valid,
+    input logic [63:0]                      f2_seq_next_pc,
+    input logic                             f2_will_emit_c,
+    input logic                             packet_buf_enq,
+    input logic                             line_straddle_advance_c,
+    input logic                             consume_remainder_c,
+    input logic                             consumed_remainder_r,
+    input ftq_entry_t                       f2_work_ftq_entry_c,
+    input logic [63:LINE_BITS]              f2_work_line_addr_c,
+    input logic                             ifu_work_same_owner_advance_c,
     input logic                             packet_flowthrough_candidate,
     input logic                             packet_flowthrough_valid,
     input logic                             packet_buf_stale_owner_c
@@ -124,6 +135,17 @@ module fetch_frontend_profiler
     integer xs_flowthrough_owner_miss_cycles;
     integer xs_flowthrough_incomplete_owner_cycles;
     integer xs_flowthrough_valid_cycles;
+    integer xs_same_owner_candidate_cycles;
+    integer xs_same_owner_emit_candidate_cycles;
+    integer xs_same_owner_advanced_cycles;
+    integer xs_same_owner_block_no_emit_cycles;
+    integer xs_same_owner_block_no_enq_cycles;
+    integer xs_same_owner_block_owner_not_live_cycles;
+    integer xs_same_owner_block_owner_complete_cycles;
+    integer xs_same_owner_block_pred_ctl_cycles;
+    integer xs_same_owner_block_remainder_cycles;
+    integer xs_same_owner_block_crossline_cycles;
+    integer xs_same_owner_block_other_cycles;
 
     logic [63:0] xs_catchup_top_pc [0:XS_CATCHUP_TOPN-1];
     integer xs_catchup_top_count [0:XS_CATCHUP_TOPN-1];
@@ -145,6 +167,19 @@ module fetch_frontend_profiler
     logic xs_packet_stale_epoch_mismatch_c;
     logic xs_packet_stale_tag_mismatch_c;
     logic xs_flowthrough_incomplete_owner_c;
+    logic xs_same_owner_candidate_c;
+    logic xs_same_owner_emit_candidate_c;
+    logic xs_same_owner_crossline_c;
+    logic xs_same_owner_pred_ctl_window_c;
+    logic xs_same_owner_remainder_hold_c;
+    logic xs_same_owner_block_no_emit_c;
+    logic xs_same_owner_block_no_enq_c;
+    logic xs_same_owner_block_owner_not_live_c;
+    logic xs_same_owner_block_owner_complete_c;
+    logic xs_same_owner_block_pred_ctl_c;
+    logic xs_same_owner_block_remainder_c;
+    logic xs_same_owner_block_crossline_c;
+    logic xs_same_owner_block_other_c;
 
     initial begin
         xs_catchup_probe_en = 1'b0;
@@ -240,6 +275,71 @@ module fetch_frontend_profiler
     assign xs_flowthrough_incomplete_owner_c =
         packet_flowthrough_owner_match_c &&
         !f2_work_owner_complete_c;
+    assign xs_same_owner_candidate_c =
+        f2_same_owner_continue_c &&
+        f2_seq_valid &&
+        f2_work_ftq_valid_c;
+    assign xs_same_owner_emit_candidate_c =
+        xs_same_owner_candidate_c &&
+        f2_will_emit_c;
+    assign xs_same_owner_crossline_c =
+        xs_same_owner_emit_candidate_c &&
+        (f2_seq_next_pc[63:LINE_BITS] != f2_work_line_addr_c);
+    assign xs_same_owner_pred_ctl_window_c =
+        xs_same_owner_emit_candidate_c &&
+        f2_work_ftq_entry_c.pred_ctl_valid &&
+        (({1'b0, f2_seq_next_pc[5:0]} + 7'd16) >
+         {1'b0, f2_work_ftq_entry_c.pred_ctl_offset});
+    assign xs_same_owner_remainder_hold_c =
+        xs_same_owner_emit_candidate_c &&
+        (line_straddle_advance_c ||
+         consume_remainder_c ||
+         consumed_remainder_r);
+    assign xs_same_owner_block_no_emit_c =
+        xs_same_owner_candidate_c &&
+        !f2_will_emit_c;
+    assign xs_same_owner_block_no_enq_c =
+        xs_same_owner_emit_candidate_c &&
+        !packet_buf_enq;
+    assign xs_same_owner_block_owner_not_live_c =
+        xs_same_owner_emit_candidate_c &&
+        packet_buf_enq &&
+        !f2_ftq_owner_live_c;
+    assign xs_same_owner_block_owner_complete_c =
+        xs_same_owner_emit_candidate_c &&
+        packet_buf_enq &&
+        f2_ftq_owner_live_c &&
+        f2_work_owner_complete_c;
+    assign xs_same_owner_block_pred_ctl_c =
+        xs_same_owner_emit_candidate_c &&
+        packet_buf_enq &&
+        f2_ftq_owner_live_c &&
+        !f2_work_owner_complete_c &&
+        xs_same_owner_pred_ctl_window_c;
+    assign xs_same_owner_block_remainder_c =
+        xs_same_owner_emit_candidate_c &&
+        packet_buf_enq &&
+        f2_ftq_owner_live_c &&
+        !f2_work_owner_complete_c &&
+        !xs_same_owner_pred_ctl_window_c &&
+        xs_same_owner_remainder_hold_c;
+    assign xs_same_owner_block_crossline_c =
+        xs_same_owner_emit_candidate_c &&
+        packet_buf_enq &&
+        f2_ftq_owner_live_c &&
+        !f2_work_owner_complete_c &&
+        !xs_same_owner_pred_ctl_window_c &&
+        !xs_same_owner_remainder_hold_c &&
+        xs_same_owner_crossline_c;
+    assign xs_same_owner_block_other_c =
+        xs_same_owner_emit_candidate_c &&
+        packet_buf_enq &&
+        f2_ftq_owner_live_c &&
+        !f2_work_owner_complete_c &&
+        !xs_same_owner_pred_ctl_window_c &&
+        !xs_same_owner_remainder_hold_c &&
+        !xs_same_owner_crossline_c &&
+        !ifu_work_same_owner_advance_c;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -290,6 +390,17 @@ module fetch_frontend_profiler
             xs_flowthrough_owner_miss_cycles   <= 0;
             xs_flowthrough_incomplete_owner_cycles <= 0;
             xs_flowthrough_valid_cycles        <= 0;
+            xs_same_owner_candidate_cycles     <= 0;
+            xs_same_owner_emit_candidate_cycles <= 0;
+            xs_same_owner_advanced_cycles      <= 0;
+            xs_same_owner_block_no_emit_cycles <= 0;
+            xs_same_owner_block_no_enq_cycles  <= 0;
+            xs_same_owner_block_owner_not_live_cycles <= 0;
+            xs_same_owner_block_owner_complete_cycles <= 0;
+            xs_same_owner_block_pred_ctl_cycles <= 0;
+            xs_same_owner_block_remainder_cycles <= 0;
+            xs_same_owner_block_crossline_cycles <= 0;
+            xs_same_owner_block_other_cycles   <= 0;
             for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
                 xs_catchup_top_pc[i]    <= 64'd0;
                 xs_catchup_top_count[i] <= 0;
@@ -463,6 +574,39 @@ module fetch_frontend_profiler
             if (packet_flowthrough_valid)
                 xs_flowthrough_valid_cycles <=
                     xs_flowthrough_valid_cycles + 1;
+            if (xs_same_owner_candidate_c)
+                xs_same_owner_candidate_cycles <=
+                    xs_same_owner_candidate_cycles + 1;
+            if (xs_same_owner_emit_candidate_c)
+                xs_same_owner_emit_candidate_cycles <=
+                    xs_same_owner_emit_candidate_cycles + 1;
+            if (ifu_work_same_owner_advance_c)
+                xs_same_owner_advanced_cycles <=
+                    xs_same_owner_advanced_cycles + 1;
+            if (xs_same_owner_block_no_emit_c)
+                xs_same_owner_block_no_emit_cycles <=
+                    xs_same_owner_block_no_emit_cycles + 1;
+            if (xs_same_owner_block_no_enq_c)
+                xs_same_owner_block_no_enq_cycles <=
+                    xs_same_owner_block_no_enq_cycles + 1;
+            if (xs_same_owner_block_owner_not_live_c)
+                xs_same_owner_block_owner_not_live_cycles <=
+                    xs_same_owner_block_owner_not_live_cycles + 1;
+            if (xs_same_owner_block_owner_complete_c)
+                xs_same_owner_block_owner_complete_cycles <=
+                    xs_same_owner_block_owner_complete_cycles + 1;
+            if (xs_same_owner_block_pred_ctl_c)
+                xs_same_owner_block_pred_ctl_cycles <=
+                    xs_same_owner_block_pred_ctl_cycles + 1;
+            if (xs_same_owner_block_remainder_c)
+                xs_same_owner_block_remainder_cycles <=
+                    xs_same_owner_block_remainder_cycles + 1;
+            if (xs_same_owner_block_crossline_c)
+                xs_same_owner_block_crossline_cycles <=
+                    xs_same_owner_block_crossline_cycles + 1;
+            if (xs_same_owner_block_other_c)
+                xs_same_owner_block_other_cycles <=
+                    xs_same_owner_block_other_cycles + 1;
 
             if (xs_catchup_base_c)
                 xs_catchup_base_cycles <= xs_catchup_base_cycles + 1;
@@ -668,6 +812,28 @@ module fetch_frontend_profiler
                      xs_flowthrough_incomplete_owner_cycles);
             $display("xs flowthrough valid        : %0d",
                      xs_flowthrough_valid_cycles);
+            $display("xs same owner candidate     : %0d",
+                     xs_same_owner_candidate_cycles);
+            $display("xs same owner emit cand     : %0d",
+                     xs_same_owner_emit_candidate_cycles);
+            $display("xs same owner advanced      : %0d",
+                     xs_same_owner_advanced_cycles);
+            $display("xs same owner block no emit : %0d",
+                     xs_same_owner_block_no_emit_cycles);
+            $display("xs same owner block no enq  : %0d",
+                     xs_same_owner_block_no_enq_cycles);
+            $display("xs same owner block no owner: %0d",
+                     xs_same_owner_block_owner_not_live_cycles);
+            $display("xs same owner block complete: %0d",
+                     xs_same_owner_block_owner_complete_cycles);
+            $display("xs same owner block pred ctl: %0d",
+                     xs_same_owner_block_pred_ctl_cycles);
+            $display("xs same owner block rem     : %0d",
+                     xs_same_owner_block_remainder_cycles);
+            $display("xs same owner block crossln : %0d",
+                     xs_same_owner_block_crossline_cycles);
+            $display("xs same owner block other   : %0d",
+                     xs_same_owner_block_other_cycles);
             $display("recoverable top F1 PCs:");
             for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
                 if (xs_catchup_top_count[i] != 0) begin
@@ -738,6 +904,17 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .ic_req_valid                    (ic_req_valid),
     .ftq_need_alloc_c                (ftq_need_alloc_c),
     .f2_ftq_owner_live_c             (f2_ftq_owner_live_c),
+    .f2_same_owner_continue_c        (f2_same_owner_continue_c),
+    .f2_seq_valid                    (f2_seq_valid),
+    .f2_seq_next_pc                  (f2_seq_next_pc),
+    .f2_will_emit_c                  (f2_will_emit_c),
+    .packet_buf_enq                  (packet_buf_enq),
+    .line_straddle_advance_c         (line_straddle_advance_c),
+    .consume_remainder_c             (consume_remainder_c),
+    .consumed_remainder_r            (consumed_remainder_r),
+    .f2_work_ftq_entry_c             (f2_work_ftq_entry_c),
+    .f2_work_line_addr_c             (f2_work_line_addr_c),
+    .ifu_work_same_owner_advance_c   (ifu_work_same_owner_advance_c),
     .packet_flowthrough_candidate    (packet_flowthrough_candidate),
     .packet_flowthrough_valid        (packet_flowthrough_valid),
     .packet_buf_stale_owner_c        (packet_buf_stale_owner_c)

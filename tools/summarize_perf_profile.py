@@ -54,6 +54,7 @@ KEY_XS_PREFIX = [
     "f2_cursor_",
     "packet_stale_",
     "flowthrough_",
+    "same_owner_",
 ]
 
 
