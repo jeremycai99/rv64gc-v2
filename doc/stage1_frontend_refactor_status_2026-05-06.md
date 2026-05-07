@@ -1015,6 +1015,68 @@ violations; counter_invariants enforce zero-asserts. A row is only meaningful
 when these checks prove that the BPU-owned stream, not a testbench-specific
 path, moved the frontend-supply counters.
 
+## Frontend module split plan
+
+This refactor is behavior-neutral structural cleanup first. Do not claim a
+performance improvement from these slices. The goal is to make the RTL map to a
+recognizable XiangShan-like frontend organization before the next performance
+inspection.
+
+Target integration:
+
+| Target file | XiangShan analogue | Current ownership in `fetch_unit.sv` | First interface shape |
+|---|---|---|---|
+| `fetch_top.sv` | `FrontendInlinedImp` | Current `fetch_unit.sv` top-level ports and pure wiring around FTQ/BPU/IFU/ICache/IBuffer. | Preserve the existing `fetch_unit` external port contract initially; later `fetch_unit.sv` can become a compatibility wrapper around `fetch_top`. |
+| `bpu.sv` | `Bpu` | BTB/TAGE/RAS instances and request-time FTQ prediction assembly around lines 857-1100, plus RAS/GHR speculative update control around lines 2334-2383. | `lookup_pc`, `aux_lookup_pc`, commit/update/restore inputs, `bpu_pred_t`/`bpu_aux_pred_t`, RAS snapshot, `ghr_out`, speculative update request. |
+| `ftq.sv` | `Ftq` | Already separate. Current owner pointers are `alloc_to_ifu`, `ifu_to_wb`, and `ifu_to_commit`. | Keep `ftq_entry_t` and current valid/ready/pop interface; later rename ports toward `BpuToFtq`, `FtqToIfu`, `IfuToFtq` bundles. |
+| `ifu.sv` | `Ifu` | F1 PC generation lines 125-204; request ready/alloc policy lines 317-371; IFU work cursor and duplicate/replay guard lines 1102-1470; FTQ completion/commit-pop policy lines 2260-2332. | `FtqToIfu` owner view, `IfuToFtq` request/delivery/writeback pops, redirect/remainder inputs, IBuffer/ICQ backpressure, `ifu_work_item_t` output to line fetch and packet build. |
+| `ifu_line_fetch.sv` | `Ifu` + `ICache` adapter | ICache request/response association, NLPB, ICQ, and same-line line-state reuse around lines 207-759. | `IfuToICache`: request valid/addr. `ICacheToIfu`: response valid/hit/data plus request PC and FTQ identity. Keep `icache.sv` separate. |
+| `pred_checker.sv` | `PredChecker` | FTQ predicted-control matching, static CFI override, branch target choice, subgroup split choice, final count, owner completion, redirect/RAS/GHR requests around lines 1763-2383. | Inputs: extracted slots, predecode result, FTQ owner entry, BPU prediction metadata. Outputs: redirect request/target, final count, seq-next PC, owner complete, RAS op, TAGE spec update. |
+| `instr_boundary.sv` | `InstrBoundary` | Raw parcel extraction, RVC length detection, straddle detect, and remainder state around lines 1472-1626 and 2385-2419. | Inputs: work PC, 512-bit line, valid, redirect/stall. Outputs: raw slot PCs/instructions/RVC flags, extract count, straddle/remainder consume, seq helper signals. |
+| `predecode.sv` | `PreDecode` / `F3PreDecode` | Earliest and second control-flow decode around lines 1648-1761; helper functions `is_link_reg`, `imm_b64`, `imm_j64`. | Inputs: raw/decompressed slots, slot PCs/valid/RVC, extract count, RAS top. Outputs: first/second CFI metadata and owner conditional prediction flag. |
+| `rvc_expander.sv` | `RvcExpander` | Generate block of `rvc_decompress` instances around lines 1628-1646. | Inputs: raw halfword array. Outputs: decompressed word/is_rvc/illegal arrays. |
+| `instr_compact.sv` | `InstrCompact` | Packet construction around lines 2421-2519. | Inputs: slots, final count, prediction decision, FTQ/IFU metadata, RAS/GHR snapshots. Output: `FetchToIBuffer` packet valid plus `fetch_packet_t`. |
+| `ibuffer.sv` | `IBuffer` | Existing `fetch_packet_buffer.sv` instance and decode-facing output around lines 832-855 and 2521-2562. | Rename or wrap `fetch_packet_buffer.sv`; keep `fetch_packet_t` valid/ready/deq owner-match interface. |
+
+Interface naming should converge toward XiangShan's direction names without a
+large package rewrite in the first slices:
+
+| Direction | Initial SystemVerilog carrier |
+|---|---|
+| BPU to FTQ | Existing `ftq_entry_t` prediction fields; later split into a packed `bpu_to_ftq_t`. |
+| FTQ to BPU | Existing commit/update/restore signals plus RAS/GHR repair; later packed `ftq_to_bpu_t` if needed. |
+| FTQ to IFU | Current `ftq_*owner_*`, `ftq_current_epoch`, occupancy counts. |
+| IFU to FTQ | Current `ftq_ifu_req_pop_valid`, `ftq_delivery_push_valid`, `ftq_ifu_pop_valid`, `ftq_commit_pop_valid`. |
+| IFU to ICache | Current `ic_req_valid/ic_req_addr`. |
+| ICache to IFU | Current `ic_resp_valid/ic_resp_hit/ic_resp_data` plus ICQ request PC and FTQ identity. |
+| Fetch to IBuffer | `packet_buf_enq`, `packet_buf_in`, `packet_buf_enq_ready`. |
+| IBuffer to decode | Current `fetch_count/fetch_insn/fetch_pc/fetch_is_rvc/fetch_bp_*` outputs. |
+
+Migration order:
+
+1. Extract leaf combinational helpers with no architectural behavior change:
+   `predecode.sv`, `instr_boundary.sv`, `rvc_expander.sv`,
+   `instr_compact.sv`, then `pred_checker.sv`.
+2. After each leaf extraction, update DSim/XSim file lists, rebuild, run strict
+   DSE smoke on Dhrystone 100 and CoreMark 1 with:
+
+   ```bash
+   python3 tools/run_benchmarks.py --runner dsim --run-class dse \
+       --manifest tests/benchmarks/stage1_signoff.json \
+       --bench dhrystone_100_checkedin \
+       --bench coremark_iter1_generalization \
+       --plusarg FETCH_DELIVERY_CHECK --plusarg FETCH_DELIVERY_STRICT \
+       --plusarg FETCH_OWNER_CHECK --plusarg FETCH_OWNER_STRICT \
+       --plusarg PERF_PROFILE --plusarg PERF_COUNTERS --plusarg STAT_DUMP
+   ```
+
+3. Commit each validated extraction before starting the next one.
+4. Only after the leaf modules are clean, move stateful ownership pieces:
+   `ifu_line_fetch.sv`, `ifu.sv`, `bpu.sv`, and final `fetch_top.sv`.
+5. Keep debug probes and SVA with the owner module they observe as state moves.
+   Until then, leave them in `fetch_unit.sv` so hierarchical testbench probes
+   continue to work.
+
 ### Long-run drift guard
 
 Use `--goal stage1` for any Stage 1 long run. The runner now rejects drifted
