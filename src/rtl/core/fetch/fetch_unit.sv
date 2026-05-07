@@ -2599,12 +2599,18 @@ module fetch_unit
                         end
                     end
                     BT_JAL,
-                    BT_JALR,
-                    BT_CALL,
-                    BT_RET: begin
+                    BT_CALL: begin
                         packet_redirect_taken = 1'b1;
                         packet_redirect_target =
                             fetch_packet_out.pd_ctl_target;
+                    end
+                    BT_JALR,
+                    BT_RET: begin
+                        if (fetch_packet_out.pd_ctl_target != 64'd0) begin
+                            packet_redirect_taken = 1'b1;
+                            packet_redirect_target =
+                                fetch_packet_out.pd_ctl_target;
+                        end
                     end
                     default: begin
                     end
@@ -2626,6 +2632,41 @@ module fetch_unit
                                      fetch_packet_out.ftq_owner_complete,
                                      packet_flowthrough_valid,
                                      packet_buf_deq);
+                            $display("[FETCH_DELIVERY_CHECK_DETAIL] pkt_block=%016h pkt_start=%0d pkt_lookup=%016h ifu_line=%014h reused=%b pred_valid=%b pred_taken=%b pred_off=%0d pred_type=%0d pred_target=%016h pd_valid=%b pd_slot=%0d pd_type=%0d pd_target=%016h",
+                                     fetch_packet_out.ftq_block_pc,
+                                     fetch_packet_out.ftq_start_offset,
+                                     fetch_packet_out.ftq_bp_lookup_pc,
+                                     fetch_packet_out.ifu_line_addr,
+                                     fetch_packet_out.ifu_line_reused,
+                                     fetch_packet_out.ftq_pred_valid,
+                                     fetch_packet_out.ftq_pred_taken,
+                                     fetch_packet_out.ftq_pred_offset,
+                                     fetch_packet_out.ftq_pred_type,
+                                     fetch_packet_out.ftq_pred_target,
+                                     fetch_packet_out.pd_ctl_valid,
+                                     fetch_packet_out.pd_ctl_slot,
+                                     fetch_packet_out.pd_ctl_type,
+                                     fetch_packet_out.pd_ctl_target);
+                            $display("[FETCH_DELIVERY_CHECK_F2] work_pc=%016h work_valid=%b work_idx=%0d work_tag=%0d work_block=%016h work_start=%0d owner_live=%b ftq_enq=%b enq_idx=%0d enq_tag=%0d enq_block=%016h enq_start=%0d ftq_pop=%b count_ifu_wb=%0d next_owner=%b next_idx=%0d next_tag=%0d next_block=%016h next_start=%0d",
+                                     f2_work_pc_c,
+                                     f2_work_ftq_valid_c,
+                                     f2_work_ftq_idx_c,
+                                     f2_work_ftq_alloc_tag_c,
+                                     f2_work_ftq_entry_c.block_pc,
+                                     f2_work_ftq_entry_c.start_offset,
+                                     f2_ftq_owner_live_c,
+                                     ftq_enq_valid,
+                                     ftq_enq_idx,
+                                     ftq_enq_tag,
+                                     ftq_enq_entry_c.block_pc,
+                                     ftq_enq_entry_c.start_offset,
+                                     ftq_ifu_pop_valid,
+                                     ftq_count_ifu_to_wb,
+                                     ftq_next_ifu_owner_valid,
+                                     ftq_next_ifu_owner_idx,
+                                     ftq_next_ifu_owner_tag,
+                                     ftq_next_ifu_owner_entry.block_pc,
+                                     ftq_next_ifu_owner_entry.start_offset);
                         end
                         delivery_check_noncontig_count <=
                             delivery_check_noncontig_count + 1;
@@ -2869,12 +2910,18 @@ module fetch_unit
                             end
                         end
                         BT_JAL,
-                        BT_JALR,
-                        BT_CALL,
-                        BT_RET: begin
+                        BT_CALL: begin
                             packet_redirect_taken = 1'b1;
                             packet_redirect_target =
                                 fetch_packet_out.pd_ctl_target;
+                        end
+                        BT_JALR,
+                        BT_RET: begin
+                            if (fetch_packet_out.pd_ctl_target != 64'd0) begin
+                                packet_redirect_taken = 1'b1;
+                                packet_redirect_target =
+                                    fetch_packet_out.pd_ctl_target;
+                            end
                         end
                         default: begin
                         end
@@ -2905,6 +2952,43 @@ module fetch_unit
                                              i,
                                              expected_pc,
                                              fetch_packet_out.fetch_pc[i]);
+                                    $display("[FETCH_OWNER_CHECK_DETAIL] pkt_block=%016h pkt_start=%0d pkt_lookup=%016h ifu_line=%014h reused=%b pred_valid=%b pred_taken=%b pred_off=%0d pred_type=%0d pred_target=%016h pd_valid=%b pd_slot=%0d pd_type=%0d pd_target=%016h stream_same=%b packet_same=%b",
+                                             fetch_packet_out.ftq_block_pc,
+                                             fetch_packet_out.ftq_start_offset,
+                                             fetch_packet_out.ftq_bp_lookup_pc,
+                                             fetch_packet_out.ifu_line_addr,
+                                             fetch_packet_out.ifu_line_reused,
+                                             fetch_packet_out.ftq_pred_valid,
+                                             fetch_packet_out.ftq_pred_taken,
+                                             fetch_packet_out.ftq_pred_offset,
+                                             fetch_packet_out.ftq_pred_type,
+                                             fetch_packet_out.ftq_pred_target,
+                                             fetch_packet_out.pd_ctl_valid,
+                                             fetch_packet_out.pd_ctl_slot,
+                                             fetch_packet_out.pd_ctl_type,
+                                             fetch_packet_out.pd_ctl_target,
+                                             stream_same_owner,
+                                             packet_same_owner);
+                                    $display("[FETCH_OWNER_CHECK_F2] work_pc=%016h work_valid=%b work_idx=%0d work_tag=%0d work_block=%016h work_start=%0d owner_live=%b ftq_enq=%b enq_idx=%0d enq_tag=%0d enq_block=%016h enq_start=%0d ftq_pop=%b count_ifu_wb=%0d next_owner=%b next_idx=%0d next_tag=%0d next_block=%016h next_start=%0d",
+                                             f2_work_pc_c,
+                                             f2_work_ftq_valid_c,
+                                             f2_work_ftq_idx_c,
+                                             f2_work_ftq_alloc_tag_c,
+                                             f2_work_ftq_entry_c.block_pc,
+                                             f2_work_ftq_entry_c.start_offset,
+                                             f2_ftq_owner_live_c,
+                                             ftq_enq_valid,
+                                             ftq_enq_idx,
+                                             ftq_enq_tag,
+                                             ftq_enq_entry_c.block_pc,
+                                             ftq_enq_entry_c.start_offset,
+                                             ftq_ifu_pop_valid,
+                                             ftq_count_ifu_to_wb,
+                                             ftq_next_ifu_owner_valid,
+                                             ftq_next_ifu_owner_idx,
+                                             ftq_next_ifu_owner_tag,
+                                             ftq_next_ifu_owner_entry.block_pc,
+                                             ftq_next_ifu_owner_entry.start_offset);
                                 end
                                 owner_packet_skipped_pc_count <=
                                     owner_packet_skipped_pc_count + 1;

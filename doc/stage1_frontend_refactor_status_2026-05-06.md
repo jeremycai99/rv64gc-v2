@@ -17,7 +17,7 @@ behind MegaBOOM on the shared rows that have been rerun through that hook:
 | Workload | MegaBOOM calibrated | rv64gc-v2 timed | Gap |
 |---|---:|---:|---:|
 | Dhrystone 100 | 23,814 cycles | 26,394 cycles | rv64gc-v2 +9.8% cycles |
-| CoreMark 1 | 192,249 cycles | 207,870 cycles | rv64gc-v2 +7.5% cycles |
+| CoreMark 1 | 192,249 cycles | 207,775 cycles | rv64gc-v2 +7.5% cycles |
 
 The full shared Dhrystone/CoreMark set still needs to be rerun through the
 calibrated BOOM hook before Stage 1 can be scored. The current evidence does
@@ -25,6 +25,56 @@ not support a claim that rv64gc-v2 beats MegaBOOM.
 
 Stage 2 remains open: the aggressive targets are 7.5 CM/MHz and
 4.0 DMIPS/MHz.
+
+## Current RTL Checkpoint, 2026-05-06
+
+Fresh rebuilt DSim strict/profiled smoke passed on the current RTL:
+
+- Build: `./build_dsim.sh` passed after the current `fetch_unit.sv` checker
+  fix.
+- Run artifact:
+  `benchmark_results/20260506_stage1_strict_profiled_current_rtl/`.
+- Required plusargs were present:
+  `+FETCH_DELIVERY_CHECK +FETCH_DELIVERY_STRICT +FETCH_OWNER_CHECK
+  +FETCH_OWNER_STRICT +PERF_PROFILE +PERF_COUNTERS +STAT_DUMP`.
+- Golden-PC delivery was enabled by the manifest rows.
+- Legacy loop buffer and standalone decoded-op replay activity remained zero.
+
+| Workload | Status | Timed cycles | Timed instret | `mcycle` | Metric |
+|---|---|---:|---:|---:|---:|
+| Dhrystone 100 | PASS | 26,394 | 48,436 | 26,893 | 2.156369 DMIPS/MHz |
+| CoreMark 1 | PASS | 207,775 | 318,379 | 218,205 | 4.812899 CM/MHz |
+| CoreMark 10 | PASS | 2,033,822 | 3,183,638 | 2,044,276 | 4.916851 CM/MHz |
+
+The strict CoreMark 10 blocker was a checker contract bug, not an RTL delivery
+bug. The failing packet contained an indirect `ret` with no predicted target
+(`pd_ctl_target=0`) followed by the fall-through `jal crc16` at `0x8000347e`.
+The frontend correctly keeps fetching fall-through until a backend redirect
+resolves the unknown indirect target; the checker incorrectly treated the
+zero target as an architectural redirect to PC zero. The checker now treats
+direct `JAL`/`CALL` as known redirects, while `JALR`/`RET` redirect the expected
+stream only when the packet carries a nonzero predicted target.
+
+Current frontend counters still show the Stage 1 performance work is open:
+
+| Counter | Dhrystone 100 | CoreMark 1 | CoreMark 10 | Interpretation |
+|---|---:|---:|---:|---|
+| Frontend zero cycles | 35.2% | 41.8% | 41.4% | Decode supply is still frequently empty. |
+| `ftq_occ_max` | 1 | 1 | 1 | FTQ runahead is still effectively one owner deep. |
+| `packet_buf_occ_max` | 0 | 0 | 0 | IBuffer is still flow-through only in these rows. |
+| `packet_empty_f2_data` | 9,308 | 85,166 | 806,782 | F2/data-side empty pressure remains dominant. |
+| `packet_empty_noemit_dup` | 8,997 | 82,038 | 777,901 | Duplicate/no-emit pressure remains dominant. |
+| `xs_f2_owner_idx_mismatch` | 0 | 0 | 0 | Owner invariant is clean. |
+| `xs_f2_owner_tag_mismatch` | 0 | 0 | 0 | Owner invariant is clean. |
+| `xs_ftq_empty_cycles` | 8,927 | 83,056 | 779,071 | Demand frontend is still shallow. |
+| `xs_packet_buffer_stale_owner` | 418 | 5,792 | 53,242 | Flow-through misses remain visible. |
+
+Verdict: current RTL is endpoint-clean and profiled under strict owner/delivery
+checks, but it does not yet show a performance-active frontend architecture
+change. The next RTL slice must make FTQ/IBuffer occupancy move: bounded
+BPU/F1 runahead should be accepted only if `ftq_occ_max` rises above 1,
+IBuffer occupancy becomes nonzero, duplicate/no-emit pressure drops, and the
+strict/golden owner invariants remain clean.
 
 ## Bottleneck (data-driven)
 
@@ -169,7 +219,7 @@ profile columns, so they must not be used as evidence that an architecture
 change is performance-active. Treat those rows as: **functionality smoke only;
 performance unproven**.
 
-Latest fresh profiled smoke:
+Previous fresh profiled smoke, retained for counter-comparison history:
 
 - Rebuild: `./build_dsim.sh` passed after the current `fetch_unit.sv` timestamp,
   including the simulation-only `+TRACE_FETCH_OWNER` diagnostic hook.
@@ -227,18 +277,16 @@ profiled CoreMark iter1 row is
 | IBuffer stale owner total | 5,786 | 5,792 | +6 |
 | Packet stale `no_head/idx/epoch/tag` | `5662/124/0/0` | `5792/0/0/0` | bucket shifted |
 
-Verdict: the current rebuilt RTL is endpoint-clean and profiled, but it does
-not yet prove a performance-active architecture change. The frontend remains
-lockstep: `ftq_occ_max` is still 1, IBuffer occupancy never rises above the
-flow-through path, and duplicate/no-emit pressure is still high. The next
-longer Stage 1 run should not start until the next RTL slice has a counter
-hypothesis that should move these buckets.
+Verdict at that checkpoint: the rebuilt RTL was endpoint-clean and profiled,
+but did not prove a performance-active architecture change. The newer current
+RTL checkpoint at the top of this document supersedes this as the latest
+evidence and reaches the same conclusion: the frontend remains lockstep.
 
-Long-run launch status: scoreable Stage 1 should still wait for a scoped commit
-and the next performance-active frontend slice. The owner-completion invariant
-is now clean in smoke, but the frontend remains lockstep (`ftq_occ_max=1`,
-IBuffer occupancy 0 through flow-through), so a full signoff run before bounded
-F1/BPU runahead would mostly re-score the existing timing point.
+Long-run launch status: scoreable Stage 1 should still wait for the next
+performance-active frontend slice. The owner-completion invariant is clean in
+smoke, but the frontend remains lockstep (`ftq_occ_max=1`, IBuffer occupancy
+0 through flow-through), so a full signoff run before bounded F1/BPU runahead
+would mostly re-score the existing timing point.
 
 2026-05-06 owner-completion counter split and E2 guard:
 
