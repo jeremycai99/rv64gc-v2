@@ -698,7 +698,6 @@ module dcache
     int                     st_line_byte [0:7];
     logic [LINE_SIZE*8-1:0] fill_done_line_data;
     logic                   fill_done_store_merge;
-    logic                   s1_st_is_tohost;
 
     always_comb begin
         st_full_mask = '0;
@@ -733,7 +732,7 @@ module dcache
             // so include those bytes in the installed line instead of acking
             // the store while dropping its data.
             fill_done_store_merge =
-                s1_st_valid && !s1_st_is_tohost && !invalidate_all &&
+                s1_st_valid && !invalidate_all &&
                 (st_line_addr[63:LINE_BITS] ==
                  mshr[fill_done_idx].addr[63:LINE_BITS]);
 
@@ -813,34 +812,28 @@ module dcache
     // until the fill completes.  Once the fill installs the line, the
     // store re-issues from the CSB and hits, at which point we ack.
     //
-    // Tohost addresses (magic address 0x80001000) are exempt from this —
-    // they are never actually backed by memory, and holding the store
-    // would deadlock the tohost detector.  We ack them unconditionally.
-    //
     // An MSHR must be free to allocate a store-miss fill; if no MSHR is
     // available, the store is also ack'd (silently dropped) to keep the
     // CSB moving.  This is a bring-up compromise.
-    assign s1_st_is_tohost = (s1_st_addr[31:12] == 20'h80001);
 
     logic s1_st_can_allocate_mshr;
     assign s1_st_can_allocate_mshr = s1_st_valid && !st_cache_hit &&
                                      !mshr_st_match_hit && mshr_free_avail &&
-                                     !s1_st_is_tohost && !invalidate_all &&
+                                     !invalidate_all &&
                                      !fill_done_avail;
 
     // A store waiting for a pending fill (either just-allocated or already
     // in flight to the same line): do NOT ack yet.
     logic s1_st_miss_accepted;
     assign s1_st_miss_accepted = s1_st_valid && !st_cache_hit &&
-                                  !s1_st_is_tohost && !invalidate_all &&
+                                  !invalidate_all &&
                                   !fill_done_avail &&
                                   (s1_st_can_allocate_mshr || mshr_st_match_hit);
 
     logic s1_st_waiting_for_fill;
     assign s1_st_waiting_for_fill = s1_st_valid && !st_cache_hit &&
                                     !s1_st_miss_accepted &&
-                                    (s1_st_can_allocate_mshr || mshr_st_match_hit) &&
-                                    !s1_st_is_tohost;
+                                    (s1_st_can_allocate_mshr || mshr_st_match_hit);
 
     // Completion is resolved in S1, one cycle after the CSB presents a store
     // on store_req_*.  Only acknowledge the CSB when its current head is still
@@ -935,7 +928,7 @@ module dcache
                 sim_store_port_wait_cyc <= sim_store_port_wait_cyc + 1;
             if (s1_st_can_allocate_mshr)
                 sim_store_miss_alloc_cyc <= sim_store_miss_alloc_cyc + 1;
-            if (s1_st_valid && !st_cache_hit && mshr_st_match_hit && !s1_st_is_tohost)
+            if (s1_st_valid && !st_cache_hit && mshr_st_match_hit)
                 sim_store_miss_merge_cyc <= sim_store_miss_merge_cyc + 1;
             if (s0_store_lookup_grant_a)
                 sim_store_port_grant_a_cyc <= sim_store_port_grant_a_cyc + 1;
@@ -1135,7 +1128,7 @@ module dcache
 
             // ---- Merge accepted store miss into an existing line fill ----
             if (s1_st_valid && !st_cache_hit && mshr_st_match_hit &&
-                !s1_st_is_tohost && !invalidate_all && !fill_done_avail) begin
+                !invalidate_all && !fill_done_avail) begin
                 mshr[mshr_st_match_idx].store_pending <= 1'b1;
                 mshr[mshr_st_match_idx].store_line_mask <=
                     mshr[mshr_st_match_idx].store_line_mask | st_full_mask;
@@ -1162,7 +1155,7 @@ module dcache
                         // bytes into the captured fill data explicitly.
                         if (s1_st_valid && !st_cache_hit && mshr_st_match_hit &&
                             (mshr_st_match_idx == MSHR_IDX_BITS'(m)) &&
-                            !s1_st_is_tohost && !invalidate_all) begin
+                            !invalidate_all) begin
                             mshr[m].fill_data <=
                                 merge_store_overlay_into_line(
                                     merge_store_overlay_into_line(

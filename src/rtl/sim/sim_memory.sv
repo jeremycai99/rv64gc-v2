@@ -17,12 +17,7 @@ module sim_memory
     input  logic [511:0] mem_req_wdata,
     output logic        mem_req_ready,
     output logic        mem_resp_valid,
-    output logic [511:0] mem_resp_data,
-
-    // Tohost monitoring (for test pass/fail)
-    input  logic [63:0] tohost_addr,
-    output logic        tohost_valid,
-    output logic [63:0] tohost_value
+    output logic [511:0] mem_resp_data
 );
 
     // =========================================================================
@@ -100,28 +95,5 @@ module sim_memory
 
     assign mem_resp_valid = resp_valid_r;
     assign mem_resp_data  = resp_data_r;
-
-    // =========================================================================
-    // Tohost monitoring
-    // =========================================================================
-    logic [ADDR_BITS-1:0] tohost_local_addr;
-    assign tohost_local_addr = tohost_addr[ADDR_BITS-1:0];
-
-    logic [63:0] tohost_current;
-    always_comb begin
-        for (int i = 0; i < 8; i++) begin
-            tohost_current[i*8 +: 8] = mem[tohost_local_addr + ADDR_BITS'(i)];
-        end
-    end
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            tohost_valid <= 1'b0;
-            tohost_value <= 64'd0;
-        end else begin
-            tohost_value <= tohost_current;
-            tohost_valid <= (tohost_current != 64'd0);
-        end
-    end
 
 endmodule
