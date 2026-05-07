@@ -168,7 +168,9 @@ Current default RTL:
   stale, or owner-complete against the FTQ commit owner. When empty, it may
   flow an accepted IFU packet directly to decode in the same cycle; this
   flow-through path is still owned by the IBuffer, so decode no longer consumes
-  the separate `packet_buf_in` direct-bypass path.
+  the separate `packet_buf_in` direct-bypass path. The IBuffer wrapper also
+  emits the flow-through observation signals and decode/commit-side FTQ pop
+  request derived from dequeue fire, owner match, and owner-complete.
 
 Intended BPU/FTQ contract:
 
@@ -412,7 +414,8 @@ These are the structural constraint points that any optimization needs to be awa
   IFU-writeback owner, completion-side delivery push, and FTQ IFU-pop decision
   for the active work owner; the decode/commit-side FTQ pop remains tied to the
   IBuffer dequeue owner-complete boundary. The cursor is the single registered
-  F2 work state; request anti-duplication, NLPB response matching, line acceptance, line-state
+  F2 work state; request anti-duplication, NLPB response matching, line
+  acceptance, line-state
   matching, extraction, predecode, owner-live checks, packet construction,
   owner-completion decisions, and debug/profile paths consume the cursor aliases
   rather than raw F2 PC/owner signals. Owner completion is delayed when the

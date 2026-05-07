@@ -495,6 +495,10 @@ module fetch_top
         .deq_packet                      (packet_buf_head),
         .deq_fire                        (packet_buf_deq_fire),
         .deq_flowthrough                 (packet_buf_flowthrough_c),
+        .flowthrough_candidate           (packet_flowthrough_candidate),
+        .flowthrough_owner_match         (packet_flowthrough_owner_match_c),
+        .flowthrough_valid               (packet_flowthrough_valid),
+        .commit_pop_valid                (ftq_commit_pop_valid),
         .packet_out_valid                (fetch_packet_out_valid),
         .packet_out                      (fetch_packet_out),
         .decode_fetch_count              (fetch_count),
@@ -940,18 +944,6 @@ module fetch_top
         !(bp_branch_found && bp_taken) &&
         (f2_seq_next_pc[63:LINE_BITS] == f2_work_pc_c[63:LINE_BITS]);
 
-    // Decode no longer consumes a separate packet_buf_in bypass. Flow-through
-    // is an IBuffer-owned empty-buffer delivery observation.
-    assign packet_flowthrough_candidate = packet_buf_flowthrough_c;
-    assign packet_flowthrough_owner_match_c =
-        packet_flowthrough_candidate &&
-        packet_buf_owner_match_c;
-    assign packet_flowthrough_valid = packet_buf_flowthrough_c;
-
-    assign ftq_commit_pop_valid =
-        (packet_buf_deq_fire &&
-         packet_buf_owner_match_c &&
-         packet_buf_head_owner_complete_c);
     assign ftq_pop_valid = ftq_ifu_pop_valid;
 
     // =========================================================================

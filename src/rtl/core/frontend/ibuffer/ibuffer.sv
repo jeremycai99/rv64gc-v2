@@ -22,6 +22,10 @@ module ibuffer
     output fetch_packet_t deq_packet,
     output logic          deq_fire,
     output logic                         deq_flowthrough,
+    output logic                         flowthrough_candidate,
+    output logic                         flowthrough_owner_match,
+    output logic                         flowthrough_valid,
+    output logic                         commit_pop_valid,
     output logic                         packet_out_valid,
     output fetch_packet_t                packet_out,
     output logic [2:0]                   decode_fetch_count,
@@ -78,6 +82,11 @@ module ibuffer
 
     assign packet_out_valid = deq_valid;
     assign packet_out       = deq_packet;
+    assign flowthrough_candidate   = deq_flowthrough;
+    assign flowthrough_owner_match = deq_flowthrough && deq_owner_match;
+    assign flowthrough_valid       = deq_flowthrough;
+    assign commit_pop_valid        =
+        deq_fire && deq_owner_match && deq_owner_complete;
 
     always_comb begin
         decode_fetch_count                  = 3'd0;
