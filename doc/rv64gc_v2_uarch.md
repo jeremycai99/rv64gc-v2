@@ -126,6 +126,10 @@ Current default RTL:
   The RTL names the cursor policy cases explicitly: redirect handoff, matching
   redirect handoff through the FTQ next-owner view, FTQ next-owner completion
   handoff, normal request-owner load, and remainder request-owner load.
+  Request-owner cursor loads are sourced from a single combinational request
+  work item that carries the request PC, FTQ idx/epoch/alloc-tag, and full FTQ
+  entry together, instead of scattering raw `ftq_enq_*` field assignments
+  across the cursor policy logic.
   Simulation invariants check that IFU request-pop is a real ready/enqueue
   handshake, that selected FTQ next-owner handoffs load the cursor on the
   following cycle, and that a wrong-owner IFU completion candidate cannot pop

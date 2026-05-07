@@ -149,6 +149,36 @@ owner view. Key counters remain structurally clean:
 accept as an ownership-carry checkpoint only; it intentionally does not claim
 performance movement.
 
+## IFU Request Work-Item Checkpoint, 2026-05-06
+
+The request-owner cursor load sites now consume one combinational
+`ifu_req_work_item_c` object instead of separately assigning request PC and raw
+`ftq_enq_*` fields at each policy branch. This keeps the request PC, FTQ
+idx/epoch/tag, and full FTQ entry snapshot paired at one local source before a
+future owner queue or capacity-bounded runahead path is introduced.
+
+- Build: `./build_dsim.sh` passed before this smoke; no RTL dependency changed
+  after that rebuild.
+- Strict/profiled anchor smoke artifact:
+  `benchmark_results/20260506_ifu_req_work_item_smoke/`.
+- Strict/profiled frontend smoke artifact:
+  `benchmark_results/20260506_ifu_req_work_item_frontend_smoke/`.
+
+| Workload | Status | Timed cycles | Timed instret | Metric | Notes |
+|---|---|---:|---:|---:|---|
+| Dhrystone 100 | PASS | 27,093 | 48,436 | 2.100734 DMIPS/MHz | strict owner/delivery clean |
+| CoreMark 1 | PASS | 209,058 | 318,379 | 4.783362 CM/MHz | strict owner/delivery clean |
+| Mixed branch dense | PASS | - | - | - | strict frontend smoke clean |
+| Data-dependent branch | PASS | - | - | - | strict frontend smoke clean |
+| Call/return mimic | PASS | - | - | - | strict frontend smoke clean |
+| Taken loop 100 | PASS | - | - | - | strict frontend smoke clean |
+
+Key anchor counters remain neutral relative to the ICQ FTQ-entry checkpoint:
+`ftq_occ_max=1`, `packet_buf_occ_max=0`, `xs_f2_owner_idx_mismatch=0`,
+`xs_f2_owner_tag_mismatch=0`, and `packet_stale_* = 0`. Verdict: accept as a
+local owner-pairing cleanup only. It does not claim performance movement or
+enable proactive runahead by itself.
+
 ## Bottleneck (data-driven)
 
 `tools/bubble_attribution.py` on cm10 (commit-stage classification):
@@ -1041,6 +1071,7 @@ python3 tools/run_benchmarks.py --runner dsim --goal stage1 --run-class signoff 
 | `fetch_packet_t.ifu_line_*` + `FETCH_OWNER_CHECK` | working tree 2026-05-06 | Explicit IFU line identity and same-line owner contract checking |
 | ICQ response-line output | working tree 2026-05-06 | Response line address is explicit and feeds packet IFU line metadata |
 | ICQ FTQ-entry carry | working tree 2026-05-06 | I-cache response queue carries request PC, FTQ idx/epoch/tag, and full FTQ entry snapshot so future cursor handoff has one coherent request object |
+| IFU request work item | working tree 2026-05-06 | Request-owner cursor loads now consume one paired request PC + FTQ metadata object instead of scattering raw `ftq_enq_*` assignments across cursor policy branches |
 | FTQ enqueue-ready boundary | working tree 2026-05-06 | `ftq_enq_ready` is wired into IFU request-ready and fetch stall; request allocation and IFU request-pop now share the FTQ valid/ready contract |
 | FTQ IFU-to-writeback count | working tree 2026-05-06 | `ftq.sv` exposes requested-not-written-back owner occupancy as a separate count for future bounded runahead rules |
 | IFU owner-policy SVA | working tree 2026-05-06 | Invariants F/G/H check request-pop ready/enqueue alignment, FTQ next-owner cursor loads, and matching redirect next-owner loads |

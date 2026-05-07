@@ -609,6 +609,7 @@ module fetch_unit
     endfunction
     ifu_work_item_t                         ifu_work_r;
     ifu_work_item_t                         ifu_work_next_c;
+    ifu_work_item_t                         ifu_req_work_item_c;
     logic                                  f2_work_ftq_valid_c;
     logic [FTQ_IDX_BITS-1:0]               f2_work_ftq_idx_c;
     logic [FTQ_EPOCH_BITS-1:0]             f2_work_ftq_epoch_c;
@@ -621,6 +622,16 @@ module fetch_unit
     logic                                  ifu_work_take_ftq_next_owner_c;
     logic                                  ifu_work_take_request_owner_c;
     logic                                  ifu_work_take_remainder_request_owner_c;
+
+    assign ifu_req_work_item_c = make_ifu_work_item(
+        1'b1,
+        req_pc_c,
+        1'b1,
+        ftq_enq_idx,
+        ftq_enq_epoch,
+        ftq_enq_tag,
+        ftq_enq_entry_c);
+
     icache_resp_queue #(.DEPTH(ICQ_DEPTH)) u_icache_resp_queue (
         .clk(clk),
         .rst_n(rst_n),
@@ -1148,14 +1159,7 @@ module fetch_unit
                     ftq_next_ifu_owner_tag,
                     ftq_next_ifu_owner_entry);
             end else if (ifu_work_redirect_enq_owner_c) begin
-                ifu_work_next_c = make_ifu_work_item(
-                    1'b1,
-                    f2_bpu_target,
-                    1'b1,
-                    ftq_enq_idx,
-                    ftq_enq_epoch,
-                    ftq_enq_tag,
-                    ftq_enq_entry_c);
+                ifu_work_next_c = ifu_req_work_item_c;
             end else begin
                 ifu_work_next_c = make_ifu_work_item(
                     1'b1,
@@ -1191,19 +1195,23 @@ module fetch_unit
                     consume_remainder_c ||
                     consumed_remainder_r) begin
                     if (ifu_work_take_remainder_request_owner_c) begin
-                        work_ftq_valid_next     = 1'b1;
-                        work_ftq_idx_next       = ftq_enq_idx;
-                        work_ftq_epoch_next     = ftq_enq_epoch;
-                        work_ftq_alloc_tag_next = ftq_enq_tag;
-                        work_ftq_entry_next     = ftq_enq_entry_c;
+                        work_pc_next            = ifu_req_work_item_c.pc;
+                        work_ftq_valid_next     = ifu_req_work_item_c.ftq_valid;
+                        work_ftq_idx_next       = ifu_req_work_item_c.ftq_idx;
+                        work_ftq_epoch_next     = ifu_req_work_item_c.ftq_epoch;
+                        work_ftq_alloc_tag_next =
+                            ifu_req_work_item_c.ftq_alloc_tag;
+                        work_ftq_entry_next     = ifu_req_work_item_c.ftq_entry;
                         work_owner_delivered_next = 1'b0;
                     end
                 end else if (ifu_work_take_request_owner_c) begin
-                    work_ftq_valid_next     = 1'b1;
-                    work_ftq_idx_next       = ftq_enq_idx;
-                    work_ftq_epoch_next     = ftq_enq_epoch;
-                    work_ftq_alloc_tag_next = ftq_enq_tag;
-                    work_ftq_entry_next     = ftq_enq_entry_c;
+                    work_pc_next            = ifu_req_work_item_c.pc;
+                    work_ftq_valid_next     = ifu_req_work_item_c.ftq_valid;
+                    work_ftq_idx_next       = ifu_req_work_item_c.ftq_idx;
+                    work_ftq_epoch_next     = ifu_req_work_item_c.ftq_epoch;
+                    work_ftq_alloc_tag_next =
+                        ifu_req_work_item_c.ftq_alloc_tag;
+                    work_ftq_entry_next     = ifu_req_work_item_c.ftq_entry;
                     work_owner_delivered_next = 1'b0;
                 end else if (!f1_valid) begin
                     work_ftq_valid_next     = 1'b0;
