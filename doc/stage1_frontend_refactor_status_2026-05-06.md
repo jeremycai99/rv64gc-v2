@@ -174,12 +174,15 @@ Latest fresh profiled smoke:
 - Rebuild: `./build_dsim.sh` passed after the current `fetch_unit.sv` timestamp,
   including the simulation-only `+TRACE_FETCH_OWNER` diagnostic hook.
 - Run artifact:
-  `benchmark_results/20260506_fetch_owner_trace_smoke_seq/summary.md`.
+  `benchmark_results/20260506_owner_complete_successor_gate_smoke_seq/summary.md`.
 - Required plusargs were present in both command lines:
   `+FETCH_DELIVERY_CHECK +FETCH_DELIVERY_STRICT +FETCH_OWNER_CHECK
   +FETCH_OWNER_STRICT +PERF_PROFILE`.
 - Endpoint/invariant grep was clean: no `ERROR`, `FATAL`, `INVARIANT_`,
   `ASSERT`, or `FAIL` signatures in the run directory.
+  A follow-up `+TRACE_FETCH_OWNER` diagnostic run also passed and produced zero
+  owner-trace lines:
+  `benchmark_results/20260506_owner_complete_successor_gate_trace_seq/summary.md`.
 
 Fresh profiled smoke result:
 
@@ -198,8 +201,8 @@ Dhrystone 100 counter movement versus locked Stage 1 baseline
 | `packet_buf_occ_max` | 1 | 0 | -1 |
 | `packet_empty_noemit_dup` | 8,563 | 8,997 | +434 |
 | `packet_empty_f2_data` | 9,292 | 9,308 | +16 |
-| `f2_owner_idx_mismatch` | 0 | 8,985 | +8,985 |
-| `ftq_empty_cycles` | 9,042 | 9,236 | +194 |
+| `f2_owner_idx_mismatch` | 0 | 0 | 0 |
+| `ftq_empty_cycles` | 9,042 | 8,927 | -115 |
 | Frontend zero cycles | 9,484 | 9,462 | -22 |
 | Frontend hist `0/1/2/3/4` | `9484/4501/3135/2076/7717` | `9462/4501/3137/2076/7717` | effectively flat |
 | IBuffer stale owner total | 309 | 418 | +109 |
@@ -217,12 +220,12 @@ profiled CoreMark iter1 row is
 | `packet_buf_occ_max` | 1 | 0 | -1 |
 | `packet_empty_noemit_dup` | 76,252 | 82,038 | +5,786 |
 | `packet_empty_f2_data` | 85,166 | 85,166 | 0 |
-| `f2_owner_idx_mismatch` | 76,909 | 76,863 | -46 |
-| `ftq_empty_cycles` | 86,106 | 86,175 | +69 |
+| `f2_owner_idx_mismatch` | 76,909 | 0 | -76,909 |
+| `ftq_empty_cycles` | 86,106 | 83,056 | -3,050 |
 | Frontend zero cycles | 91,460 | 91,304 | -156 |
 | Frontend hist `0/1/2/3/4` | `91460/34029/14247/22535/56093` | `91304/34038/14250/22545/56068` | effectively flat |
-| IBuffer stale owner total | 5,786 | 5,788 | +2 |
-| Packet stale `no_head/idx/epoch/tag` | `5662/124/0/0` | `5788/0/0/0` | bucket shifted |
+| IBuffer stale owner total | 5,786 | 5,792 | +6 |
+| Packet stale `no_head/idx/epoch/tag` | `5662/124/0/0` | `5792/0/0/0` | bucket shifted |
 
 Verdict: the current rebuilt RTL is endpoint-clean and profiled, but it does
 not yet prove a performance-active architecture change. The frontend remains
@@ -231,12 +234,11 @@ flow-through path, and duplicate/no-emit pressure is still high. The next
 longer Stage 1 run should not start until the next RTL slice has a counter
 hypothesis that should move these buckets.
 
-Long-run launch status: scoreable Stage 1 is blocked in the current working
-tree. The harness rejects `--goal stage1 --run-class signoff` while RTL is
-unlocked/dirty under the default mechanism class, and the fresh profiled smoke
-already violates the stage manifest invariant `xs_f2_owner_idx_mismatch == 0`.
-Running the full signoff set now would create a known-rejected artifact, not a
-useful signoff candidate.
+Long-run launch status: scoreable Stage 1 should still wait for a scoped commit
+and the next performance-active frontend slice. The owner-completion invariant
+is now clean in smoke, but the frontend remains lockstep (`ftq_occ_max=1`,
+IBuffer occupancy 0 through flow-through), so a full signoff run before bounded
+F1/BPU runahead would mostly re-score the existing timing point.
 
 2026-05-06 owner-completion counter split and E2 guard:
 
@@ -256,10 +258,12 @@ Counter interpretation after this slice:
 | `xs_f2_owner_*` | Architecturally relevant owner state for completed IFU work candidates. Nonzero `no_head` or `idx_mismatch` means the cursor can still produce a completed packet while FTQ IFU-writeback ownership is elsewhere; it is blocked from popping FTQ by `ftq_ifu_pop_valid = candidate && owner_live`. |
 | `xs_f2_cursor_wb_*` | Diagnostic raw skew between the live IFU work cursor and the FTQ IFU-writeback pointer. This is expected to remain high until the cursor is fully driven by the FTQ/IBuffer work contract. |
 
-Residual blocker: `xs_f2_owner_idx_mismatch` is still nonzero
-(Dhrystone 202, CoreMark iter1 138) and `xs_f2_owner_no_head` is still nonzero
-(Dhrystone 107, CoreMark iter1 2,977). This confirms the next RTL slice must
-remove wrong-owner packet production rather than only renaming counters.
+Superseded blocker: this slice exposed nonzero
+`xs_f2_owner_idx_mismatch` (Dhrystone 202, CoreMark iter1 138) and
+`xs_f2_owner_no_head` (Dhrystone 107, CoreMark iter1 2,977). The successor-gated
+owner-completion slice below resolves those architectural owner counters while
+leaving raw cursor/writeback skew as diagnostic evidence of the remaining
+lockstep frontend.
 
 2026-05-06 non-live owner trace hook:
 
@@ -278,6 +282,28 @@ same-owner packet popped the IFU-writeback owner. Later mismatch samples show
 blocker to the IFU-owner completion boundary: `f2_work_owner_complete_c` can
 complete an FTQ owner before all required same-owner packet PCs have been
 delivered. It is not a decode-side IBuffer dequeue problem.
+
+2026-05-06 successor-gated owner-completion boundary:
+
+| Workload | Status | Timed cycles | Timed instret | Owner no-head/idx | Notes |
+|---|---|---:|---:|---:|---|
+| Dhrystone 100 | PASS | 26,394 | 48,436 | `0 / 0` | same cycles as prior smoke; FTQ owner completion no longer pops on straddle-remainder consume |
+| CoreMark 1 | PASS | 207,775 | 318,379 | `0 / 0` | remaining CoreMark no-head event was a taken redirect without a successor owner; now gated by registered FTQ successor state |
+
+Accepted run artifacts:
+`benchmark_results/20260506_owner_complete_successor_gate_smoke_seq/summary.md`
+and
+`benchmark_results/20260506_owner_complete_successor_gate_trace_seq/summary.md`.
+The trace diagnostic emitted zero `FETCH_OWNER_TRACE` lines. The accepted RTL
+uses `consume_remainder_c` and registered `ftq_count_ifu_to_wb`/`ftq_enq_valid`
+state to decide whether the current owner has a successor before pop.
+
+Rejected variant:
+`benchmark_results/20260506_owner_complete_keep_owner_gate_smoke_seq/summary.md`.
+Gating completion directly with `ifu_work_redirect_keep_owner_c` hit DSim
+`ITERLIMIT` on both smoke workloads because that signal depends on the
+combinational FTQ next-owner view, which in turn depends on the pop decision.
+That form was backed out.
 
 2026-05-06 owner-view smoke after adding the explicit IFU-writeback owner alias:
 

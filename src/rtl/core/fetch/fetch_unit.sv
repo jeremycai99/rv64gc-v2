@@ -291,6 +291,7 @@ module fetch_unit
     logic        f2_work_line_valid_c;
     logic [63:LINE_BITS] f2_work_line_addr_c;
     logic        f2_work_owner_complete_c;
+    logic        f2_redirect_without_owner_successor_c;
     logic        ftq_last_alloc_valid_r;
     logic [63:0] ftq_last_alloc_req_pc_r;
     logic        subgroup_seed_valid_r;
@@ -2226,11 +2227,20 @@ module fetch_unit
     end
 
     // Completion is a property of the current IFU work item after extraction and
-    // predecode. Keep it as a named boundary so FTQ writeback/pop, packet
-    // metadata, and future cursor decoupling use the same decision.
+    // predecode. A straddle-remainder consume or redirect without a successor
+    // owner may emit instructions, but the owner can still have a same-owner
+    // continuation packet on the following cycle. Keep completion gated until
+    // that continuation point so FTQ writeback/pop and packet metadata agree on
+    // the owner lifetime.
+    assign f2_redirect_without_owner_successor_c =
+        req_redirect_c &&
+        !ftq_enq_valid &&
+        (ftq_count_ifu_to_wb <= {{FTQ_IDX_BITS{1'b0}}, 1'b1});
     assign f2_work_owner_complete_c =
-        !straddle_detected ||
-        (bp_branch_found && bp_taken && !subgroup_split_before_ctl_c);
+        !consume_remainder_c &&
+        !f2_redirect_without_owner_successor_c &&
+        (!straddle_detected ||
+         (bp_branch_found && bp_taken && !subgroup_split_before_ctl_c));
 
     // Decode no longer consumes a separate packet_buf_in bypass. Flow-through
     // is an IBuffer-owned empty-buffer delivery observation.

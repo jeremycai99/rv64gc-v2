@@ -121,6 +121,9 @@ Current default RTL:
   following cycle, and that a wrong-owner IFU completion candidate cannot pop
   the FTQ IFU-writeback owner. The profile counters distinguish architectural
   completion-owner mismatches from diagnostic cursor-vs-writeback skew.
+  Owner completion is stricter than packet emission: a packet that consumes a
+  straddle remainder, or redirects without an enqueued/registered successor
+  owner, keeps the current owner live for the continuation packet.
   The next XiangShan-style split is to make this cursor-to-FTQ handoff more
   complete under explicit owner/completion rules.
 - `fetch_packet_buffer.sv` is the decode-facing owner-aware IBuffer boundary.
@@ -361,7 +364,9 @@ These are the structural constraint points that any optimization needs to be awa
   response matching, line acceptance, line-state matching, extraction,
   predecode, owner-live checks, packet construction, owner-completion decisions,
   and debug/profile paths consume the cursor aliases rather than raw F2 PC/owner
-  signals.
+  signals. Owner completion is delayed when the emitted packet is still carrying
+  a same-owner continuation, such as a straddle-remainder consume or a redirect
+  taken before a successor owner exists.
 - **Current stall sources:** I-cache miss, pipeline backpressure (FTQ full / packet buffer full / rename stall), wait-for-Icresp, NLP miss
 - **Intended ownership contract:** F1 may request the next predicted block when
   a stable FTQ/fetch-block owner and downstream packet-buffer slot are available.
