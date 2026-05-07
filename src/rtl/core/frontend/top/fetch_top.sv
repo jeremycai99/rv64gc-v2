@@ -526,28 +526,43 @@ module fetch_top
     );
 
     ibuffer u_ibuffer (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .flush      (redirect_valid),
-        .enq_valid  (packet_buf_enq),
-        .enq_packet (packet_buf_in),
-        .enq_ready  (packet_buf_enq_ready),
-        .enq_fire   (packet_buf_enq_fire),
-        .deq_ready  (packet_buf_deq),
-        .deq_valid  (packet_buf_valid),
-        .deq_packet (packet_buf_head),
-        .deq_fire   (packet_buf_deq_fire),
-        .deq_flowthrough(packet_buf_flowthrough_c),
-        .owner_valid(ftq_commit_owner_valid),
-        .owner_idx  (ftq_commit_owner_idx),
-        .owner_epoch(ftq_current_epoch),
-        .owner_tag  (ftq_commit_owner_tag),
-        .deq_owner_match(packet_buf_owner_match_c),
-        .deq_stale_owner(packet_buf_stale_owner_c),
-        .deq_owner_complete(packet_buf_head_owner_complete_c),
-        .full       (packet_buf_full),
-        .empty      (packet_buf_empty),
-        .count      (packet_buf_count)
+        .clk                             (clk),
+        .rst_n                           (rst_n),
+        .flush                           (redirect_valid),
+        .enq_valid                       (packet_buf_enq),
+        .enq_packet                      (packet_buf_in),
+        .enq_ready                       (packet_buf_enq_ready),
+        .enq_fire                        (packet_buf_enq_fire),
+        .deq_ready                       (packet_buf_deq),
+        .deq_valid                       (packet_buf_valid),
+        .deq_packet                      (packet_buf_head),
+        .deq_fire                        (packet_buf_deq_fire),
+        .deq_flowthrough                 (packet_buf_flowthrough_c),
+        .packet_out_valid                (fetch_packet_out_valid),
+        .packet_out                      (fetch_packet_out),
+        .decode_fetch_count              (fetch_count),
+        .decode_fetch_insn               (fetch_insn),
+        .decode_fetch_pc                 (fetch_pc),
+        .decode_fetch_is_rvc             (fetch_is_rvc),
+        .decode_fetch_bp_taken           (fetch_bp_taken),
+        .decode_fetch_bp_target          (fetch_bp_target),
+        .decode_fetch_bp_owner_valid     (fetch_bp_owner_valid),
+        .decode_fetch_bp_owner_slot      (fetch_bp_owner_slot),
+        .decode_fetch_bp_owner_from_subgroup(fetch_bp_owner_from_subgroup),
+        .decode_fetch_bp_lookup_pc       (fetch_bp_lookup_pc),
+        .decode_fetch_bp_ras_tos         (fetch_bp_ras_tos),
+        .decode_fetch_bp_ras_top         (fetch_bp_ras_top),
+        .decode_fetch_bp_ghr             (fetch_bp_ghr),
+        .owner_valid                     (ftq_commit_owner_valid),
+        .owner_idx                       (ftq_commit_owner_idx),
+        .owner_epoch                     (ftq_current_epoch),
+        .owner_tag                       (ftq_commit_owner_tag),
+        .deq_owner_match                 (packet_buf_owner_match_c),
+        .deq_stale_owner                 (packet_buf_stale_owner_c),
+        .deq_owner_complete              (packet_buf_head_owner_complete_c),
+        .full                            (packet_buf_full),
+        .empty                           (packet_buf_empty),
+        .count                           (packet_buf_count)
     );
 
     // =========================================================================
@@ -1245,49 +1260,6 @@ module fetch_top
         .packet_enq_o                 (packet_buf_enq),
         .packet_o                     (packet_buf_in)
     );
-
-    always_comb begin
-        fetch_count      = 3'd0;
-        fetch_bp_owner_valid = 1'b0;
-        fetch_bp_owner_slot  = 3'd0;
-        fetch_bp_owner_from_subgroup = 1'b0;
-        fetch_bp_lookup_pc   = 64'd0;
-        fetch_bp_ras_tos = 5'd0;
-        fetch_bp_ras_top = 64'd0;
-        fetch_bp_ghr     = '0;
-        fetch_is_rvc     = '0;
-        fetch_bp_taken   = '0;
-
-        for (int i = 0; i < PIPE_WIDTH; i++) begin
-            fetch_insn[i]      = 32'h0000_0013;
-            fetch_pc[i]        = '0;
-            fetch_bp_target[i] = '0;
-        end
-
-        fetch_packet_out_valid = packet_buf_valid;
-        fetch_packet_out       = packet_buf_head;
-
-        if (fetch_packet_out_valid) begin
-            fetch_count      = fetch_packet_out.fetch_count;
-            fetch_bp_owner_valid = fetch_packet_out.pd_ctl_valid;
-            fetch_bp_owner_slot  = fetch_packet_out.pd_ctl_slot;
-            fetch_bp_owner_from_subgroup =
-                fetch_packet_out.pd_ctl_valid &&
-                fetch_packet_out.ftq_pred_from_subgroup;
-            fetch_bp_lookup_pc   = fetch_packet_out.ftq_bp_lookup_pc;
-            fetch_bp_ras_tos = fetch_packet_out.fetch_bp_ras_tos;
-            fetch_bp_ras_top = fetch_packet_out.fetch_bp_ras_top;
-            fetch_bp_ghr     = fetch_packet_out.fetch_bp_ghr;
-            fetch_is_rvc     = fetch_packet_out.fetch_is_rvc;
-            fetch_bp_taken   = fetch_packet_out.fetch_bp_taken;
-
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                fetch_insn[i]      = fetch_packet_out.fetch_insn[i];
-                fetch_pc[i]        = fetch_packet_out.fetch_pc[i];
-                fetch_bp_target[i] = fetch_packet_out.fetch_bp_target[i];
-            end
-        end
-    end
 
 `ifdef SIMULATION
     logic delivery_check_en;

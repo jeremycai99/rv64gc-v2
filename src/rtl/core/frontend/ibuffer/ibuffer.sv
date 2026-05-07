@@ -21,7 +21,22 @@ module ibuffer
     output logic          deq_valid,
     output fetch_packet_t deq_packet,
     output logic          deq_fire,
-    output logic          deq_flowthrough,
+    output logic                         deq_flowthrough,
+    output logic                         packet_out_valid,
+    output fetch_packet_t                packet_out,
+    output logic [2:0]                   decode_fetch_count,
+    output logic [31:0]                  decode_fetch_insn [0:PIPE_WIDTH-1],
+    output logic [63:0]                  decode_fetch_pc [0:PIPE_WIDTH-1],
+    output logic [PIPE_WIDTH-1:0]        decode_fetch_is_rvc,
+    output logic [PIPE_WIDTH-1:0]        decode_fetch_bp_taken,
+    output logic [63:0]                  decode_fetch_bp_target [0:PIPE_WIDTH-1],
+    output logic                         decode_fetch_bp_owner_valid,
+    output logic [2:0]                   decode_fetch_bp_owner_slot,
+    output logic                         decode_fetch_bp_owner_from_subgroup,
+    output logic [63:0]                  decode_fetch_bp_lookup_pc,
+    output logic [4:0]                   decode_fetch_bp_ras_tos,
+    output logic [63:0]                  decode_fetch_bp_ras_top,
+    output logic [GHR_BITS-1:0]          decode_fetch_bp_ghr,
 
     input  logic                          owner_valid,
     input  logic [FTQ_IDX_BITS-1:0]       owner_idx,
@@ -60,5 +75,48 @@ module ibuffer
         .empty             (empty),
         .count             (count)
     );
+
+    assign packet_out_valid = deq_valid;
+    assign packet_out       = deq_packet;
+
+    always_comb begin
+        decode_fetch_count                  = 3'd0;
+        decode_fetch_bp_owner_valid         = 1'b0;
+        decode_fetch_bp_owner_slot          = 3'd0;
+        decode_fetch_bp_owner_from_subgroup = 1'b0;
+        decode_fetch_bp_lookup_pc           = 64'd0;
+        decode_fetch_bp_ras_tos             = 5'd0;
+        decode_fetch_bp_ras_top             = 64'd0;
+        decode_fetch_bp_ghr                 = '0;
+        decode_fetch_is_rvc                 = '0;
+        decode_fetch_bp_taken               = '0;
+
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            decode_fetch_insn[i]      = 32'h0000_0013;
+            decode_fetch_pc[i]        = '0;
+            decode_fetch_bp_target[i] = '0;
+        end
+
+        if (deq_valid) begin
+            decode_fetch_count                  = deq_packet.fetch_count;
+            decode_fetch_bp_owner_valid         = deq_packet.pd_ctl_valid;
+            decode_fetch_bp_owner_slot          = deq_packet.pd_ctl_slot;
+            decode_fetch_bp_owner_from_subgroup =
+                deq_packet.pd_ctl_valid &&
+                deq_packet.ftq_pred_from_subgroup;
+            decode_fetch_bp_lookup_pc           = deq_packet.ftq_bp_lookup_pc;
+            decode_fetch_bp_ras_tos             = deq_packet.fetch_bp_ras_tos;
+            decode_fetch_bp_ras_top             = deq_packet.fetch_bp_ras_top;
+            decode_fetch_bp_ghr                 = deq_packet.fetch_bp_ghr;
+            decode_fetch_is_rvc                 = deq_packet.fetch_is_rvc;
+            decode_fetch_bp_taken               = deq_packet.fetch_bp_taken;
+
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                decode_fetch_insn[i]      = deq_packet.fetch_insn[i];
+                decode_fetch_pc[i]        = deq_packet.fetch_pc[i];
+                decode_fetch_bp_target[i] = deq_packet.fetch_bp_target[i];
+            end
+        end
+    end
 
 endmodule

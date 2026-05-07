@@ -442,13 +442,15 @@ These are the structural constraint points that any optimization needs to be awa
 - **Current IBuffer boundary:** `frontend/ibuffer/ibuffer.sv` is the
   decode-facing packet boundary and currently wraps the existing
   `fetch_packet_buffer` FIFO implementation. It is the only packet source for
-  decode. Its empty-buffer flow-through preserves the previous fast path
-  without letting `fetch_top.sv` bypass the owner-aware buffer. F2 emission is
-  gated by the IBuffer enqueue-ready signal rather than the raw full flag, so a
-  full buffer can still accept a packet on a same-cycle dequeue. The old
-  `FETCH_PACKET_BYPASS2` direct-bypass control surface has been removed; the
-  current debug/profiling signal is an IBuffer flow-through observation, not an
-  alternate decode data path.
+  decode and owns the packet-to-decode signal adaptation for `fetch_count`,
+  instruction words, PCs, RVC flags, branch-prediction metadata, and the
+  monitor-facing packet observation. Its empty-buffer flow-through preserves the
+  previous fast path without letting `fetch_top.sv` bypass the owner-aware
+  buffer. F2 emission is gated by the IBuffer enqueue-ready signal rather than
+  the raw full flag, so a full buffer can still accept a packet on a same-cycle
+  dequeue. The old `FETCH_PACKET_BYPASS2` direct-bypass control surface has
+  been removed; the current debug/profiling signal is an IBuffer flow-through
+  observation, not an alternate decode data path.
 - **Instruction helper leaves:** `frontend/instr/instr_boundary.sv`,
   `frontend/instr/rvc_expander.sv`, `frontend/instr/predecode.sv`, and
   `frontend/instr/instr_compact.sv` hold parcel extraction, compressed
