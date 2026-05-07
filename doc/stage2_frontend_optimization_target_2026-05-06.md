@@ -321,8 +321,72 @@ The heavier Stage 1 workload rows also passed with the same checks:
 
 Compared with the older locked Stage 1 rows, this moves Dhrystone 300 from the
 mid 76K to 64.7K timed-cycle range and CoreMark 10 from about 2.03M to 1.93M
-timed cycles. The next formal step is a full scoreable signoff run from this
-committed RTL, using the same strict checks and counter-movement gate.
+timed cycles. These rows were then consolidated into a full goal run from the
+committed RTL.
+
+Full goal consolidation:
+
+- `benchmark_results/20260507_pred_ctl_start_stage1_goal`
+- 16/16 rows PASS under `--goal stage1`, signoff class, strict owner/delivery
+  checks, `+PERF_PROFILE`, `+PERF_COUNTERS`, and `+STAT_DUMP`.
+
+| Workload | Timed cycles | Metric |
+|---|---:|---:|
+| Dhrystone 100 | 22,290 | 2.553396 DMIPS/MHz |
+| Dhrystone 300 | 64,719 | 2.638261 DMIPS/MHz |
+| CoreMark 1 | 196,124 | 5.098815 CoreMark/MHz |
+| CoreMark 10 | 1,931,584 | 5.177098 CoreMark/MHz |
+
+This is the first consolidated post-refactor goal artifact for the
+predicted-control-start IFU rule. It does not reach the long-term 4.0
+DMIPS/MHz and 7.5 CoreMark/MHz targets, but it is a broad, endpoint-clean
+frontend improvement and should become the new baseline for the next bottleneck
+iteration.
+
+## Stage 2 Signoff Risk And Phase Gates
+
+The accepted same-owner/predicted-control work is a real architectural
+improvement, but the remaining gap to the aggressive Stage 2 targets is still
+large. This must be treated as a signoff risk, not as a small cleanup tail.
+
+| Metric | Current heavy row | Stage 2 target | Required score uplift | Equivalent cycle reduction |
+|---|---:|---:|---:|---:|
+| CoreMark/MHz | 5.177098 | 7.5 | +44.9% | 31.0% |
+| DMIPS/MHz | 2.638261 | 4.0 | +51.6% | 34.0% |
+
+The Arm Cortex-A72 comparison should be interpreted as an effective-utilization
+warning. A72 is nominally a 3-wide decode machine, but its score comes from a
+balanced commercial frontend/backend: prediction quality, recovery latency,
+fetch buffering, load-use behavior, memory dependence handling, scheduler
+balance, and physical timing discipline. rv64gc-v2 has more nominal width in
+some places, but width is not useful when the frontend remains shallow or when
+uop, branch, LSU, or ROB-head behavior prevents sustained retirement.
+
+Stage 2 therefore needs explicit promotion and stop criteria:
+
+| Gate | Objective | Required evidence | Decision |
+|---|---|---|---|
+| A | Lock current accepted RTL as the new scoreable baseline. | Full scoreable run from committed RTL, strict owner/delivery checks, endpoint identity, broad smoke pass, and the expected duplicate/no-emit counter movement. | If this fails, fix correctness or methodology before more DSE. |
+| B | Prove true frontend runahead, not just same-owner cursor repair. | `xs_ftq_occ_max > 1`, nonzero IBuffer occupancy on meaningful rows, duplicate/no-emit falls broadly, and redirect recovery does not grow enough to erase the gain. | If occupancy stays shallow, continue FTQ/IFU/IBuffer ownership work. |
+| C | Score the frontend-only ceiling. | After depth-1 or depth-2 runahead, heavy rows should approach roughly 6.0 CM/MHz and 3.2 DMIPS/MHz. | If scores are below that range, frontend-only work is insufficient and a second-domain DSE must open. |
+| D | Select the second-domain limiter from counters. | Use branch/recovery, effective-uop, LSU/load-use, ROB-head, and backend scheduling counters to identify the largest residual. | Promote only the counter-backed domain: BPU/recovery, fusion/uop count, LSU, or backend balance. |
+| E | Stretch to final signoff. | Full benchmark manifest, broad probes, endpoint/golden checks where available, and no major regression outside Dhrystone/CoreMark. | Only then compare against the 7.5 CM/MHz and 4.0 DMIPS/MHz targets. |
+
+Concrete second-domain triggers:
+
+| Residual signal after runahead | Next architectural direction |
+|---|---|
+| High redirect or restart cost | Recovery shortening, BPU timing, or early IFU prediction validation. |
+| High branch MPKI or indirect concentration | BPU quality work, including uBTB/S0 or indirect prediction only if the per-PC data supports it. |
+| High instruction count per useful work | Macro-op/uop fusion and effective frontend-slot utilization. |
+| ROB-head stalls dominated by loads | Load-use path, LSU latency, memory dependence, or store/load forwarding. |
+| Backend issue or wakeup/select stalls dominate | Scheduler and execution balance, not more frontend patches. |
+
+The Stage 2 plan should continue the frontend path first because current
+occupancy and duplicate/no-emit counters still show shallow delivery. However,
+the final A72-class target should not depend on frontend work alone unless
+Gate C proves the frontend-only ceiling is much higher than the current data
+suggests.
 
 ## Current Architecture State
 
@@ -404,13 +468,13 @@ already exist.
 
 | Phase | Task | Exit criterion |
 |---|---|---|
-| 0 | Capture baseline counters on current RTL. | Current cm/dhry rows plus occupancy, duplicate/no-emit, supply, redirect, and head-blocking data recorded. |
-| 1 | Decouple the existing IFU work cursor from raw F2 mirror state. | Cursor advances by FTQ IFU-writeback owner and current PC; strict delivery remains clean. |
-| 2 | Use IBuffer and FTQ capacity to bound proactive BPU/F1 runahead at depth 1. | FTQ/IBuffer occupancy rises; duplicate/no-emit buckets fall; endpoint identity remains clean. |
-| 3 | Increase bounded runahead to depth 2 if Phase 2 is clean. | Timed cycles improve and wrong-path/flush cost remains bounded. |
-| 4 | Decide whether BPU S0/uBTB or BPU S1 pipelining is needed. | Promote only if counters show prediction latency/timing blocks deeper runahead. |
-| 5 | Evaluate recovery, indirect prediction, fusion, or prefetch candidates. | Each candidate must be gated by its specific counter and measured independently. |
-| 6 | Re-score against calibrated MegaBOOM rows and update the remaining bottleneck map. | Stage 1 gap closes or the residual limiter is named with data. |
+| 0 | Lock the current accepted RTL as the new scoreable baseline. | Gate A passes: full scoreable run, strict checks, endpoint identity, broad smoke pass, and expected counter movement. |
+| 1 | Finish decoupling the existing IFU work cursor from raw F2 mirror state. | Cursor advances by FTQ IFU-writeback owner and current PC; strict delivery remains clean. |
+| 2 | Use IBuffer and FTQ capacity to bound proactive BPU/F1 runahead at depth 1. | Gate B passes: FTQ/IBuffer occupancy rises, duplicate/no-emit buckets fall, and wrong-path cost remains bounded. |
+| 3 | Increase bounded runahead to depth 2 if Phase 2 is clean. | Heavy rows improve without endpoint drift; wrong-path/flush cost does not erase the frontend gain. |
+| 4 | Score the frontend-only ceiling. | Gate C passes or fails explicitly; if it fails, stop treating frontend-only DSE as sufficient for final signoff. |
+| 5 | Select and implement one second-domain optimization. | Gate D names the residual limiter from counters before RTL work starts. |
+| 6 | Re-score against calibrated MegaBOOM and final Stage 2 targets. | Gate E passes: full manifest, broad probes, endpoint/golden checks where available, and no major off-target regression. |
 
 ## Explicit Non-Goals
 
@@ -434,11 +498,14 @@ The workable Stage 2 frontend path is:
 1. Measure current ownership/supply behavior.
 2. Decouple the existing IFU work cursor.
 3. Enable small, capacity-bounded proactive BPU/F1 runahead.
-4. Promote BPU S0/uBTB, recovery, indirect prediction, fusion, or prefetch only
+4. Score the frontend-only ceiling against the Gate C threshold.
+5. Promote BPU S0/uBTB, recovery, indirect prediction, fusion, LSU/load-use, or backend balance only
    when counters identify them as the next limiter.
 
 The strongest near-term objective remains closing the calibrated MegaBOOM gap
 on Dhrystone/CoreMark without endpoint drift. The aggressive 7.5 CM/MHz and
-4.0 DMIPS/MHz targets remain valid as multi-stage goals, but this document no
-longer claims a hard frontend-only ceiling or declares memory/EXU work required
-before the frontend runahead data exists.
+4.0 DMIPS/MHz targets remain valid as multi-stage goals, but the current heavy
+rows still require about one third fewer cycles to reach those targets. The
+plan therefore keeps frontend runahead first, while making second-domain work a
+required escalation if true frontend runahead does not clear the Gate C score
+range.
