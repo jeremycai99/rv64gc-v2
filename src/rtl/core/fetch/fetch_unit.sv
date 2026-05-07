@@ -1089,20 +1089,10 @@ module fetch_unit
     logic [2:0]  f2_btb_alt_type_r;
     logic [5:0]  f2_btb_alt_offset_r;
     logic        f2_tage_taken_r;
-    // Forward declarations (used by consume_remainder_c before full definition)
+    // Boundary outputs are driven by instr_boundary and consumed by the IFU
+    // cursor policy before the leaf instance appears later in the file.
     logic [2:0]  extract_count;
     logic [5:0]  start_offset;
-
-    // On the cycle where f2 consumes a straddle remainder (start_offset=0,
-    // remainder_valid_r=1 and one or more instructions were emitted), the
-    // usual f1->f2 pipeline would leave the work cursor at the same cache-line base
-    // next cycle (because f1_pc lagged behind by one cycle across the
-    // straddle). Detect the consume event combinationally and advance
-    // the work cursor directly to f2_seq_next_pc so the following cycle processes
-    // the next real instruction stream.
-    assign consume_remainder_c = remainder_valid_r && f2_work_valid_c &&
-                                 f2_data_valid && (start_offset == 6'd0) &&
-                                 (extract_count > 3'd0);
 
     always_comb begin
         logic [63:0]                           work_pc_next;
@@ -1455,8 +1445,6 @@ module fetch_unit
     // f2_work_pc_c[5:0]. Each instruction is either 16-bit compressed (bits[1:0]
     // != 2'b11) or 32-bit.
     // =========================================================================
-    localparam int MAX_EXTRACT_BYTES = 62; // max bytes we can look at
-
     // Raw extracted halfwords and full instruction words before decompression
     logic [15:0] raw_hw [0:PIPE_WIDTH-1];        // raw 16-bit parcel
     logic [31:0] raw_insn [0:PIPE_WIDTH-1];      // 32-bit (either native or zero-extended)
@@ -1487,121 +1475,33 @@ module fetch_unit
     logic [2:0]  subgroup_split_type_c;
     logic [63:0] subgroup_split_pc_c;
     logic [63:0] subgroup_split_target_c;
-    // extract_count, start_offset, remainder_valid_r declared earlier
-
-    assign start_offset = f2_work_pc_c[5:0];
-
-    // ---- Cross-line remainder buffer ----
-    logic [15:0] remainder_hw_r;       // first 2 bytes (lower half)
-    logic [63:0] remainder_pc_r;       // PC of the straddling instruction
-
-    // Combinational: detect straddling 32-bit instruction at line end
     logic        straddle_detected;
-    logic [15:0] straddle_hw;
     logic [63:0] straddle_pc;
 
-    // Extract instructions from the cache line combinationally
-    always_comb begin
-        // Default all slots
-        for (int i = 0; i < PIPE_WIDTH; i++) begin
-            raw_hw[i]      = 16'h0;
-            raw_insn[i]    = 32'h0000_0013; // NOP
-            slot_is_rvc[i] = 1'b0;
-            slot_valid[i]  = 1'b0;
-            slot_pc[i]     = '0;
-        end
-        extract_count      = 3'd0;
-        straddle_detected  = 1'b0;
-        straddle_hw        = 16'h0;
-        straddle_pc        = '0;
-
-        if (f2_work_valid_c && f2_data_valid) begin
-            automatic logic [6:0] byte_pos;
-            automatic int slot_idx;
-            byte_pos = {1'b0, start_offset};
-            slot_idx = 0;
-
-            // If the remainder buffer holds the first half of a straddling
-            // instruction, combine it with the start of this cache line.
-            if (remainder_valid_r && byte_pos == 7'd0) begin
-                // The remainder holds the low 16 bits; read bytes 0-1 of
-                // this line for the high 16 bits.
-                automatic logic [31:0] word32;
-                word32[15:0]  = remainder_hw_r;
-                word32[23:16] = f2_data_line[0 +: 8];
-                word32[31:24] = f2_data_line[8 +: 8];
-
-                slot_is_rvc[0] = 1'b0;
-                raw_insn[0]    = word32;
-                slot_valid[0]  = 1'b1;
-                slot_pc[0]     = remainder_pc_r;
-                extract_count  = 3'd1;
-                byte_pos       = 7'd2;   // consumed 2 bytes from this line
-                slot_idx       = 1;
-            end
-
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (i >= slot_idx) begin
-                // Check if we have at least 2 bytes remaining in the line
-                if (byte_pos <= 7'd62) begin
-                    // Read 16-bit parcel at current position
-                    // Each byte is at bit position byte_pos*8
-                    automatic logic [15:0] hw;
-                    automatic logic [6:0]  bp;
-                    bp = byte_pos;
-                    hw = {f2_data_line[bp*8 +: 8],
-                          f2_data_line[bp*8 +: 8]};
-                    // Correct: read two bytes in little-endian order
-                    hw[7:0]  = f2_data_line[bp*8 +: 8];
-                    hw[15:8] = f2_data_line[(bp+7'd1)*8 +: 8];
-
-                    raw_hw[i]  = hw;
-                    slot_pc[i] = {f2_work_pc_c[63:6], bp[5:0]};
-
-                    if (hw[1:0] != 2'b11) begin
-                        // 16-bit compressed instruction
-                        slot_is_rvc[i] = 1'b1;
-                        raw_insn[i]    = {16'h0, hw};
-                        slot_valid[i]  = 1'b1;
-                        extract_count  = 3'(i + 1);
-                        byte_pos       = byte_pos + 7'd2;
-                    end else if (byte_pos <= 7'd60) begin
-                        // 32-bit instruction: need 4 bytes
-                        automatic logic [31:0] word32;
-                        automatic logic [6:0]  bp2;
-                        bp2 = byte_pos;
-                        word32[7:0]   = f2_data_line[bp2*8 +: 8];
-                        word32[15:8]  = f2_data_line[(bp2+7'd1)*8 +: 8];
-                        word32[23:16] = f2_data_line[(bp2+7'd2)*8 +: 8];
-                        word32[31:24] = f2_data_line[(bp2+7'd3)*8 +: 8];
-
-                        slot_is_rvc[i] = 1'b0;
-                        raw_insn[i]    = word32;
-                        slot_valid[i]  = 1'b1;
-                        extract_count  = 3'(i + 1);
-                        byte_pos       = byte_pos + 7'd4;
-                    end else begin
-                        // 32-bit instruction crosses line boundary.
-                        // Save the first 2 bytes for the next cache line.
-                        straddle_detected = 1'b1;
-                        straddle_hw       = hw;
-                        straddle_pc       = {f2_work_pc_c[63:6], bp[5:0]};
-                    end
-                end
-                // else: past end of line, stop
-                end
-            end
-        end
-    end
-
-    assign line_straddle_advance_c =
-        f2_work_valid_c &&
-        f2_data_valid &&
-        straddle_detected &&
-        (extract_count == 3'd0) &&
-        f2_seq_valid &&
-        !redirect_valid &&
-        !fe_stall;
+    instr_boundary u_instr_boundary (
+        .clk                    (clk),
+        .rst_n                  (rst_n),
+        .redirect_i             (redirect_valid),
+        .bpu_redirect_i         (f2_bpu_redirect && !fe_stall),
+        .stall_i                (fe_stall),
+        .work_valid_i           (f2_work_valid_c),
+        .work_pc_i              (f2_work_pc_c),
+        .data_valid_i           (f2_data_valid),
+        .data_line_i            (f2_data_line),
+        .seq_valid_i            (f2_seq_valid),
+        .start_offset_o         (start_offset),
+        .raw_hw_o               (raw_hw),
+        .raw_insn_o             (raw_insn),
+        .slot_is_rvc_o          (slot_is_rvc),
+        .slot_valid_o           (slot_valid),
+        .slot_pc_o              (slot_pc),
+        .extract_count_o        (extract_count),
+        .straddle_detected_o    (straddle_detected),
+        .straddle_pc_o          (straddle_pc),
+        .line_straddle_advance_o(line_straddle_advance_c),
+        .consume_remainder_o    (consume_remainder_c),
+        .remainder_valid_o      (remainder_valid_r)
+    );
 
     // =========================================================================
     // RVC decompression: 6 instances (one per slot)
@@ -2276,42 +2176,6 @@ module fetch_unit
                 bp_branch_found && bp_taken &&
                 (bp_type == BT_COND) &&
                 (bp_branch_slot == predecode_ctl_slot);
-        end
-    end
-
-    // =========================================================================
-    // Remainder buffer: save the first 2 bytes of a straddling instruction
-    //
-    // The remainder must persist until the next cache line is actually
-    // available and the extraction logic consumes it (consume_remainder_c).
-    // If the next line misses in the I-cache, we may idle for several
-    // cycles with a valid remainder waiting for data.
-    // =========================================================================
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            remainder_valid_r <= 1'b0;
-            remainder_hw_r    <= 16'h0;
-            remainder_pc_r    <= '0;
-        end else if (redirect_valid || (f2_bpu_redirect && !fe_stall)) begin
-            remainder_valid_r <= 1'b0;
-            remainder_hw_r    <= 16'h0;
-            remainder_pc_r    <= '0;
-        end else if (!fe_stall) begin
-            if (straddle_detected &&
-                f2_work_valid_c &&
-                f2_data_valid) begin
-                // New straddle detected on the current cache line: latch the
-                // first 2 bytes so the next cache line can complete it.
-                remainder_valid_r <= 1'b1;
-                remainder_hw_r    <= straddle_hw;
-                remainder_pc_r    <= straddle_pc;
-            end else if (consume_remainder_c) begin
-                // Successfully combined remainder with the new cache line;
-                // clear the buffer.
-                remainder_valid_r <= 1'b0;
-            end
-            // Otherwise: hold the remainder while we wait for the next
-            // cache line to arrive (I-cache miss, backend stall, etc.).
         end
     end
 

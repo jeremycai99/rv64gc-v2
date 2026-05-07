@@ -57,6 +57,7 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/sim/mem_if_pkg.sv" \
       "$P/src/rtl/core/fetch/rvc_decompress.sv" \
       "$P/src/rtl/core/fetch/predecode.sv" \
+      "$P/src/rtl/core/fetch/instr_boundary.sv" \
       "$P/src/rtl/core/fetch/btb.sv" \
       "$P/src/rtl/core/fetch/ras.sv" \
       "$P/src/rtl/core/fetch/tage_sc_l.sv" \
