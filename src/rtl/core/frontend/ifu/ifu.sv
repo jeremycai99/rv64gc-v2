@@ -128,6 +128,8 @@ module ifu
     logic        owner_completion_candidate_c;
     logic        owner_delivery_push_c;
     logic        ftq_ifu_pop_valid_c;
+    logic        work_same_owner_emit_advance_c;
+    logic        work_same_owner_dup_advance_c;
     logic        work_same_owner_advance_c;
     logic        pred_control_outside_next_packet_c;
 
@@ -214,7 +216,7 @@ module ifu
          {1'b0, work_r.ftq_entry.pred_ctl_offset}) ||
         (({1'b0, seq_next_pc_i[5:0]} + 7'd16) <=
          {1'b0, work_r.ftq_entry.pred_ctl_offset});
-    assign work_same_owner_advance_c =
+    assign work_same_owner_emit_advance_c =
         same_owner_continue_i &&
         seq_valid_i &&
         will_emit_i &&
@@ -227,6 +229,23 @@ module ifu
         !consume_remainder_i &&
         !consumed_remainder_r &&
         (seq_next_pc_i[63:LINE_BITS] == work_r.line_addr);
+    assign work_same_owner_dup_advance_c =
+        same_owner_continue_i &&
+        seq_valid_i &&
+        duplicate_suppressed_i &&
+        owner_live_c &&
+        work_r.ftq_valid &&
+        work_r.owner_delivered &&
+        !owner_complete_i &&
+        pred_control_outside_next_packet_c &&
+        !line_straddle_advance_i &&
+        !consume_remainder_i &&
+        !consumed_remainder_r &&
+        (duplicate_next_pc_i == seq_next_pc_i) &&
+        (seq_next_pc_i[63:LINE_BITS] == work_r.line_addr);
+    assign work_same_owner_advance_c =
+        work_same_owner_emit_advance_c ||
+        work_same_owner_dup_advance_c;
 
     assign owner_live_c =
         work_r.ftq_valid &&

@@ -288,6 +288,8 @@ module fetch_frontend_profiler
     assign xs_same_owner_pred_ctl_window_c =
         xs_same_owner_emit_candidate_c &&
         f2_work_ftq_entry_c.pred_ctl_valid &&
+        ({1'b0, f2_seq_next_pc[5:0]} !=
+         {1'b0, f2_work_ftq_entry_c.pred_ctl_offset}) &&
         (({1'b0, f2_seq_next_pc[5:0]} + 7'd16) >
          {1'b0, f2_work_ftq_entry_c.pred_ctl_offset});
     assign xs_same_owner_remainder_hold_c =
@@ -297,7 +299,8 @@ module fetch_frontend_profiler
          consumed_remainder_r);
     assign xs_same_owner_block_no_emit_c =
         xs_same_owner_candidate_c &&
-        !f2_will_emit_c;
+        !f2_will_emit_c &&
+        !ifu_work_same_owner_advance_c;
     assign xs_same_owner_block_no_enq_c =
         xs_same_owner_emit_candidate_c &&
         !packet_buf_enq;
