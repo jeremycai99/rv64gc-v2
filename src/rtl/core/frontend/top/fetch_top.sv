@@ -127,14 +127,9 @@ module fetch_top
     logic [2:0]  final_count;
     logic        subgroup_split_before_ctl_c;
 
-    // consumed_remainder_r: latched when the current cycle's extraction
-    // consumed a straddle remainder AND emitted at least one instruction.
-    // The following cycle must bypass the normal f1->f2 pipeline
-    // (which otherwise leaves the IFU work cursor pointing at the
-    // already-processed cache-line base) and instead advance it directly to the
-    // f2_seq_next_pc captured on the consume cycle.
+    // consumed_remainder_r is driven by the IFU remainder cursor. Keep this
+    // name at the integration boundary for existing simulation binds.
     logic        consumed_remainder_r;
-    logic [63:0] post_remainder_pc_r;
 
     logic        fe_stall;
 
@@ -219,8 +214,6 @@ module fetch_top
     logic        f2_work_owner_delivered_c;
     logic        f2_owner_delivery_push_c;
     logic        f2_redirect_without_owner_successor_c;
-    logic        ftq_last_alloc_valid_r;
-    logic [63:0] ftq_last_alloc_req_pc_r;
     logic        subgroup_seed_valid_r;
     logic [63:0] subgroup_seed_pc_r;
     logic [63:0] subgroup_seed_parent_pc_r;
@@ -309,8 +302,6 @@ module fetch_top
         .ftq_enq_ready_i                          (ftq_enq_ready),
         .remainder_valid_i                        (remainder_valid_r),
         .same_owner_continue_i                    (f2_same_owner_continue_c),
-        .last_alloc_valid_i                       (ftq_last_alloc_valid_r),
-        .last_alloc_req_pc_i                      (ftq_last_alloc_req_pc_r),
         .req_redirect_i                           (req_redirect_c),
         .duplicate_suppressed_i                   (f2_duplicate_suppressed_c),
         .duplicate_next_pc_i                      (f2_duplicate_next_pc_c),
@@ -332,8 +323,6 @@ module fetch_top
         .seq_next_pc_i                            (f2_seq_next_pc),
         .line_straddle_advance_i                  (line_straddle_advance_c),
         .consume_remainder_i                      (consume_remainder_c),
-        .consumed_remainder_i                     (consumed_remainder_r),
-        .post_remainder_pc_i                      (post_remainder_pc_r),
         .owner_complete_i                         (f2_work_owner_complete_c),
         .packet_valid_i                           (packet_buf_in.valid),
         .packet_enq_i                             (packet_buf_enq),
@@ -353,6 +342,7 @@ module fetch_top
         .ic_req_valid_o                           (ic_req_valid),
         .ic_req_addr_o                            (ic_req_addr),
         .fe_stall_o                               (fe_stall),
+        .consumed_remainder_o                     (consumed_remainder_r),
         .redirect_without_owner_successor_o       (f2_redirect_without_owner_successor_c),
         .owner_completion_candidate_o             (f2_owner_completion_candidate_c),
         .owner_delivery_push_o                    (f2_owner_delivery_push_c),
@@ -732,46 +722,6 @@ module fetch_top
     // group's sequential PC. The bytes were already consumed by the original
     // emission; advancing again starts the next request inside that packet.
     assign f2_pc_consumed_c = f2_will_emit_c || line_straddle_advance_c;
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            ftq_last_alloc_valid_r    <= 1'b0;
-            ftq_last_alloc_req_pc_r   <= '0;
-        end else if (redirect_valid) begin
-            ftq_last_alloc_valid_r    <= 1'b0;
-            ftq_last_alloc_req_pc_r   <= '0;
-        end else if (ftq_enq_valid) begin
-            ftq_last_alloc_valid_r    <= 1'b1;
-            ftq_last_alloc_req_pc_r   <= req_pc_c;
-        end else if (ftq_ifu_pop_valid && !ftq_next_ifu_owner_valid) begin
-            ftq_last_alloc_valid_r    <= 1'b0;
-            ftq_last_alloc_req_pc_r   <= '0;
-        end
-    end
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            consumed_remainder_r <= 1'b0;
-            post_remainder_pc_r  <= '0;
-        end else if (redirect_valid) begin
-            // Flush cursor-adjacent state on redirect.
-            consumed_remainder_r <= 1'b0;
-        end else if (f2_bpu_redirect && !fe_stall) begin
-            // BPU redirect redirects the IFU work cursor to the target.
-            consumed_remainder_r <= 1'b0;
-        end else begin
-            if (!fe_stall) begin
-                // Latch the consume event and the post-remainder PC so the
-                // next cycle can also advance f1_pc in lock-step.
-                if (consume_remainder_c) begin
-                    consumed_remainder_r <= 1'b1;
-                    post_remainder_pc_r  <= f2_seq_next_pc;
-                end else begin
-                    consumed_remainder_r <= 1'b0;
-                end
-            end
-        end
-    end
 
     // =========================================================================
     // F2: Instruction extraction from cache line

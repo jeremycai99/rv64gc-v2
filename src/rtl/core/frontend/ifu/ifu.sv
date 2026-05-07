@@ -19,8 +19,6 @@ module ifu
     input  logic                          ftq_enq_ready_i,
     input  logic                          remainder_valid_i,
     input  logic                          same_owner_continue_i,
-    input  logic                          last_alloc_valid_i,
-    input  logic [63:0]                   last_alloc_req_pc_i,
     input  logic                          req_redirect_i,
     input  logic                          duplicate_suppressed_i,
     input  logic [63:0]                   duplicate_next_pc_i,
@@ -46,8 +44,6 @@ module ifu
     input  logic [63:0]                   seq_next_pc_i,
     input  logic                          line_straddle_advance_i,
     input  logic                          consume_remainder_i,
-    input  logic                          consumed_remainder_i,
-    input  logic [63:0]                   post_remainder_pc_i,
     input  logic                          owner_complete_i,
     input  logic                          packet_valid_i,
     input  logic                          packet_enq_i,
@@ -68,6 +64,7 @@ module ifu
     output logic                          ic_req_valid_o,
     output logic [63:0]                   ic_req_addr_o,
     output logic                          fe_stall_o,
+    output logic                          consumed_remainder_o,
     output logic                          redirect_without_owner_successor_o,
     output logic                          owner_completion_candidate_o,
     output logic                          owner_delivery_push_o,
@@ -109,6 +106,10 @@ module ifu
     ifu_work_item_t work_next_c;
     logic [63:0] f1_pc_r;
     logic        f1_valid_r;
+    logic        last_alloc_valid_r;
+    logic [63:0] last_alloc_req_pc_r;
+    logic        consumed_remainder_r;
+    logic [63:0] post_remainder_pc_r;
     logic [63:0] next_pc_c;
     logic        next_valid_c;
     logic [63:0] req_pc_c;
@@ -138,6 +139,7 @@ module ifu
     assign ic_req_valid_o          = f1_valid_r && !fe_stall_c;
     assign ic_req_addr_o           = req_pc_c;
     assign fe_stall_o              = fe_stall_c;
+    assign consumed_remainder_o    = consumed_remainder_r;
     assign redirect_without_owner_successor_o =
         redirect_without_owner_successor_c;
     assign owner_completion_candidate_o = owner_completion_candidate_c;
@@ -167,8 +169,8 @@ module ifu
         !line_straddle_advance_i &&
         !same_owner_continue_i &&
         (req_redirect_i || !(work_r.valid && (req_pc_c == work_r.pc))) &&
-        (req_redirect_i || !last_alloc_valid_i ||
-         (req_pc_c != last_alloc_req_pc_i));
+        (req_redirect_i || !last_alloc_valid_r ||
+         (req_pc_c != last_alloc_req_pc_r));
     assign fe_stall_c = frontend_hold_i ||
                         packet_buf_full_i ||
                         icq_full_i ||
@@ -223,14 +225,14 @@ module ifu
     assign work_take_remainder_request_owner_o =
         !work_redirect_o &&
         !fe_stall_c &&
-        consumed_remainder_i &&
+        consumed_remainder_r &&
         ftq_enq_valid_c;
     assign work_take_request_owner_o =
         !work_redirect_o &&
         !fe_stall_c &&
         !(line_straddle_advance_i ||
           consume_remainder_i ||
-          consumed_remainder_i) &&
+          consumed_remainder_r) &&
         ftq_enq_valid_c;
 
     always_comb begin
@@ -317,14 +319,14 @@ module ifu
                     work_pc_next = seq_next_pc_i;
                 else if (consume_remainder_i)
                     work_pc_next = seq_next_pc_i;
-                else if (consumed_remainder_i)
-                    work_pc_next = post_remainder_pc_i;
+                else if (consumed_remainder_r)
+                    work_pc_next = post_remainder_pc_r;
                 else
                     work_pc_next = f1_pc_r;
 
                 if (line_straddle_advance_i ||
                     consume_remainder_i ||
-                    consumed_remainder_i) begin
+                    consumed_remainder_r) begin
                     if (work_take_remainder_request_owner_o) begin
                         work_pc_next            = req_pc_c;
                         work_ftq_valid_next     = 1'b1;
@@ -371,18 +373,44 @@ module ifu
             f1_pc_r    <= RESET_VECTOR;
             f1_valid_r <= 1'b1;
             work_r <= '0;
+            last_alloc_valid_r  <= 1'b0;
+            last_alloc_req_pc_r <= '0;
+            consumed_remainder_r <= 1'b0;
+            post_remainder_pc_r  <= '0;
         end else begin
             if (redirect_i) begin
                 f1_pc_r    <= redirect_pc_i;
                 f1_valid_r <= 1'b1;
-            end else if (!fe_stall_c) begin
-                if (bpu_redirect_i)
-                    f1_pc_r <= bpu_target_i;
-                else if (consumed_remainder_i)
-                    f1_pc_r <= post_remainder_pc_i;
-                else
-                    f1_pc_r <= next_pc_c;
-                f1_valid_r <= next_valid_c;
+                last_alloc_valid_r    <= 1'b0;
+                last_alloc_req_pc_r   <= '0;
+                consumed_remainder_r  <= 1'b0;
+            end else begin
+                if (ftq_enq_valid_c) begin
+                    last_alloc_valid_r  <= 1'b1;
+                    last_alloc_req_pc_r <= req_pc_c;
+                end else if (ftq_ifu_pop_valid_c && !ftq_next_owner_valid_i) begin
+                    last_alloc_valid_r  <= 1'b0;
+                    last_alloc_req_pc_r <= '0;
+                end
+
+                if (!fe_stall_c) begin
+                    if (bpu_redirect_i)
+                        f1_pc_r <= bpu_target_i;
+                    else if (consumed_remainder_r)
+                        f1_pc_r <= post_remainder_pc_r;
+                    else
+                        f1_pc_r <= next_pc_c;
+                    f1_valid_r <= next_valid_c;
+
+                    if (bpu_redirect_i) begin
+                        consumed_remainder_r <= 1'b0;
+                    end else if (consume_remainder_i) begin
+                        consumed_remainder_r <= 1'b1;
+                        post_remainder_pc_r  <= seq_next_pc_i;
+                    end else begin
+                        consumed_remainder_r <= 1'b0;
+                    end
+                end
             end
             work_r <= work_next_c;
         end

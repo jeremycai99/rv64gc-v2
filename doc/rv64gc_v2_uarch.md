@@ -115,7 +115,7 @@ Current default RTL:
   can load PC and owner metadata as one object instead of pairing signals from
   different request phases. Same-line owners may consume the local F2
   line-state record without treating the queue head as the owner cursor.
-- `fetch_top.sv` now has a stateful IFU work item carrying valid, PC,
+- `frontend/ifu/ifu.sv` owns a stateful IFU work item carrying valid, PC,
   FTQ idx/epoch/alloc-tag, FTQ entry, line identity, delivery state, and
   completion fields.
   This cursor is the single registered F2 work state; the previous raw F2
@@ -138,6 +138,10 @@ Current default RTL:
   work item that carries the request PC, FTQ idx/epoch/alloc-tag, and full FTQ
   entry together, instead of scattering raw `ftq_enq_*` field assignments
   across the cursor policy logic.
+  The IFU also owns the last-allocation anti-duplicate register and the
+  consumed-remainder/post-remainder cursor used to advance across RVC straddles;
+  `fetch_top.sv` only publishes the consumed-remainder state for existing
+  simulation binds.
   Simulation invariants check that IFU request-pop is a real ready/enqueue
   handshake, that selected FTQ next-owner handoffs load the cursor on the
   following cycle, and that a wrong-owner IFU completion candidate cannot pop
@@ -403,11 +407,12 @@ These are the structural constraint points that any optimization needs to be awa
   rather than proactive runahead. The IFU request boundary computes request PC,
   I-cache request valid/address, FTQ enqueue valid, IFU request-pop fire, and
   frontend stall from registered F1/F2 state plus FTQ, ICQ, and IBuffer
-  readiness. The IFU also owns the completion-side delivery push and FTQ
-  IFU-pop decision for the active work owner; the decode/commit-side FTQ pop
-  remains tied to the IBuffer dequeue owner-complete boundary. The cursor is
-  the single registered F2 work state; request
-  anti-duplication, NLPB response matching, line acceptance, line-state
+  readiness. It also owns the last-allocation anti-duplicate register,
+  straddle-remainder cursor, completion-side delivery push, and FTQ IFU-pop
+  decision for the active work owner; the decode/commit-side FTQ pop remains
+  tied to the IBuffer dequeue owner-complete boundary. The cursor is the single
+  registered F2 work state; request anti-duplication, NLPB response matching,
+  line acceptance, line-state
   matching, extraction, predecode, owner-live checks, packet construction,
   owner-completion decisions, and debug/profile paths consume the cursor aliases
   rather than raw F2 PC/owner signals. Owner completion is delayed when the
