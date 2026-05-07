@@ -234,11 +234,6 @@ module fetch_top
     logic        subgroup_seed_load_c;
     logic        subgroup_seed_pred_taken_c;
     ftq_entry_t  req_ftq_entry_c;
-    logic        req_pred_ctl_valid_c;
-    logic        req_pred_ctl_taken_c;
-    logic [5:0]  req_pred_ctl_offset_c;
-    logic [2:0]  req_pred_ctl_type_c;
-    logic [63:0] req_pred_ctl_target_c;
     ftq_entry_t  ftq_head_entry;
     ftq_entry_t  ftq_ifu_owner_entry;
     ftq_entry_t  ftq_ifu_wb_owner_entry;
@@ -598,6 +593,11 @@ module fetch_top
     logic [4:0]  ras_tos;
     logic        tage_spec_update_valid;
     logic        tage_spec_taken;
+    logic        f1_aux_pred_ctl_valid_c;
+    logic        f1_aux_pred_ctl_taken_c;
+    logic [5:0]  f1_aux_pred_ctl_offset_c;
+    logic [2:0]  f1_aux_pred_ctl_type_c;
+    logic [63:0] f1_aux_pred_ctl_target_c;
 
     bpu u_bpu (
         .clk                         (clk),
@@ -646,6 +646,18 @@ module fetch_top
         .ghr_restore_valid_i         (ghr_restore_valid),
         .ghr_restore_val_i           (ghr_restore_val),
         .ghr_o                       (ghr_out),
+        .subgroup_seed_hit_i         (subgroup_seed_hit_c),
+        .subgroup_seed_pred_valid_i  (subgroup_seed_pred_valid_r),
+        .subgroup_seed_pred_taken_i  (subgroup_seed_pred_taken_r),
+        .subgroup_seed_pred_offset_i (subgroup_seed_pred_offset_r),
+        .subgroup_seed_pred_type_i   (subgroup_seed_pred_type_r),
+        .subgroup_seed_pred_target_i (subgroup_seed_pred_target_r),
+        .req_ftq_entry_o             (req_ftq_entry_c),
+        .aux_pred_ctl_valid_o        (f1_aux_pred_ctl_valid_c),
+        .aux_pred_ctl_taken_o        (f1_aux_pred_ctl_taken_c),
+        .aux_pred_ctl_offset_o       (f1_aux_pred_ctl_offset_c),
+        .aux_pred_ctl_type_o         (f1_aux_pred_ctl_type_c),
+        .aux_pred_ctl_target_o       (f1_aux_pred_ctl_target_c),
         .ras_push_valid_i            (ras_push_valid),
         .ras_push_addr_i             (ras_push_addr),
         .ras_pop_valid_i             (ras_pop_valid),
@@ -656,122 +668,6 @@ module fetch_top
         .ras_restore_top_valid_i     (ras_restore_top_valid),
         .ras_restore_top_addr_i      (ras_restore_top_addr)
     );
-
-    always_comb begin
-        req_pred_ctl_valid_c  = 1'b0;
-        req_pred_ctl_taken_c  = 1'b0;
-        req_pred_ctl_offset_c = 6'd0;
-        req_pred_ctl_type_c   = BT_COND;
-        req_pred_ctl_target_c = 64'd0;
-
-        if (btb_hit) begin
-            req_pred_ctl_valid_c  = 1'b1;
-            req_pred_ctl_offset_c = btb_branch_offset;
-            req_pred_ctl_type_c   = btb_branch_type;
-
-            case (btb_branch_type)
-                BT_COND: begin
-                    req_pred_ctl_target_c = btb_target;
-                    req_pred_ctl_taken_c  = tage_pred_taken;
-                end
-                BT_JAL,
-                BT_JALR,
-                BT_CALL: begin
-                    req_pred_ctl_target_c = btb_target;
-                    req_pred_ctl_taken_c  = 1'b1;
-                end
-                BT_RET: begin
-                    if ((ras_tos != 5'd0) && (ras_pop_addr != 64'd0)) begin
-                        req_pred_ctl_target_c = ras_pop_addr;
-                        req_pred_ctl_taken_c  = 1'b1;
-                    end
-                end
-                default: begin
-                    req_pred_ctl_valid_c = 1'b0;
-                end
-            endcase
-        end
-    end
-
-    logic        f1_aux_pred_ctl_valid_c;
-    logic        f1_aux_pred_ctl_taken_c;
-    logic [5:0]  f1_aux_pred_ctl_offset_c;
-    logic [2:0]  f1_aux_pred_ctl_type_c;
-    logic [63:0] f1_aux_pred_ctl_target_c;
-
-    always_comb begin
-        f1_aux_pred_ctl_valid_c  = 1'b0;
-        f1_aux_pred_ctl_taken_c  = 1'b0;
-        f1_aux_pred_ctl_offset_c = 6'd0;
-        f1_aux_pred_ctl_type_c   = BT_COND;
-        f1_aux_pred_ctl_target_c = 64'd0;
-
-        if (f1_aux_btb_hit) begin
-            automatic logic [63:0] pred_branch_pc;
-            pred_branch_pc = {f1_pc[63:LINE_BITS], f1_aux_btb_offset};
-            f1_aux_pred_ctl_valid_c  = 1'b1;
-            f1_aux_pred_ctl_offset_c = f1_aux_btb_offset;
-            f1_aux_pred_ctl_type_c   = f1_aux_btb_type;
-
-            case (f1_aux_btb_type)
-                BT_COND: begin
-                    f1_aux_pred_ctl_target_c = f1_aux_btb_target;
-                    f1_aux_pred_ctl_taken_c =
-                        (f1_aux_btb_target < pred_branch_pc);
-                end
-                BT_JAL,
-                BT_JALR,
-                BT_CALL: begin
-                    f1_aux_pred_ctl_target_c = f1_aux_btb_target;
-                    f1_aux_pred_ctl_taken_c  = 1'b1;
-                end
-                BT_RET: begin
-                    if ((ras_tos != 5'd0) && (ras_pop_addr != 64'd0)) begin
-                        f1_aux_pred_ctl_target_c = ras_pop_addr;
-                        f1_aux_pred_ctl_taken_c  = 1'b1;
-                    end
-                end
-                default: begin
-                    f1_aux_pred_ctl_valid_c = 1'b0;
-                end
-            endcase
-        end
-    end
-
-    always_comb begin
-        req_ftq_entry_c = '0;
-        req_ftq_entry_c.block_pc         = req_block_pc_c;
-        req_ftq_entry_c.start_offset     = req_pc_c[5:0];
-        req_ftq_entry_c.fallthrough_pc   = req_block_pc_c + 64'(LINE_SIZE);
-        if (subgroup_seed_hit_c) begin
-            req_ftq_entry_c.pred_ctl_valid   = subgroup_seed_pred_valid_r;
-            req_ftq_entry_c.pred_ctl_taken   = subgroup_seed_pred_taken_r;
-            req_ftq_entry_c.pred_ctl_offset  = subgroup_seed_pred_offset_r;
-            req_ftq_entry_c.pred_ctl_type    = subgroup_seed_pred_type_r;
-            req_ftq_entry_c.pred_ctl_target  = subgroup_seed_pred_target_r;
-            req_ftq_entry_c.pred_from_subgroup = 1'b1;
-        end else begin
-            req_ftq_entry_c.pred_ctl_valid   = req_pred_ctl_valid_c;
-            req_ftq_entry_c.pred_ctl_taken   = req_pred_ctl_taken_c;
-            req_ftq_entry_c.pred_ctl_offset  = req_pred_ctl_offset_c;
-            req_ftq_entry_c.pred_ctl_type    = req_pred_ctl_type_c;
-            req_ftq_entry_c.pred_ctl_target  = req_pred_ctl_target_c;
-            req_ftq_entry_c.pred_from_subgroup = 1'b0;
-        end
-        req_ftq_entry_c.btb_hit          = btb_hit;
-        req_ftq_entry_c.btb_offset       = btb_branch_offset;
-        req_ftq_entry_c.btb_type         = btb_branch_type;
-        req_ftq_entry_c.btb_target       = btb_target;
-        req_ftq_entry_c.btb_alt_hit      = btb_alt_hit;
-        req_ftq_entry_c.btb_alt_offset   = btb_alt_branch_offset;
-        req_ftq_entry_c.btb_alt_type     = btb_alt_branch_type;
-        req_ftq_entry_c.btb_alt_target   = btb_alt_target;
-        req_ftq_entry_c.tage_taken       = tage_pred_taken;
-        req_ftq_entry_c.tage_confident   = tage_pred_confident;
-        req_ftq_entry_c.ras_tos_snapshot = ras_tos;
-        req_ftq_entry_c.ras_top_snapshot = ras_pop_addr;
-        req_ftq_entry_c.ghr_snapshot     = ghr_out;
-    end
 
     // =========================================================================
     // F1 -> F2 pipeline registers

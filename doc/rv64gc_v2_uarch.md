@@ -460,6 +460,10 @@ These are the structural constraint points that any optimization needs to be awa
   selection, owner-complete classification, RAS/GHR action requests, and the
   registered subgroup seed state used to carry branch-owner prediction metadata
   into the following request.
+- **BPU boundary:** `core/bpu/bpu.sv` owns BTB, TAGE, RAS, GHR repair, request
+  prediction assembly, aux prediction observation, and the BPU-to-FTQ request
+  entry adapter. `fetch_top.sv` consumes the assembled FTQ entry instead of
+  locally rebuilding predictor metadata.
   Prediction ownership and redirect policy still live above these helpers.
 - **Prediction checker leaf:** `frontend/pred/pred_checker.sv` validates the
   FTQ-predicted control against predecode, selects the packet cut point,
