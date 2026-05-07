@@ -119,13 +119,32 @@ Follow-up result:
   `GOLDEN_PC OK` through the same partial run. The trial skips the compressed
   fall-through instruction while existing owner/stale counters remain clean.
 
-Revised verdict: this is not a scoreable performance iteration. The regression
-is caused by an incomplete cursor change, not by benchmark methodology. The
-one-line advance changes the work PC without atomically advancing the full IFU
-work item: owner identity, ICQ line response association, prediction snapshot,
-branch/remainder boundary state, and completion/writeback state. Future trials
-must pass golden PC checks on both Dhrystone and CoreMark, and any benchmark
-regression invalidates the row even if another benchmark improves.
+Revised verdict: this is not a scoreable performance iteration, but it should
+not remove same-owner cursor decoupling from the option list. The row is a
+failed counter probe of an incomplete implementation. The regression is caused
+by a local cursor change, not by benchmark methodology. The one-line advance
+changes the work PC without atomically advancing the full IFU work item: owner
+identity, ICQ line response association, prediction snapshot, branch/remainder
+boundary state, and completion/writeback state. Future trials must pass golden
+PC checks on both Dhrystone and CoreMark, and any benchmark regression
+invalidates the row even if another benchmark improves.
+
+Why the RTL was active:
+
+- The result provenance recorded a dirty RTL delta in
+  `src/rtl/core/frontend/ifu/ifu.sv` before the trial build.
+- Dhrystone moved from 27,093 to 21,597 timed cycles and
+  `packet_empty_noemit_dup` fell from 9,098 to 3,410, so the simulator was not
+  running the old image.
+- CoreMark then failed with the same modified image. The first failure is not a
+  late timeout ambiguity: the golden PC checker catches the exact retired
+  stream divergence at sequence 7,056.
+
+Correct next interpretation: keep the option, reject this implementation. The
+next RTL slice must make same-owner progress through an owned IFU work advance
+event that updates PC, line ownership, completion state, and prediction boundary
+metadata together. A local work-PC edit is not enough evidence to abandon the
+architectural path.
 
 ## Current Architecture State
 
