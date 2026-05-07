@@ -84,7 +84,7 @@ module ibuffer
         .count             (count)
     );
 
-    assign packet_out_valid = deq_valid;
+    assign packet_out_valid = deq_valid && deq_owner_match;
     assign packet_out       = deq_packet;
     assign flowthrough_candidate   = deq_flowthrough;
     assign flowthrough_owner_match = deq_flowthrough && deq_owner_match;
@@ -110,7 +110,7 @@ module ibuffer
             decode_fetch_bp_target[i] = '0;
         end
 
-        if (deq_valid) begin
+        if (packet_out_valid) begin
             decode_fetch_count                  = deq_packet.fetch_count;
             decode_fetch_bp_owner_valid         = deq_packet.pd_ctl_valid;
             decode_fetch_bp_owner_slot          = deq_packet.pd_ctl_slot;

@@ -44,14 +44,12 @@ module fetch_packet_buffer
     logic [PTR_W-1:0] rd_ptr_r, wr_ptr_r;
     logic [PTR_W:0]   count_r;
     fetch_packet_t    head_packet_c;
+    logic             deq_owner_ready_c;
 
     assign empty     = (count_r == '0);
     assign full      = (count_r == DEPTH);
-    assign enq_ready = !full || deq_ready;
     assign deq_valid = !empty || (enq_valid && empty);
     assign enq_fire  = enq_valid && enq_ready;
-    assign deq_fire  = deq_valid && deq_ready;
-    assign deq_flowthrough = empty && enq_valid && deq_ready;
     assign count     = count_r;
 
     always_comb begin
@@ -80,6 +78,10 @@ module fetch_packet_buffer
          (head_packet_c.ftq_idx != owner_idx) ||
          (head_packet_c.ftq_epoch != owner_epoch) ||
          (head_packet_c.ftq_alloc_tag != owner_tag));
+    assign deq_owner_ready_c = deq_ready && deq_owner_match;
+    assign enq_ready = !full || deq_owner_ready_c;
+    assign deq_fire  = deq_valid && deq_owner_ready_c;
+    assign deq_flowthrough = empty && enq_valid && deq_owner_ready_c;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
