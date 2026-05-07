@@ -470,7 +470,7 @@ module tb_top
         if ($test$plusargs("PERF_PROFILE")) pp_en = 1;
     end
 
-    // Raw fetch histogram: cycles where fetch_count = N from fetch_unit
+    // Raw fetch histogram: cycles where fetch_count = N from fetch_top
     integer fetch_hist [0:6];
     // Effective frontend histogram: cycles where rename sees N instructions
     integer frontend_hist [0:6];
@@ -1060,77 +1060,77 @@ module tb_top
 `endif
             if (u_core.fetch_count == 3'd0) begin
                 fetch_zero_total_cyc <= fetch_zero_total_cyc + 1;
-                if (u_core.u_fetch_unit.frontend_hold) begin
+                if (u_core.u_fetch_top.frontend_hold) begin
                     fetch_zero_frontend_hold_cyc <=
                         fetch_zero_frontend_hold_cyc + 1;
                 end else if (u_core.flush_out.valid || u_core.bru_early_redirect) begin
                     fetch_zero_redirect_cyc <= fetch_zero_redirect_cyc + 1;
-                end else if (!u_core.u_fetch_unit.packet_buf_valid) begin
+                end else if (!u_core.u_fetch_top.packet_buf_valid) begin
                     fetch_zero_pkt_empty_cyc <= fetch_zero_pkt_empty_cyc + 1;
-                    if (u_core.u_fetch_unit.ftq_full)
+                    if (u_core.u_fetch_top.ftq_full)
                         fetch_zero_ftq_full_cyc <= fetch_zero_ftq_full_cyc + 1;
-                    if (u_core.u_fetch_unit.packet_buf_full)
+                    if (u_core.u_fetch_top.packet_buf_full)
                         fetch_zero_pkt_full_cyc <= fetch_zero_pkt_full_cyc + 1;
-                    if (u_core.u_fetch_unit.ic_req_valid)
+                    if (u_core.u_fetch_top.ic_req_valid)
                         fetch_zero_icreq_live_cyc <= fetch_zero_icreq_live_cyc + 1;
-                    if (u_core.u_fetch_unit.packet_buf_enq) begin
+                    if (u_core.u_fetch_top.packet_buf_enq) begin
                         fetch_zero_pkt_empty_enq_cyc <= fetch_zero_pkt_empty_enq_cyc + 1;
-                        if (u_core.u_fetch_unit.packet_buf_in.pd_ctl_valid) begin
+                        if (u_core.u_fetch_top.packet_buf_in.pd_ctl_valid) begin
                             fetch_zero_enq_ctl_cyc <= fetch_zero_enq_ctl_cyc + 1;
-                            if ((u_core.u_fetch_unit.packet_buf_in.pd_ctl_type == 3'd0) &&
-                                !u_core.u_fetch_unit.packet_buf_in.ftq_pred_taken &&
-                                !(|u_core.u_fetch_unit.packet_buf_in.fetch_bp_taken)) begin
+                            if ((u_core.u_fetch_top.packet_buf_in.pd_ctl_type == 3'd0) &&
+                                !u_core.u_fetch_top.packet_buf_in.ftq_pred_taken &&
+                                !(|u_core.u_fetch_top.packet_buf_in.fetch_bp_taken)) begin
                                 fetch_zero_enq_ctl_cond_nt_cyc <=
                                     fetch_zero_enq_ctl_cond_nt_cyc + 1;
                             end
-                            if (u_core.u_fetch_unit.packet_buf_in.pd_ctl_type == 3'd0)
+                            if (u_core.u_fetch_top.packet_buf_in.pd_ctl_type == 3'd0)
                                 fetch_zero_enq_ctl_cond_cyc <=
                                     fetch_zero_enq_ctl_cond_cyc + 1;
-                            else if ((u_core.u_fetch_unit.packet_buf_in.pd_ctl_type == 3'd3) ||
-                                     (u_core.u_fetch_unit.packet_buf_in.pd_ctl_type == 3'd4))
+                            else if ((u_core.u_fetch_top.packet_buf_in.pd_ctl_type == 3'd3) ||
+                                     (u_core.u_fetch_top.packet_buf_in.pd_ctl_type == 3'd4))
                                 fetch_zero_enq_ctl_callret_cyc <=
                                     fetch_zero_enq_ctl_callret_cyc + 1;
                             else
                                 fetch_zero_enq_ctl_other_cyc <=
                                     fetch_zero_enq_ctl_other_cyc + 1;
-                            if (u_core.u_fetch_unit.packet_buf_in.ftq_pred_taken ||
-                                (|u_core.u_fetch_unit.packet_buf_in.fetch_bp_taken))
+                            if (u_core.u_fetch_top.packet_buf_in.ftq_pred_taken ||
+                                (|u_core.u_fetch_top.packet_buf_in.fetch_bp_taken))
                                 fetch_zero_enq_ctl_taken_cyc <=
                                     fetch_zero_enq_ctl_taken_cyc + 1;
                         end else begin
                             fetch_zero_enq_noctl_cyc <= fetch_zero_enq_noctl_cyc + 1;
                         end
-                        if (u_core.u_fetch_unit.packet_buf_in.ftq_owner_complete)
+                        if (u_core.u_fetch_top.packet_buf_in.ftq_owner_complete)
                             fetch_zero_enq_owner_done_cyc <=
                                 fetch_zero_enq_owner_done_cyc + 1;
-                        if (u_core.u_fetch_unit.ftq_head_valid &&
-                            (u_core.u_fetch_unit.packet_buf_in.ftq_idx ==
-                             u_core.u_fetch_unit.ftq_head_idx) &&
-                            (u_core.u_fetch_unit.packet_buf_in.ftq_epoch ==
-                             u_core.u_fetch_unit.ftq_current_epoch) &&
-                            (u_core.u_fetch_unit.packet_buf_in.ftq_alloc_tag ==
-                             u_core.u_fetch_unit.ftq_head_tag))
+                        if (u_core.u_fetch_top.ftq_head_valid &&
+                            (u_core.u_fetch_top.packet_buf_in.ftq_idx ==
+                             u_core.u_fetch_top.ftq_head_idx) &&
+                            (u_core.u_fetch_top.packet_buf_in.ftq_epoch ==
+                             u_core.u_fetch_top.ftq_current_epoch) &&
+                            (u_core.u_fetch_top.packet_buf_in.ftq_alloc_tag ==
+                             u_core.u_fetch_top.ftq_head_tag))
                             fetch_zero_enq_ftq_match_cyc <=
                                 fetch_zero_enq_ftq_match_cyc + 1;
                     end
-                    if (!u_core.u_fetch_unit.ic_resp_valid &&
-                        !u_core.u_fetch_unit.fe_stall &&
-                        u_core.u_fetch_unit.f1_valid)
+                    if (!u_core.u_fetch_top.ic_resp_valid &&
+                        !u_core.u_fetch_top.fe_stall &&
+                        u_core.u_fetch_top.f1_valid)
                         fetch_zero_wait_icresp_cyc <= fetch_zero_wait_icresp_cyc + 1;
-                    if (u_core.u_fetch_unit.f2_work_valid_c &&
-                        !u_core.u_fetch_unit.f2_data_valid)
+                    if (u_core.u_fetch_top.f2_work_valid_c &&
+                        !u_core.u_fetch_top.f2_data_valid)
                         fetch_zero_f2_wait_cyc <= fetch_zero_f2_wait_cyc + 1;
-                    if (u_core.u_fetch_unit.f2_work_valid_c &&
-                        u_core.u_fetch_unit.f2_data_valid) begin
+                    if (u_core.u_fetch_top.f2_work_valid_c &&
+                        u_core.u_fetch_top.f2_data_valid) begin
                         fetch_zero_f2_data_cyc <= fetch_zero_f2_data_cyc + 1;
-                        if (u_core.u_fetch_unit.f2_will_emit_c) begin
+                        if (u_core.u_fetch_top.f2_will_emit_c) begin
                             fetch_zero_f2_emit_cyc <= fetch_zero_f2_emit_cyc + 1;
-                        end else if (u_core.u_fetch_unit.extract_count == 3'd0) begin
+                        end else if (u_core.u_fetch_top.extract_count == 3'd0) begin
                             fetch_zero_no_emit_extract0_cyc <=
                                 fetch_zero_no_emit_extract0_cyc + 1;
-                        end else if (u_core.u_fetch_unit.f2_last_emit_valid_r &&
-                                     (u_core.u_fetch_unit.f2_last_emit_pc_r ==
-                                      u_core.u_fetch_unit.f2_work_pc_c)) begin
+                        end else if (u_core.u_fetch_top.f2_last_emit_valid_r &&
+                                     (u_core.u_fetch_top.f2_last_emit_pc_r ==
+                                      u_core.u_fetch_top.f2_work_pc_c)) begin
                             fetch_zero_no_emit_dup_cyc <=
                                 fetch_zero_no_emit_dup_cyc + 1;
                         end else begin
@@ -1138,14 +1138,14 @@ module tb_top
                                 fetch_zero_no_emit_other_cyc + 1;
                         end
                     end
-                    if (!u_core.u_fetch_unit.ftq_full &&
-                        !u_core.u_fetch_unit.packet_buf_full &&
-                        !u_core.u_fetch_unit.ic_req_valid &&
-                        !( !u_core.u_fetch_unit.ic_resp_valid &&
-                           !u_core.u_fetch_unit.fe_stall &&
-                           u_core.u_fetch_unit.f1_valid) &&
-                        !(u_core.u_fetch_unit.f2_work_valid_c &&
-                          !u_core.u_fetch_unit.f2_data_valid))
+                    if (!u_core.u_fetch_top.ftq_full &&
+                        !u_core.u_fetch_top.packet_buf_full &&
+                        !u_core.u_fetch_top.ic_req_valid &&
+                        !( !u_core.u_fetch_top.ic_resp_valid &&
+                           !u_core.u_fetch_top.fe_stall &&
+                           u_core.u_fetch_top.f1_valid) &&
+                        !(u_core.u_fetch_top.f2_work_valid_c &&
+                          !u_core.u_fetch_top.f2_data_valid))
                         fetch_zero_other_cyc <= fetch_zero_other_cyc + 1;
                 end else begin
                     fetch_zero_pkt_valid_cyc <= fetch_zero_pkt_valid_cyc + 1;
@@ -1577,7 +1577,7 @@ module tb_top
         if (pp_en) begin
             $display("==== PERF PROFILE ====");
             $display("Total cycles: %0d", perf_total_cyc);
-            $display("Raw fetch histogram (cycles with N instr from fetch_unit):");
+            $display("Raw fetch histogram (cycles with N instr from fetch_top):");
             for (int i = 0; i <= 6; i++)
                 $display("  fetch=%0d : %0d (%0d%%)", i, fetch_hist[i],
                          (perf_total_cyc > 0) ? (fetch_hist[i] * 100 / perf_total_cyc) : 0);
@@ -2487,64 +2487,64 @@ module tb_top
                 trace_prev_crat_s10_data <= crat_s10_data;
             end
             if (trace_listptr_en && (trace_cycle >= trace_listptr_start)) begin
-                if (u_core.u_fetch_unit.f2_work_valid_c &&
-                    u_core.u_fetch_unit.f2_data_valid &&
-                    tb_coremark_list_ptr_pc(u_core.u_fetch_unit.f2_work_pc_c)) begin
+                if (u_core.u_fetch_top.f2_work_valid_c &&
+                    u_core.u_fetch_top.f2_data_valid &&
+                    tb_coremark_list_ptr_pc(u_core.u_fetch_top.f2_work_pc_c)) begin
                     $display("[LPF2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h bp=%b bp_tk=%b bp_slot=%0d bp_tgt=%016h sg_v=%b sg_pc=%016h pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b flowthrough=%b uoc_active=%b rn_stall=%b fe_stall=%b flush=%b",
                         trace_cycle,
-                        u_core.u_fetch_unit.f2_work_pc_c,
-                        u_core.u_fetch_unit.extract_count,
-                        u_core.u_fetch_unit.final_count,
-                        u_core.u_fetch_unit.f2_will_emit_c,
-                        u_core.u_fetch_unit.f2_data_valid,
-                        u_core.u_fetch_unit.remainder_valid_r,
-                        u_core.u_fetch_unit.consume_remainder_c,
-                        u_core.u_fetch_unit.f2_seq_valid,
-                        u_core.u_fetch_unit.f2_seq_next_pc,
-                        u_core.u_fetch_unit.bp_branch_found,
-                        u_core.u_fetch_unit.bp_taken,
-                        u_core.u_fetch_unit.bp_branch_slot,
-                        u_core.u_fetch_unit.bp_target_addr,
-                        u_core.u_fetch_unit.subgroup_seed_valid_r,
-                        u_core.u_fetch_unit.subgroup_seed_pc_r,
-                        u_core.u_fetch_unit.packet_buf_in.valid,
-                        u_core.u_fetch_unit.packet_buf_in.fetch_count,
-                        u_core.u_fetch_unit.fetch_count,
-                        u_core.u_fetch_unit.packet_buf_valid,
-                        u_core.u_fetch_unit.packet_flowthrough_valid,
+                        u_core.u_fetch_top.f2_work_pc_c,
+                        u_core.u_fetch_top.extract_count,
+                        u_core.u_fetch_top.final_count,
+                        u_core.u_fetch_top.f2_will_emit_c,
+                        u_core.u_fetch_top.f2_data_valid,
+                        u_core.u_fetch_top.remainder_valid_r,
+                        u_core.u_fetch_top.consume_remainder_c,
+                        u_core.u_fetch_top.f2_seq_valid,
+                        u_core.u_fetch_top.f2_seq_next_pc,
+                        u_core.u_fetch_top.bp_branch_found,
+                        u_core.u_fetch_top.bp_taken,
+                        u_core.u_fetch_top.bp_branch_slot,
+                        u_core.u_fetch_top.bp_target_addr,
+                        u_core.u_fetch_top.subgroup_seed_valid_r,
+                        u_core.u_fetch_top.subgroup_seed_pc_r,
+                        u_core.u_fetch_top.packet_buf_in.valid,
+                        u_core.u_fetch_top.packet_buf_in.fetch_count,
+                        u_core.u_fetch_top.fetch_count,
+                        u_core.u_fetch_top.packet_buf_valid,
+                        u_core.u_fetch_top.packet_flowthrough_valid,
                         u_core.uoc_active,
                         u_core.rename_stall,
                         u_core.frontend_backend_stall,
                         u_core.flush_out.valid);
                     for (int i = 0; i < PIPE_WIDTH; i++) begin
-                        if (u_core.u_fetch_unit.slot_valid[i] &&
-                            tb_coremark_list_ptr_pc(u_core.u_fetch_unit.slot_pc[i])) begin
+                        if (u_core.u_fetch_top.slot_valid[i] &&
+                            tb_coremark_list_ptr_pc(u_core.u_fetch_top.slot_pc[i])) begin
                             $display("[LPF2SLOT] cyc=%0d slot=%0d pc=%016h hw=%04h raw=%08h rvc=%b decomp=%08h final_in=%b",
                                 trace_cycle,
                                 i,
-                                u_core.u_fetch_unit.slot_pc[i],
-                                u_core.u_fetch_unit.raw_hw[i],
-                                u_core.u_fetch_unit.raw_insn[i],
-                                u_core.u_fetch_unit.slot_is_rvc[i],
-                                u_core.u_fetch_unit.decomp_out[i],
-                                (i < int'(u_core.u_fetch_unit.final_count)));
+                                u_core.u_fetch_top.slot_pc[i],
+                                u_core.u_fetch_top.raw_hw[i],
+                                u_core.u_fetch_top.raw_insn[i],
+                                u_core.u_fetch_top.slot_is_rvc[i],
+                                u_core.u_fetch_top.decomp_out[i],
+                                (i < int'(u_core.u_fetch_top.final_count)));
                         end
                     end
                 end
 
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if ((i < int'(u_core.u_fetch_unit.fetch_count)) &&
-                        tb_coremark_list_ptr_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
+                    if ((i < int'(u_core.u_fetch_top.fetch_count)) &&
+                        tb_coremark_list_ptr_pc(u_core.u_fetch_top.fetch_pc[i])) begin
                         $display("[LPFETCH] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b flowthrough=%b uoc_active=%b rn_stall=%b fe_stall=%b flush=%b",
                             trace_cycle,
                             i,
-                            u_core.u_fetch_unit.fetch_pc[i],
-                            u_core.u_fetch_unit.fetch_insn[i],
-                            u_core.u_fetch_unit.fetch_is_rvc[i],
-                            u_core.u_fetch_unit.fetch_count,
-                            u_core.u_fetch_unit.fetch_packet_out.fetch_count,
-                            u_core.u_fetch_unit.packet_buf_valid,
-                            u_core.u_fetch_unit.packet_flowthrough_valid,
+                            u_core.u_fetch_top.fetch_pc[i],
+                            u_core.u_fetch_top.fetch_insn[i],
+                            u_core.u_fetch_top.fetch_is_rvc[i],
+                            u_core.u_fetch_top.fetch_count,
+                            u_core.u_fetch_top.fetch_packet_out.fetch_count,
+                            u_core.u_fetch_top.packet_buf_valid,
+                            u_core.u_fetch_top.packet_flowthrough_valid,
                             u_core.uoc_active,
                             u_core.rename_stall,
                             u_core.frontend_backend_stall,
@@ -2788,56 +2788,56 @@ module tb_top
                 automatic int lowpc_next_count;
 
                 lowpc_next_count = trace_lowpc_count;
-                if (u_core.u_fetch_unit.f2_work_valid_c &&
-                    u_core.u_fetch_unit.f2_data_valid &&
-                    tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.f2_work_pc_c)) begin
+                if (u_core.u_fetch_top.f2_work_valid_c &&
+                    u_core.u_fetch_top.f2_data_valid &&
+                    tb_coremark_bad_fetch_pc(u_core.u_fetch_top.f2_work_pc_c)) begin
                     $display("[CM_FETCH_F2] cyc=%0d f2_pc=%016h ext=%0d final=%0d emit=%b data_v=%b rem=%b cons_rem=%b seq_v=%b seq_pc=%016h strad=%b pkt_v=%b pkt_count=%0d out_count=%0d buf_v=%b flowthrough=%b uoc_active=%b stall=%b flush=%b",
                         trace_cycle,
-                        u_core.u_fetch_unit.f2_work_pc_c,
-                        u_core.u_fetch_unit.extract_count,
-                        u_core.u_fetch_unit.final_count,
-                        u_core.u_fetch_unit.f2_will_emit_c,
-                        u_core.u_fetch_unit.f2_data_valid,
-                        u_core.u_fetch_unit.remainder_valid_r,
-                        u_core.u_fetch_unit.consume_remainder_c,
-                        u_core.u_fetch_unit.f2_seq_valid,
-                        u_core.u_fetch_unit.f2_seq_next_pc,
-                        u_core.u_fetch_unit.straddle_detected,
-                        u_core.u_fetch_unit.packet_buf_in.valid,
-                        u_core.u_fetch_unit.packet_buf_in.fetch_count,
-                        u_core.u_fetch_unit.fetch_count,
-                        u_core.u_fetch_unit.packet_buf_valid,
-                        u_core.u_fetch_unit.packet_flowthrough_valid,
+                        u_core.u_fetch_top.f2_work_pc_c,
+                        u_core.u_fetch_top.extract_count,
+                        u_core.u_fetch_top.final_count,
+                        u_core.u_fetch_top.f2_will_emit_c,
+                        u_core.u_fetch_top.f2_data_valid,
+                        u_core.u_fetch_top.remainder_valid_r,
+                        u_core.u_fetch_top.consume_remainder_c,
+                        u_core.u_fetch_top.f2_seq_valid,
+                        u_core.u_fetch_top.f2_seq_next_pc,
+                        u_core.u_fetch_top.straddle_detected,
+                        u_core.u_fetch_top.packet_buf_in.valid,
+                        u_core.u_fetch_top.packet_buf_in.fetch_count,
+                        u_core.u_fetch_top.fetch_count,
+                        u_core.u_fetch_top.packet_buf_valid,
+                        u_core.u_fetch_top.packet_flowthrough_valid,
                         u_core.uoc_active,
                         u_core.frontend_backend_stall,
                         u_core.flush_out.valid);
                     for (int i = 0; i < PIPE_WIDTH; i++) begin
-                        if (u_core.u_fetch_unit.slot_valid[i]) begin
+                        if (u_core.u_fetch_top.slot_valid[i]) begin
                             $display("[CM_FETCH_SLOT] cyc=%0d slot=%0d pc=%016h hw=%04h raw=%08h rvc=%b decomp=%08h final_in=%b",
                                 trace_cycle,
                                 i,
-                                u_core.u_fetch_unit.slot_pc[i],
-                                u_core.u_fetch_unit.raw_hw[i],
-                                u_core.u_fetch_unit.raw_insn[i],
-                                u_core.u_fetch_unit.slot_is_rvc[i],
-                                u_core.u_fetch_unit.decomp_out[i],
-                                (i < int'(u_core.u_fetch_unit.final_count)));
+                                u_core.u_fetch_top.slot_pc[i],
+                                u_core.u_fetch_top.raw_hw[i],
+                                u_core.u_fetch_top.raw_insn[i],
+                                u_core.u_fetch_top.slot_is_rvc[i],
+                                u_core.u_fetch_top.decomp_out[i],
+                                (i < int'(u_core.u_fetch_top.final_count)));
                         end
                     end
                 end
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if ((i < int'(u_core.u_fetch_unit.fetch_count)) &&
-                        tb_coremark_bad_fetch_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
+                    if ((i < int'(u_core.u_fetch_top.fetch_count)) &&
+                        tb_coremark_bad_fetch_pc(u_core.u_fetch_top.fetch_pc[i])) begin
                         $display("[CM_FETCH_OUT] cyc=%0d slot=%0d pc=%016h insn=%08h rvc=%b count=%0d pkt_count=%0d buf_v=%b flowthrough=%b uoc_active=%b stall=%b flush=%b",
                             trace_cycle,
                             i,
-                            u_core.u_fetch_unit.fetch_pc[i],
-                            u_core.u_fetch_unit.fetch_insn[i],
-                            u_core.u_fetch_unit.fetch_is_rvc[i],
-                            u_core.u_fetch_unit.fetch_count,
-                            u_core.u_fetch_unit.fetch_packet_out.fetch_count,
-                            u_core.u_fetch_unit.packet_buf_valid,
-                            u_core.u_fetch_unit.packet_flowthrough_valid,
+                            u_core.u_fetch_top.fetch_pc[i],
+                            u_core.u_fetch_top.fetch_insn[i],
+                            u_core.u_fetch_top.fetch_is_rvc[i],
+                            u_core.u_fetch_top.fetch_count,
+                            u_core.u_fetch_top.fetch_packet_out.fetch_count,
+                            u_core.u_fetch_top.packet_buf_valid,
+                            u_core.u_fetch_top.packet_flowthrough_valid,
                             u_core.uoc_active,
                             u_core.frontend_backend_stall,
                             u_core.flush_out.valid);
@@ -2955,20 +2955,20 @@ module tb_top
                 end
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if ((lowpc_next_count < 120) &&
-                        (i < int'(u_core.u_fetch_unit.fetch_count)) &&
-                        tb_low_text_pc(u_core.u_fetch_unit.fetch_pc[i])) begin
+                        (i < int'(u_core.u_fetch_top.fetch_count)) &&
+                        tb_low_text_pc(u_core.u_fetch_top.fetch_pc[i])) begin
                         $display("[LOWPC] cyc=%0d n=%0d stage=fetch slot=%0d pc=%016h uoc_active=%b uoc_state=%0d flush=%b redir=%016h bru_redir=%b bru_pc=%016h fetch_count=%0d",
                             trace_cycle,
                             lowpc_next_count,
                             i,
-                            u_core.u_fetch_unit.fetch_pc[i],
+                            u_core.u_fetch_top.fetch_pc[i],
                             u_core.uoc_active,
                             u_core.u_uop_cache.state_r,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.bru_early_redirect,
                             u_core.bru_early_target,
-                            u_core.u_fetch_unit.fetch_count);
+                            u_core.u_fetch_top.fetch_count);
                         lowpc_next_count++;
                     end
                     if ((lowpc_next_count < 120) &&
@@ -3746,46 +3746,46 @@ module tb_top
                         u_core.bpu_update_mispredict,
                         u_core.bpu_update_target);
                 end
-                if (u_core.u_fetch_unit.f2_work_valid_c &&
-                    u_core.u_fetch_unit.ic_resp_valid &&
-                    (u_core.u_fetch_unit.f2_work_pc_c >= 64'h00000000800020d0) &&
-                    (u_core.u_fetch_unit.f2_work_pc_c < 64'h0000000080002440) &&
-                    (u_core.u_fetch_unit.f2_btb_hit_r ||
-                     u_core.u_fetch_unit.bp_branch_found ||
+                if (u_core.u_fetch_top.f2_work_valid_c &&
+                    u_core.u_fetch_top.ic_resp_valid &&
+                    (u_core.u_fetch_top.f2_work_pc_c >= 64'h00000000800020d0) &&
+                    (u_core.u_fetch_top.f2_work_pc_c < 64'h0000000080002440) &&
+                    (u_core.u_fetch_top.f2_btb_hit_r ||
+                     u_core.u_fetch_top.bp_branch_found ||
                      u_core.bpu_update_valid)) begin
                     $display("[BPF2] cyc=%0d f2_pc=%016h hit=%b btype=%0d boff=%0d btgt=%016h bp_found=%b bp_type=%0d bp_slot=%0d bp_tgt=%016h ras_tos=%0d push=%b pop=%b",
                         trace_cycle,
-                        u_core.u_fetch_unit.f2_work_pc_c,
-                        u_core.u_fetch_unit.f2_btb_hit_r,
-                        u_core.u_fetch_unit.f2_btb_type_r,
-                        u_core.u_fetch_unit.f2_btb_offset_r,
-                        u_core.u_fetch_unit.f2_btb_target_r,
-                        u_core.u_fetch_unit.bp_branch_found,
-                        u_core.u_fetch_unit.bp_type,
-                        u_core.u_fetch_unit.bp_branch_slot,
-                        u_core.u_fetch_unit.bp_target_addr,
-                        u_core.u_fetch_unit.ras_tos,
-                        u_core.u_fetch_unit.ras_push_valid,
-                        u_core.u_fetch_unit.ras_pop_valid);
+                        u_core.u_fetch_top.f2_work_pc_c,
+                        u_core.u_fetch_top.f2_btb_hit_r,
+                        u_core.u_fetch_top.f2_btb_type_r,
+                        u_core.u_fetch_top.f2_btb_offset_r,
+                        u_core.u_fetch_top.f2_btb_target_r,
+                        u_core.u_fetch_top.bp_branch_found,
+                        u_core.u_fetch_top.bp_type,
+                        u_core.u_fetch_top.bp_branch_slot,
+                        u_core.u_fetch_top.bp_target_addr,
+                        u_core.u_fetch_top.ras_tos,
+                        u_core.u_fetch_top.ras_push_valid,
+                        u_core.u_fetch_top.ras_pop_valid);
                 end
-                if (u_core.u_fetch_unit.ras_push_valid ||
-                    u_core.u_fetch_unit.ras_pop_valid ||
+                if (u_core.u_fetch_top.ras_push_valid ||
+                    u_core.u_fetch_top.ras_pop_valid ||
                     u_core.flush_out.valid) begin
                     $display("[RAS] cyc=%0d tos=%0d push=%b push_addr=%016h pop=%b pop_addr=%016h f2_pc=%016h bp_found=%b bp_type=%0d bp_tgt=%016h emit=%b dup=%b flush=%b fl_tos=%0d fl_pc=%016h",
                         trace_cycle,
-                        u_core.u_fetch_unit.ras_tos,
-                        u_core.u_fetch_unit.ras_push_valid,
-                        u_core.u_fetch_unit.ras_push_addr,
-                        u_core.u_fetch_unit.ras_pop_valid,
-                        u_core.u_fetch_unit.ras_pop_addr,
-                        u_core.u_fetch_unit.f2_work_pc_c,
-                        u_core.u_fetch_unit.bp_branch_found,
-                        u_core.u_fetch_unit.bp_type,
-                        u_core.u_fetch_unit.bp_target_addr,
-                        u_core.u_fetch_unit.f2_will_emit_c,
-                        (u_core.u_fetch_unit.f2_last_emit_valid_r &&
-                         (u_core.u_fetch_unit.f2_last_emit_pc_r ==
-                          u_core.u_fetch_unit.f2_work_pc_c)),
+                        u_core.u_fetch_top.ras_tos,
+                        u_core.u_fetch_top.ras_push_valid,
+                        u_core.u_fetch_top.ras_push_addr,
+                        u_core.u_fetch_top.ras_pop_valid,
+                        u_core.u_fetch_top.ras_pop_addr,
+                        u_core.u_fetch_top.f2_work_pc_c,
+                        u_core.u_fetch_top.bp_branch_found,
+                        u_core.u_fetch_top.bp_type,
+                        u_core.u_fetch_top.bp_target_addr,
+                        u_core.u_fetch_top.f2_will_emit_c,
+                        (u_core.u_fetch_top.f2_last_emit_valid_r &&
+                         (u_core.u_fetch_top.f2_last_emit_pc_r ==
+                          u_core.u_fetch_top.f2_work_pc_c)),
                         u_core.flush_out.valid,
                         u_core.flush_out.ras_tos,
                         u_core.flush_out.redirect_pc);
@@ -4427,33 +4427,33 @@ module tb_top
                     end
                 end
                 // Trace fetcher output (decode input)
-                if (u_core.u_fetch_unit.fetch_count > 0) begin
+                if (u_core.u_fetch_top.fetch_count > 0) begin
                     for (int fi = 0; fi < PIPE_WIDTH; fi++) begin
-                        if (fi < int'(u_core.u_fetch_unit.fetch_count)) begin
+                        if (fi < int'(u_core.u_fetch_top.fetch_count)) begin
                             $display("[FETCH%0d] cyc=%0d pc=%016h insn=%08h is_rvc=%b",
                                 fi,
                                 trace_cycle,
-                                u_core.u_fetch_unit.fetch_pc[fi],
-                                u_core.u_fetch_unit.fetch_insn[fi],
-                                u_core.u_fetch_unit.fetch_is_rvc[fi]);
+                                u_core.u_fetch_top.fetch_pc[fi],
+                                u_core.u_fetch_top.fetch_insn[fi],
+                                u_core.u_fetch_top.fetch_is_rvc[fi]);
                         end
                     end
                 end
                 // Trace fetch internals
                 $display("[F1F2] cyc=%0d f1_pc=%016h f1_v=%b f2_pc=%016h f2_v=%b ic_v=%b ic_d[63:0]=%016h",
                     trace_cycle,
-                    u_core.u_fetch_unit.f1_pc,
-                    u_core.u_fetch_unit.f1_valid,
-                    u_core.u_fetch_unit.f2_work_pc_c,
-                    u_core.u_fetch_unit.f2_work_valid_c,
-                    u_core.u_fetch_unit.ic_resp_valid,
-                    u_core.u_fetch_unit.ic_resp_data[63:0]);
+                    u_core.u_fetch_top.f1_pc,
+                    u_core.u_fetch_top.f1_valid,
+                    u_core.u_fetch_top.f2_work_pc_c,
+                    u_core.u_fetch_top.f2_work_valid_c,
+                    u_core.u_fetch_top.ic_resp_valid,
+                    u_core.u_fetch_top.ic_resp_data[63:0]);
                 $display("[ICST] cyc=%0d mshr0_v=%b mshr1_v=%b fill_v=%b fill_d[63:0]=%016h",
                     trace_cycle,
-                    u_core.u_fetch_unit.u_ifu_line_fetch.u_icache.ic_mshr_valid[0],
-                    u_core.u_fetch_unit.u_ifu_line_fetch.u_icache.ic_mshr_valid[1],
-                    u_core.u_fetch_unit.u_ifu_line_fetch.u_icache.fill_resp_valid,
-                    u_core.u_fetch_unit.u_ifu_line_fetch.u_icache.fill_resp_data[63:0]);
+                    u_core.u_fetch_top.u_ifu_line_fetch.u_icache.ic_mshr_valid[0],
+                    u_core.u_fetch_top.u_ifu_line_fetch.u_icache.ic_mshr_valid[1],
+                    u_core.u_fetch_top.u_ifu_line_fetch.u_icache.fill_resp_valid,
+                    u_core.u_fetch_top.u_ifu_line_fetch.u_icache.fill_resp_data[63:0]);
             end
         end
     end
@@ -4572,11 +4572,11 @@ module tb_top
             if (u_core.flush_out.valid) pc_flush_cycles <= pc_flush_cycles + 1;
             if (u_core.bru_early_redirect) pc_backend_redirect <= pc_backend_redirect + 1;
             // IC miss: f2 stage was valid but icache didn't deliver data
-            if (u_core.u_fetch_unit.f2_work_valid_c && !u_core.u_fetch_unit.ic_resp_valid)
+            if (u_core.u_fetch_top.f2_work_valid_c && !u_core.u_fetch_top.ic_resp_valid)
                 pc_icache_miss <= pc_icache_miss + 1;
             if (u_core.uoc_active)
                 pc_total_flushed <= pc_total_flushed + 1; // decoded-op replay active counter
-            if (u_core.u_fetch_unit.f2_bpu_redirect)
+            if (u_core.u_fetch_top.f2_bpu_redirect)
                 pc_bpu_redirect <= pc_bpu_redirect + 1;
             if (u_core.flush_out.valid)
                 pc_backend_redirect <= pc_backend_redirect + 1;
@@ -4707,27 +4707,27 @@ module tb_top
             // Update shadow only when the proposed design's F2 would actually
             // capture from queue: when F2 is consuming this cycle (will emit).
             // Otherwise hold (proposed F2 holds when not consuming).
-            if (u_core.u_fetch_unit.f2_will_emit_c &&
-                u_core.u_fetch_unit.ic_resp_valid) begin
-                f2_work_pc_shadow_queue_r <= u_core.u_fetch_unit.icq_deq_pc;
+            if (u_core.u_fetch_top.f2_will_emit_c &&
+                u_core.u_fetch_top.ic_resp_valid) begin
+                f2_work_pc_shadow_queue_r <= u_core.u_fetch_top.icq_deq_pc;
             end
 
             // Compare shadow against actual at the F2 stage (only meaningful
             // when F2 is valid AND has data via the queue path AND we're not
             // in a transition state)
-            if (u_core.u_fetch_unit.f2_work_valid_c &&
-                u_core.u_fetch_unit.ic_resp_valid &&
-                u_core.u_fetch_unit.f2_will_emit_c &&
-                !u_core.u_fetch_unit.f2_line_state_use_c &&
-                !u_core.u_fetch_unit.consumed_remainder_r) begin
-                if (u_core.u_fetch_unit.f2_work_pc_c[63:6] ==
+            if (u_core.u_fetch_top.f2_work_valid_c &&
+                u_core.u_fetch_top.ic_resp_valid &&
+                u_core.u_fetch_top.f2_will_emit_c &&
+                !u_core.u_fetch_top.f2_line_state_use_c &&
+                !u_core.u_fetch_top.consumed_remainder_r) begin
+                if (u_core.u_fetch_top.f2_work_pc_c[63:6] ==
                     f2_work_pc_shadow_queue_r[63:6]) begin
                     shadow_queue_pc_match_cycles_r <=
                         shadow_queue_pc_match_cycles_r + 1;
                 end else begin
                     shadow_queue_pc_diverge_cycles_r <=
                         shadow_queue_pc_diverge_cycles_r + 1;
-                    last_shadow_diverge_actual_r   <= u_core.u_fetch_unit.f2_work_pc_c;
+                    last_shadow_diverge_actual_r   <= u_core.u_fetch_top.f2_work_pc_c;
                     last_shadow_diverge_proposed_r <= f2_work_pc_shadow_queue_r;
                     last_shadow_diverge_cycle_r    <= trace_cycle;
                 end

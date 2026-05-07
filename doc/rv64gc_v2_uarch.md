@@ -114,7 +114,7 @@ Current default RTL:
   can load PC and owner metadata as one object instead of pairing signals from
   different request phases. Same-line owners may consume the local F2
   line-state record without treating the queue head as the owner cursor.
-- `fetch_unit.sv` now has a stateful IFU work item carrying valid, PC,
+- `fetch_top.sv` now has a stateful IFU work item carrying valid, PC,
   FTQ idx/epoch/alloc-tag, FTQ entry, line identity, delivery state, and
   completion fields.
   This cursor is the single registered F2 work state; the previous raw F2
@@ -374,7 +374,7 @@ These are the structural constraint points that any optimization needs to be awa
 
 ## 2. Front-End
 
-### 2.1 Frontend Integration (`src/rtl/core/frontend/top/fetch_unit.sv`)
+### 2.1 Frontend Integration (`src/rtl/core/frontend/top/fetch_top.sv`)
 
 - **Width:** 16 bytes/cycle (`FETCH_BYTES = 16`); up to 4 instructions (RVC: up to 8 if all compressed)
 - **Current pipeline:** 2 stages (IF1: PC gen + L1I tag/data probe + BPU lookup; IF2: way mux + predecode).
@@ -385,6 +385,9 @@ These are the structural constraint points that any optimization needs to be awa
   4. BPU redirect (taken-branch BTB+TAGE prediction)
   5. Sequential PC + 16
 - **L1I:** see §11
+- **Module boundary:** `fetch_top.sv` is the direct frontend integration top
+  instantiated by `rv64gc_core_top.sv`. `frontend/ifu/ifu.sv` is the
+  instruction fetch unit block inside that integration layer.
 - **Current advance model:** F1 is still coupled to F2 packet progress. This
   means the BPU can predict a target, but the frontend generally does not build
   a multi-entry predicted-block stream ahead of decode.
@@ -433,14 +436,14 @@ These are the structural constraint points that any optimization needs to be awa
 - **Current line-state boundary:** `ifu_line_fetch.sv` records a separate
   line-state register for the consumed response line (line address, data, and
   epoch). Packet metadata is sourced from this line identity, while FTQ
-  idx/epoch/tag remain the owner cursor in `fetch_unit.sv`. The extraction
+  idx/epoch/tag remain the owner cursor in `fetch_top.sv`. The extraction
   datapath may consume the line-state record when the line and epoch match the
   IFU work cursor line; otherwise it waits for an accepted queue response.
 - **Current IBuffer boundary:** `frontend/ibuffer/ibuffer.sv` is the
   decode-facing packet boundary and currently wraps the existing
   `fetch_packet_buffer` FIFO implementation. It is the only packet source for
   decode. Its empty-buffer flow-through preserves the previous fast path
-  without letting `fetch_unit.sv` bypass the owner-aware buffer. F2 emission is
+  without letting `fetch_top.sv` bypass the owner-aware buffer. F2 emission is
   gated by the IBuffer enqueue-ready signal rather than the raw full flag, so a
   full buffer can still accept a packet on a same-cycle dequeue. The old
   `FETCH_PACKET_BYPASS2` direct-bypass control surface has been removed; the

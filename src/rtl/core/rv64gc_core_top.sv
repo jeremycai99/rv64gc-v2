@@ -43,7 +43,7 @@ module rv64gc_core_top
     flush_t bru_flush;
     flush_t flush_out;
 
-    // Forward declarations for BRU signals used in fetch_unit port connections
+    // Forward declarations for BRU signals used in fetch_top port connections
     logic        bru_early_redirect;
     logic        bru0_early_redirect;
     logic        bru1_early_redirect;
@@ -183,8 +183,8 @@ module rv64gc_core_top
     logic [63:0] icache_fill_resp_addr;
     logic [511:0] icache_fill_resp_data;
 
-    // Prefetch L2 signals (from fetch_unit NLPB to L2 prefetch port).
-    // Declared here because fetch_unit instantiation below uses them as
+    // Prefetch L2 signals (from fetch_top NLPB to L2 prefetch port).
+    // Declared here because fetch_top instantiation below uses them as
     // port connections; an explicit declaration must precede first use
     // under IEEE 1800 strict semantics (DSim rejects implicit-net
     // declarations; xsim was lenient).  L2 cache instantiation consumes
@@ -285,7 +285,7 @@ module rv64gc_core_top
     // FENCE.I signal
     logic        fence_i_signal;
 
-    fetch_unit u_fetch_unit (
+    fetch_top u_fetch_top (
         .clk                    (clk),
         .rst_n                  (rst_n),
         .fetch_count            (fetch_count),
@@ -2116,7 +2116,7 @@ module rv64gc_core_top
     // =========================================================================
     logic [63:0] bru_result;
     logic        bru_taken;
-    // bru_target declared earlier (forward decl for fetch_unit port)
+    // bru_target declared earlier (forward decl for fetch_top port)
     logic [63:0] bru_taken_target;
     logic        bru_mispredict;
 
@@ -3614,7 +3614,7 @@ module rv64gc_core_top
     logic [511:0] l2_icache_resp_data;
     logic l2_invalidate_busy;
 
-    // (pf_l2_* signals are forward-declared near the fetch_unit section above.)
+    // (pf_l2_* signals are forward-declared near the fetch_top section above.)
 
     // The L2 hit pipeline does not invalidate stages after delivery, so a
     // response for an earlier icache fetch reappears L2_HIT_LATENCY cycles
@@ -3642,7 +3642,7 @@ module rv64gc_core_top
         .icache_resp_valid  (icache_fill_resp_valid),
         .icache_resp_addr   (l2_icache_resp_addr),
         .icache_resp_data   (icache_fill_resp_data),
-        // Prefetch port (from NLPB via fetch_unit)
+        // Prefetch port (from NLPB via fetch_top)
         .prefetch_req_valid (pf_l2_req_valid),
         .prefetch_req_addr  (pf_l2_req_addr),
         .prefetch_req_ready (pf_l2_req_ready),

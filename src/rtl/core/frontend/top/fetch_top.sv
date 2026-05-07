@@ -1,10 +1,10 @@
-/* file: fetch_unit.sv
- Description: Fetch unit with branch prediction and I-cache interface.
+/* file: fetch_top.sv
+ Description: Frontend integration top for branch prediction, IFU, FTQ, and I-cache.
  Author: Jeremy Cai
  Date: Apr 09, 2026
  Version: 2.0
 */
-module fetch_unit
+module fetch_top
     import rv64gc_pkg::*;
     import isa_pkg::*;
     import uarch_pkg::*;

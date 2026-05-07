@@ -14,7 +14,7 @@ module next_line_prefetch_buffer
     input  logic         clk,
     input  logic         rst_n,
 
-    // Lookup port (from fetch_unit, combinational — same cycle as icache)
+    // Lookup port from IFU line fetch, combinational, same cycle as icache.
     input  logic         lookup_valid,
     input  logic [63:0]  lookup_addr,
     output logic         hit,
