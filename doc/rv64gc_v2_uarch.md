@@ -81,6 +81,12 @@ Current default RTL:
   allocation tags. The requested-not-written-back occupancy is exposed as its
   own count so future runahead limits can distinguish queued owner requests
   from owners already delivered toward commit.
+- Decode/commit visibility is split from IFU-owner completion. The first
+  accepted packet for an IFU-writeback owner pushes that FTQ owner into the
+  commit/decode-visible region; the IFU-writeback owner may remain live until
+  the final packet for that owner is emitted. This lets one predicted fetch
+  block span multiple decode packets without making the packet buffer observe a
+  stale owner between the first and last packet.
 - The IFU request owner and IFU-writeback owner are separate pointers. In the
   current monolithic fetch unit, request-owner progress is driven by the normal
   request allocation event; the FTQ handles same-cycle
@@ -99,7 +105,8 @@ Current default RTL:
   as instruction data. Same-line owners may consume the local F2 line-state
   record without treating the queue head as the owner cursor.
 - `fetch_unit.sv` now has a stateful IFU work item carrying valid, PC,
-  FTQ idx/epoch/alloc-tag, FTQ entry, line identity, and completion fields.
+  FTQ idx/epoch/alloc-tag, FTQ entry, line identity, delivery state, and
+  completion fields.
   This cursor is the single registered F2 work state; the previous raw F2
   PC/FTQ mirror-register set has been retired. Line acceptance and
   line-state matching use the cursor's active `line_addr`; extraction,
@@ -123,7 +130,10 @@ Current default RTL:
   completion-owner mismatches from diagnostic cursor-vs-writeback skew.
   Owner completion is stricter than packet emission: a packet that consumes a
   straddle remainder, or redirects without an enqueued/registered successor
-  owner, keeps the current owner live for the continuation packet.
+  owner, keeps the current owner live for the continuation packet. Straight-line
+  same-line continuation also keeps the current owner live; the first emitted
+  packet records that the owner has been delivered to the commit/decode side,
+  while final owner completion is delayed until the continuation is exhausted.
   The next XiangShan-style split is to make this cursor-to-FTQ handoff more
   complete under explicit owner/completion rules.
 - `fetch_packet_buffer.sv` is the decode-facing owner-aware IBuffer boundary.
@@ -359,14 +369,18 @@ These are the structural constraint points that any optimization needs to be awa
   means the BPU can predict a target, but the frontend generally does not build
   a multi-entry predicted-block stream ahead of decode.
 - **Current IFU work cursor:** the default RTL has a stateful work item carrying
-  current PC, line address, FTQ identity, FTQ metadata, and completion fields.
-  It is the single registered F2 work state; request anti-duplication, NLPB
-  response matching, line acceptance, line-state matching, extraction,
-  predecode, owner-live checks, packet construction, owner-completion decisions,
-  and debug/profile paths consume the cursor aliases rather than raw F2 PC/owner
-  signals. Owner completion is delayed when the emitted packet is still carrying
-  a same-owner continuation, such as a straddle-remainder consume or a redirect
-  taken before a successor owner exists.
+  current PC, line address, FTQ identity, FTQ metadata, delivery state, and
+  completion fields. It is the single registered F2 work state; request
+  anti-duplication, NLPB response matching, line acceptance, line-state
+  matching, extraction, predecode, owner-live checks, packet construction,
+  owner-completion decisions, and debug/profile paths consume the cursor aliases
+  rather than raw F2 PC/owner signals. Owner completion is delayed when the
+  emitted packet is still carrying
+  a same-owner continuation, such as straight-line same-line delivery,
+  straddle-remainder consume, or a redirect taken before a successor owner
+  exists. The first accepted packet separately marks the owner as delivered to
+  the commit/decode-visible side of the FTQ, so multi-packet owners do not look
+  stale to the decode-facing packet buffer.
 - **Current stall sources:** I-cache miss, pipeline backpressure (FTQ full / packet buffer full / rename stall), wait-for-Icresp, NLP miss
 - **Intended ownership contract:** F1 may request the next predicted block when
   a stable FTQ/fetch-block owner and downstream packet-buffer slot are available.
@@ -499,7 +513,10 @@ These are the structural constraint points that any optimization needs to be awa
   Current RTL has separate allocation-to-request, request-to-writeback, and
   writeback-to-commit counts, current IFU request owner, current IFU-writeback
   owner, next IFU-writeback owner after same-cycle pop/request movement, and
-  commit/training owner aliases. It is already the right place to own
+  commit/training owner aliases. Decode/commit visibility is advanced by an
+  explicit first-packet delivery push, not by final IFU-owner completion, so a
+  single FTQ owner can remain active in the IFU while already being visible to
+  the decode/commit side. The FTQ is already the right place to own
   prediction-block metadata.
 - **FTQ ownership gaps:** the current RTL has an explicit monolithic IFU request
   valid/ready/fire boundary. Remaining gaps are redirect/epoch lifetime for
@@ -922,8 +939,8 @@ Used by `tools/bubble_taxonomy.py` and `tools/headwait_deepdive.py` for per-cycl
 ## 13. Documentation Index
 
 - `doc/rv64gc_v2_uarch.md` — this document; architectural specification only.
-- `doc/stage1_frontend_refactor_status_2026-05-06.md` — Stage 1 frontend
-  refactor status, performance methodology, raw rows, and evaluation status.
+- `doc/stage1_frontend_refactor_status_2026-05-06.md` — frontend refactor
+  status, performance methodology, raw rows, and evaluation status.
 - `doc/competitor_analysis.md` — external core architecture references and
   comparison methodology.
 - `doc/archive/4wide/` — historical pivot notes, run reports, and retired

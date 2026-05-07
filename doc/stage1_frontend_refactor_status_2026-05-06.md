@@ -26,9 +26,10 @@ not support a claim that rv64gc-v2 beats MegaBOOM.
 Stage 2 remains open: the aggressive targets are 7.5 CM/MHz and
 4.0 DMIPS/MHz.
 
-## Current RTL Checkpoint, 2026-05-06
+## Locked Baseline Before Delivery-Push Slice, 2026-05-06
 
-Fresh rebuilt DSim strict/profiled smoke passed on the current RTL:
+Fresh rebuilt DSim strict/profiled smoke passed on the last locked baseline
+before the FTQ delivery-push slice:
 
 - Build: `./build_dsim.sh` passed after the current `fetch_unit.sv` checker
   fix.
@@ -69,12 +70,56 @@ Current frontend counters still show the Stage 1 performance work is open:
 | `xs_ftq_empty_cycles` | 8,927 | 83,056 | 779,071 | Demand frontend is still shallow. |
 | `xs_packet_buffer_stale_owner` | 418 | 5,792 | 53,242 | Flow-through misses remain visible. |
 
-Verdict: current RTL is endpoint-clean and profiled under strict owner/delivery
-checks, but it does not yet show a performance-active frontend architecture
-change. The next RTL slice must make FTQ/IBuffer occupancy move: bounded
-BPU/F1 runahead should be accepted only if `ftq_occ_max` rises above 1,
+Verdict: this baseline is endpoint-clean and profiled under strict
+owner/delivery checks, but it does not yet show a performance-active frontend
+architecture change. The next RTL slice must make FTQ/IBuffer occupancy move:
+bounded BPU/F1 runahead should be accepted only if `ftq_occ_max` rises above 1,
 IBuffer occupancy becomes nonzero, duplicate/no-emit pressure drops, and the
 strict/golden owner invariants remain clean.
+
+## FTQ Delivery-Push Structural Checkpoint, 2026-05-06
+
+The current working tree splits first-packet delivery from final IFU-owner
+completion. The first accepted packet for an IFU-writeback owner pushes that
+owner into the commit/decode-visible FTQ region; the IFU-writeback owner can
+remain live until a same-owner continuation finishes. This fixes the stale
+owner artifact that appeared when one FTQ owner legally spans multiple packets.
+
+- Build: `./build_dsim.sh` passed.
+- Strict/profiled smoke artifact:
+  `benchmark_results/20260506_delivery_push_same_owner_smoke/`.
+- Heavy endpoint-only artifact:
+  `benchmark_results/20260506_delivery_push_same_owner_iter10_endpoint/`.
+- The stage1 CoreMark 10 golden-PC row tripped at sequence `2553567`
+  (`expected=0x800023e0`, `actual=0x800023de`). Local disassembly shows
+  `0x800023de` is the real compressed `ld s2,64(sp)` between `0x800023dc`
+  and `0x800023e0`, so the current golden fixture is stale or generated from a
+  different retire stream. That golden file must not be treated as an
+  independent oracle until the generation contract is repaired.
+
+| Workload | Status | Timed cycles | Timed instret | Metric | Notes |
+|---|---|---:|---:|---:|---|
+| Dhrystone 100 | PASS | 27,093 | 48,436 | 2.100734 DMIPS/MHz | strict owner/delivery clean |
+| CoreMark 1 | PASS | 209,058 | 318,379 | 4.783362 CM/MHz | strict owner/delivery clean |
+| CoreMark 10 | PASS | 2,058,941 | 3,183,639 | 4.856866 CM/MHz | endpoint-only run; golden fixture excluded |
+
+Key counter movement versus the locked baseline:
+
+| Counter | Dhrystone 100 | CoreMark 1 | CoreMark 10 endpoint | Interpretation |
+|---|---:|---:|---:|---|
+| `ftq_occ_max` | 1 | 1 | 1 | Still no real FTQ runahead. |
+| `packet_buf_occ_max` | 0 | 0 | 0 | IBuffer is still flow-through only. |
+| `packet_empty_f2_data` | 9,410 | 85,756 | 814,953 | F2/data empty pressure did not improve. |
+| `packet_empty_noemit_dup` | 9,098 | 82,614 | 785,795 | Duplicate/no-emit pressure did not improve. |
+| `xs_f2_owner_idx_mismatch` | 0 | 0 | 0 | Owner invariant remains clean. |
+| `xs_packet_buffer_stale_owner` | 0 | 0 | 0 | Delivery/commit visibility split fixed stale owner accounting. |
+| `xs_ftq_empty_cycles` | 3,223 | 50,944 | 480,771 | FTQ empty accounting changed, but occupancy is still shallow. |
+
+Verdict: accept this as a structural checkpoint only. It cleans up owner
+lifetime for legal multi-packet FTQ owners, but it regresses measured timing
+and does not provide Stage 1 performance evidence. The next implementation
+must create capacity-owned BPU/F1 runahead and nonzero IBuffer occupancy before
+any performance claim is valid.
 
 ## Bottleneck (data-driven)
 
@@ -154,8 +199,8 @@ rv64gc-v2 is now aligned in direction but not yet in depth:
 | Role | Current rv64gc-v2 state | Bottleneck impact | Next refactor slice |
 |---|---|---|---|
 | BPU owner production | BPU prediction is still coupled to F2 packet progress. | F1 cannot build a predicted stream; FTQ occupancy remains shallow. | Enable proactive F1 only after FTQ owner allocation and IBuffer capacity are structural. |
-| FTQ owner lifetime | `ftq.sv` now has separate allocation-to-request, request-to-writeback, and writeback-to-commit state, with distinct IFU request and IFU-writeback owner views. The monolithic fetch unit drives request ownership from the normal request allocation event, and FTQ handles same-cycle allocation-to-IFU transfer. `ifu_req_ready` is now gated by response-queue and IBuffer capacity. | F2 completion, IBuffer flow-through, and owner-mismatch counters now name the correct completion-side role instead of raw queue-head state. The split is structural without changing measured timing. | Define redirect/epoch lifetime for outstanding responses, then use the capacity-aware boundary for bounded runahead. |
-| IFU validation | IFU/F2 logic still lives mostly inside `fetch_unit.sv`, but there is now a stateful IFU work cursor (`ifu_work_item_t`) carrying PC, line address, and FTQ identity. Raw F2 PC/FTQ mirror registers have been removed, so the cursor is the single registered F2 work state. On IFU-owner completion, the cursor can take the next FTQ IFU-writeback owner identity while keeping `f2_seq_next_pc` as the in-stream PC. Request de-dup, NLPB response matching, line acceptance, line-state matching, extraction, predecode, owner-live checks, packet metadata, debug/probe reporting, and the owner-completion decision all use cursor aliases. | The boundary is structurally in place without changing measured timing, but local F2 recovery and duplicate suppression remain too important. | Continue replacing local F1/F2 owner steering with FTQ owner identity while preserving the cursor-owned in-owner PC. |
+| FTQ owner lifetime | `ftq.sv` now has separate allocation-to-request, request-to-writeback, and writeback-to-commit state, with distinct IFU request and IFU-writeback owner views. First-packet delivery now pushes the owner into the commit/decode-visible region separately from final IFU-owner completion, so a same-owner continuation can remain live without making the packet buffer see a stale owner. `ifu_req_ready` is gated by response-queue and IBuffer capacity. | F2 completion, IBuffer flow-through, and owner-mismatch counters now name the correct completion-side role instead of raw queue-head state. The delivery split removes stale-owner accounting but still does not create runahead. | Define redirect/epoch lifetime for outstanding responses, then use the capacity-aware boundary for bounded runahead. |
+| IFU validation | IFU/F2 logic still lives mostly inside `fetch_unit.sv`, but there is now a stateful IFU work cursor (`ifu_work_item_t`) carrying PC, line address, FTQ identity, delivery state, and completion state. Raw F2 PC/FTQ mirror registers have been removed, so the cursor is the single registered F2 work state. Same-line straight-line continuation remains under the same FTQ owner until the final packet. Request de-dup, NLPB response matching, line acceptance, line-state matching, extraction, predecode, owner-live checks, packet metadata, debug/probe reporting, and the owner-completion decision all use cursor aliases. | The boundary is structurally in place, but F1/F2 are still lockstep and duplicate/no-emit pressure remains high. | Continue replacing local F1/F2 owner steering with FTQ owner identity while preserving the cursor-owned in-owner PC. |
 | IBuffer elasticity | `fetch_packet_buffer.sv` is now the owner-aware decode-facing IBuffer boundary: it stores complete fetch packets, exposes enqueue/dequeue fire, classifies the head packet as owner-match/stale/owner-complete against the FTQ commit owner, and owns the empty-buffer flow-through path to decode. `+FETCH_DELIVERY_STRICT` now survives the clean Dhrystone/CoreMark smoke. | It now manages the commit-pop side of owner lifetime and removes the separate `packet_buf_in` decode bypass, but F1/F2 are still mostly lockstep and duplicate suppression remains in `fetch_unit.sv`. | Use IBuffer capacity to bound proactive F1 runahead, then broaden strict delivery/golden-PC coverage. |
 
 The current bottleneck maps to the missing IFU/IBuffer split: the core can
@@ -196,11 +241,17 @@ The next session should use this order:
    keeping the cursor-computed `f2_seq_next_pc`. Debug/probe paths that report
    active F2 PC/FTQ state also read `f2_work_*`, including the testbench
    hierarchical probes that used to read `f2_valid_r`/`f2_pc_r`.
-5. **Then enable bounded BPU/F1 runahead.** F1 can advance from BPU prediction
+5. **Split first-packet delivery from final IFU completion.** Done as a
+   structural checkpoint on 2026-05-06. Same-line straight-line continuation
+   can keep the same FTQ owner live across multiple packets while the first
+   packet still makes that owner visible to the IBuffer/commit side. This fixes
+   stale-owner accounting, but the run regressed timing and left `ftq_occ_max`
+   at 1 and `packet_buf_occ_max` at 0, so it is not performance evidence.
+6. **Then enable bounded BPU/F1 runahead.** F1 can advance from BPU prediction
    only when FTQ allocation and IBuffer capacity are available. The runahead
    limit should initially be small and derived from FTQ/IBuffer occupancy, not
    benchmark PCs.
-6. **Measure the intended counters.** The improvement claim is valid only if
+7. **Measure the intended counters.** The improvement claim is valid only if
    `packet_empty_noemit_dup`, `xs_dup_last_emit`, frontend bubbles, and shallow
    FTQ occupancy move in the expected direction while endpoint identity and
    owner-invariant counters remain clean.
@@ -956,6 +1007,7 @@ python3 tools/run_benchmarks.py --runner dsim --goal stage1 --run-class signoff 
 | F2 line-state record | working tree 2026-05-06 | Active line/epoch-qualified data reuse with stale-response epoch drain; FTQ owner cursor remains separate |
 | F2 queue-PC shadow probe | working tree 2026-05-06 | Shadow runahead evidence now samples accepted ICQ responses, not raw queue-head visibility |
 | IFU work cursor (`ifu_work_item_t`) | working tree 2026-05-06 | Stateful PC/FTQ/line work item; raw F2 PC/FTQ mirror registers retired; clean owner handoff uses FTQ next-owner identity plus cursor `f2_seq_next_pc`; redirect handoff can use the matching FTQ next-owner view; line gates use active `line_addr`, and extraction/owner/completion/debug probes use `f2_work_*` aliases |
+| FTQ delivery-push split | working tree 2026-05-06 | First accepted packet pushes the IFU-writeback owner into the commit/decode-visible region separately from final IFU-owner completion; same-owner multi-packet continuation no longer appears as stale owner |
 | IBuffer flow-through | working tree 2026-05-06 | Empty-buffer same-cycle decode delivery is owned by `fetch_packet_buffer`; the old separate `packet_buf_in` decode bypass no longer feeds `fetch_packet_out` |
 | Packet flow-through naming | working tree 2026-05-06 | Stale `FETCH_PACKET_BYPASS2*` direct-bypass controls removed; frontend fast-path counters and trace labels now use flow-through naming |
 | Local shortcut controls and logic | working tree 2026-05-06 | Opt-in same-line, same-tail, sequential-lookahead, weak-bias, and direct packet-policy/tail paths removed from `fetch_unit.sv`; stale harness summary columns were removed; remaining runahead work must be FTQ/IBuffer capacity-owned |

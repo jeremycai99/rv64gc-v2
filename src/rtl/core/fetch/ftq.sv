@@ -20,6 +20,7 @@ module ftq
     output logic [FTQ_ALLOC_TAG_BITS-1:0] enq_tag,
 
     input  logic                         ifu_req_pop_valid,
+    input  logic                         delivery_push_valid,
     input  logic                         pop_valid,
 
     output logic                         head_valid,
@@ -95,6 +96,7 @@ module ftq
     logic ifu_req_pop_existing_c;
     logic ifu_req_pop_from_enq_c;
     logic ifu_req_pop_fire_c;
+    logic delivery_push_fire_c;
     logic ifu_wb_pop_fire_c;
     logic commit_pop_fire_c;
     logic commit_pop_possible_c;
@@ -119,12 +121,12 @@ module ftq
                            count_ifu_to_wb_r +
                            count_wb_to_commit_r;
     assign empty         = (total_count_c == '0);
-    assign full          = (total_count_c == DEPTH);
+    assign full          = (total_count_c >= (FTQ_IDX_BITS+1)'(DEPTH));
     assign ifu_owner_valid_c = (count_alloc_to_ifu_r != '0);
     assign ifu_wb_owner_valid_c = (count_ifu_to_wb_r != '0) ||
                                   ifu_req_pop_fire_c;
     assign commit_owner_valid_c = (count_wb_to_commit_r != '0) ||
-                                  ifu_wb_pop_fire_c;
+                                  delivery_push_fire_c;
     assign head_valid    = ifu_wb_owner_valid_c;
     assign commit_head_valid = commit_owner_valid_c;
     assign commit_pop_possible_c = commit_pop_valid && commit_head_valid;
@@ -146,6 +148,8 @@ module ftq
     assign ifu_wb_pop_fire_c = !flush && pop_valid &&
                                ((count_ifu_to_wb_r != '0) ||
                                 ifu_req_pop_existing_c);
+    assign delivery_push_fire_c = !flush && delivery_push_valid &&
+                                  ifu_wb_owner_valid_c;
     assign commit_pop_fire_c = !flush && commit_pop_valid &&
                                commit_owner_valid_c;
     assign count_ifu_to_commit = count_ifu_to_wb_r + count_wb_to_commit_r;
@@ -226,7 +230,7 @@ module ftq
             (ifu_req_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0) -
             (ifu_wb_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0);
         next_count_wb_to_commit_c = count_wb_to_commit_r +
-            (ifu_wb_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0) -
+            (delivery_push_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0) -
             (commit_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0);
 
         if (flush) begin
@@ -281,11 +285,11 @@ module ftq
         end else if (commit_pop_fire_c) begin
             if (count_wb_to_commit_r > {{FTQ_IDX_BITS{1'b0}}, 1'b1})
                 next_commit_ptr_c = ptr_next(commit_ptr_r);
-            else if (ifu_wb_pop_fire_c)
+            else if (delivery_push_fire_c)
                 next_commit_ptr_c = ifu_wb_owner_idx_c;
             else
                 next_commit_ptr_c = ptr_next(commit_ptr_r);
-        end else if ((count_wb_to_commit_r == '0) && ifu_wb_pop_fire_c) begin
+        end else if ((count_wb_to_commit_r == '0) && delivery_push_fire_c) begin
             next_commit_ptr_c = ifu_wb_owner_idx_c;
         end
     end

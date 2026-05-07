@@ -140,6 +140,7 @@ module fetch_unit
     logic [63:0] f2_duplicate_next_pc_c;
     logic        f2_ftq_owner_live_c;
     logic        f2_owner_completion_candidate_c;
+    logic        f2_same_owner_continue_c;
     logic        bp_branch_found;
     logic        bp_taken;
     logic [63:0] bp_target_addr;
@@ -254,6 +255,7 @@ module fetch_unit
     logic        ifu_req_fire_c;
     logic        ftq_pop_valid;
     logic        ftq_ifu_req_pop_valid;
+    logic        ftq_delivery_push_valid;
     logic        ftq_ifu_pop_valid;
     logic        ftq_commit_pop_valid;
     logic        ftq_head_valid;
@@ -291,6 +293,8 @@ module fetch_unit
     logic        f2_work_line_valid_c;
     logic [63:LINE_BITS] f2_work_line_addr_c;
     logic        f2_work_owner_complete_c;
+    logic        f2_work_owner_delivered_c;
+    logic        f2_owner_delivery_push_c;
     logic        f2_redirect_without_owner_successor_c;
     logic        ftq_last_alloc_valid_r;
     logic [63:0] ftq_last_alloc_req_pc_r;
@@ -382,6 +386,7 @@ module fetch_unit
         f1_valid &&
         !remainder_valid_r &&
         !line_straddle_advance_c &&
+        !f2_same_owner_continue_c &&
         // The live F2 group already owns this exact request PC. Re-allocating
         // a fresh FTQ entry for it creates a tag with no distinct packet to
         // pair against. A predicted redirect is different: it starts a new
@@ -572,6 +577,7 @@ module fetch_unit
         logic                                  line_valid;
         logic [63:LINE_BITS]                   line_addr;
         logic                                  owner_complete;
+        logic                                  owner_delivered;
     } ifu_work_item_t;
     function automatic ifu_work_item_t make_ifu_work_item(
         input logic                                  valid,
@@ -594,6 +600,7 @@ module fetch_unit
             make_ifu_work_item.line_valid    = valid;
             make_ifu_work_item.line_addr     = pc[63:LINE_BITS];
             make_ifu_work_item.owner_complete = 1'b0;
+            make_ifu_work_item.owner_delivered = 1'b0;
         end
     endfunction
     ifu_work_item_t                         ifu_work_r;
@@ -690,6 +697,7 @@ module fetch_unit
     assign f2_work_ftq_entry_c     = ifu_work_r.ftq_entry;
     assign f2_work_line_valid_c    = ifu_work_r.line_valid;
     assign f2_work_line_addr_c     = ifu_work_r.line_addr;
+    assign f2_work_owner_delivered_c = ifu_work_r.owner_delivered;
     assign f2_ftq_owner_live_c =
         f2_work_ftq_valid_c &&
         ftq_ifu_wb_owner_valid &&
@@ -768,6 +776,7 @@ module fetch_unit
         .enq_epoch    (ftq_enq_epoch),
         .enq_tag      (ftq_enq_tag),
         .ifu_req_pop_valid(ftq_ifu_req_pop_valid),
+        .delivery_push_valid(ftq_delivery_push_valid),
         .pop_valid    (ftq_ifu_pop_valid),
         .head_valid   (ftq_head_valid),
         .head_entry   (ftq_head_entry),
@@ -1107,6 +1116,7 @@ module fetch_unit
         logic [FTQ_EPOCH_BITS-1:0]             work_ftq_epoch_next;
         logic [FTQ_ALLOC_TAG_BITS-1:0]         work_ftq_alloc_tag_next;
         ftq_entry_t                            work_ftq_entry_next;
+        logic                                  work_owner_delivered_next;
 
         ifu_work_next_c = ifu_work_r;
 
@@ -1116,6 +1126,8 @@ module fetch_unit
         work_ftq_epoch_next     = f2_work_ftq_epoch_c;
         work_ftq_alloc_tag_next = f2_work_ftq_alloc_tag_c;
         work_ftq_entry_next     = f2_work_ftq_entry_c;
+        work_owner_delivered_next =
+            f2_work_owner_delivered_c || f2_owner_delivery_push_c;
 
         if (redirect_valid) begin
             ifu_work_next_c = '0;
@@ -1147,6 +1159,7 @@ module fetch_unit
                     f2_work_ftq_epoch_c,
                     f2_work_ftq_alloc_tag_c,
                     f2_work_ftq_entry_c);
+                ifu_work_next_c.owner_delivered = work_owner_delivered_next;
             end
         end else if (!fe_stall) begin
             if (ifu_work_take_ftq_next_owner_c) begin
@@ -1177,6 +1190,7 @@ module fetch_unit
                         work_ftq_epoch_next     = ftq_enq_epoch;
                         work_ftq_alloc_tag_next = ftq_enq_tag;
                         work_ftq_entry_next     = ftq_enq_entry_c;
+                        work_owner_delivered_next = 1'b0;
                     end
                 end else if (ifu_work_take_request_owner_c) begin
                     work_ftq_valid_next     = 1'b1;
@@ -1184,12 +1198,14 @@ module fetch_unit
                     work_ftq_epoch_next     = ftq_enq_epoch;
                     work_ftq_alloc_tag_next = ftq_enq_tag;
                     work_ftq_entry_next     = ftq_enq_entry_c;
+                    work_owner_delivered_next = 1'b0;
                 end else if (!f1_valid) begin
                     work_ftq_valid_next     = 1'b0;
                     work_ftq_idx_next       = '0;
                     work_ftq_epoch_next     = '0;
                     work_ftq_alloc_tag_next = '0;
                     work_ftq_entry_next     = '0;
+                    work_owner_delivered_next = 1'b0;
                 end
 
                 ifu_work_next_c = make_ifu_work_item(
@@ -1200,6 +1216,7 @@ module fetch_unit
                     work_ftq_epoch_next,
                     work_ftq_alloc_tag_next,
                     work_ftq_entry_next);
+                ifu_work_next_c.owner_delivered = work_owner_delivered_next;
             end
         end
     end
@@ -2226,6 +2243,21 @@ module fetch_unit
         end
     end
 
+    // A straight-line continuation within the current cache line remains part
+    // of the same fetch-block owner. Allocate a new FTQ owner only at a real
+    // ownership boundary: control transfer, explicit subgroup split, line end,
+    // or straddle handling.
+    assign f2_same_owner_continue_c =
+        f2_work_valid_c &&
+        f2_data_valid &&
+        f2_seq_valid &&
+        (final_count > 3'd0) &&
+        !straddle_detected &&
+        !predecode_ctl_found &&
+        !subgroup_split_before_ctl_c &&
+        !(bp_branch_found && bp_taken) &&
+        (f2_seq_next_pc[63:LINE_BITS] == f2_work_pc_c[63:LINE_BITS]);
+
     // Completion is a property of the current IFU work item after extraction and
     // predecode. A straddle-remainder consume or redirect without a successor
     // owner may emit instructions, but the owner can still have a same-owner
@@ -2239,6 +2271,7 @@ module fetch_unit
     assign f2_work_owner_complete_c =
         !consume_remainder_c &&
         !f2_redirect_without_owner_successor_c &&
+        !f2_same_owner_continue_c &&
         (!straddle_detected ||
          (bp_branch_found && bp_taken && !subgroup_split_before_ctl_c));
 
@@ -2257,6 +2290,14 @@ module fetch_unit
         f2_work_ftq_valid_c &&
         !redirect_valid &&
         !frontend_hold;
+    assign f2_owner_delivery_push_c =
+        packet_buf_enq &&
+        f2_work_ftq_valid_c &&
+        f2_ftq_owner_live_c &&
+        !f2_work_owner_delivered_c &&
+        !redirect_valid &&
+        !frontend_hold;
+    assign ftq_delivery_push_valid = f2_owner_delivery_push_c;
     assign ftq_ifu_pop_valid =
         f2_owner_completion_candidate_c &&
         f2_ftq_owner_live_c;
