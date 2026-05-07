@@ -259,6 +259,29 @@ Interpretation:
   past, that predicted-control PC. This is a general frontend ownership rule,
   not a benchmark-PC rule.
 
+Rejected follow-up trial:
+
+- `benchmark_results/20260507_trial_pred_ctl_owner_split_dhrystone`
+- `benchmark_results/20260507_trial_pred_ctl_owner_split_coremark`
+
+The trial split before any FTQ-owned predicted conditional at a nonzero packet
+slot and relaxed IFU same-owner advance up to the predicted-control PC. It was
+endpoint-clean, but it is rejected as a performance policy:
+
+| Workload | Accepted timed cycles | Trial timed cycles | Verdict |
+|---|---:|---:|---|
+| Dhrystone 100 | 26,080 | 26,778 | Regresses. |
+| CoreMark 1 | 199,331 | 241,204 | Large regression. |
+
+The trial reduced Dhrystone `packet_empty_noemit_dup` from 8,067 to 6,009, but
+CoreMark increased it from 70,972 to 80,254 and increased redirect recovery
+from 2,995 to 3,310. The forced split created many more same-owner advances,
+but it also destroyed useful branch-packet packing and increased FTQ empty
+time. The conclusion is not "predicted-control ownership is irrelevant"; it is
+that unconditional branch-boundary splitting is too blunt. The next candidate
+needs a selective predicted-control mechanism that preserves useful packet
+packing while preventing the specific fall-through skip hazard.
+
 ## Current Architecture State
 
 rv64gc-v2 is already aligned with the intended XiangShan/BOOM-style ownership
