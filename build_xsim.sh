@@ -73,9 +73,9 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/decode/decode_slice.sv" \
       "$P/src/rtl/core/decode/decode.sv" \
       "$P/src/rtl/core/decode/fusion_detector.sv" \
-      "$P/src/rtl/core/fetch/uop_cache_tag_ram.sv" \
-      "$P/src/rtl/core/fetch/uop_cache_data_ram.sv" \
-      "$P/src/rtl/core/fetch/uop_cache.sv" \
+      "$P/src/rtl/core/uop_cache/uop_cache_tag_ram.sv" \
+      "$P/src/rtl/core/uop_cache/uop_cache_data_ram.sv" \
+      "$P/src/rtl/core/uop_cache/uop_cache.sv" \
       "$P/src/rtl/core/rename/rat.sv" \
       "$P/src/rtl/core/rename/free_list.sv" \
       "$P/src/rtl/core/rename/checkpoint.sv" \

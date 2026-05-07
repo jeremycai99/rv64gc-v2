@@ -471,7 +471,7 @@ These are the structural constraint points that any optimization needs to be awa
 - **Entries:** 4 (`NUM_ENTRIES=4`)
 - **Purpose:** small prefetch buffer for sequential-access lines (warm-cache helper, not primary predictor)
 
-### 2.6 UOP Cache (UOC) (`src/rtl/core/fetch/uop_cache.sv`)
+### 2.6 UOP Cache (UOC) (`src/rtl/core/uop_cache/uop_cache.sv`)
 
 - **Geometry:** 32 sets × 8 ways × 4 µops/entry = 1024 µop slots (`UOC_SETS=32`, `UOC_WAYS=8`, `UOC_PER_ENTRY=PIPE_WIDTH=4`)
 - **Indexed by:** fetch-group start PC

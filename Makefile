@@ -139,9 +139,9 @@ RTL_FILES = \
     $(RTL_DIR)/core/decode/decode_slice.sv \
     $(RTL_DIR)/core/decode/decode.sv \
     $(RTL_DIR)/core/decode/fusion_detector.sv \
-    $(RTL_DIR)/core/fetch/uop_cache_tag_ram.sv \
-    $(RTL_DIR)/core/fetch/uop_cache_data_ram.sv \
-    $(RTL_DIR)/core/fetch/uop_cache.sv \
+    $(RTL_DIR)/core/uop_cache/uop_cache_tag_ram.sv \
+    $(RTL_DIR)/core/uop_cache/uop_cache_data_ram.sv \
+    $(RTL_DIR)/core/uop_cache/uop_cache.sv \
     $(RTL_DIR)/core/rename/rat.sv \
     $(RTL_DIR)/core/rename/free_list.sv \
     $(RTL_DIR)/core/rename/checkpoint.sv \

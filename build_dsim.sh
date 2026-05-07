@@ -90,9 +90,9 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/decode/decode_slice.sv \
      src/rtl/core/decode/decode.sv \
      src/rtl/core/decode/fusion_detector.sv \
-     src/rtl/core/fetch/uop_cache_tag_ram.sv \
-     src/rtl/core/fetch/uop_cache_data_ram.sv \
-     src/rtl/core/fetch/uop_cache.sv \
+     src/rtl/core/uop_cache/uop_cache_tag_ram.sv \
+     src/rtl/core/uop_cache/uop_cache_data_ram.sv \
+     src/rtl/core/uop_cache/uop_cache.sv \
      src/rtl/core/rename/rat.sv \
      src/rtl/core/rename/free_list.sv \
      src/rtl/core/rename/checkpoint.sv \
