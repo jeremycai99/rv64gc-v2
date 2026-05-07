@@ -372,6 +372,9 @@ module fetch_top
         .work_line_valid_i      (f2_work_line_valid_c),
         .work_line_addr_i       (f2_work_line_addr_c),
         .current_epoch_i        (ftq_current_epoch),
+        .ftq_wb_owner_valid_i   (ftq_ifu_wb_owner_valid),
+        .ftq_wb_owner_idx_i     (ftq_ifu_wb_owner_idx),
+        .ftq_wb_owner_tag_i     (ftq_ifu_wb_owner_tag),
         .req_owner_valid_i      (ftq_enq_valid),
         .req_owner_idx_i        (ftq_enq_idx),
         .req_owner_epoch_i      (ftq_enq_epoch),
@@ -387,6 +390,7 @@ module fetch_top
         .icq_deq_ftq_epoch_o    (icq_deq_ftq_epoch),
         .icq_deq_ftq_alloc_tag_o(icq_deq_ftq_alloc_tag),
         .icq_deq_ftq_entry_o    (icq_deq_ftq_entry),
+        .icq_deq_owner_match_o  (icq_deq_owner_match_c),
         .icq_full_o             (icq_full),
         .icq_empty_o            (icq_empty),
         .icq_count_o            (icq_count),
@@ -416,13 +420,6 @@ module fetch_top
         .pf_l2_resp_data        (pf_l2_resp_data)
     );
 
-    assign icq_deq_owner_match_c =
-        icq_deq_valid &&
-        icq_deq_ftq_valid &&
-        ftq_ifu_wb_owner_valid &&
-        (icq_deq_ftq_idx == ftq_ifu_wb_owner_idx) &&
-        (icq_deq_ftq_epoch == ftq_current_epoch) &&
-        (icq_deq_ftq_alloc_tag == ftq_ifu_wb_owner_tag);
     ftq u_ftq (
         .clk          (clk),
         .rst_n        (rst_n),

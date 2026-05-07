@@ -26,6 +26,9 @@ module ifu_line_fetch
     input  logic                          work_line_valid_i,
     input  logic [63:LINE_BITS]           work_line_addr_i,
     input  logic [FTQ_EPOCH_BITS-1:0]     current_epoch_i,
+    input  logic                          ftq_wb_owner_valid_i,
+    input  logic [FTQ_IDX_BITS-1:0]       ftq_wb_owner_idx_i,
+    input  logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_wb_owner_tag_i,
 
     input  logic                          req_owner_valid_i,
     input  logic [FTQ_IDX_BITS-1:0]       req_owner_idx_i,
@@ -43,6 +46,7 @@ module ifu_line_fetch
     output logic [FTQ_EPOCH_BITS-1:0]     icq_deq_ftq_epoch_o,
     output logic [FTQ_ALLOC_TAG_BITS-1:0] icq_deq_ftq_alloc_tag_o,
     output ftq_entry_t                    icq_deq_ftq_entry_o,
+    output logic                          icq_deq_owner_match_o,
     output logic                          icq_full_o,
     output logic                          icq_empty_o,
     output logic [ICQ_COUNT_BITS-1:0]     icq_count_o,
@@ -128,6 +132,13 @@ module ifu_line_fetch
         icq_deq_valid_o &&
         (!icq_deq_ftq_valid_o ||
          (icq_deq_ftq_epoch_o != current_epoch_i));
+    assign icq_deq_owner_match_o =
+        icq_deq_valid_o &&
+        icq_deq_ftq_valid_o &&
+        ftq_wb_owner_valid_i &&
+        (icq_deq_ftq_idx_o == ftq_wb_owner_idx_i) &&
+        (icq_deq_ftq_epoch_o == current_epoch_i) &&
+        (icq_deq_ftq_alloc_tag_o == ftq_wb_owner_tag_i);
     assign icq_deq_ready_c =
         icq_line_matches_work_c ||
         icq_deq_stale_c;

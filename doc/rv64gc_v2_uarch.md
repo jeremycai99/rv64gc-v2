@@ -442,9 +442,10 @@ These are the structural constraint points that any optimization needs to be awa
 - **Current line-fetch adapter boundary:** `frontend/ifu/ifu_line_fetch.sv`
   owns the I-cache, next-line prefetch buffer, request-owner retime, and
   `icache_resp_queue` response association. It also owns the line-qualified
-  ICQ pop rule, stale epoch drain, and same-line line-state reuse. It keeps
-  `icache.sv` itself as a separate cache block and exposes the accepted line
-  data plus ICQ head metadata back to the current integration layer.
+  ICQ pop rule, stale epoch drain, IFU-writeback owner-match observation, and
+  same-line line-state reuse. It keeps `icache.sv` itself as a separate cache
+  block and exposes the accepted line data plus ICQ head metadata back to the
+  current integration layer.
 - **Current line-state boundary:** `ifu_line_fetch.sv` records a separate
   line-state register for the consumed response line (line address, data, and
   epoch). Packet metadata is sourced from this line identity, while FTQ
