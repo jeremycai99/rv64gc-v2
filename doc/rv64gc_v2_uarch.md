@@ -387,7 +387,9 @@ These are the structural constraint points that any optimization needs to be awa
 - **L1I:** see §11
 - **Module boundary:** `fetch_top.sv` is the direct frontend integration top
   instantiated by `rv64gc_core_top.sv`. `frontend/ifu/ifu.sv` is the
-  instruction fetch unit block inside that integration layer.
+  instruction fetch unit block inside that integration layer. A monolithic
+  `fetch_unit.sv` is not part of the target structure; any compatibility name
+  in this area means the split is incomplete and should be retired.
 - **Current advance model:** F1 is still coupled to F2 packet progress. This
   means the BPU can predict a target, but the frontend generally does not build
   a multi-entry predicted-block stream ahead of decode.
@@ -467,15 +469,10 @@ These are the structural constraint points that any optimization needs to be awa
   entry adapter. `fetch_top.sv` consumes the assembled FTQ entry instead of
   locally rebuilding predictor metadata.
 - **Simulation checker boundary:** `src/rtl/sim/fetch_delivery_checker.sv`
-  binds to `fetch_top` in simulation and owns the strict fetch delivery stream
-  checker. This keeps the delivery `$display`, `$fatal`, and plusarg handling
-  out of the frontend integration RTL.
-  Prediction ownership and redirect policy still live above these helpers.
-- **Prediction checker leaf:** `frontend/pred/pred_checker.sv` validates the
-  FTQ-predicted control against predecode, selects the packet cut point,
-  requests predicted redirects, and emits the associated RAS/GHR actions.
-  Persistent subgroup seed state remains in the integration layer until the
-  stateful BPU split.
+  and `src/rtl/sim/fetch_owner_checker.sv` bind to `fetch_top` in simulation
+  and own the strict delivery stream and same-line owner contract checkers.
+  This keeps checker `$display`, `$fatal`, and plusarg handling out of the
+  frontend integration RTL.
 - **Current runahead precondition:** the IFU work cursor is still conservative
   and mirror-locked to the registered F1/F2 flow. Before F1 can run ahead by
   default, this cursor must become the independently advanced work item for the
