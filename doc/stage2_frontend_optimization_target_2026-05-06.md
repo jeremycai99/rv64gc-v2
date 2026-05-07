@@ -96,12 +96,21 @@ Rejected trials that should not be revived in their old form:
 | Unconditional predicted-control owner split | Endpoint-clean but regresses CoreMark 1 badly. | Predicted-control ownership must be selective, not a blunt split-before-control policy. |
 | Same-cycle subgroup successor allocation | Dhrystone improves, CoreMark times out or corrupts ownership. | Future-owner production without owner-keyed delivery is unsafe. |
 | Owner-complete successor allocation | Dhrystone/CoreMark 1 improve, but branch hotspot and CoreMark 10 fail. | The transition gap is real, but owner-start packet delivery must be atomic with FTQ allocation and IFU cursor selection. |
-| Guarded successor retry after rename fix | Owner/stale counters become clean, but CoreMark 10 checksum is `17144` instead of `64687`. | Do not carry successor trial RTL forward. Fix owner-start delivery first. |
+| Guarded successor retry after rename fix | Owner/stale counters become clean, but CoreMark 10 checksum is `17144` instead of `64687`. | Do not carry the old trial RTL forward as-is. Keep successor runahead as an active bug-isolation and performance path. |
 
 The key rejected-successor lesson is specific: allocating a new owner is not
 enough. The first packet for that owner must be delivered from the owner-start
 PC exactly once, with matching FTQ identity, ICQ response association,
 prediction snapshot, and completion state.
+
+The successor trials should not be abandoned. They showed material performance
+potential on smaller rows, so the failure should be treated as a pipeline
+contract bug revealed by deeper workloads. The next successor work must start
+from the clean baseline and add observability around the owner transition:
+allocated successor PC, selected IFU work PC, ICQ response owner, first packet
+PC, IBuffer owner, rename hold ownership, and retired golden PC. A successor
+trial is scoreable only after Dhrystone, CoreMark 1, CoreMark 10, and the branch
+hotspot probe all pass endpoint and golden-PC checks.
 
 ## Architecture State
 
@@ -142,7 +151,8 @@ counter-backed second domain instead.
 | Option | Status | Expected benefit | Guardrail |
 |---|---|---|---|
 | Baseline counter pass | Required next | Prevents another stale methodology loop. | Use committed RTL and full strict plusargs. |
-| Owner request queue / IFU work queue | Primary next frontend slice | Lets IFU request and F2 delivery decouple by FTQ owner. | Owner-start PC delivery exactly once; no stale ICQ response consumption. |
+| Successor runahead bug isolation | Primary next debug slice | Preserves the high-leverage smaller-row gain while finding the CoreMark 10 corruption mechanism. | Must start from clean RTL, add owner-start transition tracing/assertions, and pass golden PC before any perf claim. |
+| Owner request queue / IFU work queue | Primary structural frontend slice | Lets IFU request and F2 delivery decouple by FTQ owner. | Owner-start PC delivery exactly once; no stale ICQ response consumption. |
 | Capacity-bounded depth-2 runahead | Only after queue cleanup | More useful fetch overlap. | Do not promote if it increases redirect or ICQ head blocking enough to erase gains. |
 | Early fetch-line metadata | High value | Reduces conservative predicted-control and RVC boundary stalls. | Golden PC clean on mixed RVC/control windows. |
 | BPU/FTQ training metadata cleanup | High value | Improves attribution and enables safe prediction experiments. | Preserve GHR/RAS/target snapshots per owner. |
@@ -174,12 +184,13 @@ Every accepted performance row must report:
 | Phase | Task | Exit criterion |
 |---|---|---|
 | 0 | Rerun full baseline from commit `3e58a93`. | Gate A passes and becomes the new comparison anchor. |
-| 1 | Add owner-tagged IFU request/work queue semantics. | Owner-start delivery is exact; strict checks and CoreMark 10 checksum pass. |
-| 2 | Re-score depth-1 runahead with real upstream backlog. | Duplicate/no-emit falls without ICQ wait or redirect recovery replacing it. |
-| 3 | Try depth-2 only if Phase 2 is clean. | Heavy rows improve with no endpoint drift. |
-| 4 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
-| 5 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
-| 6 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 1 | Reproduce and isolate the successor transition bug from clean RTL. | First divergence is caught by owner-start assertions or golden PC, not by late checksum drift. |
+| 2 | Convert the successor fix into owner-tagged IFU request/work queue semantics. | Owner-start delivery is exact; strict checks and CoreMark 10 checksum pass. |
+| 3 | Re-score depth-1 successor/runahead with real upstream backlog. | Duplicate/no-emit falls without ICQ wait or redirect recovery replacing it. |
+| 4 | Try depth-2 only if Phase 3 is clean. | Heavy rows improve with no endpoint drift. |
+| 5 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
+| 6 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
+| 7 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -193,12 +204,15 @@ Every accepted performance row must report:
 
 ## Verdict
 
-The next frontend work should focus on owner-tagged IFU/ICQ/IBuffer elasticity,
-not on another successor allocation shortcut. The prior successor trials proved
-there is performance in earlier owner transition, but also proved that the
-current owner-start delivery contract is too weak.
+The next frontend work should keep successor runahead alive, but treat the
+previous implementation as a bug reproducer rather than a candidate to keep.
+The prior successor trials proved there is performance in earlier owner
+transition, especially on smaller rows, and they also exposed that the current
+owner-start delivery contract is too weak.
 
 Near-term objective: produce real, strict-clean FTQ and IBuffer occupancy and
-reduce CoreMark 10 duplicate/no-emit pressure without checksum drift. Long-term
-objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a required second-domain
-escalation if frontend-only work does not reach the Gate C ceiling.
+reduce CoreMark 10 duplicate/no-emit pressure without checksum drift. The
+successor bug isolation is part of that objective, not a discarded side branch.
+Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a required
+second-domain escalation if frontend-only work does not reach the Gate C
+ceiling.
