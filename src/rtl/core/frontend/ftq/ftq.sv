@@ -20,6 +20,7 @@ module ftq
     output logic [FTQ_ALLOC_TAG_BITS-1:0] enq_tag,
 
     input  logic                         ifu_req_pop_valid,
+    input  logic                         ifu_cancel_next_valid,
     input  logic                         delivery_push_valid,
     input  logic                         pop_valid,
 
@@ -81,12 +82,15 @@ module ftq
     logic [FTQ_IDX_BITS-1:0] ifu_owner_idx_c;
     logic [FTQ_IDX_BITS-1:0] ifu_wb_owner_idx_c;
     logic [FTQ_IDX_BITS-1:0] commit_owner_idx_c;
+    logic [FTQ_IDX_BITS-1:0] next_ifu_owner_idx_c;
     logic [FTQ_ALLOC_TAG_BITS-1:0] ifu_owner_tag_c;
     logic [FTQ_ALLOC_TAG_BITS-1:0] ifu_wb_owner_tag_c;
     logic [FTQ_ALLOC_TAG_BITS-1:0] commit_owner_tag_c;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] next_ifu_owner_tag_c;
     logic ifu_owner_valid_c;
     logic ifu_wb_owner_valid_c;
     logic commit_owner_valid_c;
+    logic next_ifu_owner_valid_c;
     logic [FTQ_IDX_BITS-1:0] next_ifu_req_ptr_c;
     logic [FTQ_IDX_BITS-1:0] next_ifu_wb_ptr_c;
     logic [FTQ_IDX_BITS-1:0] next_commit_ptr_c;
@@ -96,15 +100,17 @@ module ftq
     logic ifu_req_pop_existing_c;
     logic ifu_req_pop_from_enq_c;
     logic ifu_req_pop_fire_c;
+    logic ifu_cancel_next_possible_c;
+    logic ifu_cancel_next_fire_c;
     logic delivery_push_fire_c;
     logic ifu_wb_pop_fire_c;
     logic commit_pop_fire_c;
-    logic commit_pop_possible_c;
     logic enq_fire_c;
+    logic enq_replace_next_c;
+    logic [FTQ_IDX_BITS-1:0] enq_idx_c;
     logic [FTQ_IDX_BITS-1:0] ifu_req_pop_idx_c;
     logic [FTQ_ALLOC_TAG_BITS-1:0] ifu_req_pop_tag_c;
     ftq_entry_t ifu_req_pop_entry_c;
-    logic next_ifu_owner_from_enq_c;
 
     function automatic logic [FTQ_IDX_BITS-1:0] ptr_next(
         input logic [FTQ_IDX_BITS-1:0] ptr
@@ -129,9 +135,18 @@ module ftq
                                   delivery_push_fire_c;
     assign head_valid    = ifu_wb_owner_valid_c;
     assign commit_head_valid = commit_owner_valid_c;
-    assign commit_pop_possible_c = commit_pop_valid && commit_head_valid;
-    assign enq_ready     = flush || !full || commit_pop_possible_c;
-    assign enq_idx       = flush ? '0 : wr_ptr_r;
+    assign ifu_cancel_next_possible_c =
+        !flush &&
+        ifu_cancel_next_valid &&
+        (count_ifu_to_wb_r > {{FTQ_IDX_BITS{1'b0}}, 1'b1});
+    assign enq_ready     = flush ||
+                           !full ||
+                           ifu_cancel_next_possible_c;
+    assign enq_idx_c     =
+        (ifu_cancel_next_possible_c && enq_valid)
+            ? ptr_next(ifu_wb_ptr_r)
+            : wr_ptr_r;
+    assign enq_idx       = flush ? '0 : enq_idx_c;
     assign enq_epoch     = flush ? (epoch_r + FTQ_EPOCH_BITS'(1)) : epoch_r;
     assign enq_tag       = alloc_tag_r;
     assign current_epoch = epoch_r;
@@ -145,6 +160,9 @@ module ftq
                                     !ifu_owner_valid_c && enq_fire_c;
     assign ifu_req_pop_fire_c = ifu_req_pop_existing_c ||
                                 ifu_req_pop_from_enq_c;
+    assign ifu_cancel_next_fire_c = ifu_cancel_next_possible_c &&
+                                    enq_valid;
+    assign enq_replace_next_c = enq_fire_c && ifu_cancel_next_fire_c;
     assign ifu_wb_pop_fire_c = !flush && pop_valid &&
                                ((count_ifu_to_wb_r != '0) ||
                                 ifu_req_pop_existing_c);
@@ -165,7 +183,7 @@ module ftq
     end
 
     assign ifu_req_pop_idx_c =
-        ifu_req_pop_from_enq_c ? wr_ptr_r : ifu_owner_idx_c;
+        ifu_req_pop_from_enq_c ? enq_idx_c : ifu_owner_idx_c;
     assign ifu_req_pop_tag_c =
         ifu_req_pop_from_enq_c ? alloc_tag_r : ifu_owner_tag_c;
     always_comb begin
@@ -228,7 +246,8 @@ module ftq
             (ifu_req_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0);
         next_count_ifu_to_wb_c = count_ifu_to_wb_r +
             (ifu_req_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0) -
-            (ifu_wb_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0);
+            (ifu_wb_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0) -
+            (ifu_cancel_next_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0);
         next_count_wb_to_commit_c = count_wb_to_commit_r +
             (delivery_push_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0) -
             (commit_pop_fire_c ? {{FTQ_IDX_BITS{1'b0}}, 1'b1} : '0);
@@ -250,13 +269,13 @@ module ftq
             if (count_alloc_to_ifu_r > {{FTQ_IDX_BITS{1'b0}}, 1'b1})
                 next_ifu_req_ptr_c = ptr_next(ifu_req_ptr_r);
             else if (enq_fire_c)
-                next_ifu_req_ptr_c = wr_ptr_r;
+                next_ifu_req_ptr_c = enq_idx_c;
             else
                 next_ifu_req_ptr_c = ptr_next(ifu_req_ptr_r);
         end else if (ifu_req_pop_from_enq_c) begin
-            next_ifu_req_ptr_c = ptr_next(wr_ptr_r);
+            next_ifu_req_ptr_c = ptr_next(enq_idx_c);
         end else if ((count_alloc_to_ifu_r == '0) && enq_fire_c) begin
-            next_ifu_req_ptr_c = wr_ptr_r;
+            next_ifu_req_ptr_c = enq_idx_c;
         end
     end
 
@@ -266,12 +285,21 @@ module ftq
         if (flush) begin
             next_ifu_wb_ptr_c = '0;
         end else if (ifu_wb_pop_fire_c) begin
-            if (count_ifu_to_wb_r > {{FTQ_IDX_BITS{1'b0}}, 1'b1})
+            if (ifu_cancel_next_fire_c &&
+                (count_ifu_to_wb_r > (FTQ_IDX_BITS+1)'(2)))
+                next_ifu_wb_ptr_c = ptr_next(ptr_next(ifu_wb_ptr_r));
+            else if (ifu_cancel_next_fire_c && ifu_req_pop_fire_c)
+                next_ifu_wb_ptr_c = ifu_req_pop_idx_c;
+            else if (ifu_cancel_next_fire_c)
+                next_ifu_wb_ptr_c = ptr_next(ptr_next(ifu_wb_ptr_r));
+            else if (count_ifu_to_wb_r > {{FTQ_IDX_BITS{1'b0}}, 1'b1})
                 next_ifu_wb_ptr_c = ptr_next(ifu_wb_ptr_r);
             else if (ifu_req_pop_fire_c)
                 next_ifu_wb_ptr_c = ifu_req_pop_idx_c;
             else
                 next_ifu_wb_ptr_c = ptr_next(ifu_wb_ptr_r);
+        end else if (ifu_cancel_next_fire_c) begin
+            next_ifu_wb_ptr_c = ifu_wb_ptr_r;
         end else if ((count_ifu_to_wb_r == '0) && ifu_req_pop_fire_c) begin
             next_ifu_wb_ptr_c = ifu_req_pop_idx_c;
         end
@@ -295,29 +323,34 @@ module ftq
     end
 
     always_comb begin
-        next_ifu_owner_entry_c = '0;
+        next_ifu_owner_valid_c    = 1'b0;
+        next_ifu_owner_idx_c      = '0;
+        next_ifu_owner_tag_c      = '0;
+        next_ifu_owner_entry_c    = '0;
 
-        if (next_count_ifu_to_wb_c != '0) begin
-            if (next_ifu_owner_from_enq_c)
-                next_ifu_owner_entry_c = enq_entry;
-            else
-                next_ifu_owner_entry_c = ftq_entry_t'(mem_r[next_ifu_wb_ptr_c]);
+        if (count_ifu_to_wb_r > {{FTQ_IDX_BITS{1'b0}}, 1'b1}) begin
+            if (ifu_cancel_next_fire_c && !enq_replace_next_c) begin
+                if (count_ifu_to_wb_r > (FTQ_IDX_BITS+1)'(2)) begin
+                    next_ifu_owner_valid_c = 1'b1;
+                    next_ifu_owner_idx_c   = ptr_next(ptr_next(ifu_wb_ptr_r));
+                end
+            end else begin
+                next_ifu_owner_valid_c = 1'b1;
+                next_ifu_owner_idx_c   = ptr_next(ifu_wb_ptr_r);
+            end
+        end
+
+        if (next_ifu_owner_valid_c) begin
+            next_ifu_owner_entry_c =
+                ftq_entry_t'(mem_r[next_ifu_owner_idx_c]);
+            next_ifu_owner_tag_c = tag_mem_r[next_ifu_owner_idx_c];
         end
     end
 
-    assign next_ifu_owner_from_enq_c =
-        (next_count_ifu_to_wb_c != '0) &&
-        ifu_req_pop_from_enq_c &&
-        (next_ifu_wb_ptr_c == wr_ptr_r);
-    assign next_ifu_owner_valid = (next_count_ifu_to_wb_c != '0);
+    assign next_ifu_owner_valid = next_ifu_owner_valid_c;
     assign next_ifu_owner_entry = next_ifu_owner_entry_c;
-    assign next_ifu_owner_idx   = next_ifu_wb_ptr_c;
-    assign next_ifu_owner_tag   =
-        !next_ifu_owner_valid
-            ? '0
-            : (next_ifu_owner_from_enq_c
-                  ? alloc_tag_r
-                  : tag_mem_r[next_ifu_wb_ptr_c]);
+    assign next_ifu_owner_idx   = next_ifu_owner_idx_c;
+    assign next_ifu_owner_tag   = next_ifu_owner_tag_c;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -355,9 +388,10 @@ module ftq
                     alloc_tag_r <= alloc_tag_r + FTQ_ALLOC_TAG_BITS'(1);
 
                 if (enq_fire_c) begin
-                    mem_r[wr_ptr_r]     <= ENTRY_W'(enq_entry);
-                    tag_mem_r[wr_ptr_r] <= alloc_tag_r;
-                    wr_ptr_r            <= ptr_next(wr_ptr_r);
+                    mem_r[enq_idx_c]     <= ENTRY_W'(enq_entry);
+                    tag_mem_r[enq_idx_c] <= alloc_tag_r;
+                    if (!enq_replace_next_c)
+                        wr_ptr_r <= ptr_next(wr_ptr_r);
                 end
 
                 ifu_req_ptr_r <= next_ifu_req_ptr_c;

@@ -449,6 +449,59 @@ DMIPS/MHz and 7.5 CoreMark/MHz targets, but it is a broad, endpoint-clean
 frontend improvement and should become the new baseline for the next bottleneck
 iteration.
 
+Accepted depth-1 BPU/F1 runahead slice:
+
+- `benchmark_results/20260507_stage2_depth1_runahead_final_smoke`
+- Rebuilt DSim from the current RTL and reran the strict DSE smoke with
+  `+FETCH_DELIVERY_CHECK +FETCH_DELIVERY_STRICT +FETCH_OWNER_CHECK
+  +FETCH_OWNER_STRICT +PERF_PROFILE +PERF_COUNTERS +STAT_DUMP`.
+- The implementation allocates one direct-taken predicted target ahead of the
+  current IFU writeback owner when FTQ, ICQ, and packet-buffer capacity allow
+  it. JALR and return targets are excluded for this first slice.
+- FTQ successor ownership is now registered and replacement-aware. A pending
+  runahead successor can be consumed by a matching redirect, or cancelled and
+  replaced when the real redirect target differs.
+- The I-cache response path has a one-entry future-line side buffer so a
+  response for the successor owner does not get consumed by the current owner.
+
+| Workload | Prior timed cycles | Depth-1 timed cycles | Metric | Strict result |
+|---|---:|---:|---:|---|
+| Dhrystone 100 | 22,290 | 22,189 | 2.565019 DMIPS/MHz | PASS |
+| CoreMark 1 | 196,124 | 195,632 | 5.111638 CoreMark/MHz | PASS |
+
+Key counter movement versus the prior predicted-control-start baseline:
+
+| Workload | `xs_ftq_occ_max` | `xs_ftq_occ_hist_2to3` | `xs_runahead_req_fire` | `xs_runahead_pending_cycles` | `xs_runahead_redirect_match` | `xs_runahead_cancel_next` |
+|---|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | 1 -> 2 | 0 -> 699 | 500 | 699 | 500 | 0 |
+| CoreMark 1 | 1 -> 2 | 0 -> 20,257 | 10,572 | 20,257 | 10,382 | 3 |
+
+Bubble counters:
+
+| Workload | `packet_empty_noemit_dup` | `packet_empty_f2_data` | `packet_empty_wait_icresp` | `xs_ftq_empty_cycles` | `xs_icq_future_head_block` | `xs_packet_buf_occ_max` |
+|---|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | 4,111 -> 4,009 | 4,423 -> 4,321 | 262 -> 3,332 | 3,326 -> 3,326 | 399 | 0 |
+| CoreMark 1 | 66,694 -> 65,881 | 69,884 -> 69,072 | 3,437 -> 49,477 | 51,151 -> 51,242 | 1,887 | 0 |
+
+Interpretation:
+
+- This is the first scoreable proof that the frontend can hold more than one
+  FTQ owner under strict checks: `xs_ftq_occ_max` reaches 2 on both smoke rows,
+  and the runahead request, pending, and redirect-match counters move.
+- The score gain is real but marginal: about 0.45% fewer Dhrystone 100 timed
+  cycles and 0.25% fewer CoreMark 1 timed cycles versus the previous accepted
+  baseline.
+- Gate B is therefore only partially satisfied. FTQ runahead exists, but
+  `xs_packet_buf_occ_max` remains 0, so the decode-facing IBuffer is still not
+  absorbing rate mismatch. The large `packet_empty_wait_icresp` increase also
+  shows that future-line ownership is exposing ICQ/head-of-line effects rather
+  than eliminating fetch starvation.
+- The next implementation should not keep pushing local runahead depth first.
+  It should make the IBuffer and IFU request queue absorb complete
+  owner-tagged packets or lines, then rerun the same counters. Depth 2 should
+  only be promoted after the depth-1 path no longer converts duplicate bubbles
+  into I-cache or ICQ waiting.
+
 ## Stage 2 Signoff Risk And Phase Gates
 
 The accepted same-owner/predicted-control work is a real architectural
@@ -501,10 +554,10 @@ split in direction, but not yet in depth:
 
 | Role | Current state | Remaining gap |
 |---|---|---|
-| BPU | Prediction is still coupled to F2 packet progress. | F1 does not yet build a sustained predicted owner stream. |
-| FTQ | Allocation, IFU request, IFU writeback, and commit/training views are structurally split. | The split is not yet used to maintain deeper demand runahead. |
-| IFU work cursor | A stateful `ifu_work_item_t` exists and carries PC, line address, and FTQ identity. Same-owner advance is now allowed when the next packet is outside the predicted-control hazard window. | It still needs deeper owner runahead and eventual removal of duplicate suppression as a correctness crutch. |
-| IBuffer | `fetch_packet_buffer.sv` is the owner-aware decode-facing packet boundary. | Capacity must be used as the runahead limit, not just as a pass-through buffer. |
+| BPU | Prediction can now launch a bounded depth-1 direct-taken successor request without updating F2 prediction state. | It is not yet a sustained predicted owner stream, and indirect/return targets remain excluded. |
+| FTQ | Allocation, IFU request, IFU writeback, and commit/training views are structurally split. The successor owner is registered and can be cancelled/replaced under runahead. | Depth is still capped at one successor and the runahead path is not yet backed by real IBuffer elasticity. |
+| IFU work cursor | A stateful `ifu_work_item_t` exists and carries PC, line address, and FTQ identity. Same-owner advance is allowed when bounded by predicted-control reachability, and depth-1 predicted-target runahead is active. | It still needs a deeper owner request queue and eventual removal of duplicate suppression as a correctness crutch. |
+| IBuffer | `fetch_packet_buffer.sv` is the owner-aware decode-facing packet boundary. | Capacity is still effectively unused on the measured rows; it must become a real elastic buffer before increasing runahead depth. |
 
 Therefore the next work is not to add these objects from scratch. The next work
 is to let the existing objects act independently under explicit ownership and
@@ -518,8 +571,8 @@ These are the options worth keeping in the active Stage 2 plan.
 |---|---|---|---|
 | Baseline counter pass | Required first | Prevents another stale methodology loop. | Capture current RTL counters before changing default behavior. |
 | Decouple existing IFU work cursor | In progress, first accepted slice landed | Allows IFU extraction/progress by FTQ owner instead of raw F2 mirror state. | Keep same-owner advance bounded by live owner, same line, real packet enqueue, and predicted-control reachability. |
-| Capacity-bounded BPU/F1 runahead | Primary after cursor decoupling | Lets F1 allocate/fetch ahead when FTQ, ICQ, and IBuffer have room. | Initial depth 1-2; limit derived from occupancy and epoch safety, not benchmark PCs. |
-| Owner-aware IBuffer elasticity | Primary support work | Absorbs decode/backend bubbles while IFU continues producing packets. | Complete packets carry FTQ identity and owner-complete metadata; strict delivery remains clean. |
+| Capacity-bounded BPU/F1 runahead | Depth-1 direct-taken slice implemented | Lets F1 allocate/fetch ahead when FTQ, ICQ, and IBuffer have room. | Do not raise depth until ICQ and IBuffer head effects are reduced; limit remains occupancy and epoch based, not benchmark PCs. |
+| Owner-aware IBuffer elasticity | Next primary support work | Absorbs decode/backend bubbles while IFU continues producing packets. | Complete packets carry FTQ identity and owner-complete metadata; `xs_packet_buf_occ_max` must become nonzero without strict-delivery drift. |
 | Early IFU prediction validation | Workable after runahead | Repairs wrong predicted control closer to fetch. | Owner-tagged writeback to FTQ; redirect counters must not become dominant. |
 | Mispredict recovery shortening | Conditional | Reduces FLUSH/restart cost. | Do only if `redirect_to_restart_cycles` shows meaningful headroom. |
 | BPU S0 fast-path predictor / uBTB | Conditional | May allow deeper runahead or timing closure if main prediction path becomes the limiter. | Do only after cursor+runahead data shows BPU lookup latency/timing blocks depth, or timing closure requires it. |
@@ -576,11 +629,12 @@ already exist.
 |---|---|---|
 | 0 | Lock the current accepted RTL as the new scoreable baseline. | Gate A passes: full scoreable run, strict checks, endpoint identity, broad smoke pass, and expected counter movement. |
 | 1 | Finish decoupling the existing IFU work cursor from raw F2 mirror state. | Cursor advances by FTQ IFU-writeback owner and current PC; strict delivery remains clean. |
-| 2 | Use IBuffer and FTQ capacity to bound proactive BPU/F1 runahead at depth 1. | Gate B passes: FTQ/IBuffer occupancy rises, duplicate/no-emit buckets fall, and wrong-path cost remains bounded. |
-| 3 | Increase bounded runahead to depth 2 if Phase 2 is clean. | Heavy rows improve without endpoint drift; wrong-path/flush cost does not erase the frontend gain. |
-| 4 | Score the frontend-only ceiling. | Gate C passes or fails explicitly; if it fails, stop treating frontend-only DSE as sufficient for final signoff. |
-| 5 | Select and implement one second-domain optimization. | Gate D names the residual limiter from counters before RTL work starts. |
-| 6 | Re-score against calibrated MegaBOOM and final Stage 2 targets. | Gate E passes: full manifest, broad probes, endpoint/golden checks where available, and no major off-target regression. |
+| 2 | Use FTQ capacity to bound proactive BPU/F1 runahead at depth 1. | Partial Gate B evidence exists: FTQ occupancy reaches 2 and strict checks pass, but IBuffer occupancy remains zero. |
+| 3 | Add owner-aware IBuffer/request elasticity before increasing runahead depth. | `xs_packet_buf_occ_max > 0`, duplicate/no-emit falls broadly, ICQ/future-head blocking does not replace the old bubble, and strict delivery remains clean. |
+| 4 | Increase bounded runahead to depth 2 only if Phase 3 is clean. | Heavy rows improve without endpoint drift; wrong-path/flush cost does not erase the frontend gain. |
+| 5 | Score the frontend-only ceiling. | Gate C passes or fails explicitly; if it fails, stop treating frontend-only DSE as sufficient for final signoff. |
+| 6 | Select and implement one second-domain optimization. | Gate D names the residual limiter from counters before RTL work starts. |
+| 7 | Re-score against calibrated MegaBOOM and final Stage 2 targets. | Gate E passes: full manifest, broad probes, endpoint/golden checks where available, and no major off-target regression. |
 
 ## Explicit Non-Goals
 
@@ -604,8 +658,9 @@ The workable Stage 2 frontend path is:
 1. Measure current ownership/supply behavior.
 2. Decouple the existing IFU work cursor.
 3. Enable small, capacity-bounded proactive BPU/F1 runahead.
-4. Score the frontend-only ceiling against the Gate C threshold.
-5. Promote BPU S0/uBTB, recovery, indirect prediction, fusion, LSU/load-use, or backend balance only
+4. Add owner-aware IBuffer/request elasticity before increasing runahead depth.
+5. Score the frontend-only ceiling against the Gate C threshold.
+6. Promote BPU S0/uBTB, recovery, indirect prediction, fusion, LSU/load-use, or backend balance only
    when counters identify them as the next limiter.
 
 The strongest near-term objective remains closing the calibrated MegaBOOM gap

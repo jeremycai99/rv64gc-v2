@@ -42,6 +42,7 @@ module ifu
     input  logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_wb_owner_tag_i,
     input  logic [FTQ_EPOCH_BITS-1:0]     ftq_current_epoch_i,
     input  logic [FTQ_IDX_BITS:0]         ftq_count_ifu_to_wb_i,
+    input  logic [FTQ_IDX_BITS:0]         ftq_count_alloc_to_ifu_i,
 
     input  logic                          seq_valid_i,
     input  logic [63:0]                   seq_next_pc_i,
@@ -90,8 +91,25 @@ module ifu
     output logic                          work_take_ftq_next_owner_o,
     output logic                          work_take_request_owner_o,
     output logic                          work_take_remainder_request_owner_o,
-    output logic                          work_same_owner_advance_o
+    output logic                          work_same_owner_advance_o,
+
+    output logic                          runahead_req_valid_o,
+    output logic                          runahead_req_fire_o,
+    output logic                          runahead_cancel_next_o,
+    output logic                          runahead_pending_o,
+    output logic [63:0]                   runahead_pending_pc_o,
+    output logic [FTQ_IDX_BITS-1:0]       runahead_pending_idx_o,
+    output logic [FTQ_EPOCH_BITS-1:0]     runahead_pending_epoch_o,
+    output logic [FTQ_ALLOC_TAG_BITS-1:0] runahead_pending_tag_o,
+    output logic                          runahead_redirect_match_o,
+    output logic                          runahead_duplicate_alloc_blocked_o,
+    output logic                          runahead_depth_gt1_o
 );
+
+    localparam int MAX_DEMAND_RUNAHEAD = 1;
+
+    localparam logic [2:0] BT_JALR = 3'd2;
+    localparam logic [2:0] BT_RET  = 3'd4;
 
     typedef struct packed {
         logic                          valid;
@@ -116,14 +134,18 @@ module ifu
     logic [63:0] post_remainder_pc_r;
     logic [63:0] next_pc_c;
     logic        next_valid_c;
+    logic [63:0] normal_req_pc_c;
+    logic [63:0] runahead_req_pc_c;
     logic [63:0] req_pc_c;
     logic [63:0] req_block_pc_c;
+    logic        required_ftq_need_alloc_c;
     logic        ftq_need_alloc_c;
     logic        ftq_enq_valid_c;
     logic        ifu_req_ready_c;
     logic        ifu_req_fire_c;
     logic        fe_stall_c;
     logic        owner_live_c;
+    logic        owner_live_registered_c;
     logic        redirect_without_owner_successor_c;
     logic        owner_completion_candidate_c;
     logic        owner_delivery_push_c;
@@ -132,6 +154,25 @@ module ifu
     logic        work_same_owner_dup_advance_c;
     logic        work_same_owner_advance_c;
     logic        pred_control_outside_next_packet_c;
+    logic        ftq_next_owner_stable_c;
+    logic        redirect_next_owner_match_c;
+    logic [FTQ_IDX_BITS+1:0] frontend_owner_depth_c;
+    logic        runahead_pending_r;
+    logic [63:0] runahead_pending_pc_r;
+    logic [FTQ_IDX_BITS-1:0] runahead_pending_idx_r;
+    logic [FTQ_EPOCH_BITS-1:0] runahead_pending_epoch_r;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] runahead_pending_tag_r;
+    logic        runahead_budget_avail_c;
+    logic        runahead_target_valid_c;
+    logic        runahead_target_direct_c;
+    logic        runahead_target_before_ctl_c;
+    logic        runahead_next_owner_match_c;
+    logic        runahead_candidate_c;
+    logic        selected_req_is_runahead_c;
+    logic        runahead_cancel_next_c;
+    logic        runahead_pending_match_next_c;
+    logic        runahead_pending_target_match_c;
+    logic        runahead_pending_clear_c;
 
     assign f1_valid_o              = f1_valid_r;
     assign f1_pc_o                 = f1_pc_r;
@@ -155,6 +196,27 @@ module ifu
     assign owner_completion_candidate_o = owner_completion_candidate_c;
     assign owner_delivery_push_o        = owner_delivery_push_c;
     assign work_same_owner_advance_o    = work_same_owner_advance_c;
+    assign runahead_req_valid_o =
+        selected_req_is_runahead_c && f1_valid_r && !fe_stall_c;
+    assign runahead_req_fire_o =
+        ifu_req_fire_c && selected_req_is_runahead_c;
+    assign runahead_cancel_next_o = runahead_cancel_next_c;
+    assign runahead_pending_o       = runahead_pending_r;
+    assign runahead_pending_pc_o    = runahead_pending_pc_r;
+    assign runahead_pending_idx_o   = runahead_pending_idx_r;
+    assign runahead_pending_epoch_o = runahead_pending_epoch_r;
+    assign runahead_pending_tag_o   = runahead_pending_tag_r;
+    assign runahead_redirect_match_o =
+        work_redirect_o &&
+        runahead_pending_target_match_c;
+    assign runahead_duplicate_alloc_blocked_o =
+        work_redirect_o &&
+        req_redirect_i &&
+        redirect_next_owner_match_c &&
+        runahead_pending_target_match_c;
+    assign runahead_depth_gt1_o =
+        frontend_owner_depth_c >
+        (FTQ_IDX_BITS+2)'(MAX_DEMAND_RUNAHEAD + 1);
 
     assign work_valid_o         = work_r.valid;
     assign work_pc_o            = work_r.pc;
@@ -167,25 +229,92 @@ module ifu
     assign work_line_addr_o     = work_r.line_addr;
     assign work_owner_delivered_o = work_r.owner_delivered;
 
-    assign req_pc_c = (req_redirect_i && !redirect_i)
-                      ? bpu_target_i
-                      : (line_straddle_advance_i
-                            ? seq_next_pc_i
-                            : f1_pc_r);
+    assign normal_req_pc_c = (req_redirect_i && !redirect_i)
+                             ? bpu_target_i
+                             : (line_straddle_advance_i
+                                   ? seq_next_pc_i
+                                   : f1_pc_r);
+    assign runahead_req_pc_c = work_r.ftq_entry.pred_ctl_target;
+    assign req_pc_c = selected_req_is_runahead_c
+                      ? runahead_req_pc_c
+                      : normal_req_pc_c;
     assign req_block_pc_c = {req_pc_c[63:LINE_BITS], {LINE_BITS{1'b0}}};
-    assign ftq_need_alloc_c =
+    assign ftq_next_owner_stable_c =
+        ftq_count_ifu_to_wb_i > {{FTQ_IDX_BITS{1'b0}}, 1'b1};
+    assign redirect_next_owner_match_c =
+        ftq_next_owner_stable_c &&
+        ftq_next_owner_valid_i &&
+        (ftq_next_owner_entry_i.block_pc ==
+         {bpu_target_i[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
+        (ftq_next_owner_entry_i.start_offset == bpu_target_i[5:0]);
+    assign required_ftq_need_alloc_c =
         !redirect_i &&
         f1_valid_r &&
         !remainder_valid_i &&
         !line_straddle_advance_i &&
         !same_owner_continue_i &&
-        (req_redirect_i || !(work_r.valid && (req_pc_c == work_r.pc))) &&
+        !(req_redirect_i && redirect_next_owner_match_c) &&
+        (req_redirect_i ||
+         !(work_r.valid && (normal_req_pc_c == work_r.pc))) &&
         (req_redirect_i || !last_alloc_valid_r ||
-         (req_pc_c != last_alloc_req_pc_r));
+         (normal_req_pc_c != last_alloc_req_pc_r));
+    assign frontend_owner_depth_c =
+        {1'b0, ftq_count_alloc_to_ifu_i} +
+        {1'b0, ftq_count_ifu_to_wb_i};
+    assign runahead_budget_avail_c =
+        frontend_owner_depth_c <
+        (FTQ_IDX_BITS+2)'(MAX_DEMAND_RUNAHEAD + 1);
+    assign runahead_target_valid_c =
+        work_r.ftq_entry.pred_ctl_valid &&
+        work_r.ftq_entry.pred_ctl_taken &&
+        (work_r.ftq_entry.pred_ctl_target != 64'd0) &&
+        (work_r.ftq_entry.pred_ctl_target != work_r.pc);
+    assign runahead_target_direct_c =
+        (work_r.ftq_entry.pred_ctl_type != BT_JALR) &&
+        (work_r.ftq_entry.pred_ctl_type != BT_RET);
+    assign runahead_target_before_ctl_c =
+        (work_r.pc[63:LINE_BITS] ==
+         work_r.ftq_entry.block_pc[63:LINE_BITS]) &&
+        ({1'b0, work_r.pc[5:0]} <=
+         {1'b0, work_r.ftq_entry.pred_ctl_offset});
+    assign runahead_next_owner_match_c =
+        ftq_next_owner_stable_c &&
+        ftq_next_owner_valid_i &&
+        (ftq_next_owner_entry_i.block_pc ==
+         {runahead_req_pc_c[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
+        (ftq_next_owner_entry_i.start_offset == runahead_req_pc_c[5:0]);
+    assign runahead_candidate_c =
+        !required_ftq_need_alloc_c &&
+        !redirect_i &&
+        !req_redirect_i &&
+        f1_valid_r &&
+        !frontend_hold_i &&
+        !packet_buf_full_i &&
+        !icq_full_i &&
+        ftq_enq_ready_i &&
+        !remainder_valid_i &&
+        !line_straddle_advance_i &&
+        !consume_remainder_i &&
+        !consumed_remainder_r &&
+        work_r.valid &&
+        work_r.ftq_valid &&
+        work_r.owner_delivered &&
+        owner_live_registered_c &&
+        !owner_complete_i &&
+        runahead_target_valid_c &&
+        runahead_target_direct_c &&
+        runahead_target_before_ctl_c &&
+        runahead_budget_avail_c &&
+        !runahead_pending_r &&
+        !runahead_next_owner_match_c;
+    assign selected_req_is_runahead_c = runahead_candidate_c;
+    assign ftq_need_alloc_c =
+        required_ftq_need_alloc_c ||
+        selected_req_is_runahead_c;
     assign fe_stall_c = frontend_hold_i ||
                         packet_buf_full_i ||
                         icq_full_i ||
-                        (ftq_need_alloc_c && !ftq_enq_ready_i);
+                        (required_ftq_need_alloc_c && !ftq_enq_ready_i);
     assign ftq_enq_valid_c = f1_valid_r && !fe_stall_c && ftq_need_alloc_c;
     assign ifu_req_ready_c = ftq_enq_ready_i && !icq_full_i && !packet_buf_full_i;
     assign ifu_req_fire_c = ftq_enq_valid_c && ifu_req_ready_c;
@@ -253,15 +382,19 @@ module ifu
         (work_r.ftq_idx == ftq_wb_owner_idx_i) &&
         (work_r.ftq_epoch == ftq_current_epoch_i) &&
         (work_r.ftq_alloc_tag == ftq_wb_owner_tag_i);
+    assign owner_live_registered_c =
+        work_r.ftq_valid &&
+        (ftq_count_ifu_to_wb_i != '0) &&
+        ftq_wb_owner_valid_i &&
+        (work_r.ftq_idx == ftq_wb_owner_idx_i) &&
+        (work_r.ftq_epoch == ftq_current_epoch_i) &&
+        (work_r.ftq_alloc_tag == ftq_wb_owner_tag_i);
 
     assign work_redirect_o =
         bpu_redirect_i && !fe_stall_c;
     assign work_redirect_next_owner_match_o =
         work_redirect_o &&
-        ftq_next_owner_valid_i &&
-        (ftq_next_owner_entry_i.block_pc ==
-         {bpu_target_i[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
-        (ftq_next_owner_entry_i.start_offset == bpu_target_i[5:0]);
+        redirect_next_owner_match_c;
     assign work_redirect_enq_owner_o =
         work_redirect_o &&
         !work_redirect_next_owner_match_o &&
@@ -280,14 +413,41 @@ module ifu
         !work_redirect_o &&
         !fe_stall_c &&
         consumed_remainder_r &&
-        ftq_enq_valid_c;
+        ftq_enq_valid_c &&
+        !selected_req_is_runahead_c;
     assign work_take_request_owner_o =
         !work_redirect_o &&
         !fe_stall_c &&
         !(line_straddle_advance_i ||
           consume_remainder_i ||
           consumed_remainder_r) &&
-        ftq_enq_valid_c;
+        ftq_enq_valid_c &&
+        !selected_req_is_runahead_c;
+    assign runahead_pending_match_next_c =
+        runahead_pending_r &&
+        ftq_next_owner_valid_i &&
+        (ftq_next_owner_idx_i == runahead_pending_idx_r) &&
+        (ftq_current_epoch_i == runahead_pending_epoch_r) &&
+        (ftq_next_owner_tag_i == runahead_pending_tag_r) &&
+        (ftq_next_owner_entry_i.block_pc ==
+         {runahead_pending_pc_r[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
+        (ftq_next_owner_entry_i.start_offset == runahead_pending_pc_r[5:0]);
+    assign runahead_pending_target_match_c =
+        runahead_pending_r &&
+        ({bpu_target_i[63:LINE_BITS], {LINE_BITS{1'b0}}} ==
+         {runahead_pending_pc_r[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
+        (bpu_target_i[5:0] == runahead_pending_pc_r[5:0]);
+    assign runahead_cancel_next_c =
+        work_redirect_o &&
+        ftq_enq_valid_c &&
+        (ftq_count_ifu_to_wb_i > {{FTQ_IDX_BITS{1'b0}}, 1'b1}) &&
+        runahead_pending_r &&
+        !runahead_pending_target_match_c;
+    assign runahead_pending_clear_c =
+        redirect_i ||
+        runahead_cancel_next_c ||
+        runahead_redirect_match_o ||
+        (work_take_ftq_next_owner_o && runahead_pending_match_next_c);
 
     always_comb begin
         if (redirect_i) begin
@@ -433,6 +593,11 @@ module ifu
             last_alloc_req_pc_r <= '0;
             consumed_remainder_r <= 1'b0;
             post_remainder_pc_r  <= '0;
+            runahead_pending_r       <= 1'b0;
+            runahead_pending_pc_r    <= '0;
+            runahead_pending_idx_r   <= '0;
+            runahead_pending_epoch_r <= '0;
+            runahead_pending_tag_r   <= '0;
         end else begin
             if (redirect_i) begin
                 f1_pc_r    <= redirect_pc_i;
@@ -440,6 +605,11 @@ module ifu
                 last_alloc_valid_r    <= 1'b0;
                 last_alloc_req_pc_r   <= '0;
                 consumed_remainder_r  <= 1'b0;
+                runahead_pending_r       <= 1'b0;
+                runahead_pending_pc_r    <= '0;
+                runahead_pending_idx_r   <= '0;
+                runahead_pending_epoch_r <= '0;
+                runahead_pending_tag_r   <= '0;
             end else begin
                 if (ftq_enq_valid_c) begin
                     last_alloc_valid_r  <= 1'b1;
@@ -447,6 +617,20 @@ module ifu
                 end else if (ftq_ifu_pop_valid_c && !ftq_next_owner_valid_i) begin
                     last_alloc_valid_r  <= 1'b0;
                     last_alloc_req_pc_r <= '0;
+                end
+
+                if (runahead_req_fire_o) begin
+                    runahead_pending_r       <= 1'b1;
+                    runahead_pending_pc_r    <= req_pc_c;
+                    runahead_pending_idx_r   <= req_owner_idx_i;
+                    runahead_pending_epoch_r <= req_owner_epoch_i;
+                    runahead_pending_tag_r   <= req_owner_tag_i;
+                end else if (runahead_pending_clear_c) begin
+                    runahead_pending_r       <= 1'b0;
+                    runahead_pending_pc_r    <= '0;
+                    runahead_pending_idx_r   <= '0;
+                    runahead_pending_epoch_r <= '0;
+                    runahead_pending_tag_r   <= '0;
                 end
 
                 if (!fe_stall_c) begin

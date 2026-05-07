@@ -29,6 +29,9 @@ module ifu_line_fetch
     input  logic                          ftq_wb_owner_valid_i,
     input  logic [FTQ_IDX_BITS-1:0]       ftq_wb_owner_idx_i,
     input  logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_wb_owner_tag_i,
+    input  logic                          ftq_next_owner_valid_i,
+    input  logic [FTQ_IDX_BITS-1:0]       ftq_next_owner_idx_i,
+    input  logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_next_owner_tag_i,
 
     input  logic                          req_owner_valid_i,
     input  logic [FTQ_IDX_BITS-1:0]       req_owner_idx_i,
@@ -102,8 +105,12 @@ module ifu_line_fetch
     logic [FTQ_EPOCH_BITS-1:0] ic_req_ftq_pipe_epoch_r;
     logic [FTQ_ALLOC_TAG_BITS-1:0] ic_req_ftq_pipe_alloc_tag_r;
     ftq_entry_t   ic_req_ftq_pipe_entry_r;
+    logic         icq_deq_current_owner_match_c;
+    logic         icq_deq_next_owner_match_c;
+    logic         icq_deq_unowned_stale_c;
     logic         icq_line_matches_work_c;
     logic         icq_deq_stale_c;
+    logic         icq_future_capture_c;
     logic         icq_deq_ready_c;
     logic         line_state_valid_r;
     logic [63:LINE_BITS] line_state_addr_r;
@@ -111,6 +118,20 @@ module ifu_line_fetch
     logic [FTQ_EPOCH_BITS-1:0] line_state_epoch_r;
     logic         line_state_match_c;
     logic         line_state_use_c;
+    logic         future_line_valid_r;
+    logic [511:0] future_line_data_r;
+    logic         future_line_hit_r;
+    logic [63:0]  future_line_pc_r;
+    logic [FTQ_IDX_BITS-1:0] future_line_ftq_idx_r;
+    logic [FTQ_EPOCH_BITS-1:0] future_line_ftq_epoch_r;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] future_line_ftq_alloc_tag_r;
+    ftq_entry_t   future_line_ftq_entry_r;
+    logic         future_line_match_c;
+    logic         line_resp_from_future_c;
+    logic         line_resp_from_icq_c;
+    logic [511:0] line_resp_data_c;
+    logic         line_resp_hit_c;
+    logic [63:LINE_BITS] line_resp_addr_c;
 
     assign nlpb_trigger      = ic_resp_valid_comb && ic_resp_hit_comb;
     assign nlpb_trigger_addr = {req_addr_i[63:6], 6'b0};
@@ -128,26 +149,68 @@ module ifu_line_fetch
         icq_deq_valid_o &&
         work_line_valid_i &&
         (icq_deq_line_addr_o == work_line_addr_i);
-    assign icq_deq_stale_c =
-        icq_deq_valid_o &&
-        (!icq_deq_ftq_valid_o ||
-         (icq_deq_ftq_epoch_o != current_epoch_i));
-    assign icq_deq_owner_match_o =
+    assign icq_deq_current_owner_match_c =
         icq_deq_valid_o &&
         icq_deq_ftq_valid_o &&
         ftq_wb_owner_valid_i &&
         (icq_deq_ftq_idx_o == ftq_wb_owner_idx_i) &&
         (icq_deq_ftq_epoch_o == current_epoch_i) &&
         (icq_deq_ftq_alloc_tag_o == ftq_wb_owner_tag_i);
+    assign icq_deq_next_owner_match_c =
+        icq_deq_valid_o &&
+        icq_deq_ftq_valid_o &&
+        ftq_next_owner_valid_i &&
+        (icq_deq_ftq_idx_o == ftq_next_owner_idx_i) &&
+        (icq_deq_ftq_epoch_o == current_epoch_i) &&
+        (icq_deq_ftq_alloc_tag_o == ftq_next_owner_tag_i);
+    assign icq_deq_owner_match_o = icq_deq_current_owner_match_c;
+    assign icq_deq_unowned_stale_c =
+        icq_deq_valid_o &&
+        icq_deq_ftq_valid_o &&
+        ftq_wb_owner_valid_i &&
+        !icq_deq_current_owner_match_c &&
+        !icq_deq_next_owner_match_c;
+    assign icq_deq_stale_c =
+        icq_deq_valid_o &&
+        (!icq_deq_ftq_valid_o ||
+         (icq_deq_ftq_epoch_o != current_epoch_i) ||
+         icq_deq_unowned_stale_c);
+    assign icq_future_capture_c =
+        icq_deq_valid_o &&
+        !icq_line_matches_work_c &&
+        !icq_deq_stale_c &&
+        icq_deq_next_owner_match_c &&
+        !future_line_valid_r;
     assign icq_deq_ready_c =
         icq_line_matches_work_c ||
-        icq_deq_stale_c;
-    assign line_resp_valid_o =
+        icq_deq_stale_c ||
+        icq_future_capture_c;
+    assign future_line_match_c =
+        future_line_valid_r &&
+        work_line_valid_i &&
+        (future_line_pc_r[63:LINE_BITS] == work_line_addr_i) &&
+        ftq_wb_owner_valid_i &&
+        (future_line_ftq_idx_r == ftq_wb_owner_idx_i) &&
+        (future_line_ftq_epoch_r == current_epoch_i) &&
+        (future_line_ftq_alloc_tag_r == ftq_wb_owner_tag_i);
+    assign line_resp_from_future_c = future_line_match_c;
+    assign line_resp_from_icq_c =
         icq_deq_valid_o &&
-        icq_deq_ready_c &&
+        icq_line_matches_work_c &&
         !icq_deq_stale_c;
-    assign line_resp_data_o = icq_deq_data_o;
-    assign line_resp_hit_o  = icq_deq_hit_o;
+    assign line_resp_valid_o =
+        line_resp_from_future_c ||
+        line_resp_from_icq_c;
+    assign line_resp_data_c =
+        line_resp_from_future_c ? future_line_data_r : icq_deq_data_o;
+    assign line_resp_hit_c =
+        line_resp_from_future_c ? future_line_hit_r : icq_deq_hit_o;
+    assign line_resp_addr_c =
+        line_resp_from_future_c
+            ? future_line_pc_r[63:LINE_BITS]
+            : icq_deq_line_addr_o;
+    assign line_resp_data_o = line_resp_data_c;
+    assign line_resp_hit_o  = line_resp_hit_c;
     assign line_state_match_c =
         line_state_valid_r &&
         work_line_valid_i &&
@@ -159,7 +222,7 @@ module ifu_line_fetch
     assign data_line_o =
         line_state_use_c ? line_state_data_r : line_resp_data_o;
     assign data_line_addr_o =
-        line_state_use_c ? line_state_addr_r : icq_deq_line_addr_o;
+        line_state_use_c ? line_state_addr_r : line_resp_addr_c;
     assign data_line_reused_o = line_state_use_c;
     assign line_state_valid_o = line_state_valid_r;
     assign line_state_addr_o  = line_state_addr_r;
@@ -220,6 +283,14 @@ module ifu_line_fetch
             line_state_addr_r           <= '0;
             line_state_data_r           <= '0;
             line_state_epoch_r          <= '0;
+            future_line_valid_r         <= 1'b0;
+            future_line_data_r          <= '0;
+            future_line_hit_r           <= 1'b0;
+            future_line_pc_r            <= '0;
+            future_line_ftq_idx_r       <= '0;
+            future_line_ftq_epoch_r     <= '0;
+            future_line_ftq_alloc_tag_r <= '0;
+            future_line_ftq_entry_r     <= '0;
         end else if (flush_i) begin
             nlpb_resp_valid_r <= 1'b0;
             nlpb_resp_addr_r  <= '0;
@@ -229,28 +300,75 @@ module ifu_line_fetch
             line_state_addr_r  <= '0;
             line_state_data_r  <= '0;
             line_state_epoch_r <= '0;
+            future_line_valid_r         <= 1'b0;
+            future_line_data_r          <= '0;
+            future_line_hit_r           <= 1'b0;
+            future_line_pc_r            <= '0;
+            future_line_ftq_idx_r       <= '0;
+            future_line_ftq_epoch_r     <= '0;
+            future_line_ftq_alloc_tag_r <= '0;
+            future_line_ftq_entry_r     <= '0;
         end else begin
             nlpb_resp_valid_r <= f1_valid_i && !stall_i && nlpb_hit_comb;
             nlpb_resp_addr_r  <= {req_addr_i[63:LINE_BITS], {LINE_BITS{1'b0}}};
             nlpb_resp_data_r  <= nlpb_data_comb;
-            ic_req_addr_pipe_r <= req_addr_i;
-            if (req_owner_valid_i) begin
-                ic_req_ftq_pipe_valid_r     <= 1'b1;
-                ic_req_ftq_pipe_idx_r       <= req_owner_idx_i;
-                ic_req_ftq_pipe_epoch_r     <= req_owner_epoch_i;
-                ic_req_ftq_pipe_alloc_tag_r <= req_owner_alloc_tag_i;
-                ic_req_ftq_pipe_entry_r     <= req_owner_entry_i;
+            if (req_valid_i) begin
+                ic_req_addr_pipe_r <= req_addr_i;
+                ic_req_ftq_pipe_valid_r <= req_owner_valid_i;
+                if (req_owner_valid_i) begin
+                    ic_req_ftq_pipe_idx_r       <= req_owner_idx_i;
+                    ic_req_ftq_pipe_epoch_r     <= req_owner_epoch_i;
+                    ic_req_ftq_pipe_alloc_tag_r <= req_owner_alloc_tag_i;
+                    ic_req_ftq_pipe_entry_r     <= req_owner_entry_i;
+                end else begin
+                    ic_req_ftq_pipe_idx_r       <= '0;
+                    ic_req_ftq_pipe_epoch_r     <= '0;
+                    ic_req_ftq_pipe_alloc_tag_r <= '0;
+                    ic_req_ftq_pipe_entry_r     <= '0;
+                end
+            end else begin
+                ic_req_ftq_pipe_valid_r <= 1'b0;
             end
             if (fence_i) begin
                 line_state_valid_r <= 1'b0;
                 line_state_addr_r  <= '0;
                 line_state_data_r  <= '0;
                 line_state_epoch_r <= '0;
+                future_line_valid_r         <= 1'b0;
+                future_line_data_r          <= '0;
+                future_line_hit_r           <= 1'b0;
+                future_line_pc_r            <= '0;
+                future_line_ftq_idx_r       <= '0;
+                future_line_ftq_epoch_r     <= '0;
+                future_line_ftq_alloc_tag_r <= '0;
+                future_line_ftq_entry_r     <= '0;
             end else if (work_valid_i && line_resp_valid_o) begin
                 line_state_valid_r <= 1'b1;
-                line_state_addr_r  <= icq_deq_line_addr_o;
+                line_state_addr_r  <= line_resp_addr_c;
                 line_state_data_r  <= line_resp_data_o;
                 line_state_epoch_r <= current_epoch_i;
+            end
+
+            if (!fence_i) begin
+                if (line_resp_from_future_c) begin
+                    future_line_valid_r         <= 1'b0;
+                    future_line_data_r          <= '0;
+                    future_line_hit_r           <= 1'b0;
+                    future_line_pc_r            <= '0;
+                    future_line_ftq_idx_r       <= '0;
+                    future_line_ftq_epoch_r     <= '0;
+                    future_line_ftq_alloc_tag_r <= '0;
+                    future_line_ftq_entry_r     <= '0;
+                end else if (icq_future_capture_c) begin
+                    future_line_valid_r         <= 1'b1;
+                    future_line_data_r          <= icq_deq_data_o;
+                    future_line_hit_r           <= icq_deq_hit_o;
+                    future_line_pc_r            <= icq_deq_pc_o;
+                    future_line_ftq_idx_r       <= icq_deq_ftq_idx_o;
+                    future_line_ftq_epoch_r     <= icq_deq_ftq_epoch_o;
+                    future_line_ftq_alloc_tag_r <= icq_deq_ftq_alloc_tag_o;
+                    future_line_ftq_entry_r     <= icq_deq_ftq_entry_o;
+                end
             end
         end
     end

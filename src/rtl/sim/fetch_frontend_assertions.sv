@@ -50,9 +50,22 @@ module fetch_frontend_assertions
     input logic [63:0]                      f2_seq_next_pc,
     input logic [FTQ_IDX_BITS-1:0]          ftq_next_ifu_owner_idx,
     input logic [FTQ_ALLOC_TAG_BITS-1:0]    ftq_next_ifu_owner_tag,
+    input logic                             ftq_next_ifu_owner_valid,
+    input ftq_entry_t                       ftq_next_ifu_owner_entry,
     input logic                             ifu_work_redirect_next_owner_match_c,
     input logic [63:0]                      f2_bpu_target,
-    input logic                             ifu_work_same_owner_advance_c
+    input logic                             ifu_work_same_owner_advance_c,
+    input logic [FTQ_IDX_BITS:0]            ftq_count_alloc_to_ifu,
+    input logic [FTQ_IDX_BITS:0]            ftq_count_ifu_to_wb,
+    input logic                             ifu_runahead_req_fire_c,
+    input logic                             ifu_runahead_cancel_next_c,
+    input logic                             ifu_runahead_pending_c,
+    input logic [63:0]                      ifu_runahead_pending_pc_c,
+    input logic [FTQ_IDX_BITS-1:0]          ifu_runahead_pending_idx_c,
+    input logic [FTQ_EPOCH_BITS-1:0]        ifu_runahead_pending_epoch_c,
+    input logic [FTQ_ALLOC_TAG_BITS-1:0]    ifu_runahead_pending_tag_c,
+    input logic                             ifu_runahead_duplicate_alloc_blocked_c,
+    input logic                             ifu_runahead_depth_gt1_c
 );
 
     property p_f2_pc_matches_resp_source;
@@ -230,6 +243,92 @@ module fetch_frontend_assertions
                     f2_work_ftq_idx_c,
                     f2_work_ftq_alloc_tag_c);
 
+    property p_runahead_depth_is_bounded;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        !ifu_runahead_depth_gt1_c &&
+        (({1'b0, ftq_count_alloc_to_ifu} +
+          {1'b0, ftq_count_ifu_to_wb}) <= (FTQ_IDX_BITS+2)'(2));
+    endproperty
+    a_runahead_depth_is_bounded:
+        assert property (p_runahead_depth_is_bounded)
+        else $error("[INVARIANT_J] demand runahead depth exceeded: alloc_to_ifu=%0d ifu_to_wb=%0d",
+                    ftq_count_alloc_to_ifu,
+                    ftq_count_ifu_to_wb);
+
+    property p_runahead_pending_matches_next_owner;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        (ifu_runahead_pending_c &&
+         (ifu_runahead_pending_pc_c != 64'd0)) |->
+        (redirect_valid ||
+         ifu_runahead_cancel_next_c ||
+         ifu_work_redirect_next_owner_match_c ||
+         (ftq_next_ifu_owner_valid &&
+         (ftq_next_ifu_owner_idx == ifu_runahead_pending_idx_c) &&
+         (ftq_current_epoch == ifu_runahead_pending_epoch_c) &&
+         (ftq_next_ifu_owner_tag == ifu_runahead_pending_tag_c) &&
+         (ftq_next_ifu_owner_entry.block_pc ==
+          {ifu_runahead_pending_pc_c[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
+         (ftq_next_ifu_owner_entry.start_offset ==
+          ifu_runahead_pending_pc_c[5:0])));
+    endproperty
+    a_runahead_pending_matches_next_owner:
+        assert property (p_runahead_pending_matches_next_owner)
+        else $error("[INVARIANT_K] runahead pending owner does not match FTQ next owner: pc=%016h idx=%h tag=%h",
+                    ifu_runahead_pending_pc_c,
+                    ifu_runahead_pending_idx_c,
+                    ifu_runahead_pending_tag_c);
+
+    property p_redirect_match_does_not_enqueue_duplicate;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        ifu_work_redirect_next_owner_match_c |-> !ftq_enq_valid;
+    endproperty
+    a_redirect_match_does_not_enqueue_duplicate:
+        assert property (p_redirect_match_does_not_enqueue_duplicate)
+        else $error("[INVARIANT_L] redirect consumed existing next owner and also enqueued duplicate");
+
+    property p_runahead_future_owner_not_current_work;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        (ifu_runahead_pending_c &&
+         f2_work_ftq_valid_c &&
+         (f2_work_ftq_idx_c == ifu_runahead_pending_idx_c) &&
+         (f2_work_ftq_alloc_tag_c == ifu_runahead_pending_tag_c)) |->
+        ifu_work_redirect_next_owner_match_c;
+    endproperty
+    a_runahead_future_owner_not_current_work:
+        assert property (p_runahead_future_owner_not_current_work)
+        else $error("[INVARIANT_M] future runahead owner became current IFU work before redirect: pc=%016h pending_pc=%016h idx=%h tag=%h",
+                    f2_work_pc_c,
+                    ifu_runahead_pending_pc_c,
+                    ifu_runahead_pending_idx_c,
+                    ifu_runahead_pending_tag_c);
+
+    property p_runahead_duplicate_block_has_no_enqueue;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        ifu_runahead_duplicate_alloc_blocked_c |-> !ftq_enq_valid;
+    endproperty
+    a_runahead_duplicate_block_has_no_enqueue:
+        assert property (p_runahead_duplicate_block_has_no_enqueue)
+        else $error("[INVARIANT_N] runahead duplicate-allocation block still enqueued");
+
+    property p_runahead_fire_has_clean_request_pop;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        ifu_runahead_req_fire_c |->
+        (ftq_ifu_req_pop_valid && ftq_enq_valid && ftq_enq_ready &&
+         !icq_full && !packet_buf_full);
+    endproperty
+    a_runahead_fire_has_clean_request_pop:
+        assert property (p_runahead_fire_has_clean_request_pop)
+        else $error("[INVARIANT_O] runahead request fired without clean FTQ/ICQ handoff");
+
+    property p_runahead_cancel_has_current_pop_and_enqueue;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        ifu_runahead_cancel_next_c |->
+        ftq_enq_valid;
+    endproperty
+    a_runahead_cancel_has_current_pop_and_enqueue:
+        assert property (p_runahead_cancel_has_current_pop_and_enqueue)
+        else $error("[INVARIANT_P] runahead cancel did not enqueue replacement redirect target");
+
 endmodule
 
 bind fetch_top fetch_frontend_assertions u_fetch_frontend_assertions (
@@ -274,8 +373,21 @@ bind fetch_top fetch_frontend_assertions u_fetch_frontend_assertions (
     .f2_seq_next_pc                       (f2_seq_next_pc),
     .ftq_next_ifu_owner_idx               (ftq_next_ifu_owner_idx),
     .ftq_next_ifu_owner_tag               (ftq_next_ifu_owner_tag),
+    .ftq_next_ifu_owner_valid             (ftq_next_ifu_owner_valid),
+    .ftq_next_ifu_owner_entry             (ftq_next_ifu_owner_entry),
     .ifu_work_redirect_next_owner_match_c (ifu_work_redirect_next_owner_match_c),
     .f2_bpu_target                        (f2_bpu_target),
-    .ifu_work_same_owner_advance_c        (ifu_work_same_owner_advance_c)
+    .ifu_work_same_owner_advance_c        (ifu_work_same_owner_advance_c),
+    .ftq_count_alloc_to_ifu               (ftq_count_alloc_to_ifu),
+    .ftq_count_ifu_to_wb                  (ftq_count_ifu_to_wb),
+    .ifu_runahead_req_fire_c              (ifu_runahead_req_fire_c),
+    .ifu_runahead_cancel_next_c           (ifu_runahead_cancel_next_c),
+    .ifu_runahead_pending_c               (ifu_runahead_pending_c),
+    .ifu_runahead_pending_pc_c            (ifu_runahead_pending_pc_c),
+    .ifu_runahead_pending_idx_c           (ifu_runahead_pending_idx_c),
+    .ifu_runahead_pending_epoch_c         (ifu_runahead_pending_epoch_c),
+    .ifu_runahead_pending_tag_c           (ifu_runahead_pending_tag_c),
+    .ifu_runahead_duplicate_alloc_blocked_c(ifu_runahead_duplicate_alloc_blocked_c),
+    .ifu_runahead_depth_gt1_c             (ifu_runahead_depth_gt1_c)
 );
 `endif

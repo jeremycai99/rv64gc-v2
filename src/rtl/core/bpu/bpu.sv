@@ -63,6 +63,7 @@ module bpu
     output logic [GHR_BITS-1:0]     ghr_o,
 
     input  logic                    f2_stall_i,
+    input  logic                    f2_capture_i,
     input  logic                    f2_redirect_i,
     input  logic                    f2_line_straddle_advance_i,
     input  logic                    f2_consume_remainder_i,
@@ -212,7 +213,7 @@ module bpu
             f2_btb_alt_offset_o <= '0;
             f2_tage_taken_o     <= 1'b0;
             f2_ghr_snapshot_o   <= '0;
-        end else if (!flush_i && !f2_stall_i) begin
+        end else if (!flush_i && !f2_stall_i && f2_capture_i) begin
             f2_btb_hit_o        <= btb_hit_o;
             f2_btb_target_o     <= btb_target_o;
             f2_btb_type_o       <= btb_type_o;

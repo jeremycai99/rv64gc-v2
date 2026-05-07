@@ -70,7 +70,19 @@ module fetch_frontend_profiler
     input logic                             ifu_work_same_owner_advance_c,
     input logic                             packet_flowthrough_candidate,
     input logic                             packet_flowthrough_valid,
-    input logic                             packet_buf_stale_owner_c
+    input logic                             packet_buf_stale_owner_c,
+    input logic [FTQ_IDX_BITS:0]            ftq_count_alloc_to_ifu,
+    input logic [FTQ_IDX_BITS:0]            ftq_count_ifu_to_wb,
+    input logic                             icq_deq_valid,
+    input logic [63:LINE_BITS]              icq_deq_line_addr,
+    input logic                             f2_work_line_valid_c,
+    input logic                             ifu_runahead_req_valid_c,
+    input logic                             ifu_runahead_req_fire_c,
+    input logic                             ifu_runahead_cancel_next_c,
+    input logic                             ifu_runahead_pending_c,
+    input logic                             ifu_runahead_redirect_match_c,
+    input logic                             ifu_runahead_duplicate_alloc_blocked_c,
+    input logic                             ifu_runahead_depth_gt1_c
 );
 
     localparam logic [2:0] BT_RET = 3'd4;
@@ -146,6 +158,14 @@ module fetch_frontend_profiler
     integer xs_same_owner_block_remainder_cycles;
     integer xs_same_owner_block_crossline_cycles;
     integer xs_same_owner_block_other_cycles;
+    integer xs_runahead_req_valid_cycles;
+    integer xs_runahead_req_fire_cycles;
+    integer xs_runahead_cancel_next_cycles;
+    integer xs_runahead_pending_cycles;
+    integer xs_runahead_redirect_match_cycles;
+    integer xs_runahead_duplicate_alloc_blocked_cycles;
+    integer xs_ftq_depth_gt1_cycles;
+    integer xs_icq_future_head_block_cycles;
 
     logic [63:0] xs_catchup_top_pc [0:XS_CATCHUP_TOPN-1];
     integer xs_catchup_top_count [0:XS_CATCHUP_TOPN-1];
@@ -180,6 +200,7 @@ module fetch_frontend_profiler
     logic xs_same_owner_block_remainder_c;
     logic xs_same_owner_block_crossline_c;
     logic xs_same_owner_block_other_c;
+    logic xs_icq_future_head_block_c;
 
     initial begin
         xs_catchup_probe_en = 1'b0;
@@ -343,6 +364,10 @@ module fetch_frontend_profiler
         !xs_same_owner_remainder_hold_c &&
         !xs_same_owner_crossline_c &&
         !ifu_work_same_owner_advance_c;
+    assign xs_icq_future_head_block_c =
+        icq_deq_valid &&
+        f2_work_line_valid_c &&
+        (icq_deq_line_addr != f2_work_line_addr_c);
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -404,6 +429,14 @@ module fetch_frontend_profiler
             xs_same_owner_block_remainder_cycles <= 0;
             xs_same_owner_block_crossline_cycles <= 0;
             xs_same_owner_block_other_cycles   <= 0;
+            xs_runahead_req_valid_cycles       <= 0;
+            xs_runahead_req_fire_cycles        <= 0;
+            xs_runahead_cancel_next_cycles      <= 0;
+            xs_runahead_pending_cycles         <= 0;
+            xs_runahead_redirect_match_cycles  <= 0;
+            xs_runahead_duplicate_alloc_blocked_cycles <= 0;
+            xs_ftq_depth_gt1_cycles            <= 0;
+            xs_icq_future_head_block_cycles    <= 0;
             for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
                 xs_catchup_top_pc[i]    <= 64'd0;
                 xs_catchup_top_count[i] <= 0;
@@ -610,6 +643,33 @@ module fetch_frontend_profiler
             if (xs_same_owner_block_other_c)
                 xs_same_owner_block_other_cycles <=
                     xs_same_owner_block_other_cycles + 1;
+            if (ifu_runahead_req_valid_c)
+                xs_runahead_req_valid_cycles <=
+                    xs_runahead_req_valid_cycles + 1;
+            if (ifu_runahead_req_fire_c)
+                xs_runahead_req_fire_cycles <=
+                    xs_runahead_req_fire_cycles + 1;
+            if (ifu_runahead_cancel_next_c)
+                xs_runahead_cancel_next_cycles <=
+                    xs_runahead_cancel_next_cycles + 1;
+            if (ifu_runahead_pending_c)
+                xs_runahead_pending_cycles <=
+                    xs_runahead_pending_cycles + 1;
+            if (ifu_runahead_redirect_match_c)
+                xs_runahead_redirect_match_cycles <=
+                    xs_runahead_redirect_match_cycles + 1;
+            if (ifu_runahead_duplicate_alloc_blocked_c)
+                xs_runahead_duplicate_alloc_blocked_cycles <=
+                    xs_runahead_duplicate_alloc_blocked_cycles + 1;
+            if (ifu_runahead_depth_gt1_c ||
+                (({1'b0, ftq_count_alloc_to_ifu} +
+                  {1'b0, ftq_count_ifu_to_wb}) >
+                 (FTQ_IDX_BITS+2)'(2)))
+                xs_ftq_depth_gt1_cycles <=
+                    xs_ftq_depth_gt1_cycles + 1;
+            if (xs_icq_future_head_block_c)
+                xs_icq_future_head_block_cycles <=
+                    xs_icq_future_head_block_cycles + 1;
 
             if (xs_catchup_base_c)
                 xs_catchup_base_cycles <= xs_catchup_base_cycles + 1;
@@ -737,6 +797,22 @@ module fetch_frontend_profiler
                      xs_ftq_occ_hist[4]);
             $display("xs ftq occ hist 16plus      : %0d",
                      xs_ftq_occ_hist[5]);
+            $display("xs runahead req valid       : %0d",
+                     xs_runahead_req_valid_cycles);
+            $display("xs runahead req fire        : %0d",
+                     xs_runahead_req_fire_cycles);
+            $display("xs runahead cancel next     : %0d",
+                     xs_runahead_cancel_next_cycles);
+            $display("xs runahead pending cycles  : %0d",
+                     xs_runahead_pending_cycles);
+            $display("xs runahead redirect match  : %0d",
+                     xs_runahead_redirect_match_cycles);
+            $display("xs runahead dup alloc block : %0d",
+                     xs_runahead_duplicate_alloc_blocked_cycles);
+            $display("xs ftq depth gt1 cycles     : %0d",
+                     xs_ftq_depth_gt1_cycles);
+            $display("xs icq future head block    : %0d",
+                     xs_icq_future_head_block_cycles);
             $display("xs packet buf empty cycles  : %0d",
                      xs_packet_buf_empty_cycles);
             $display("xs packet buf full cycles   : %0d",
@@ -920,6 +996,18 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .ifu_work_same_owner_advance_c   (ifu_work_same_owner_advance_c),
     .packet_flowthrough_candidate    (packet_flowthrough_candidate),
     .packet_flowthrough_valid        (packet_flowthrough_valid),
-    .packet_buf_stale_owner_c        (packet_buf_stale_owner_c)
+    .packet_buf_stale_owner_c        (packet_buf_stale_owner_c),
+    .ftq_count_alloc_to_ifu          (ftq_count_alloc_to_ifu),
+    .ftq_count_ifu_to_wb             (ftq_count_ifu_to_wb),
+    .icq_deq_valid                   (icq_deq_valid),
+    .icq_deq_line_addr               (icq_deq_line_addr),
+    .f2_work_line_valid_c            (f2_work_line_valid_c),
+    .ifu_runahead_req_valid_c        (ifu_runahead_req_valid_c),
+    .ifu_runahead_req_fire_c         (ifu_runahead_req_fire_c),
+    .ifu_runahead_cancel_next_c      (ifu_runahead_cancel_next_c),
+    .ifu_runahead_pending_c          (ifu_runahead_pending_c),
+    .ifu_runahead_redirect_match_c   (ifu_runahead_redirect_match_c),
+    .ifu_runahead_duplicate_alloc_blocked_c(ifu_runahead_duplicate_alloc_blocked_c),
+    .ifu_runahead_depth_gt1_c        (ifu_runahead_depth_gt1_c)
 );
 `endif

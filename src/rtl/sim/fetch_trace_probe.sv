@@ -96,6 +96,11 @@ module fetch_trace_probe
     input logic                             ftq_ifu_wb_owner_valid,
     input logic [FTQ_IDX_BITS-1:0]          ftq_ifu_wb_owner_idx,
     input logic [FTQ_ALLOC_TAG_BITS-1:0]    ftq_ifu_wb_owner_tag,
+    input logic                             ifu_runahead_req_fire_c,
+    input logic                             ifu_runahead_cancel_next_c,
+    input logic                             ifu_runahead_pending_c,
+    input logic [63:0]                      ifu_runahead_pending_pc_c,
+    input logic [FTQ_ALLOC_TAG_BITS-1:0]    ifu_runahead_pending_tag_c,
     input logic [FTQ_IDX_BITS:0]            ftq_count_alloc_to_ifu,
     input logic [FTQ_IDX_BITS:0]            ftq_count_ifu_to_wb,
     input logic [FTQ_IDX_BITS:0]            ftq_count_ifu_to_commit,
@@ -114,6 +119,7 @@ module fetch_trace_probe
 );
 
     logic trace_fetch_en;
+    logic trace_fetch_all_en;
     logic trace_fetch_split_en;
     logic trace_fetch_dup_en;
     logic trace_fetch_owner_en;
@@ -121,10 +127,12 @@ module fetch_trace_probe
 
     initial begin
         trace_fetch_en = 1'b0;
+        trace_fetch_all_en = 1'b0;
         trace_fetch_split_en = 1'b0;
         trace_fetch_dup_en = 1'b0;
         trace_fetch_owner_en = 1'b0;
         if ($test$plusargs("TRACE_FETCH")) trace_fetch_en = 1'b1;
+        if ($test$plusargs("TRACE_FETCH_ALL")) trace_fetch_all_en = 1'b1;
         if ($test$plusargs("TRACE_FETCH_SPLIT")) trace_fetch_split_en = 1'b1;
         if ($test$plusargs("FETCH_DUP_TRACE")) trace_fetch_dup_en = 1'b1;
         if ($test$plusargs("TRACE_FETCH_OWNER")) trace_fetch_owner_en = 1'b1;
@@ -136,7 +144,8 @@ module fetch_trace_probe
         end else begin
             trace_fetch_cycle <= trace_fetch_cycle + 1;
             if (trace_fetch_en &&
-                ((trace_fetch_cycle < 600) ||
+                (trace_fetch_all_en ||
+                 (trace_fetch_cycle < 600) ||
                  ((f1_pc >= 64'h0000_0000_8000_2000) &&
                   (f1_pc <  64'h0000_0000_8000_2470)) ||
                  ((f1_pc >= 64'h0000_0000_8000_2500) &&
@@ -153,7 +162,7 @@ module fetch_trace_probe
                   (f2_work_pc_c <  64'h0000_0000_8000_3400)) ||
                  ((f2_work_pc_c >= 64'h0000_0000_8000_39f0) &&
                   (f2_work_pc_c <  64'h0000_0000_8000_3a80)))) begin
-                $display("[FETCH] cyc=%0d f1_pc=%016h ic_req_v=%b ic_req=%016h ic_resp_v=%b ic_hit=%b nlpb_hit=%b f2_v=%b f2_pc=%016h f2_hit=%b f2_type=%0d f2_off=%0d f2_alt_hit=%b f2_alt_type=%0d f2_alt_off=%0d ext=%0d final=%0d emit=%b dup=%b seq_v=%b seq_pc=%016h line_reuse=%b bp=%b bp_taken=%b bp_type=%0d bp_slot=%0d bp_tgt=%016h pd_v=%b pd_slot=%0d pd_type=%0d pd_tgt=%016h ftq_pred_v=%b ftq_pred_t=%b ftq_pred_slot=%0d ftq_pred_type=%0d ftq_sub=%b pd_mm=%b sg_v=%b sg_pc=%016h sg_t=%b sg_parent=%016h sg_owner=%016h ras_tos=%0d ras_push=%b ras_push_addr=%016h ras_pop=%b ras_pop_addr=%016h redir=%b redir_pc=%016h cmt_redir=%b cmt_pc=%016h rem_v=%b cons_rem=%b consd_rem=%b ftq_need=%b ftq_enq=%b ftq_enq_tag=%0d ftq_pop=%b ftq_cnt=%0d ftq_head_v=%b ftq_head=%0d ftq_head_tag=%0d f2_ftq_v=%b f2_ftq=%0d f2_ftq_tag=%0d f2_ftq_blk=%016h pkt_live=%b pkt_ftq_tag=%0d fe_hold=%b fe_stall=%b fetch_out=%0d",
+                $display("[FETCH] cyc=%0d f1_pc=%016h ic_req_v=%b ic_req=%016h ic_resp_v=%b ic_hit=%b nlpb_hit=%b f2_v=%b f2_pc=%016h f2_hit=%b f2_type=%0d f2_off=%0d f2_alt_hit=%b f2_alt_type=%0d f2_alt_off=%0d ext=%0d final=%0d emit=%b dup=%b seq_v=%b seq_pc=%016h line_reuse=%b bp=%b bp_taken=%b bp_type=%0d bp_slot=%0d bp_tgt=%016h pd_v=%b pd_slot=%0d pd_type=%0d pd_tgt=%016h ftq_pred_v=%b ftq_pred_t=%b ftq_pred_slot=%0d ftq_pred_type=%0d ftq_sub=%b pd_mm=%b sg_v=%b sg_pc=%016h sg_t=%b sg_parent=%016h sg_owner=%016h ras_tos=%0d ras_push=%b ras_push_addr=%016h ras_pop=%b ras_pop_addr=%016h redir=%b redir_pc=%016h cmt_redir=%b cmt_pc=%016h rem_v=%b cons_rem=%b consd_rem=%b ftq_need=%b ftq_enq=%b ftq_enq_tag=%0d ftq_pop=%b ftq_cnt=%0d ftq_head_v=%b ftq_head=%0d ftq_head_tag=%0d f2_ftq_v=%b f2_ftq=%0d f2_ftq_tag=%0d f2_ftq_blk=%016h ra_fire=%b ra_cancel=%b ra_pend=%b ra_pc=%016h ra_tag=%0d pkt_live=%b pkt_ftq_tag=%0d fe_hold=%b fe_stall=%b fetch_out=%0d",
                     trace_fetch_cycle,
                     f1_pc,
                     ic_req_valid,
@@ -220,6 +229,11 @@ module fetch_trace_probe
                     f2_work_ftq_idx_c,
                     f2_work_ftq_alloc_tag_c,
                     f2_work_ftq_entry_c.block_pc,
+                    ifu_runahead_req_fire_c,
+                    ifu_runahead_cancel_next_c,
+                    ifu_runahead_pending_c,
+                    ifu_runahead_pending_pc_c,
+                    ifu_runahead_pending_tag_c,
                     packet_buf_owner_match_c,
                     packet_buf_valid ? packet_buf_head.ftq_alloc_tag : '0,
                     frontend_hold,
@@ -425,6 +439,11 @@ bind fetch_top fetch_trace_probe u_fetch_trace_probe (
     .ftq_ifu_wb_owner_valid          (ftq_ifu_wb_owner_valid),
     .ftq_ifu_wb_owner_idx            (ftq_ifu_wb_owner_idx),
     .ftq_ifu_wb_owner_tag            (ftq_ifu_wb_owner_tag),
+    .ifu_runahead_req_fire_c         (ifu_runahead_req_fire_c),
+    .ifu_runahead_cancel_next_c      (ifu_runahead_cancel_next_c),
+    .ifu_runahead_pending_c          (ifu_runahead_pending_c),
+    .ifu_runahead_pending_pc_c       (ifu_runahead_pending_pc_c),
+    .ifu_runahead_pending_tag_c      (ifu_runahead_pending_tag_c),
     .ftq_count_alloc_to_ifu          (ftq_count_alloc_to_ifu),
     .ftq_count_ifu_to_wb             (ftq_count_ifu_to_wb),
     .ftq_count_ifu_to_commit         (ftq_count_ifu_to_commit),

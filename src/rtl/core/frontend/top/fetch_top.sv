@@ -274,6 +274,23 @@ module fetch_top
     logic                                  ifu_work_take_request_owner_c;
     logic                                  ifu_work_take_remainder_request_owner_c;
     logic                                  ifu_work_same_owner_advance_c;
+    logic                                  ifu_runahead_req_valid_c;
+    logic                                  ifu_runahead_req_fire_c;
+    logic                                  ifu_runahead_cancel_next_c;
+    logic                                  ifu_runahead_pending_c;
+    logic [63:0]                           ifu_runahead_pending_pc_c;
+    logic [FTQ_IDX_BITS-1:0]               ifu_runahead_pending_idx_c;
+    logic [FTQ_EPOCH_BITS-1:0]             ifu_runahead_pending_epoch_c;
+    logic [FTQ_ALLOC_TAG_BITS-1:0]         ifu_runahead_pending_tag_c;
+    logic                                  ifu_runahead_redirect_match_c;
+    logic                                  ifu_runahead_duplicate_alloc_blocked_c;
+    logic                                  ifu_runahead_depth_gt1_c;
+    logic                                  ic_req_owner_valid_c;
+    logic [FTQ_IDX_BITS-1:0]               ic_req_owner_idx_c;
+    logic [FTQ_EPOCH_BITS-1:0]             ic_req_owner_epoch_c;
+    logic [FTQ_ALLOC_TAG_BITS-1:0]         ic_req_owner_tag_c;
+    ftq_entry_t                            ic_req_owner_entry_c;
+    logic                                  bpu_f2_capture_c;
 
     ifu u_ifu (
         .clk                                      (clk),
@@ -306,6 +323,7 @@ module fetch_top
         .ftq_wb_owner_tag_i                       (ftq_ifu_wb_owner_tag),
         .ftq_current_epoch_i                      (ftq_current_epoch),
         .ftq_count_ifu_to_wb_i                    (ftq_count_ifu_to_wb),
+        .ftq_count_alloc_to_ifu_i                 (ftq_count_alloc_to_ifu),
         .seq_valid_i                              (f2_seq_valid),
         .seq_next_pc_i                            (f2_seq_next_pc),
         .line_straddle_advance_i                  (line_straddle_advance_c),
@@ -350,8 +368,43 @@ module fetch_top
         .work_take_ftq_next_owner_o               (ifu_work_take_ftq_next_owner_c),
         .work_take_request_owner_o                (ifu_work_take_request_owner_c),
         .work_take_remainder_request_owner_o      (ifu_work_take_remainder_request_owner_c),
-        .work_same_owner_advance_o                (ifu_work_same_owner_advance_c)
+        .work_same_owner_advance_o                (ifu_work_same_owner_advance_c),
+        .runahead_req_valid_o                     (ifu_runahead_req_valid_c),
+        .runahead_req_fire_o                      (ifu_runahead_req_fire_c),
+        .runahead_cancel_next_o                   (ifu_runahead_cancel_next_c),
+        .runahead_pending_o                       (ifu_runahead_pending_c),
+        .runahead_pending_pc_o                    (ifu_runahead_pending_pc_c),
+        .runahead_pending_idx_o                   (ifu_runahead_pending_idx_c),
+        .runahead_pending_epoch_o                 (ifu_runahead_pending_epoch_c),
+        .runahead_pending_tag_o                   (ifu_runahead_pending_tag_c),
+        .runahead_redirect_match_o                (ifu_runahead_redirect_match_c),
+        .runahead_duplicate_alloc_blocked_o       (ifu_runahead_duplicate_alloc_blocked_c),
+        .runahead_depth_gt1_o                     (ifu_runahead_depth_gt1_c)
     );
+
+    assign bpu_f2_capture_c = !ifu_runahead_req_valid_c;
+
+    always_comb begin
+        ic_req_owner_valid_c = f2_work_ftq_valid_c;
+        ic_req_owner_idx_c   = f2_work_ftq_idx_c;
+        ic_req_owner_epoch_c = f2_work_ftq_epoch_c;
+        ic_req_owner_tag_c   = f2_work_ftq_alloc_tag_c;
+        ic_req_owner_entry_c = f2_work_ftq_entry_c;
+
+        if (ftq_enq_valid) begin
+            ic_req_owner_valid_c = 1'b1;
+            ic_req_owner_idx_c   = ftq_enq_idx;
+            ic_req_owner_epoch_c = ftq_enq_epoch;
+            ic_req_owner_tag_c   = ftq_enq_tag;
+            ic_req_owner_entry_c = req_ftq_entry_c;
+        end else if (ifu_work_redirect_next_owner_match_c) begin
+            ic_req_owner_valid_c = 1'b1;
+            ic_req_owner_idx_c   = ftq_next_ifu_owner_idx;
+            ic_req_owner_epoch_c = ftq_current_epoch;
+            ic_req_owner_tag_c   = ftq_next_ifu_owner_tag;
+            ic_req_owner_entry_c = ftq_next_ifu_owner_entry;
+        end
+    end
 
     ifu_line_fetch #(.ICQ_DEPTH(ICQ_DEPTH)) u_ifu_line_fetch (
         .clk                    (clk),
@@ -370,11 +423,14 @@ module fetch_top
         .ftq_wb_owner_valid_i   (ftq_ifu_wb_owner_valid),
         .ftq_wb_owner_idx_i     (ftq_ifu_wb_owner_idx),
         .ftq_wb_owner_tag_i     (ftq_ifu_wb_owner_tag),
-        .req_owner_valid_i      (ftq_enq_valid),
-        .req_owner_idx_i        (ftq_enq_idx),
-        .req_owner_epoch_i      (ftq_enq_epoch),
-        .req_owner_alloc_tag_i  (ftq_enq_tag),
-        .req_owner_entry_i      (req_ftq_entry_c),
+        .ftq_next_owner_valid_i (ftq_next_ifu_owner_valid),
+        .ftq_next_owner_idx_i   (ftq_next_ifu_owner_idx),
+        .ftq_next_owner_tag_i   (ftq_next_ifu_owner_tag),
+        .req_owner_valid_i      (ic_req_owner_valid_c),
+        .req_owner_idx_i        (ic_req_owner_idx_c),
+        .req_owner_epoch_i      (ic_req_owner_epoch_c),
+        .req_owner_alloc_tag_i  (ic_req_owner_tag_c),
+        .req_owner_entry_i      (ic_req_owner_entry_c),
         .icq_deq_valid_o        (icq_deq_valid),
         .icq_deq_data_o         (icq_deq_data),
         .icq_deq_hit_o          (icq_deq_hit),
@@ -426,6 +482,7 @@ module fetch_top
         .enq_epoch    (ftq_enq_epoch),
         .enq_tag      (ftq_enq_tag),
         .ifu_req_pop_valid(ftq_ifu_req_pop_valid),
+        .ifu_cancel_next_valid(ifu_runahead_cancel_next_c),
         .delivery_push_valid(ftq_delivery_push_valid),
         .pop_valid    (ftq_ifu_pop_valid),
         .head_valid   (ftq_head_valid),
@@ -604,6 +661,7 @@ module fetch_top
         .ghr_restore_val_i           (ghr_restore_val),
         .ghr_o                       (ghr_out),
         .f2_stall_i                  (fe_stall),
+        .f2_capture_i                (bpu_f2_capture_c),
         .f2_redirect_i               (f2_bpu_redirect),
         .f2_line_straddle_advance_i  (line_straddle_advance_c),
         .f2_consume_remainder_i      (consume_remainder_c),
@@ -809,7 +867,9 @@ module fetch_top
         .redirect_i                               (redirect_valid),
         .stall_i                                  (fe_stall),
         .seed_clear_i                             (redirect_valid),
-        .seed_consume_i                           (!fe_stall && ic_req_valid),
+        .seed_consume_i                           (!fe_stall &&
+                                                   ic_req_valid &&
+                                                   !ifu_runahead_req_valid_c),
         .req_pc_i                                 (req_pc_c),
         .seq_next_pc_i                            (f2_seq_next_pc),
         .work_pc_i                                (f2_work_pc_c),
