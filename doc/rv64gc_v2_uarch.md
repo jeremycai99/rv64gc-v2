@@ -468,11 +468,13 @@ These are the structural constraint points that any optimization needs to be awa
   prediction assembly, aux prediction observation, and the BPU-to-FTQ request
   entry adapter. `fetch_top.sv` consumes the assembled FTQ entry instead of
   locally rebuilding predictor metadata.
-- **Simulation checker boundary:** `src/rtl/sim/fetch_delivery_checker.sv`
-  and `src/rtl/sim/fetch_owner_checker.sv` bind to `fetch_top` in simulation
-  and own the strict delivery stream and same-line owner contract checkers.
-  This keeps checker `$display`, `$fatal`, and plusarg handling out of the
-  frontend integration RTL.
+- **Simulation boundary:** `src/rtl/sim/fetch_delivery_checker.sv`,
+  `src/rtl/sim/fetch_owner_checker.sv`, and
+  `src/rtl/sim/fetch_frontend_profiler.sv` bind to `fetch_top` in simulation
+  and own the strict delivery stream checker, same-line owner contract checker,
+  and frontend performance/profile counters. This keeps checker and profiler
+  `$display`, `$fatal`, and plusarg handling out of the frontend integration
+  RTL.
 - **Current runahead precondition:** the IFU work cursor is still conservative
   and mirror-locked to the registered F1/F2 flow. Before F1 can run ahead by
   default, this cursor must become the independently advanced work item for the
