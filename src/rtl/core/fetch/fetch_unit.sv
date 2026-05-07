@@ -96,28 +96,6 @@ module fetch_unit
     localparam int ICQ_DEPTH = 4;
     localparam int ICQ_COUNT_BITS = $clog2(ICQ_DEPTH + 1);
 
-    function automatic logic is_link_reg(input logic [4:0] reg_id);
-        begin
-            is_link_reg = (reg_id == 5'd1) || (reg_id == 5'd5);
-        end
-    endfunction
-
-    function automatic logic [63:0] imm_b64(input logic [31:0] insn);
-        logic [12:0] imm13;
-        begin
-            imm13 = {insn[31], insn[7], insn[30:25], insn[11:8], 1'b0};
-            imm_b64 = {{51{imm13[12]}}, imm13};
-        end
-    endfunction
-
-    function automatic logic [63:0] imm_j64(input logic [31:0] insn);
-        logic [20:0] imm21;
-        begin
-            imm21 = {insn[31], insn[19:12], insn[20], insn[30:21], 1'b0};
-            imm_j64 = {{43{imm21[20]}}, imm21};
-        end
-    endfunction
-
     // =========================================================================
     // F1 stage signals
     // =========================================================================
@@ -1653,112 +1631,31 @@ module fetch_unit
     // request starts at the branch PC, but it must not create a live redirect
     // unless the full owner-redirect path is explicitly enabled.
     // =========================================================================
-    always_comb begin
-        predecode_ctl_found  = 1'b0;
-        predecode_ctl_slot   = 3'd0;
-        predecode_ctl_type   = BT_COND;
-        predecode_ctl_pc     = '0;
-        predecode_ctl_target = '0;
-        second_ctl_found     = 1'b0;
-        second_ctl_slot      = 3'd0;
-        second_ctl_type      = BT_COND;
-        second_ctl_pc        = '0;
-        second_ctl_target    = '0;
-
-        if (f2_work_valid_c && f2_data_valid) begin
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (slot_valid[i] &&
-                    (3'(i) < extract_count)) begin
-                    automatic logic        ctl_found_i;
-                    automatic logic [2:0]  ctl_type_i;
-                    automatic logic [63:0] ctl_pc_i;
-                    automatic logic [63:0] ctl_target_i;
-                    automatic logic [31:0] insn32;
-                    automatic logic [6:0]  opcode;
-                    automatic logic [2:0]  funct3;
-                    automatic logic [4:0]  rd;
-                    automatic logic [4:0]  rs1;
-                    automatic logic [11:0] imm12;
-
-                    ctl_found_i  = 1'b0;
-                    ctl_type_i   = BT_COND;
-                    ctl_pc_i     = slot_pc[i];
-                    ctl_target_i = '0;
-                    insn32 = slot_is_rvc[i] ? decomp_out[i] : raw_insn[i];
-                    opcode = insn32[6:0];
-                    funct3 = insn32[14:12];
-                    rd     = insn32[11:7];
-                    rs1    = insn32[19:15];
-                    imm12  = insn32[31:20];
-
-                    case (opcode)
-                        7'b1100011: begin
-                            ctl_found_i  = 1'b1;
-                            ctl_type_i   = BT_COND;
-                            ctl_target_i = slot_pc[i] + imm_b64(insn32);
-                        end
-                        7'b1101111: begin
-                            ctl_found_i  = 1'b1;
-                            ctl_type_i   = is_link_reg(rd) ? BT_CALL : BT_JAL;
-                            ctl_target_i = slot_pc[i] + imm_j64(insn32);
-                        end
-                        7'b1100111: begin
-                            if (funct3 == 3'b000) begin
-                                ctl_found_i = 1'b1;
-                                if ((rd == 5'd0) && is_link_reg(rs1) &&
-                                    (imm12 == 12'd0)) begin
-                                    ctl_type_i = BT_RET;
-                                    ctl_target_i =
-                                        ((ras_tos != 5'd0) && (ras_pop_addr != 64'd0))
-                                            ? ras_pop_addr
-                                            : 64'd0;
-                                end else if (is_link_reg(rd)) begin
-                                    ctl_type_i   = BT_CALL;
-                                    ctl_target_i = 64'd0;
-                                end else begin
-                                    ctl_type_i   = BT_JALR;
-                                    ctl_target_i = 64'd0;
-                                end
-                            end
-                        end
-                        default: begin
-                        end
-                    endcase
-
-                    if (ctl_found_i) begin
-                        if (!predecode_ctl_found) begin
-                            predecode_ctl_found  = 1'b1;
-                            predecode_ctl_slot   = 3'(i);
-                            predecode_ctl_type   = ctl_type_i;
-                            predecode_ctl_pc     = ctl_pc_i;
-                            predecode_ctl_target = ctl_target_i;
-                        end else if (!second_ctl_found) begin
-                            second_ctl_found  = 1'b1;
-                            second_ctl_slot   = 3'(i);
-                            second_ctl_type   = ctl_type_i;
-                            second_ctl_pc     = ctl_pc_i;
-                            second_ctl_target = ctl_target_i;
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    always_comb begin
-        owner_cond_pred_found  = 1'b0;
-        owner_cond_pred_slot   = predecode_ctl_slot;
-        owner_cond_pred_target = predecode_ctl_target;
-
-        if (f2_work_valid_c &&
-            f2_data_valid &&
-            predecode_ctl_found &&
-            (predecode_ctl_type == BT_COND)) begin
-            if (owner_tage_pred_taken) begin
-                owner_cond_pred_found = 1'b1;
-            end
-        end
-    end
+    predecode u_predecode (
+        .valid_i                 (f2_work_valid_c && f2_data_valid),
+        .extract_count_i         (extract_count),
+        .raw_insn_i              (raw_insn),
+        .decomp_insn_i           (decomp_out),
+        .slot_is_rvc_i           (slot_is_rvc),
+        .slot_valid_i            (slot_valid),
+        .slot_pc_i               (slot_pc),
+        .ras_tos_i               (ras_tos),
+        .ras_pop_addr_i          (ras_pop_addr),
+        .owner_tage_pred_taken_i (owner_tage_pred_taken),
+        .ctl_found_o             (predecode_ctl_found),
+        .ctl_slot_o              (predecode_ctl_slot),
+        .ctl_type_o              (predecode_ctl_type),
+        .ctl_pc_o                (predecode_ctl_pc),
+        .ctl_target_o            (predecode_ctl_target),
+        .second_ctl_found_o      (second_ctl_found),
+        .second_ctl_slot_o       (second_ctl_slot),
+        .second_ctl_type_o       (second_ctl_type),
+        .second_ctl_pc_o         (second_ctl_pc),
+        .second_ctl_target_o     (second_ctl_target),
+        .owner_cond_pred_found_o (owner_cond_pred_found),
+        .owner_cond_pred_slot_o  (owner_cond_pred_slot),
+        .owner_cond_pred_target_o(owner_cond_pred_target)
+    );
 
     always_comb begin
         ftq_pred_ctl_valid      = 1'b0;

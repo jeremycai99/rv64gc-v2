@@ -73,6 +73,7 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/include/uarch_pkg.sv \
      src/rtl/sim/mem_if_pkg.sv \
      src/rtl/core/fetch/rvc_decompress.sv \
+     src/rtl/core/fetch/predecode.sv \
      src/rtl/core/fetch/btb.sv \
      src/rtl/core/fetch/ras.sv \
      src/rtl/core/fetch/tage_sc_l.sv \

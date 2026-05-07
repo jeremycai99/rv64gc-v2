@@ -123,6 +123,7 @@ $(eval $(call MODULE_TB_RULE,lsu,\
 RTL_FILES = \
     $(RTL_DIR)/sim/mem_if_pkg.sv \
     $(RTL_DIR)/core/fetch/rvc_decompress.sv \
+    $(RTL_DIR)/core/fetch/predecode.sv \
     $(RTL_DIR)/core/fetch/btb.sv \
     $(RTL_DIR)/core/fetch/ras.sv \
     $(RTL_DIR)/core/fetch/tage_sc_l.sv \

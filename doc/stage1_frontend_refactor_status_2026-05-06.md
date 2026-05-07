@@ -1077,6 +1077,12 @@ Migration order:
    Until then, leave them in `fetch_unit.sv` so hierarchical testbench probes
    continue to work.
 
+Validated split slices:
+
+| Slice | RTL movement | Validation | Verdict |
+|---|---|---|---|
+| `predecode.sv` extraction | Moved first/second CFI decode and helper immediate/link-register functions out of `fetch_unit.sv`; `fetch_unit.sv` now instantiates the leaf module. | `benchmark_results/20260506_predecode_extraction_smoke`: Dhrystone 100 PASS (`mcycle=27598`, `minstret=49088`), CoreMark 1 PASS (`mcycle=219901`, `minstret=332154`) with `+FETCH_DELIVERY_CHECK +FETCH_DELIVERY_STRICT +FETCH_OWNER_CHECK +FETCH_OWNER_STRICT +PERF_PROFILE +PERF_COUNTERS +STAT_DUMP`. Owner/stale counters remained zero. | Accepted as behavior-neutral structural cleanup; no performance claim. |
+
 ### Long-run drift guard
 
 Use `--goal stage1` for any Stage 1 long run. The runner now rejects drifted
