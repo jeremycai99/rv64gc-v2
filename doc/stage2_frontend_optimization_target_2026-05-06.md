@@ -48,6 +48,61 @@ decode supply rate is only about 58.5%. The working hypothesis is that better
 proactive frontend supply keeps more independent work in flight, which can
 reduce both frontend bubbles and some apparent ROB-head backend stalls.
 
+## Kickoff Study, 2026-05-07
+
+The first Stage 2 pass rebuilt DSim from clean post-refactor commit `7837713`
+and reran the two strict smoke rows with:
+`+FETCH_DELIVERY_CHECK +FETCH_DELIVERY_STRICT +FETCH_OWNER_CHECK
++FETCH_OWNER_STRICT +PERF_PROFILE +PERF_COUNTERS +STAT_DUMP`.
+
+Baseline run: `benchmark_results/20260507_stage2_post_refactor_baseline`.
+
+| Workload | Status | Timed cycles | Metric | Frontend zero | `packet_empty_noemit_dup` | `packet_empty_f2_data` | `ftq_occ_max` | `packet_buf_occ_max` |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | PASS | 27,093 | 2.100734 DMIPS/MHz | 35.4% | 9,098 | 9,410 | 1 | 0 |
+| CoreMark 1 | PASS | 209,058 | 4.783362 CM/MHz | 41.9% | 82,614 | 85,756 | 1 | 0 |
+
+This confirms the current frontend is still shallow: FTQ occupancy never rises
+above one owner, the IBuffer is flow-through only on these rows, and the
+dominant actionable frontend bucket remains duplicate/no-emit pressure caused
+by the IFU work cursor lagging useful same-owner packet progress.
+
+Two quick RTL trials were run to test whether that diagnosis is real. Both are
+rejected as default behavior, but they are useful direction evidence.
+
+| Trial | Run directory | Result | Verdict |
+|---|---|---|---|
+| Disable `ifu_duplicate_guard` suppression | `benchmark_results/20260507_trial_disable_duplicate_guard` | Both rows abort at cycle 6 under strict delivery: expected owner stream PC `0x000000008000000c`, got replayed `0x0000000080000000`. | Reject. The guard is still protecting a real duplicate stream. Do not remove it before the IFU/ICQ owner contract makes duplicates structurally impossible. |
+| Advance IFU work PC to `seq_next_pc` on same-owner continuation | `benchmark_results/20260507_trial_same_owner_cursor_advance` | Dhrystone passes and improves to 21,496 timed cycles, 2.647711 DMIPS/MHz; duplicate/no-emit falls from 9,098 to 3,308. CoreMark times out at 1,000,000 cycles with 949,359 retired instructions, 52,524 redirect-recovery cycles, and clean owner/stale counters. | Reject as default. The counter movement proves the cursor direction has leverage, but CoreMark loses endpoint progress. |
+| Same as above, but only when the packet really emits | `benchmark_results/20260507_trial_same_owner_emit_cursor_advance` | Dhrystone passes and improves to 21,597 timed cycles, 2.635329 DMIPS/MHz; CoreMark still times out at 1,000,000 cycles with the same clean owner/stale counters and high redirect activity. | Reject as default. Emission gating is necessary but not sufficient. |
+
+Interpretation:
+
+- The targeted counter is real. Same-owner cursor advance cuts Dhrystone
+  frontend zero cycles from 35.4% to about 18.5% and improves Dhrystone by
+  roughly 20% timed cycles.
+- The current strict owner/delivery checks are necessary but not sufficient for
+  CoreMark. CoreMark can keep owner packet identity clean while still losing
+  architectural endpoint progress through control-flow or data-state drift.
+- The next accepted implementation must not be a one-line same-owner shortcut.
+  It needs an explicit IFU work/response contract: emitted packet PC,
+  FTQ owner identity, ICQ response line, BPU/RAS/GHR snapshot, and completion
+  state must advance as one owned work item.
+
+Immediate follow-up before the next RTL change:
+
+1. Generate a fresh CoreMark 1 golden PC stream from the clean baseline, then
+   rerun the same-owner cursor trial with `+CHECK_GOLDEN_PCS` to find the first
+   architectural divergence instead of waiting for a timeout.
+2. Use `+TRACE_COMMIT`, `+TRACE_COREMARK_PROGRESS`, and targeted branch traces
+   around the hot CoreMark PCs seen in the timeout (`0x80002380`,
+   `0x800023ae`, `0x80002fb8`, `0x80002ffa`) to separate frontend delivery
+   drift from backend state corruption.
+3. Implement the real Phase 1 cursor decoupling as an owned IFU work item tied
+   to ICQ response acceptance and FTQ IFU-writeback advancement. Keep the
+   duplicate guard enabled until that path passes CoreMark endpoint and golden
+   PC checks.
+
 ## Current Architecture State
 
 rv64gc-v2 is already aligned with the intended XiangShan/BOOM-style ownership
