@@ -758,7 +758,7 @@ module fetch_top
         .clk                    (clk),
         .rst_n                  (rst_n),
         .redirect_i             (redirect_valid),
-        .bpu_redirect_i         (f2_bpu_redirect && !fe_stall),
+        .bpu_redirect_i         (f2_bpu_redirect),
         .stall_i                (fe_stall),
         .work_valid_i           (f2_work_valid_c),
         .work_pc_i              (f2_work_pc_c),
@@ -907,6 +907,7 @@ module fetch_top
         .same_owner_continue_o                    (f2_same_owner_continue_c),
         .owner_complete_o                         (f2_work_owner_complete_c),
         .req_redirect_o                           (req_redirect_c),
+        .bpu_redirect_o                           (f2_bpu_redirect),
         .bpu_target_o                             (f2_bpu_target),
         .ras_push_valid_o                         (ras_push_valid),
         .ras_push_addr_o                          (ras_push_addr),
@@ -916,11 +917,6 @@ module fetch_top
     );
 
     assign ftq_pop_valid = ftq_ifu_pop_valid;
-
-    // =========================================================================
-    // BPU redirect to F1
-    // =========================================================================
-    assign f2_bpu_redirect = req_redirect_c && !fe_stall;
 
     // =========================================================================
     // Fetch packet construction and fetch-buffered output to decode

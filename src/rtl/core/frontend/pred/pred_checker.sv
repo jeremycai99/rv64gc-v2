@@ -96,6 +96,7 @@ module pred_checker
     output logic                         same_owner_continue_o,
     output logic                         owner_complete_o,
     output logic                         req_redirect_o,
+    output logic                         bpu_redirect_o,
     output logic [63:0]                  bpu_target_o,
 
     output logic                         ras_push_valid_o,
@@ -592,6 +593,7 @@ module pred_checker
         bp_branch_found_o && bp_taken_o &&
         !subgroup_split_before_ctl_o &&
         !redirect_i;
+    assign bpu_redirect_o = req_redirect_o && !stall_i;
     assign bpu_target_o = bp_target_o;
 
     always_comb begin
