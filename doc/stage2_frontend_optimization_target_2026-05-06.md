@@ -607,6 +607,26 @@ scoreable until owner-start packet delivery is made atomic with FTQ owner
 allocation and IFU work-cursor selection. Do not carry the successor trial RTL
 forward.
 
+Final 2026-05-07 cleanup after this rejection:
+
+- A guarded retry that started the successor at the subgroup owner PC and gated
+  allocation to owner-flowthrough fixed the strict owner/stale counters, but
+  `coremark_iter10` still produced checksum `17144` instead of `64687`
+  (`benchmark_results/20260507_stage2_successor_flowgate_coremark10_endpoint`).
+- Disabling only that successor allocation while keeping the rename hold fix
+  restored `coremark_iter10` endpoint identity:
+  `benchmark_results/20260507_stage2_successor_disabled_rename_hold_coremark10`,
+  1,926,763 timed cycles, 5.190052 CoreMark/MHz, checksum `64687`,
+  `flags=0`, and all owner/stale counters clean.
+- The accepted RTL change is therefore not a frontend successor mechanism. It
+  is the rename hold ownership fix: when rename has held work, it owns the
+  rename input for one cycle and stalls decode instead of merging a fresh decode
+  packet behind held slots. The trace-proven bug was a dropped packet tail
+  (`0x800023de`) when a held branch consumed one rename slot.
+- Validated final clean rows:
+  `benchmark_results/20260507_stage2_rename_hold_clean_smoke` and
+  `benchmark_results/20260507_stage2_rename_hold_clean_coremark10`.
+
 ## Stage 2 Signoff Risk And Phase Gates
 
 The accepted same-owner/predicted-control work is a real architectural
@@ -615,7 +635,7 @@ large. This must be treated as a signoff risk, not as a small cleanup tail.
 
 | Metric | Current heavy row | Stage 2 target | Required score uplift | Equivalent cycle reduction |
 |---|---:|---:|---:|---:|
-| CoreMark/MHz | 5.177098 | 7.5 | +44.9% | 31.0% |
+| CoreMark/MHz | 5.190052 | 7.5 | +44.5% | 30.8% |
 | DMIPS/MHz | 2.638261 | 4.0 | +51.6% | 34.0% |
 
 The Arm Cortex-A72 comparison should be interpreted as an effective-utilization

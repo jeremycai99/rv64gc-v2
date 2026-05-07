@@ -69,6 +69,9 @@ module rename
             hold_insn[k] = decoded_insn_t'(hold_insn_flat[k]);
     end
     logic [PIPE_WIDTH-1:0] hold_valid;
+    logic                  hold_active_c;
+
+    assign hold_active_c = |hold_valid;
 
     // =========================================================================
     // Merged working set: held insns first, then new decode insns fill gaps
@@ -316,9 +319,13 @@ module rename
             end
         end
 
-        // Pass 2: fill remaining work slots with new decode input
+        // Pass 2: fill remaining work slots with new decode input.
+        // If the hold register is occupied, it owns rename for this cycle and
+        // decode is stalled. Mixing held slots with a fresh decode packet can
+        // accept only a prefix of that packet and drop its tail.
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if ((3'(i) < dec_count) && dec_insn[i].valid &&
+            if (!hold_active_c &&
+                (3'(i) < dec_count) && dec_insn[i].valid &&
                 (num_held + num_accepted_dec) < 3'(PIPE_WIDTH)) begin
                 dec_dest[i] = num_held + num_accepted_dec;
                 work_insn[num_held + num_accepted_dec]  = dec_insn[i];
@@ -711,7 +718,8 @@ module rename
 
         // Stall if remaining non-advanced insns fill all slots,
         // or if holding register is occupied and nothing advanced.
-        stall = (remaining_count >= 3'(PIPE_WIDTH)) ||
+        stall = hold_active_c ||
+                (remaining_count >= 3'(PIPE_WIDTH)) ||
                 ((|hold_valid) && !(|slot_can_advance));
     end
 
