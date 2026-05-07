@@ -17,7 +17,7 @@ module instr_boundary
     input  logic [63:0] work_pc_i,
     input  logic        data_valid_i,
     input  logic [511:0] data_line_i,
-    input  logic        seq_valid_i,
+    input  logic [2:0]  final_count_i,
 
     output logic [5:0]  start_offset_o,
     output logic [15:0] raw_hw_o [0:PIPE_WIDTH-1],
@@ -28,6 +28,8 @@ module instr_boundary
     output logic [2:0]  extract_count_o,
     output logic        straddle_detected_o,
     output logic [63:0] straddle_pc_o,
+    output logic        seq_valid_o,
+    output logic [63:0] seq_next_pc_o,
     output logic        line_straddle_advance_o,
     output logic        consume_remainder_o,
     output logic        remainder_valid_o
@@ -37,9 +39,11 @@ module instr_boundary
     logic [15:0] remainder_hw_r;
     logic [63:0] remainder_pc_r;
     logic [15:0] straddle_hw_c;
+    logic [2:0]  seq_last_idx_c;
 
     assign start_offset_o = work_pc_i[5:0];
     assign remainder_valid_o = remainder_valid_r;
+    assign seq_last_idx_c = (final_count_i > 3'd0) ? (final_count_i - 3'd1) : 3'd0;
     assign consume_remainder_o =
         remainder_valid_r &&
         work_valid_i &&
@@ -126,12 +130,26 @@ module instr_boundary
         end
     end
 
+    always_comb begin
+        if (final_count_i > 3'd0) begin
+            seq_next_pc_o = slot_pc_o[seq_last_idx_c] +
+                (slot_is_rvc_o[seq_last_idx_c] ? 64'd2 : 64'd4);
+            seq_valid_o = 1'b1;
+        end else if (straddle_detected_o) begin
+            seq_next_pc_o = {work_pc_i[63:6] + 58'd1, 6'd0};
+            seq_valid_o = 1'b1;
+        end else begin
+            seq_next_pc_o = work_pc_i;
+            seq_valid_o = 1'b0;
+        end
+    end
+
     assign line_straddle_advance_o =
         work_valid_i &&
         data_valid_i &&
         straddle_detected_o &&
         (extract_count_o == 3'd0) &&
-        seq_valid_i &&
+        seq_valid_o &&
         !redirect_i &&
         !stall_i;
 

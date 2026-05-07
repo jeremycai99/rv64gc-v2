@@ -873,7 +873,7 @@ module fetch_top
         .work_pc_i              (f2_work_pc_c),
         .data_valid_i           (f2_data_valid),
         .data_line_i            (f2_data_line),
-        .seq_valid_i            (f2_seq_valid),
+        .final_count_i          (final_count),
         .start_offset_o         (start_offset),
         .raw_hw_o               (raw_hw),
         .raw_insn_o             (raw_insn),
@@ -883,6 +883,8 @@ module fetch_top
         .extract_count_o        (extract_count),
         .straddle_detected_o    (straddle_detected),
         .straddle_pc_o          (straddle_pc),
+        .seq_valid_o            (f2_seq_valid),
+        .seq_next_pc_o          (f2_seq_next_pc),
         .line_straddle_advance_o(line_straddle_advance_c),
         .consume_remainder_o    (consume_remainder_c),
         .remainder_valid_o      (remainder_valid_r)
@@ -1025,37 +1027,6 @@ module fetch_top
         .tage_spec_update_valid_o                 (tage_spec_update_valid),
         .tage_spec_taken_o                        (tage_spec_taken)
     );
-
-    // =========================================================================
-    // Compute sequential next PC from bytes consumed
-    // =========================================================================
-    logic [63:0] last_slot_pc;
-    logic        last_slot_rvc;
-
-    always_comb begin
-        // Compute sequential next PC based on the last instruction delivered
-        if (final_count > 3'd0) begin
-            automatic int last_idx;
-            last_idx = int'(final_count) - 1;
-            last_slot_pc  = slot_pc[last_idx];
-            last_slot_rvc = slot_is_rvc[last_idx];
-            f2_seq_next_pc = last_slot_pc + (last_slot_rvc ? 64'd2 : 64'd4);
-            f2_seq_valid   = 1'b1;
-        end else if (straddle_detected) begin
-            // No complete instructions extracted, but a straddling 32-bit
-            // instruction was found. Advance to the next cache line so
-            // the remainder buffer can be combined with the new data.
-            last_slot_pc   = straddle_pc;
-            last_slot_rvc  = 1'b0;
-            f2_seq_next_pc = {f2_work_pc_c[63:6] + 58'd1, 6'd0};
-            f2_seq_valid   = 1'b1;
-        end else begin
-            last_slot_pc   = f2_work_pc_c;
-            last_slot_rvc  = 1'b0;
-            f2_seq_next_pc = f2_work_pc_c;
-            f2_seq_valid   = 1'b0;
-        end
-    end
 
     // A straight-line continuation within the current cache line remains part
     // of the same fetch-block owner. Allocate a new FTQ owner only at a real
