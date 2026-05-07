@@ -41,10 +41,20 @@ module fetch_packet_buffer
     localparam int PKT_W = $bits(fetch_packet_t);
 
     logic [PKT_W-1:0] mem_r [0:DEPTH-1];
-    logic [PTR_W-1:0] rd_ptr_r, wr_ptr_r;
+    fetch_packet_t    mem_packet_c [0:DEPTH-1];
     logic [PTR_W:0]   count_r;
+    logic [PTR_W:0]   deq_sel_c;
     fetch_packet_t    head_packet_c;
+    fetch_packet_t    selected_packet_c;
+    logic             deq_match_found_c;
     logic             deq_owner_ready_c;
+
+    genvar gi;
+    generate
+        for (gi = 0; gi < DEPTH; gi++) begin : gen_mem_packet
+            assign mem_packet_c[gi] = fetch_packet_t'(mem_r[gi]);
+        end
+    endgenerate
 
     assign empty     = (count_r == '0);
     assign full      = (count_r == DEPTH);
@@ -53,8 +63,31 @@ module fetch_packet_buffer
     assign count     = count_r;
 
     always_comb begin
-        if (!empty) begin
-            head_packet_c = fetch_packet_t'(mem_r[rd_ptr_r]);
+        deq_sel_c          = '0;
+        deq_match_found_c  = 1'b0;
+        selected_packet_c  = '0;
+
+        for (int i = 0; i < DEPTH; i++) begin
+            if ((PTR_W+1)'(i) < count_r) begin
+                if (!deq_match_found_c &&
+                    mem_packet_c[i].valid &&
+                    owner_valid &&
+                    (mem_packet_c[i].ftq_idx == owner_idx) &&
+                    (mem_packet_c[i].ftq_epoch == owner_epoch) &&
+                    (mem_packet_c[i].ftq_alloc_tag == owner_tag)) begin
+                    deq_sel_c         = (PTR_W+1)'(i);
+                    selected_packet_c = mem_packet_c[i];
+                    deq_match_found_c = 1'b1;
+                end
+            end
+        end
+    end
+
+    always_comb begin
+        if (deq_match_found_c) begin
+            head_packet_c = selected_packet_c;
+        end else if (!empty) begin
+            head_packet_c = mem_packet_c[0];
         end else if (enq_valid) begin
             head_packet_c = enq_packet;
         end else begin
@@ -85,38 +118,48 @@ module fetch_packet_buffer
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            rd_ptr_r <= '0;
-            wr_ptr_r <= '0;
-            count_r  <= '0;
+            count_r <= '0;
+            for (int i = 0; i < DEPTH; i++) begin
+                mem_r[i] <= '0;
+            end
         end else if (flush) begin
-            rd_ptr_r <= '0;
-            wr_ptr_r <= '0;
-            count_r  <= '0;
+            count_r <= '0;
+            for (int i = 0; i < DEPTH; i++) begin
+                mem_r[i] <= '0;
+            end
         end else begin
-            case ({enq_fire, deq_fire, empty})
-                3'b100,
-                3'b101: begin
-                    mem_r[wr_ptr_r] <= PKT_W'(enq_packet);
-                    wr_ptr_r        <= wr_ptr_r + PTR_W'(1);
-                    count_r         <= count_r + {{PTR_W{1'b0}}, 1'b1};
+            if (empty && enq_fire && deq_fire) begin
+                // Empty-buffer flow-through: delivered directly from
+                // enq_packet, so no storage state changes.
+            end else if (enq_fire && deq_fire) begin
+                for (int i = 0; i < DEPTH; i++) begin
+                    if ((PTR_W+1)'(i) < deq_sel_c) begin
+                        mem_r[i] <= mem_r[i];
+                    end else if ((i < (DEPTH - 1)) &&
+                                 ((PTR_W+1)'(i) < (count_r - 1'b1))) begin
+                        mem_r[i] <= mem_r[i+1];
+                    end else if ((PTR_W+1)'(i) == (count_r - 1'b1)) begin
+                        mem_r[i] <= PKT_W'(enq_packet);
+                    end else begin
+                        mem_r[i] <= '0;
+                    end
                 end
-                3'b010,
-                3'b011: begin
-                    rd_ptr_r        <= rd_ptr_r + PTR_W'(1);
-                    count_r         <= count_r - {{PTR_W{1'b0}}, 1'b1};
+            end else if (deq_fire) begin
+                for (int i = 0; i < DEPTH; i++) begin
+                    if ((PTR_W+1)'(i) < deq_sel_c) begin
+                        mem_r[i] <= mem_r[i];
+                    end else if ((i < (DEPTH - 1)) &&
+                                 ((PTR_W+1)'(i) < (count_r - 1'b1))) begin
+                        mem_r[i] <= mem_r[i+1];
+                    end else begin
+                        mem_r[i] <= '0;
+                    end
                 end
-                3'b110: begin
-                    mem_r[wr_ptr_r] <= PKT_W'(enq_packet);
-                    wr_ptr_r        <= wr_ptr_r + PTR_W'(1);
-                    rd_ptr_r        <= rd_ptr_r + PTR_W'(1);
-                end
-                3'b111: begin
-                    // Empty-buffer flow-through: delivered directly from
-                    // enq_packet, so no storage state changes.
-                end
-                default: begin
-                end
-            endcase
+                count_r <= count_r - {{PTR_W{1'b0}}, 1'b1};
+            end else if (enq_fire) begin
+                mem_r[count_r[PTR_W-1:0]] <= PKT_W'(enq_packet);
+                count_r <= count_r + {{PTR_W{1'b0}}, 1'b1};
+            end
         end
     end
 

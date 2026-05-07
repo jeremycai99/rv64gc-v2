@@ -502,17 +502,23 @@ Interpretation:
   only be promoted after the depth-1 path no longer converts duplicate bubbles
   into I-cache or ICQ waiting.
 
-Accepted IBuffer guardrail:
+Accepted IBuffer delivery guardrail:
 
 - `benchmark_results/20260507_stage2_ibuffer_owner_gate_resmoke`
+- `benchmark_results/20260507_stage2_owner_keyed_ibuffer_smoke`
 - The decode-facing packet buffer now gates dequeue and flow-through by the
   current commit owner. `packet_out_valid` is only asserted when the head
   packet FTQ index, epoch, and allocation tag match the commit owner.
+- The buffer was then converted from strict head-only FIFO dequeue into a
+  small owner-keyed delivery queue. It still preserves enqueue order, but
+  dequeue selects the oldest buffered packet that matches the current commit
+  owner and compacts the queue after that packet leaves.
 - This is intentionally a correctness and structure slice, not a claimed
-  speedup. It prevents a future-owner packet from being consumed by decode
-  before the commit owner advances.
+  speedup. It prevents a future-owner packet from being consumed by decode,
+  and it avoids future-owner head blocking if the IFU later produces current
+  owner packets behind a future owner.
 
-| Workload | Depth-1 baseline timed cycles | Owner-gated IBuffer timed cycles | Metric | Strict result |
+| Workload | Depth-1 baseline timed cycles | Owner-keyed IBuffer timed cycles | Metric | Strict result |
 |---|---:|---:|---:|---|
 | Dhrystone 100 | 22,189 | 22,189 | 2.565019 DMIPS/MHz | PASS |
 | CoreMark 1 | 195,632 | 195,632 | 5.111638 CoreMark/MHz | PASS |
@@ -523,6 +529,13 @@ Key counters remain clean:
 |---|---:|---:|---:|---:|
 | Dhrystone 100 | 0 | 0 | 0 | 0 |
 | CoreMark 1 | 0 | 0 | 0 | 0 |
+
+Interpretation: the IBuffer delivery structure is no longer the correctness
+blocker, but it is not yet performance-active. `xs_packet_buf_occ_max` remains
+zero because the current IFU/ICQ path still mostly flow-through delivers the
+commit owner packet rather than filling the decode-facing buffer. The next
+slice must create a real owner-tagged request or packet backlog upstream; the
+IBuffer can now safely absorb it when that backlog exists.
 
 Rejected immediate subgroup successor trial:
 
@@ -605,7 +618,7 @@ split in direction, but not yet in depth:
 | BPU | Prediction can now launch a bounded depth-1 direct-taken successor request without updating F2 prediction state. | It is not yet a sustained predicted owner stream, and indirect/return targets remain excluded. |
 | FTQ | Allocation, IFU request, IFU writeback, and commit/training views are structurally split. The successor owner is registered and can be cancelled/replaced under runahead. | Depth is still capped at one successor and the runahead path is not yet backed by real IBuffer elasticity. |
 | IFU work cursor | A stateful `ifu_work_item_t` exists and carries PC, line address, and FTQ identity. Same-owner advance is allowed when bounded by predicted-control reachability, and depth-1 predicted-target runahead is active. | It still needs a deeper owner request queue and eventual removal of duplicate suppression as a correctness crutch. |
-| IBuffer | `fetch_packet_buffer.sv` is the owner-aware decode-facing packet boundary, and dequeue/flow-through are now gated by commit-owner match. | Capacity is still effectively unused on the measured rows; it must become a real elastic buffer or owner-keyed delivery structure before increasing runahead depth. |
+| IBuffer | `fetch_packet_buffer.sv` is the owner-aware decode-facing packet boundary. Dequeue/flow-through are gated by commit-owner match, and buffered dequeue can select the oldest packet matching the current commit owner. | Capacity is still effectively unused on the measured rows; the upstream IFU/ICQ path must now produce real owner-tagged backlog before increasing runahead depth. |
 
 Therefore the next work is not to add these objects from scratch. The next work
 is to let the existing objects act independently under explicit ownership and
@@ -620,7 +633,7 @@ These are the options worth keeping in the active Stage 2 plan.
 | Baseline counter pass | Required first | Prevents another stale methodology loop. | Capture current RTL counters before changing default behavior. |
 | Decouple existing IFU work cursor | In progress, first accepted slice landed | Allows IFU extraction/progress by FTQ owner instead of raw F2 mirror state. | Keep same-owner advance bounded by live owner, same line, real packet enqueue, and predicted-control reachability. |
 | Capacity-bounded BPU/F1 runahead | Depth-1 direct-taken slice implemented | Lets F1 allocate/fetch ahead when FTQ, ICQ, and IBuffer have room. | Do not raise depth until ICQ and IBuffer head effects are reduced; limit remains occupancy and epoch based, not benchmark PCs. |
-| Owner-aware IBuffer elasticity | Guardrail landed, elasticity still next | Absorbs decode/backend bubbles while IFU continues producing packets. | Complete packets carry FTQ identity and owner-complete metadata; `xs_packet_buf_occ_max` must become nonzero without strict-delivery drift or stale-owner head blocking. |
+| Owner-aware IBuffer elasticity | Owner-keyed delivery landed, upstream backlog still next | Absorbs decode/backend bubbles while IFU continues producing packets. | Complete packets carry FTQ identity and owner-complete metadata; `xs_packet_buf_occ_max` must become nonzero without strict-delivery drift or stale-owner head blocking. |
 | Early IFU prediction validation | Workable after runahead | Repairs wrong predicted control closer to fetch. | Owner-tagged writeback to FTQ; redirect counters must not become dominant. |
 | Mispredict recovery shortening | Conditional | Reduces FLUSH/restart cost. | Do only if `redirect_to_restart_cycles` shows meaningful headroom. |
 | BPU S0 fast-path predictor / uBTB | Conditional | May allow deeper runahead or timing closure if main prediction path becomes the limiter. | Do only after cursor+runahead data shows BPU lookup latency/timing blocks depth, or timing closure requires it. |
@@ -678,7 +691,7 @@ already exist.
 | 0 | Lock the current accepted RTL as the new scoreable baseline. | Gate A passes: full scoreable run, strict checks, endpoint identity, broad smoke pass, and expected counter movement. |
 | 1 | Finish decoupling the existing IFU work cursor from raw F2 mirror state. | Cursor advances by FTQ IFU-writeback owner and current PC; strict delivery remains clean. |
 | 2 | Use FTQ capacity to bound proactive BPU/F1 runahead at depth 1. | Partial Gate B evidence exists: FTQ occupancy reaches 2 and strict checks pass, but IBuffer occupancy remains zero. |
-| 3 | Add owner-aware IBuffer/request elasticity before increasing runahead depth. | The owner-gated dequeue guardrail passes; the remaining exit criterion is `xs_packet_buf_occ_max > 0`, duplicate/no-emit falls broadly, ICQ/future-head blocking does not replace the old bubble, and strict delivery remains clean. |
+| 3 | Add owner-aware IBuffer/request elasticity before increasing runahead depth. | Owner-keyed IBuffer delivery passes; the remaining exit criterion is `xs_packet_buf_occ_max > 0`, duplicate/no-emit falls broadly, ICQ/future-head blocking does not replace the old bubble, and strict delivery remains clean. |
 | 4 | Increase bounded runahead to depth 2 only if Phase 3 is clean. | Heavy rows improve without endpoint drift; wrong-path/flush cost does not erase the frontend gain. |
 | 5 | Score the frontend-only ceiling. | Gate C passes or fails explicitly; if it fails, stop treating frontend-only DSE as sufficient for final signoff. |
 | 6 | Select and implement one second-domain optimization. | Gate D names the residual limiter from counters before RTL work starts. |
