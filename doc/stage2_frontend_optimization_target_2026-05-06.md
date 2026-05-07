@@ -312,6 +312,18 @@ taken-loop, jump-table, memory struct/array, backend independent/chain, and the
 three hotspot probes. This is still DSE evidence rather than final signoff, but
 it is no longer a two-benchmark-only datapoint.
 
+The heavier Stage 1 workload rows also passed with the same checks:
+
+| Workload | Timed cycles | Metric | `packet_empty_noemit_dup` | Same-owner advanced |
+|---|---:|---:|---:|---:|
+| Dhrystone 300 | 64,719 | 2.638261 DMIPS/MHz | 11,213 | 14,518 |
+| CoreMark 10 | 1,931,584 | 5.177098 CoreMark/MHz | 639,203 | 158,584 |
+
+Compared with the older locked Stage 1 rows, this moves Dhrystone 300 from the
+mid 76K to 64.7K timed-cycle range and CoreMark 10 from about 2.03M to 1.93M
+timed cycles. The next formal step is a full scoreable signoff run from this
+committed RTL, using the same strict checks and counter-movement gate.
+
 ## Current Architecture State
 
 rv64gc-v2 is already aligned with the intended XiangShan/BOOM-style ownership
