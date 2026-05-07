@@ -69,6 +69,7 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/cache/icache.sv" \
       "$P/src/rtl/core/cache/icache_resp_queue.sv" \
       "$P/src/rtl/core/frontend/ifu/next_line_prefetch_buffer.sv" \
+      "$P/src/rtl/core/frontend/ifu/ifu_line_fetch.sv" \
       "$P/src/rtl/core/frontend/ftq/ftq.sv" \
       "$P/src/rtl/core/frontend/ibuffer/fetch_packet_buffer.sv" \
       "$P/src/rtl/core/frontend/ibuffer/ibuffer.sv" \

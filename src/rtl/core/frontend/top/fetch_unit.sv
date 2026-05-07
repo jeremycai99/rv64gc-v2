@@ -1,7 +1,7 @@
 /* file: fetch_unit.sv
  Description: Fetch unit with branch prediction and I-cache interface.
  Author: Jeremy Cai
- Date: Apr. 09, 2026
+ Date: Apr 09, 2026
  Version: 2.0
 */
 module fetch_unit
@@ -393,97 +393,48 @@ module fetch_unit
     assign ftq_enq_valid = ftq_normal_enq_valid;
     assign ftq_enq_entry_c = req_ftq_entry_c;
 
-    // I-cache raw combinational outputs (same-cycle as request)
-    logic        ic_resp_valid_comb;
-    logic [511:0] ic_resp_data_comb;
-    logic        ic_resp_hit_comb;
-
-    icache u_icache (
-        .clk            (clk),
-        .rst_n          (rst_n),
-        .req_valid      (ic_req_valid),
-        .req_addr       (ic_req_addr),
-        .resp_valid     (ic_resp_valid_comb),
-        .resp_data      (ic_resp_data_comb),
-        .resp_hit       (ic_resp_hit_comb),
-        .fill_req_valid (icache_fill_req_valid),
-        .fill_req_addr  (icache_fill_req_addr),
-        .fill_resp_valid(icache_fill_resp_valid),
-        .fill_resp_addr (icache_fill_resp_addr),
-        .fill_resp_data (icache_fill_resp_data),
-        .invalidate_all (fence_i),
-        .invalidate_busy(ic_invalidate_busy)
-    );
-
-    // =========================================================================
-    // Next-line prefetch buffer (NLPB)
-    // =========================================================================
-    logic        nlpb_hit_comb;
-    logic [511:0] nlpb_data_comb;
-    logic        nlpb_aux_hit_comb;
-    logic [511:0] nlpb_aux_data_comb;
-    logic        nlpb_resp_valid_r;
-    logic [63:0] nlpb_resp_addr_r;
-    logic [511:0] nlpb_resp_data_r;
-    logic        nlpb_resp_match_c;
-    // Trigger on icache HIT only (not fill-forwards from MSHRs)
-    logic        nlpb_trigger;
-    logic [63:0] nlpb_trigger_addr;
-    assign nlpb_trigger      = ic_resp_valid_comb && ic_resp_hit_comb;
-    assign nlpb_trigger_addr = {ic_req_addr[63:6], 6'b0};
-
-    next_line_prefetch_buffer u_nlpb (
-        .clk            (clk),
-        .rst_n          (rst_n),
-        .lookup_valid   (f1_valid && !fe_stall),
-        .lookup_addr    (ic_req_addr),
-        .hit            (nlpb_hit_comb),
-        .hit_data       (nlpb_data_comb),
-        .aux_lookup_valid(f1_valid && !fe_stall),
-        .aux_lookup_addr (f1_pc),
-        .aux_hit         (nlpb_aux_hit_comb),
-        .aux_hit_data    (nlpb_aux_data_comb),
-        .trigger_valid  (nlpb_trigger),
-        .trigger_addr   (nlpb_trigger_addr),
-        .flush          (redirect_valid),
-        .fence_i        (fence_i),
-        .pf_req_valid   (pf_l2_req_valid),
-        .pf_req_addr    (pf_l2_req_addr),
-        .pf_req_ready   (pf_l2_req_ready),
-        .pf_resp_valid  (pf_l2_resp_valid),
-        .pf_resp_addr   (pf_l2_resp_addr),
-        .pf_resp_data   (pf_l2_resp_data)
-    );
-
-    // Merged response: the icache's aligned s1 output remains the primary
-    // source.  The NLPB is re-timed by one cycle so its lookup result is only
-    // consumed when it matches the current F2 line, avoiding the stale-PC
-    // hazard of the old same-cycle bypass path.
+    // Merged line response from I-cache and NLPB. ICQ and line-state ownership
+    // remain in fetch_unit.sv until the next ifu_line_fetch slice.
     logic        merged_resp_valid_comb;
     logic [511:0] merged_resp_data_comb;
-    assign nlpb_resp_match_c =
-        nlpb_resp_valid_r &&
-        f2_work_line_valid_c &&
-        (nlpb_resp_addr_r[63:LINE_BITS] == f2_work_line_addr_c);
-    assign merged_resp_valid_comb = ic_resp_valid_comb || nlpb_resp_match_c;
-    assign merged_resp_data_comb  =
-        ic_resp_valid_comb ? ic_resp_data_comb : nlpb_resp_data_r;
+    logic        merged_resp_hit_comb;
+    logic        nlpb_hit_comb;
+    logic        nlpb_aux_hit_comb;
 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            nlpb_resp_valid_r <= 1'b0;
-            nlpb_resp_addr_r  <= '0;
-            nlpb_resp_data_r  <= '0;
-        end else if (redirect_valid) begin
-            nlpb_resp_valid_r <= 1'b0;
-            nlpb_resp_addr_r  <= '0;
-            nlpb_resp_data_r  <= '0;
-        end else begin
-            nlpb_resp_valid_r <= f1_valid && !fe_stall && nlpb_hit_comb;
-            nlpb_resp_addr_r  <= {ic_req_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
-            nlpb_resp_data_r  <= nlpb_data_comb;
-        end
-    end
+    ifu_line_fetch u_ifu_line_fetch (
+        .clk                    (clk),
+        .rst_n                  (rst_n),
+        .flush_i                (redirect_valid),
+        .fence_i                (fence_i),
+        .req_valid_i            (ic_req_valid),
+        .req_addr_i             (ic_req_addr),
+        .aux_lookup_addr_i      (f1_pc),
+        .f1_valid_i             (f1_valid),
+        .stall_i                (fe_stall),
+        .work_line_valid_i      (f2_work_line_valid_c),
+        .work_line_addr_i       (f2_work_line_addr_c),
+        .line_resp_valid_o      (merged_resp_valid_comb),
+        .line_resp_data_o       (merged_resp_data_comb),
+        .line_resp_hit_o        (merged_resp_hit_comb),
+        .nlpb_hit_o             (nlpb_hit_comb),
+        .nlpb_aux_hit_o         (nlpb_aux_hit_comb),
+        .icache_fill_req_valid  (icache_fill_req_valid),
+        .icache_fill_req_addr   (icache_fill_req_addr),
+        .icache_fill_resp_valid (icache_fill_resp_valid),
+        .icache_fill_resp_addr  (icache_fill_resp_addr),
+        .icache_fill_resp_data  (icache_fill_resp_data),
+        .icache_invalidate_busy (ic_invalidate_busy),
+        .pf_l2_req_valid        (pf_l2_req_valid),
+        .pf_l2_req_addr         (pf_l2_req_addr),
+        .pf_l2_req_ready        (pf_l2_req_ready),
+        .pf_l2_resp_valid       (pf_l2_resp_valid),
+        .pf_l2_resp_addr        (pf_l2_resp_addr),
+        .pf_l2_resp_data        (pf_l2_resp_data)
+    );
+
+    // Merged response: the I-cache aligned s1 output remains primary. The NLPB
+    // result is re-timed by one cycle inside ifu_line_fetch and consumed only
+    // when it matches the current F2 line.
 
     // Pipeline alignment with sync-read icache:
     // The icache's internal s1 stage already provides 1-cycle SRAM latency,
@@ -619,7 +570,7 @@ module fetch_unit
         .flush(redirect_valid),
         .resp_valid_i(merged_resp_valid_comb),
         .resp_data_i(merged_resp_data_comb),
-        .resp_hit_i(ic_resp_hit_comb || nlpb_resp_match_c),
+        .resp_hit_i(merged_resp_hit_comb),
         .resp_pc_i(ic_req_addr_pipe_r),
         .resp_ftq_valid_i(ic_req_ftq_pipe_valid_r),
         .resp_ftq_idx_i(ic_req_ftq_pipe_idx_r),

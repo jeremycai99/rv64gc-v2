@@ -4450,10 +4450,10 @@ module tb_top
                     u_core.u_fetch_unit.ic_resp_data[63:0]);
                 $display("[ICST] cyc=%0d mshr0_v=%b mshr1_v=%b fill_v=%b fill_d[63:0]=%016h",
                     trace_cycle,
-                    u_core.u_fetch_unit.u_icache.ic_mshr_valid[0],
-                    u_core.u_fetch_unit.u_icache.ic_mshr_valid[1],
-                    u_core.u_fetch_unit.u_icache.fill_resp_valid,
-                    u_core.u_fetch_unit.u_icache.fill_resp_data[63:0]);
+                    u_core.u_fetch_unit.u_ifu_line_fetch.u_icache.ic_mshr_valid[0],
+                    u_core.u_fetch_unit.u_ifu_line_fetch.u_icache.ic_mshr_valid[1],
+                    u_core.u_fetch_unit.u_ifu_line_fetch.u_icache.fill_resp_valid,
+                    u_core.u_fetch_unit.u_ifu_line_fetch.u_icache.fill_resp_data[63:0]);
             end
         end
     end

@@ -402,6 +402,12 @@ These are the structural constraint points that any optimization needs to be awa
   invalid or stale epoch responses are drained as flushed work. The queue can
   still accept an enqueue on a full cycle when the head also pops, avoiding
   dropped one-cycle I-cache responses.
+- **Current line-fetch adapter boundary:** `frontend/ifu/ifu_line_fetch.sv`
+  owns the I-cache plus next-line prefetch buffer request/response adapter. It
+  presents a merged line-response stream to the remaining integration logic
+  while keeping `icache.sv` itself as a separate cache block. The
+  `icache_resp_queue` and same-line line-state reuse policy still remain in the
+  integration layer until the next stateful IFU split.
 - **Current line-state boundary:** F2 records a separate line-state register for
   the consumed response line (line address, data, hit, and epoch). Packet
   metadata is sourced from this line identity, while FTQ idx/epoch/tag remain
@@ -483,6 +489,9 @@ These are the structural constraint points that any optimization needs to be awa
 
 - **Entries:** 4 (`NUM_ENTRIES=4`)
 - **Purpose:** small prefetch buffer for sequential-access lines (warm-cache helper, not primary predictor)
+- **Integration:** reached through `frontend/ifu/ifu_line_fetch.sv`, which
+  retimes NLPB hits and only exposes them as line data when the response line
+  matches the current IFU work cursor.
 
 ### 2.6 UOP Cache (UOC) (`src/rtl/core/uop_cache/uop_cache.sv`)
 
