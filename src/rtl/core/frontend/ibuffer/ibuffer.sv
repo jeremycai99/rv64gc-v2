@@ -17,7 +17,9 @@ module ibuffer
     output logic          enq_ready,
     output logic          enq_fire,
 
-    input  logic          deq_ready,
+    input  logic          backend_stall_i,
+    input  logic          frontend_hold_i,
+    output logic          deq_ready,
     output logic          deq_valid,
     output fetch_packet_t deq_packet,
     output logic          deq_fire,
@@ -54,6 +56,8 @@ module ibuffer
     output logic          empty,
     output logic [3:0]    count
 );
+
+    assign deq_ready = !backend_stall_i && !frontend_hold_i;
 
     fetch_packet_buffer u_fetch_packet_buffer (
         .clk               (clk),

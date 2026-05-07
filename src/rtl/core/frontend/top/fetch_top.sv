@@ -423,8 +423,6 @@ module fetch_top
         (icq_deq_ftq_idx == ftq_ifu_wb_owner_idx) &&
         (icq_deq_ftq_epoch == ftq_current_epoch) &&
         (icq_deq_ftq_alloc_tag == ftq_ifu_wb_owner_tag);
-    assign packet_buf_deq = !backend_stall && !frontend_hold;
-
     ftq u_ftq (
         .clk          (clk),
         .rst_n        (rst_n),
@@ -480,6 +478,8 @@ module fetch_top
         .enq_packet                      (packet_buf_in),
         .enq_ready                       (packet_buf_enq_ready),
         .enq_fire                        (packet_buf_enq_fire),
+        .backend_stall_i                 (backend_stall),
+        .frontend_hold_i                 (frontend_hold),
         .deq_ready                       (packet_buf_deq),
         .deq_valid                       (packet_buf_valid),
         .deq_packet                      (packet_buf_head),

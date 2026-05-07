@@ -169,8 +169,9 @@ Current default RTL:
   flow an accepted IFU packet directly to decode in the same cycle; this
   flow-through path is still owned by the IBuffer, so decode no longer consumes
   the separate `packet_buf_in` direct-bypass path. The IBuffer wrapper also
-  emits the flow-through observation signals and decode/commit-side FTQ pop
-  request derived from dequeue fire, owner match, and owner-complete.
+  derives decode dequeue readiness from backend stall and frontend hold,
+  emits the flow-through observation signals, and emits the decode/commit-side
+  FTQ pop request derived from dequeue fire, owner match, and owner-complete.
 
 Intended BPU/FTQ contract:
 
@@ -461,7 +462,9 @@ These are the structural constraint points that any optimization needs to be awa
   the raw full flag, so a full buffer can still accept a packet on a same-cycle
   dequeue. The old `FETCH_PACKET_BYPASS2` direct-bypass control surface has
   been removed; the current debug/profiling signal is an IBuffer flow-through
-  observation, not an alternate decode data path.
+  observation, not an alternate decode data path. Decode-side dequeue readiness
+  is also owned by the IBuffer boundary, with `fetch_top.sv` observing the
+  resulting `packet_buf_deq` signal for simulation binds and FTQ wiring.
 - **Instruction helper leaves:** `frontend/instr/instr_boundary.sv`,
   `frontend/instr/rvc_expander.sv`, `frontend/instr/predecode.sv`, and
   `frontend/instr/instr_compact.sv` hold parcel extraction, compressed
