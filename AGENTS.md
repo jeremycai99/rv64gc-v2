@@ -26,8 +26,8 @@ in April 2026 (see `doc/archive/4wide/` for pivot history and
 
 **ISA:** `rv64imafdc_zba_zbb_zbs_zicond_zicsr_zifencei`
 
-Microarchitecture spec: `doc/rv64gc_v2_uarch.md`. Stage 1 active doc:
-`doc/boom_pipeline_stats_2026-05-03.md`. Reference cores:
+Microarchitecture spec: `doc/rv64gc_v2_uarch.md`. Stage 1 frontend refactor
+status: `doc/stage1_frontend_refactor_status_2026-05-06.md`. Reference cores:
 `doc/reference_core_unified_audit_2026-05-03.md`.
 
 ## Current Status (2026-05-05)
@@ -62,7 +62,7 @@ PASS, all 5 owner-identity counter invariants hold zero.
 The remaining gap is structural: BPU/F1/F2 lockstep pins
 `xs_ftq_occ_max=1`. Architectural unlock requires F1-stage runahead
 with an icache response queue absorbing rate mismatch. Iteration
-sequence in `doc/boom_pipeline_stats_2026-05-03.md`:
+sequence in `doc/stage1_frontend_refactor_status_2026-05-06.md`:
 
 | Step | Description | Status |
 |---|---|---|
@@ -85,8 +85,10 @@ be predicted-then-measured, not trial-and-error. Workflow:
 
 # 2. Apply RTL change targeting that counter
 # 3. Run signoff with mechanism class + targeted counter + prediction
-python3 tools/run_benchmarks.py --runner dsim --run-class signoff \
+python3 tools/run_benchmarks.py --runner dsim --goal stage1 --run-class signoff \
     --manifest tests/benchmarks/stage1_signoff.json \
+    --plusarg FETCH_DELIVERY_CHECK --plusarg FETCH_DELIVERY_STRICT \
+    --plusarg FETCH_OWNER_CHECK --plusarg FETCH_OWNER_STRICT \
     --plusarg PERF_PROFILE --plusarg PERF_COUNTERS --plusarg STAT_DUMP \
     --mechanism-class ftq_owned_delivery \
     --mechanism-name <descriptive-name> \
@@ -99,6 +101,8 @@ python3 tools/run_benchmarks.py --runner dsim --run-class signoff \
 The harness enforces this in `validate_run_class_args`:
 - Signoff with `--mechanism-class default_rtl` is REJECTED if
   `git diff HEAD -- src/rtl src/tb/tb_top.sv` shows uncommitted RTL.
+- Real `--goal stage1` runs reject dirty goal-contract files
+  (`tests/benchmarks/stage1_signoff.json` and `tools/run_benchmarks.py`).
 - Non-default mechanism class REQUIRES `--targets-counter`.
 - `--targets-counter` REQUIRES matching `--expect-counter-decrease`.
 - Predictions are verified against measurement; failure to materialize

@@ -361,7 +361,7 @@ def render_markdown(results: Iterable[dict[str, object]]) -> str:
     lines.append(
         "This artifact is generated from the existing targeted CPC and raw "
         "HEADSTALL traces. It covers the immediate Step 1 and Step 2 work in "
-        "`doc/boom_pipeline_stats_2026-05-03.md`."
+        "`doc/stage1_frontend_refactor_status_2026-05-06.md`."
     )
     lines.append("")
     lines.append("## Step 1: Architectural Retire-Width And Endpoint Accounting")

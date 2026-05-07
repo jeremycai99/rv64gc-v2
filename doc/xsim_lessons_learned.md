@@ -167,7 +167,9 @@ Each fix revealed a **secondary bug**: the phantom releases from stores' bogus `
 - Checkpoint save/restore asymmetry.
 - ROB entries where rd_valid=1 at rename but slot_can_commit=0 never reaching the commit-release path.
 
-**The full investigation, with reproducer commands and the exact failed-fix sequence, is in `doc/dhrystone_debug_handoff.md`. Read that first before the next attempt.**
+**The full investigation, with reproducer commands and the exact failed-fix
+sequence, is in `doc/archive/debug_history/dhrystone_debug_handoff.md`. Read
+that first before the next attempt.**
 
 ### Bug 6: Checkpoint exhaustion on CoreMark (commit `0ebc657`)
 
@@ -350,6 +352,16 @@ Key DSim flags relevant to this project:
 - `-check-overflow` — catch counter overflow bugs (off by default).
 - `-cov` / `-coverage` — coverage + assertion report.
 
+### Addendum 2026-05-06: keep simulator file lists in lockstep
+
+The frontend refactor added `src/rtl/core/cache/icache_resp_queue.sv`.
+DSim built because its file list already included the new RTL, while XSim
+failed until `build_xsim.sh` was updated. Treat this as another cross-sim
+guardrail: every new RTL file must be added to both build paths in the same
+change, and `./build_xsim.sh` should be run before relying on DSim-only
+results. If a DSim license is busy, the XSim path can still run smoke tests
+such as `./run_xsim.sh tests/hex/rv64ui_minimal.hex 50000 +PERF_PROFILE`.
+
 ### Migration path for current SVA
 
 Existing assertions in `src/rtl/core/rv64gc_core_top.sv` A1–A7 are already
@@ -367,4 +379,3 @@ xsim-compatible. On DSim we can additionally:
 
 The dual-build `make regress` target then runs both sims and diffs the
 assertion report + final IPC.
-

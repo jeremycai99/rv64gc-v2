@@ -1,9 +1,15 @@
 {
-  "notes": "Stage 1 long-run signoff manifest. These rows are scoreable only under tools/run_benchmarks.py --run-class signoff, with endpoint identity intact, legacy loop-buffer activity zero, canonical standalone decoded-op replay telemetry present and zero, and no standalone UOC, same-tail, or local lookahead replay plusargs. counter_invariants are checked on every run_class (signoff and dse); counter_targets_stage1 are checked only on signoff.",
+  "goal_contract": {
+    "name": "stage1",
+    "version": "stage1-2026-05-06-v1",
+    "scoreable_with": "tools/run_benchmarks.py --goal stage1 --run-class signoff"
+  },
+  "notes": "Stage 1 long-run signoff manifest. DS/CoreMark remain anchor rows, and the added frontend/backend/memory/hotspot rows are generalization guards so Stage 1 does not overfit the anchors. These rows are scoreable only under tools/run_benchmarks.py --run-class signoff, with endpoint identity intact, legacy loop-buffer activity zero, canonical standalone decoded-op replay telemetry present and zero, and no standalone UOC, same-tail, or local lookahead replay plusargs. counter_invariants are checked on every run_class (signoff and dse); counter_targets_stage1 are checked only on signoff. SPEC/Embench/MiBench images are not checked into this repo; add them as separate local manifests when built.",
   "schema_extensions": {
     "counter_invariants": "Per-counter {min,max} bounds that MUST hold on every run regardless of class. Use to lock in structural invariants (e.g. owner-identity counters that must remain zero post-FTQ-split).",
     "counter_targets_stage1": "Per-counter {min,max} bounds enforced only when --run-class signoff. Use to encode Stage 1 acceptance gates beyond flags+checksum so the doc-level pass condition is machine-checkable.",
-    "golden_pc_path": "Optional. Path to a $readmemh-format file of expected commit PCs (one 16-hex-digit PC per line). When present and run_benchmarks.py forwards +CHECK_GOLDEN_PCS, the testbench asserts every retired PC matches the golden stream and finishes with [GOLDEN_PC TRIP] on first divergence."
+    "golden_pc_path": "Optional. Path to a $readmemh-format file of expected commit PCs (one 16-hex-digit PC per line). When present and run_benchmarks.py forwards +CHECK_GOLDEN_PCS, the testbench asserts every retired PC matches the golden stream and finishes with [GOLDEN_PC TRIP] on first divergence.",
+    "suite": "Optional. Human-readable grouping for broader signoff coverage; the runner records it in manifests but does not change gate behavior."
   },
   "benchmarks": [
     {
@@ -113,6 +119,390 @@
       "counter_targets_stage1": {},
       "notes": "Heavy CoreMark signoff row. CoreMark/MHz is scoreable only with checksum 64687 and flags=0. counter_targets_stage1 left empty; populate when Stage 1 RTL work starts converging (proposed: dup_last_emit max 50000, packet_empty_noemit_dup max 50000, f2_owner_no_head max 5000, ftq_occ_max min 4, packet_buf_occ_max min 2).",
       "golden_pc_path": "tests/golden_pc/coremark_iter10_checkedin.golden.hex"
+    },
+    {
+      "name": "coremark_iter1_generalization",
+      "kind": "coremark",
+      "hex": "tests/hex/coremark.hex",
+      "elf": "tests/coremark/coremark.elf",
+      "max_cycles": 1000000,
+      "iterations": 1,
+      "expected_iterations": 1,
+      "expected_checksum": 59156,
+      "expected_flags": 0,
+      "expected_control": 2,
+      "expected_hex_sha256": "0a0df66ed4b615157ff5ffef3fae58539a1483ac5dbd9b54d25e5047d54a19c7",
+      "expected_elf_sha256": "2a426dc15543b3eb72ab3bbb228ad2470d5783f6354f41e281a666ce3a2cdab7",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "anchor_generalization",
+      "notes": "CoreMark iteration-1 sensitivity row. Keeps a different CoreMark timing window in signoff so iter10 does not become the only CoreMark-shaped target."
+    },
+    {
+      "name": "frontend_mixed_branch_dense",
+      "kind": "micro_branch",
+      "hex": "tests/hex/probe_mixed_branch_dense.hex",
+      "max_cycles": 100000,
+      "expected_hex_sha256": "fcfd3b7ac38ce76debbe87a1096b269dd22f97cc7040e53e224b3196b668eaae",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "frontend_ownership",
+      "notes": "Dense mixed branch stream to catch BPU/FTQ ownership regressions that DS/CoreMark may hide."
+    },
+    {
+      "name": "frontend_data_dep_branch",
+      "kind": "micro_branch",
+      "hex": "tests/hex/probe_bpu_data_dep_branch.hex",
+      "max_cycles": 80000,
+      "expected_hex_sha256": "65d6606a44e2b993446e3113364f9287a58c16c36fa7586342943ab9ecf1dadf",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "frontend_ownership",
+      "notes": "Data-dependent branch stream for redirect and predictor recovery coverage."
+    },
+    {
+      "name": "frontend_call_return_mimic",
+      "kind": "micro_call_return",
+      "hex": "tests/hex/probe_dhry_call_mimic.hex",
+      "max_cycles": 80000,
+      "expected_hex_sha256": "23e6d82ec292f5dc5dbc61e55940fa1b406a407a185bd9d7d0e763dc31ce9760",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "frontend_ownership",
+      "notes": "Call/return plus load-use mimic to keep RAS and frontend ownership in the Stage 1 gate."
+    },
+    {
+      "name": "frontend_taken_loop_100",
+      "kind": "micro_loop",
+      "hex": "tests/hex/bench_loop_100.hex",
+      "max_cycles": 100000,
+      "expected_hex_sha256": "b6125331d72d787d7bf6bf6ce241700e77a4b08b59596e1c8ca20b95114cdd2b",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "frontend_ownership",
+      "notes": "Simple taken-loop row. It is a structural loop-ownership guard, not a license to reintroduce loop-buffer replay."
+    },
+    {
+      "name": "frontend_jump_table_c",
+      "kind": "c_control",
+      "hex": "tests/hex/test_table.hex",
+      "max_cycles": 100000,
+      "expected_hex_sha256": "a5ae339576800790caa6bf6f4053a63d0e4d8e0f7be68dadaa37d62a40950843",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "frontend_ownership",
+      "notes": "C jump-table/control-flow row for non-DS/CM branch structure coverage."
+    },
+    {
+      "name": "memory_struct_c",
+      "kind": "c_memory",
+      "hex": "tests/hex/test_struct.hex",
+      "max_cycles": 100000,
+      "expected_hex_sha256": "c9ab864e91e8fc54f9d62b4ac3727a1540e47ccc881f04ac26c3d17a8185ef39",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "memory_generalization",
+      "notes": "C struct/list-style memory row to prevent frontend-only wins from hiding pointer/memory regressions."
+    },
+    {
+      "name": "memory_array_c",
+      "kind": "c_memory",
+      "hex": "tests/hex/test_array.hex",
+      "max_cycles": 100000,
+      "expected_hex_sha256": "e7e457e03d8ea607602125caae685e30cc93cdfc31d991df83afca8cf8d85f4f",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "memory_generalization",
+      "notes": "C array-loop memory row to catch ordinary load/store and branch-loop regressions."
+    },
+    {
+      "name": "backend_independent_quad",
+      "kind": "micro_width",
+      "hex": "tests/hex/probe_independent_quad.hex",
+      "max_cycles": 50000,
+      "expected_hex_sha256": "3d699b57ef44e1dc94f3fb0a4d1497dce14646a1acee7f4fcd2cd7118e3b6faa",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "backend_generalization",
+      "notes": "Independent ALU issue/retire ceiling row so Stage 1 frontend work cannot regress basic width utilization."
+    },
+    {
+      "name": "backend_alu_chain_8",
+      "kind": "micro_bypass",
+      "hex": "tests/hex/probe_alu_chain_8.hex",
+      "max_cycles": 50000,
+      "expected_hex_sha256": "c0a318b1a85442ebdd0787fe858bbc86c9d45d621acd99b4a11f8aa3ea47467d",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "backend_generalization",
+      "notes": "Dependent ALU chain row for bypass/wakeup latency regressions."
+    },
+    {
+      "name": "hotspot_string_retire",
+      "kind": "micro_string_retire",
+      "hex": "tests/hex/probe_string_retire_hotspot.hex",
+      "max_cycles": 250000,
+      "expected_hex_sha256": "436852f408cf5cc16f3321337145ac6c6f047af9b15982ebb0d12bf327ed813b",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "hotspot_reproducer",
+      "notes": "Dhrystone-like string/retire hotspot reproducer. Keeps the hotspot as a general mechanism probe, not a Dhrystone PC special case."
+    },
+    {
+      "name": "hotspot_state_crc_branch",
+      "kind": "micro_state_crc_branch",
+      "hex": "tests/hex/probe_state_crc_branch_hotspot.hex",
+      "max_cycles": 200000,
+      "expected_hex_sha256": "a6b1689b98d7911087c9661e3cd76b6cd57f78b82b45a54308feb6985481023b",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "hotspot_reproducer",
+      "notes": "CoreMark state/CRC branch-ready hotspot reproducer for frontend and load-consumer overlap checks."
+    },
+    {
+      "name": "hotspot_matrix_store",
+      "kind": "micro_matrix_store",
+      "hex": "tests/hex/probe_matrix_bitextract_store_hotspot.hex",
+      "max_cycles": 200000,
+      "expected_hex_sha256": "85c3a5a9280d8e2a578f191be94f8e1e524c07bfeb9c374829cb21425a967b32",
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "counter_invariants": {
+        "xs_f2_owner_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_idx_mismatch": {
+          "max": 0
+        },
+        "xs_f2_owner_tag_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_epoch_mismatch": {
+          "max": 0
+        },
+        "xs_packet_stale_tag_mismatch": {
+          "max": 0
+        }
+      },
+      "counter_targets_stage1": {},
+      "suite": "hotspot_reproducer",
+      "notes": "CoreMark matrix bitextract/store hotspot reproducer for backend/memory overlap checks."
     }
   ]
 }

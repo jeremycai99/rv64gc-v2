@@ -136,7 +136,9 @@ RTL_FILES = \
     $(RTL_DIR)/core/decode/decode_slice.sv \
     $(RTL_DIR)/core/decode/decode.sv \
     $(RTL_DIR)/core/decode/fusion_detector.sv \
-    $(RTL_DIR)/core/loop_buffer.sv \
+    $(RTL_DIR)/core/fetch/uop_cache_tag_ram.sv \
+    $(RTL_DIR)/core/fetch/uop_cache_data_ram.sv \
+    $(RTL_DIR)/core/fetch/uop_cache.sv \
     $(RTL_DIR)/core/rename/rat.sv \
     $(RTL_DIR)/core/rename/free_list.sv \
     $(RTL_DIR)/core/rename/checkpoint.sv \
@@ -192,9 +194,27 @@ run: build
 #   make xsim_regression                        # run full regression suite
 # =============================================================================
 XSIM_ROOT    := D:/Xilinx/Vivado/2024.1
+WIN_CURDIR   = $(shell wslpath -m "$(CURDIR)" 2>/dev/null || printf '%s' "$(CURDIR)")
+WIN_MEMFILE  = $(shell wslpath -m "$(abspath $(MEMFILE))" 2>/dev/null || printf '%s' "$(MEMFILE)")
+WIN_XSIM_ALL_SV = $(foreach f,$(XSIM_ALL_SV),$(shell wslpath -m "$(abspath $(f))" 2>/dev/null || printf '%s' "$(f)"))
+ifeq ($(shell uname -r 2>/dev/null | grep -qi microsoft && echo 1 || echo 0),1)
+XSIM_WIN_ROOT := $(subst /,\,$(XSIM_ROOT))
+XVLOG_BAT    := "$(XSIM_WIN_ROOT)\bin\xvlog.bat"
+XELAB_BAT    := "$(XSIM_WIN_ROOT)\bin\xelab.bat"
+XSIM_BAT     := "$(XSIM_WIN_ROOT)\bin\xsim.bat"
+XVLOG        := cmd.exe /C $(XVLOG_BAT)
+XELAB        := cmd.exe /C $(XELAB_BAT)
+XSIM         := cmd.exe /C $(XSIM_BAT)
+XSIM_RUNNER  := cmd.exe /C run_xsim_tmp.bat
+else
+XVLOG_BAT    := $(XSIM_ROOT)/bin/xvlog.bat
+XELAB_BAT    := $(XSIM_ROOT)/bin/xelab.bat
+XSIM_BAT     := $(XSIM_ROOT)/bin/xsim.bat
 XVLOG        := $(XSIM_ROOT)/bin/xvlog.bat
 XELAB        := $(XSIM_ROOT)/bin/xelab.bat
 XSIM         := $(XSIM_ROOT)/bin/xsim.bat
+XSIM_RUNNER  := ./run_xsim_tmp.bat
+endif
 XSIM_TB      := tb_xsim
 XSIM_SNAP    := tb_xsim_sim
 XSIM_TB_FILE := $(TB_DIR)/tb_xsim.sv
@@ -204,24 +224,26 @@ XSIM_ALL_SV  := $(PKG_FILES) $(RTL_FILES) $(TB_TOP) $(XSIM_TB_FILE)
 
 xsim_build:
 	rm -rf xsim.dir
-	$(XVLOG) --sv --relax -d SIMULATION $(XSIM_ALL_SV)
+	$(XVLOG) --sv --relax -d SIMULATION $(WIN_XSIM_ALL_SV)
 	$(XELAB) --relax -s $(XSIM_SNAP) $(XSIM_TB)
 
 MAX_CYCLES ?= 500000
+EXTRA_PLUSARGS ?=
 
 xsim_run: xsim_build
-	@echo @echo off > run_xsim_tmp.bat
-	@echo cd /d $(shell pwd -W 2>/dev/null || pwd) >> run_xsim_tmp.bat
-	@echo call $(XSIM) $(XSIM_SNAP) --runall --testplusarg "MEMFILE=$(MEMFILE)" --testplusarg "MAX_CYCLES=$(MAX_CYCLES)" --testplusarg "NOVCD" >> run_xsim_tmp.bat
-	./run_xsim_tmp.bat
+	@printf '%s\n' '@echo off' > run_xsim_tmp.bat
+	@printf '%s\n' 'cd /d $(WIN_CURDIR)' >> run_xsim_tmp.bat
+	@printf '%s\n' 'call $(XSIM_BAT) $(XSIM_SNAP) --runall --testplusarg "MEMFILE=$(WIN_MEMFILE)" --testplusarg "MAX_CYCLES=$(MAX_CYCLES)" --testplusarg "NOVCD" $(EXTRA_PLUSARGS)' >> run_xsim_tmp.bat
+	$(XSIM_RUNNER)
 	@rm -f run_xsim_tmp.bat
 
 xsim_regression:
 	@for t in tests/hex/rv64ui_*.hex tests/hex/test_*.hex; do \
 		name=$$(basename $$t .hex); \
+		win_t=$$(wslpath -m "$$t" 2>/dev/null || printf '%s' "$$t"); \
 		echo @echo off > run_xsim_tmp.bat; \
-		echo cd /d $(shell pwd -W 2>/dev/null || pwd) >> run_xsim_tmp.bat; \
-		echo call $(XSIM) $(XSIM_SNAP) --runall --testplusarg "MEMFILE=$$t" --testplusarg "MAX_CYCLES=50000" --testplusarg "NOVCD" >> run_xsim_tmp.bat; \
+		echo cd /d $(WIN_CURDIR) >> run_xsim_tmp.bat; \
+		echo call $(XSIM_BAT) $(XSIM_SNAP) --runall --testplusarg "MEMFILE=$$win_t" --testplusarg "MAX_CYCLES=50000" --testplusarg "NOVCD" >> run_xsim_tmp.bat; \
 		result=$$(./run_xsim_tmp.bat 2>&1 | grep -E "PASS|FAIL|TIMEOUT" | tail -1); \
 		echo "$$name: $$result"; \
 	done
@@ -230,6 +252,31 @@ xsim_regression:
 xsim_clean:
 	rm -rf xsim.dir xvlog.log xelab.log xsim.log xvlog.pb xelab.pb xsim.jou
 	rm -f run_xsim_tmp.bat xsim_run.tcl
+
+# =============================================================================
+# Simulator platform flow
+#
+# Usage:
+#   make sim_platform_list
+#   make sim_platform_prepare BENCH=isa_rv64ui_add
+#   make sim_platform_dry BENCH=isa_rv64ui_add
+# =============================================================================
+SIM_PLATFORM_MANIFEST ?= tests/sim_platform/stage1_broad.json
+SIM_PLATFORM_RUN_DIR  ?= benchmark_results/sim_platform_make
+BENCH ?=
+
+.PHONY: sim_platform_list sim_platform_prepare sim_platform_dry
+
+sim_platform_list:
+	python3 tools/sim_platform.py --manifest $(SIM_PLATFORM_MANIFEST) --list
+
+sim_platform_prepare:
+	python3 tools/sim_platform.py --manifest $(SIM_PLATFORM_MANIFEST) \
+	    --prepare-only --run-dir $(SIM_PLATFORM_RUN_DIR) $(if $(BENCH),--bench $(BENCH),)
+
+sim_platform_dry:
+	python3 tools/sim_platform.py --manifest $(SIM_PLATFORM_MANIFEST) \
+	    --dry-run --run-dir $(SIM_PLATFORM_RUN_DIR) $(if $(BENCH),--bench $(BENCH),)
 
 # =============================================================================
 # Clean
@@ -250,6 +297,9 @@ help:
 	@echo "  test_<module>  Build and run a per-module Verilator testbench"
 	@echo "                 e.g.: make test_alu, make test_fetch, make test_decode"
 	@echo "  build          Full-system build (Phase 11 placeholder)"
+	@echo "  sim_platform_list      List broad simulator-platform rows"
+	@echo "  sim_platform_prepare   Prepare platform manifest for selected BENCH=<name>"
+	@echo "  sim_platform_dry       Dry-run selected platform row through run_benchmarks"
 	@echo "  clean          Remove obj_dir/ and *.vcd"
 	@echo "  help           Show this message"
 	@echo ""

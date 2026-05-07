@@ -1,9 +1,23 @@
 obj_dir/
+tests/**/obj/
 *.o
 *.elf
 *.hex
 *.vcd
 *.stackdump
+
+# Root-level ad hoc simulation outputs
+/*.out
+/*.stdout
+/*.stderr
+/*.log
+/*.jou
+/*.wdb
+/*.mxd
+/*.pb
+/tmp_result.txt
+/*_objdump_*.txt
+/build_xsim_trace.bat
 
 # DSim simulator artefacts
 dsim_work/
@@ -32,3 +46,11 @@ verif/**/sim_build/
 verif/**/results.xml
 **/__pycache__/
 *.pyc
+
+# Benchmark runner outputs and local licensed benchmark images
+benchmark_results/
+tests/spec/external/
+tests/spec/work/
+
+# Baseline pipe.v1 traces (large, regenerable)
+traces/

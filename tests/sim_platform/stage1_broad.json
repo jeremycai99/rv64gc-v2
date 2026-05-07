@@ -1,0 +1,229 @@
+{
+  "platform": {
+    "name": "rv64gc-v2-sim-platform",
+    "default_abi": "rv64gc-fixed-tohost",
+    "default_image_format": "hex",
+    "dram_base": "0x80000000",
+    "notes": "Test ABI is owned by the simulator platform. The core RTL must not expose fixed tohost ports or magic benchmark addresses."
+  },
+  "include_manifests": [
+    {
+      "path": "tests/benchmarks/benchmarks.json",
+      "suite": "stage1_anchor"
+    },
+    {
+      "path": "tests/benchmarks/coverage_expansion.json",
+      "suite": "coverage_expansion"
+    }
+  ],
+  "benchmarks": [
+    {
+      "name": "isa_rv64ui_minimal",
+      "kind": "isa_smoke",
+      "suite": "isa_smoke",
+      "hex": "tests/hex/rv64ui_minimal.hex",
+      "max_cycles": 50000,
+      "notes": "Minimal fixed-tohost ISA sanity row."
+    },
+    {
+      "name": "isa_rv64ui_add",
+      "kind": "isa_smoke",
+      "suite": "isa_smoke",
+      "hex": "tests/hex/rv64ui_add.hex",
+      "max_cycles": 50000,
+      "notes": "Integer ALU ISA smoke row."
+    },
+    {
+      "name": "isa_rv64ui_branch",
+      "kind": "isa_branch",
+      "suite": "isa_smoke",
+      "hex": "tests/hex/rv64ui_branch.hex",
+      "max_cycles": 80000,
+      "notes": "Conditional branch ISA smoke row."
+    },
+    {
+      "name": "isa_rv64ui_lui",
+      "kind": "isa_smoke",
+      "suite": "isa_smoke",
+      "hex": "tests/hex/rv64ui_lui.hex",
+      "max_cycles": 50000,
+      "notes": "Immediate construction and sign-extension smoke row."
+    },
+    {
+      "name": "isa_rv64ui_zba",
+      "kind": "isa_bitmanip",
+      "suite": "isa_smoke",
+      "hex": "tests/hex/rv64ui_zba.hex",
+      "max_cycles": 80000,
+      "notes": "Zba address-generation smoke row."
+    },
+    {
+      "name": "isa_rv64ui_zbb",
+      "kind": "isa_bitmanip",
+      "suite": "isa_smoke",
+      "hex": "tests/hex/rv64ui_zbb.hex",
+      "max_cycles": 120000,
+      "notes": "Zbb scalar bitmanip smoke row."
+    },
+    {
+      "name": "isa_rv64ui_zbs",
+      "kind": "isa_bitmanip",
+      "suite": "isa_smoke",
+      "hex": "tests/hex/rv64ui_zbs.hex",
+      "max_cycles": 80000,
+      "notes": "Zbs scalar bit set/clear smoke row."
+    },
+    {
+      "name": "isa_rv64ui_zicond",
+      "kind": "isa_conditional_zero",
+      "suite": "isa_smoke",
+      "hex": "tests/hex/rv64ui_zicond.hex",
+      "max_cycles": 80000,
+      "notes": "Zicond conditional-zero smoke row."
+    },
+    {
+      "name": "c_test_basic",
+      "kind": "c_smoke",
+      "suite": "c_smoke",
+      "hex": "tests/hex/test_basic.hex",
+      "max_cycles": 80000,
+      "notes": "Basic C runtime and call/return smoke row."
+    },
+    {
+      "name": "c_test_call",
+      "kind": "c_call",
+      "suite": "c_smoke",
+      "hex": "tests/hex/test_call.hex",
+      "max_cycles": 80000,
+      "notes": "C function call smoke row."
+    },
+    {
+      "name": "c_test_inline",
+      "kind": "c_smoke",
+      "suite": "c_smoke",
+      "hex": "tests/hex/test_inline.hex",
+      "max_cycles": 80000,
+      "notes": "Inline C codegen smoke row."
+    },
+    {
+      "name": "control_test_jal",
+      "kind": "control_jal",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_jal.hex",
+      "max_cycles": 80000,
+      "notes": "Direct jump and link control-flow row."
+    },
+    {
+      "name": "control_test_jal2",
+      "kind": "control_jal",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_jal2.hex",
+      "max_cycles": 80000,
+      "notes": "Direct jump and link control-flow row."
+    },
+    {
+      "name": "control_test_jal3",
+      "kind": "control_jal",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_jal3.hex",
+      "max_cycles": 80000,
+      "notes": "Direct jump and link control-flow row."
+    },
+    {
+      "name": "control_test_jal4",
+      "kind": "control_jal",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_jal4.hex",
+      "max_cycles": 80000,
+      "notes": "Direct jump and link control-flow row."
+    },
+    {
+      "name": "control_test_ret",
+      "kind": "control_return",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_ret.hex",
+      "max_cycles": 80000,
+      "notes": "Return path and RAS smoke row."
+    },
+    {
+      "name": "control_test_ret_nested",
+      "kind": "control_return",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_ret_nested.hex",
+      "max_cycles": 100000,
+      "notes": "Nested return path and RAS smoke row."
+    },
+    {
+      "name": "control_test_ret_nested2",
+      "kind": "control_return",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_ret_nested2.hex",
+      "max_cycles": 100000,
+      "notes": "Nested return path and RAS smoke row."
+    },
+    {
+      "name": "control_test_ret_nested3",
+      "kind": "control_return",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_ret_nested3.hex",
+      "max_cycles": 120000,
+      "notes": "Deeper nested return path and RAS smoke row."
+    },
+    {
+      "name": "control_test_ret_stack",
+      "kind": "control_return",
+      "suite": "control_smoke",
+      "hex": "tests/hex/test_ret_stack.hex",
+      "max_cycles": 120000,
+      "notes": "Stack-backed return path row."
+    },
+    {
+      "name": "loop_bench_loop",
+      "kind": "micro_loop",
+      "suite": "loop_smoke",
+      "hex": "tests/hex/bench_loop.hex",
+      "max_cycles": 80000,
+      "notes": "Simple loop without enabling legacy loop-buffer policy."
+    },
+    {
+      "name": "loop_bench_loop_10",
+      "kind": "micro_loop",
+      "suite": "loop_smoke",
+      "hex": "tests/hex/bench_loop_10.hex",
+      "max_cycles": 80000,
+      "notes": "Short loop throughput row."
+    },
+    {
+      "name": "loop_bench_loop_50",
+      "kind": "micro_loop",
+      "suite": "loop_smoke",
+      "hex": "tests/hex/bench_loop_50.hex",
+      "max_cycles": 100000,
+      "notes": "Medium loop throughput row."
+    },
+    {
+      "name": "loop_bench_loop_uncond",
+      "kind": "micro_loop",
+      "suite": "loop_smoke",
+      "hex": "tests/hex/bench_loop_uncond.hex",
+      "max_cycles": 100000,
+      "notes": "Unconditional loop frontend row."
+    },
+    {
+      "name": "loop_bench_no_loop",
+      "kind": "micro_no_loop",
+      "suite": "loop_smoke",
+      "hex": "tests/hex/bench_no_loop.hex",
+      "max_cycles": 80000,
+      "notes": "Straight-line comparison row for loop microbenchmarks."
+    },
+    {
+      "name": "loop_bench_unrolled_5",
+      "kind": "micro_loop",
+      "suite": "loop_smoke",
+      "hex": "tests/hex/bench_unrolled_5.hex",
+      "max_cycles": 100000,
+      "notes": "Unrolled loop frontend supply row."
+    }
+  ]
+}

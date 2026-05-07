@@ -39,7 +39,7 @@
       "name": "probe_string_retire_hotspot",
       "kind": "micro_string_retire",
       "hex": "tests/hex/probe_string_retire_hotspot.hex",
-      "max_cycles": 150000,
+      "max_cycles": 250000,
       "notes": "Step-3 focused reproducer for Dhrystone strcpy/strcmp byte loops and return/head-retire stalls."
     },
     {

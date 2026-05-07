@@ -70,13 +70,18 @@ SIGNOFF_ALLOWED_PLUSARGS = {
     "PERF_PROFILE",
     "PERF_COUNTERS",
     "STAT_DUMP",
+    "FETCH_DELIVERY_CHECK",
+    "FETCH_DELIVERY_STRICT",
+    "FETCH_OWNER_CHECK",
+    "FETCH_OWNER_STRICT",
+    "SIM_ABI",
+    "TOHOST_ADDR",
+    "FROMHOST_ADDR",
 }
 
-# These knobs enable standalone decoded-op replay or rejected local frontend
-# lookahead/tail-delivery paths.  They can hold fetch, drive rename, redirect
-# fetch on stream exit, or reuse an owner without a real FTQ/IBuffer delivery
-# contract.  Keep them DSE-only until the mechanism is FTQ/BPU-owned rather than
-# a renamed loop replay source.
+# These knobs enable standalone decoded-op replay, or name removed local
+# frontend shortcut controls from rejected experiments. Keep the retired names
+# here so stale manifests cannot silently qualify as signoff rows.
 SIGNOFF_FORBIDDEN_PLUSARGS = {
     "ENABLE_UOC",
     "UOC_UNSAFE_STREAM",
@@ -104,6 +109,22 @@ SIGNOFF_REJECTED_MECHANISM_CLASSES = {
     "standalone_uoc_replay",
     "benchmark_pc_special_case",
     "static_direction_shortcut",
+}
+
+DRIFT_SAFE_COUNTER_INVARIANTS = {
+    # IFU completed-work ownership must never be outside the FTQ IFU-writeback
+    # owner. These are architectural drift checks for the frontend refactor,
+    # not performance targets.
+    "xs_f2_owner_no_head": {"max": 0},
+    "xs_f2_owner_idx_mismatch": {"max": 0},
+    "xs_f2_owner_epoch_mismatch": {"max": 0},
+    "xs_f2_owner_tag_mismatch": {"max": 0},
+    # Decode-facing packets may temporarily see no commit owner in the current
+    # flow-through model, so do not gate xs_packet_stale_no_head here. Index,
+    # epoch, and tag mismatch still indicate wrong-owner packet delivery.
+    "xs_packet_stale_idx_mismatch": {"max": 0},
+    "xs_packet_stale_epoch_mismatch": {"max": 0},
+    "xs_packet_stale_tag_mismatch": {"max": 0},
 }
 
 DEFAULT_COUNTER_EXPECTATIONS = {
@@ -172,6 +193,24 @@ DEFAULT_COUNTER_EXPECTATIONS = {
             "redirect_recovery",
             "xs_backend_stall_cycles",
         ],
+    },
+}
+
+GOAL_CONTRACTS = {
+    "stage1": {
+        "manifest": REPO_ROOT / "tests" / "benchmarks" / "stage1_signoff.json",
+        "contract_version": "stage1-2026-05-06-v1",
+        "run_class": "signoff",
+        "min_benchmark_count": 16,
+        "required_plusargs": {
+            "FETCH_DELIVERY_CHECK",
+            "FETCH_DELIVERY_STRICT",
+            "FETCH_OWNER_CHECK",
+            "FETCH_OWNER_STRICT",
+            "PERF_PROFILE",
+            "PERF_COUNTERS",
+            "STAT_DUMP",
+        },
     },
 }
 
@@ -262,6 +301,76 @@ def plusarg_name(plusarg: str) -> str:
 
 def dsim_plusarg(plusarg: str) -> str:
     return plusarg if plusarg.startswith("+") else f"+{plusarg}"
+
+
+def normalize_plusargs(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    raise TypeError(f"plusargs must be a string or list, got {type(value).__name__}")
+
+
+def benchmark_plusargs(bench: dict[str, Any]) -> list[str]:
+    return normalize_plusargs(bench.get("plusargs"))
+
+
+def effective_plusargs(args: argparse.Namespace, bench: dict[str, Any]) -> list[str]:
+    return [*args.plusarg, *benchmark_plusargs(bench)]
+
+
+def drift_safe_gate_required(args: argparse.Namespace, bench: dict[str, Any]) -> bool:
+    if args.run_class == "debug":
+        return False
+    if args.run_class == "signoff" or getattr(args, "goal", None):
+        return True
+    plusarg_names = {plusarg_name(arg) for arg in effective_plusargs(args, bench)}
+    return bool(
+        {
+            "FETCH_DELIVERY_STRICT",
+            "FETCH_OWNER_STRICT",
+        }
+        & plusarg_names
+    )
+
+
+def merge_counter_bounds(
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(left)
+    if "max" in right:
+        merged["max"] = (
+            min(merged["max"], right["max"])
+            if "max" in merged
+            else right["max"]
+        )
+    if "min" in right:
+        merged["min"] = (
+            max(merged["min"], right["min"])
+            if "min" in merged
+            else right["min"]
+        )
+    return merged
+
+
+def effective_counter_invariants(
+    args: argparse.Namespace,
+    bench: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    invariants: dict[str, dict[str, Any]] = {}
+    if drift_safe_gate_required(args, bench):
+        invariants.update(
+            {
+                name: dict(bounds)
+                for name, bounds in DRIFT_SAFE_COUNTER_INVARIANTS.items()
+            }
+        )
+    for name, bounds in (bench.get("counter_invariants") or {}).items():
+        invariants[name] = merge_counter_bounds(invariants.get(name, {}), bounds)
+    return invariants
 
 
 def normalize_counter_name(name: str) -> str:
@@ -440,6 +549,29 @@ def sha256_file(path: Path) -> str | None:
     return h.hexdigest()
 
 
+def manifest_provenance(paths: list[Path]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for path in paths:
+        manifest_path = repo_path(path)
+        goal_contract: dict[str, Any] | None = None
+        if manifest_path.exists():
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                raw_contract = data.get("goal_contract")
+                if isinstance(raw_contract, dict):
+                    goal_contract = raw_contract
+            except Exception:
+                goal_contract = None
+        out.append(
+            {
+                "path": str(manifest_path),
+                "sha256": sha256_file(manifest_path),
+                "goal_contract": goal_contract,
+            }
+        )
+    return out
+
+
 def run_git(args: list[str]) -> str | None:
     completed = subprocess.run(
         ["git", *args],
@@ -493,6 +625,7 @@ def benchmark_provenance(bench: dict[str, Any]) -> dict[str, Any]:
             )
             if key in bench
         },
+        "plusargs": benchmark_plusargs(bench),
     }
 
 
@@ -667,12 +800,11 @@ def expected_int(bench: dict[str, Any], key: str) -> int | None:
     return int(bench[key])
 
 
-def evaluate_gate(
+def endpoint_identity_reasons(
     bench: dict[str, Any],
     parsed: dict[str, Any],
     provenance: dict[str, Any],
-    args: argparse.Namespace,
-) -> tuple[str, list[str], str]:
+) -> list[str]:
     reasons: list[str] = []
     kind = str(bench.get("kind", "generic")).lower()
     bench_result = parsed["bench_result"]
@@ -709,18 +841,56 @@ def evaluate_gate(
             f"iterations={bench_result.get('iterations')} expected={iterations_expected}"
         )
 
+    for kind_name, info in provenance.get("files", {}).items():
+        expected_hash = info.get("expected_sha256")
+        actual_hash = info.get("sha256")
+        if expected_hash and actual_hash != expected_hash:
+            reasons.append(
+                f"{kind_name}_sha256={actual_hash} expected={expected_hash}"
+            )
+
+    golden_trip = parsed.get("golden_pc_trip")
+    if golden_trip is not None:
+        reasons.append(
+            "golden_pc_trip:"
+            f"seq={golden_trip.get('seq')} "
+            f"expected={golden_trip.get('expected')} "
+            f"actual={golden_trip.get('actual')}"
+        )
+
+    return reasons
+
+
+def evaluate_gate(
+    bench: dict[str, Any],
+    parsed: dict[str, Any],
+    provenance: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[str, list[str], str]:
+    endpoint_reasons = endpoint_identity_reasons(bench, parsed, provenance)
+    reasons: list[str] = list(endpoint_reasons)
+
+    if architectural_counter_check_required(args):
+        reasons.extend(parsed.get("architectural_counter_failures", []))
+
     require_lb_zero = bool(bench.get("require_loop_buffer_zero")) or args.require_loop_buffer_zero
-    if require_lb_zero and parsed.get("loop_buffer_active") != 0:
-        reasons.append(f"loop_buffer_active={parsed.get('loop_buffer_active')} expected=0")
+    if require_lb_zero:
+        loop_buffer_active = parsed.get("loop_buffer_active")
+        if loop_buffer_active is None:
+            reasons.append("loop_buffer_active=missing expected=0")
+        elif loop_buffer_active != 0:
+            reasons.append(f"loop_buffer_active={loop_buffer_active} expected=0")
 
     require_decoded_op_zero = (
         bool(bench.get("require_decoded_op_replay_zero"))
         or args.require_decoded_op_replay_zero
     )
-    if require_decoded_op_zero and parsed.get("decoded_op_active") != 0:
-        reasons.append(
-            f"decoded_op_active={parsed.get('decoded_op_active')} expected=0"
-        )
+    if require_decoded_op_zero:
+        decoded_op_active = parsed.get("decoded_op_active")
+        if decoded_op_active is None:
+            reasons.append("decoded_op_active=missing expected=0")
+        elif decoded_op_active != 0:
+            reasons.append(f"decoded_op_active={decoded_op_active} expected=0")
     if (
         args.run_class == "signoff"
         and require_decoded_op_zero
@@ -734,19 +904,8 @@ def evaluate_gate(
             "logs cannot be promoted."
         )
 
-    for kind_name, info in provenance.get("files", {}).items():
-        expected_hash = info.get("expected_sha256")
-        actual_hash = info.get("sha256")
-        if expected_hash and actual_hash != expected_hash:
-            reasons.append(
-                f"{kind_name}_sha256={actual_hash} expected={expected_hash}"
-            )
-
-    if architectural_counter_check_required(args):
-        reasons.extend(parsed.get("architectural_counter_failures", []))
-
     counters = parsed.get("perf_counters") or {}
-    invariants = bench.get("counter_invariants") or {}
+    invariants = effective_counter_invariants(args, bench)
     for cname, bounds in invariants.items():
         actual = counters.get(cname)
         if actual is None:
@@ -769,19 +928,15 @@ def evaluate_gate(
             if "min" in bounds and actual < bounds["min"]:
                 reasons.append(f"counter_target:{cname}={actual} < min={bounds['min']}")
 
-    golden_trip = parsed.get("golden_pc_trip")
-    if golden_trip is not None:
-        reasons.append(
-            "golden_pc_trip:"
-            f"seq={golden_trip.get('seq')} "
-            f"expected={golden_trip.get('expected')} "
-            f"actual={golden_trip.get('actual')}"
-        )
-
     if args.run_class == "debug":
         return "DEBUG_ONLY", reasons, "debug_only_not_a_performance_score"
     if args.run_class == "dse":
-        endpoint = "endpoint_clean" if not reasons else "endpoint_failed"
+        if endpoint_reasons:
+            endpoint = "endpoint_failed"
+        elif reasons:
+            endpoint = "endpoint_clean_gate_blocked"
+        else:
+            endpoint = "endpoint_clean"
         return "DSE_ONLY", reasons, f"dse_evidence_only:{endpoint}"
 
     if reasons:
@@ -815,7 +970,7 @@ def xsim_command(
         "--testplusarg",
         '"NOVCD"',
     ]
-    for plusarg in args.plusarg:
+    for plusarg in effective_plusargs(args, bench):
         xsim_line.extend(["--testplusarg", f'"{plusarg}"'])
     return " ".join(xsim_line)
 
@@ -829,7 +984,7 @@ def local_runner_command(bench: dict[str, Any], args: argparse.Namespace) -> lis
         cmd = [str(REPO_ROOT / "run_dsim.sh"), memfile.as_posix(), str(max_cycles)]
     else:
         raise ValueError(f"unsupported local runner: {args.runner}")
-    cmd.extend(args.plusarg)
+    cmd.extend(effective_plusargs(args, bench))
     return cmd
 
 
@@ -852,7 +1007,7 @@ def dsim_shell_command(
     if waves_path is not None:
         raw_cmd.extend(["-waves", str(waves_path)])
     raw_cmd.extend([f"+MEMFILE={memfile}", f"+MAX_CYCLES={max_cycles}"])
-    raw_cmd.extend(dsim_plusarg(plusarg) for plusarg in args.plusarg)
+    raw_cmd.extend(dsim_plusarg(plusarg) for plusarg in effective_plusargs(args, bench))
 
     golden_pc_path = bench.get("golden_pc_path")
     if golden_pc_path:
@@ -909,10 +1064,14 @@ def env_text(args: argparse.Namespace, bench: dict[str, Any]) -> str:
     }
     payload = {
         "runner": args.runner,
+        "goal": args.goal,
+        "allow_partial_goal": args.allow_partial_goal,
         "run_class": args.run_class,
         "mechanism_name": args.mechanism_name,
         "mechanism_class": args.mechanism_class,
-        "plusargs": args.plusarg,
+        "global_plusargs": args.plusarg,
+        "benchmark_plusargs": benchmark_plusargs(bench),
+        "plusargs": effective_plusargs(args, bench),
         "benchmark": bench.get("name"),
         "env": interesting_env,
     }
@@ -1020,6 +1179,8 @@ def run_benchmark(
     parsed["architectural_counter_failures"] = arch_failures
     metrics = calculate_metrics(bench, parsed)
     provenance = benchmark_provenance(bench)
+    provenance["goal"] = args.goal
+    provenance["allow_partial_goal"] = args.allow_partial_goal
     provenance["git"] = git_info
     provenance["waves"] = str(waves_path) if waves_path is not None else None
     provenance["architectural_guidance"] = {
@@ -1247,11 +1408,14 @@ def write_run_manifest(
         return
     payload = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
+        "goal": args.goal,
+        "allow_partial_goal": args.allow_partial_goal,
+        "manifest_provenance": manifest_provenance(args.manifest or [DEFAULT_MANIFEST]),
         "run_class": args.run_class,
         "runner": args.runner,
         "mechanism_name": args.mechanism_name,
         "mechanism_class": args.mechanism_class,
-        "plusargs": args.plusarg,
+        "global_plusargs": args.plusarg,
         "signoff_plusarg_allow": args.signoff_plusarg_allow,
         "baseline_results": str(args.baseline_results) if args.baseline_results else None,
         "counter_expectations": counter_expectations(args),
@@ -1294,22 +1458,121 @@ def write_perf_profile_summary(results: list[RunResult], run_root: Path) -> None
         )
 
 
-def validate_run_class_args(args: argparse.Namespace) -> list[str]:
+def validate_run_class_args(
+    args: argparse.Namespace,
+    benchmarks: list[dict[str, Any]] | None = None,
+) -> list[str]:
     mechanism_class = args.mechanism_class or "default_rtl"
     allowed = {plusarg_name(arg) for arg in args.signoff_plusarg_allow}
     allowed |= SIGNOFF_ALLOWED_PLUSARGS
-    requested = {plusarg_name(arg) for arg in args.plusarg}
+    all_plusargs = list(args.plusarg)
+    for bench in benchmarks or []:
+        all_plusargs.extend(benchmark_plusargs(bench))
+    requested = {plusarg_name(arg) for arg in all_plusargs}
     forbidden_requested = sorted(requested & SIGNOFF_FORBIDDEN_PLUSARGS)
     forbidden_allowlisted = sorted(
         {plusarg_name(arg) for arg in args.signoff_plusarg_allow}
         & SIGNOFF_FORBIDDEN_PLUSARGS
     )
     disallowed = [
-        plusarg for plusarg in args.plusarg if plusarg_name(plusarg) not in allowed
+        plusarg for plusarg in all_plusargs if plusarg_name(plusarg) not in allowed
     ]
     errors = []
     if args.run_class != "signoff":
+        if args.goal:
+            contract = GOAL_CONTRACTS[args.goal]
+            errors.append(
+                f"--goal {args.goal} requires --run-class "
+                f"{contract['run_class']}; got {args.run_class!r}."
+            )
         return errors
+    if args.goal:
+        contract = GOAL_CONTRACTS[args.goal]
+        manifest_paths = [
+            repo_path(path).resolve() for path in (args.manifest or [DEFAULT_MANIFEST])
+        ]
+        required_manifest = contract["manifest"].resolve()
+        if manifest_paths != [required_manifest]:
+            errors.append(
+                f"--goal {args.goal} requires exactly one manifest: "
+                f"{required_manifest}. Got: "
+                + ", ".join(str(path) for path in manifest_paths)
+            )
+        else:
+            try:
+                manifest_data = json.loads(
+                    required_manifest.read_text(encoding="utf-8")
+                )
+            except Exception as exc:
+                errors.append(f"--goal {args.goal} cannot read manifest: {exc}")
+                manifest_data = {}
+            manifest_contract = manifest_data.get("goal_contract") or {}
+            if manifest_contract.get("name") != args.goal:
+                errors.append(
+                    f"--goal {args.goal} requires manifest goal_contract.name="
+                    f"{args.goal!r}; got {manifest_contract.get('name')!r}."
+                )
+            expected_version = contract.get("contract_version")
+            if manifest_contract.get("version") != expected_version:
+                errors.append(
+                    f"--goal {args.goal} requires manifest goal_contract.version="
+                    f"{expected_version!r}; got "
+                    f"{manifest_contract.get('version')!r}."
+                )
+            min_count = int(contract.get("min_benchmark_count", 0))
+            actual_count = len(manifest_data.get("benchmarks") or [])
+            if actual_count < min_count:
+                errors.append(
+                    f"--goal {args.goal} requires at least {min_count} "
+                    f"benchmarks in the manifest; got {actual_count}."
+                )
+        if args.bench and not args.allow_partial_goal:
+            errors.append(
+                f"--goal {args.goal} is a full long-run contract and rejects "
+                "--bench selection. Use --allow-partial-goal only for local "
+                "smoke/debug rows; do not cite partial-goal runs as signoff."
+            )
+        if args.allow_partial_goal and not args.dry_run:
+            errors.append(
+                f"--allow-partial-goal with --goal {args.goal} is dry-run only. "
+                "Run real partial smoke rows without --goal, or run the full "
+                "goal contract without --bench."
+            )
+        global_plusarg_names = {plusarg_name(arg) for arg in args.plusarg}
+        missing_plusargs = sorted(contract["required_plusargs"] - global_plusarg_names)
+        if missing_plusargs:
+            errors.append(
+                f"--goal {args.goal} requires global plusargs on every row: "
+                + ", ".join(missing_plusargs)
+            )
+        if args.no_perf_summary:
+            errors.append(
+                f"--goal {args.goal} requires the perf profile summary; "
+                "remove --no-perf-summary."
+            )
+        if not args.dry_run and not getattr(args, "skip_goal_lock_check", False):
+            lock_paths = [
+                str(contract["manifest"].relative_to(REPO_ROOT)),
+                "tools/run_benchmarks.py",
+            ]
+            try:
+                diff = subprocess.run(
+                    ["git", "diff", "--quiet", "HEAD", "--", *lock_paths],
+                    cwd=REPO_ROOT,
+                    check=False,
+                    capture_output=True,
+                )
+                goal_contract_dirty = diff.returncode != 0
+            except Exception:
+                goal_contract_dirty = False
+            if goal_contract_dirty:
+                errors.append(
+                    f"--goal {args.goal} rejects dirty goal-contract files: "
+                    + ", ".join(lock_paths)
+                    + ". Commit the manifest/runner contract before a real "
+                    "goal run, or pass --skip-goal-lock-check only for a "
+                    "clearly labeled emergency artifact."
+                )
     if mechanism_class in SIGNOFF_REJECTED_MECHANISM_CLASSES:
         errors.append(
             "signoff rejects mechanism class "
@@ -1338,9 +1601,8 @@ def validate_run_class_args(args: argparse.Namespace) -> list[str]:
         errors.append(
             "signoff run forbids unsafe frontend replay/lookahead plusargs: "
             + ", ".join(forbidden_requested)
-            + ". Use --run-class dse for unsafe UOC, same-tail, or local "
-            "lookahead experiments; signoff must use FTQ/BPU-owned frontend "
-            "mechanisms with decoded-op replay activity gated to zero."
+            + ". Use --run-class dse for unsafe UOC experiments; retired "
+            "local shortcut controls must stay out of signoff rows."
         )
 
     # Data-driven discipline (per feedback_perf_discipline.md):
@@ -1447,6 +1709,25 @@ def main(argv: list[str] | None = None) -> int:
         default="signoff",
         help="signoff enforces endpoint and anti-overfit gates; dse/debug are not scoreable.",
     )
+    parser.add_argument(
+        "--goal",
+        choices=tuple(sorted(GOAL_CONTRACTS)),
+        default=None,
+        help=(
+            "Apply a named long-run contract. For stage1 this requires the "
+            "stage1_signoff manifest, signoff class, full benchmark selection, "
+            "strict owner/delivery checks, and PERF_PROFILE/PERF_COUNTERS/STAT_DUMP."
+        ),
+    )
+    parser.add_argument(
+        "--allow-partial-goal",
+        action="store_true",
+        help=(
+            "Allow --bench together with --goal for dry-run command-shape "
+            "validation. Real partial smoke rows should run without --goal; "
+            "goal artifacts must be full-manifest runs."
+        ),
+    )
     parser.add_argument("--mechanism-name", default=None)
     parser.add_argument(
         "--mechanism-class",
@@ -1485,6 +1766,15 @@ def main(argv: list[str] | None = None) -> int:
             "signoff when RTL has uncommitted changes vs HEAD. Use only in "
             "emergencies; normal workflow is to commit baseline first or use "
             "a non-default mechanism class."
+        ),
+    )
+    parser.add_argument(
+        "--skip-goal-lock-check",
+        action="store_true",
+        help=(
+            "Bypass the --goal check that rejects dirty goal-contract files "
+            "(stage manifest and runner). Use only for explicitly labeled "
+            "emergency artifacts."
         ),
     )
     parser.add_argument(
@@ -1541,13 +1831,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-perf-summary", action="store_true")
     args = parser.parse_args(argv)
 
-    errors = validate_run_class_args(args)
-    if errors:
-        for error in errors:
-            print(f"ERROR: {error}", file=sys.stderr)
-        return 2
-    args.baseline_results_by_name = load_baseline_results(args.baseline_results)
-
     benchmarks = load_manifests(args.manifest or [DEFAULT_MANIFEST])
     selected = {
         name.lower()
@@ -1562,6 +1845,13 @@ def main(argv: list[str] | None = None) -> int:
         for bench in benchmarks:
             print(f"{bench['name']}: {bench.get('kind', 'generic')} {bench['hex']}")
         return 0
+
+    errors = validate_run_class_args(args, benchmarks)
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    args.baseline_results_by_name = load_baseline_results(args.baseline_results)
 
     if not benchmarks:
         print("No benchmarks selected", file=sys.stderr)
