@@ -1041,10 +1041,17 @@ module fetch_top
     );
 
     pred_checker u_pred_checker (
+        .clk                                      (clk),
+        .rst_n                                    (rst_n),
         .valid_i                                  (f2_work_valid_c && f2_data_valid),
         .will_emit_i                              (f2_will_emit_c),
         .redirect_i                               (redirect_valid),
         .stall_i                                  (fe_stall),
+        .seed_clear_i                             (redirect_valid),
+        .seed_consume_i                           (!fe_stall && ic_req_valid),
+        .req_pc_i                                 (req_pc_c),
+        .seq_next_pc_i                            (f2_seq_next_pc),
+        .work_pc_i                                (f2_work_pc_c),
         .extract_count_i                          (extract_count),
         .slot_valid_i                             (slot_valid),
         .slot_is_rvc_i                            (slot_is_rvc),
@@ -1102,6 +1109,16 @@ module fetch_top
         .subgroup_split_target_o                  (subgroup_split_target_c),
         .subgroup_seed_load_o                     (subgroup_seed_load_c),
         .subgroup_seed_pred_taken_o               (subgroup_seed_pred_taken_c),
+        .subgroup_seed_hit_o                      (subgroup_seed_hit_c),
+        .subgroup_seed_valid_o                    (subgroup_seed_valid_r),
+        .subgroup_seed_pc_o                       (subgroup_seed_pc_r),
+        .subgroup_seed_parent_pc_o                (subgroup_seed_parent_pc_r),
+        .subgroup_seed_owner_pc_o                 (subgroup_seed_owner_pc_r),
+        .subgroup_seed_pred_valid_o               (subgroup_seed_pred_valid_r),
+        .subgroup_seed_pred_taken_state_o         (subgroup_seed_pred_taken_r),
+        .subgroup_seed_pred_offset_o              (subgroup_seed_pred_offset_r),
+        .subgroup_seed_pred_type_o                (subgroup_seed_pred_type_r),
+        .subgroup_seed_pred_target_o              (subgroup_seed_pred_target_r),
         .final_count_o                            (final_count),
         .owner_complete_o                         (f2_work_owner_complete_c),
         .req_redirect_o                           (req_redirect_c),
@@ -1112,47 +1129,6 @@ module fetch_top
         .tage_spec_update_valid_o                 (tage_spec_update_valid),
         .tage_spec_taken_o                        (tage_spec_taken)
     );
-
-    assign subgroup_seed_hit_c =
-        subgroup_seed_valid_r && (req_pc_c == subgroup_seed_pc_r);
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            subgroup_seed_valid_r       <= 1'b0;
-            subgroup_seed_pc_r          <= '0;
-            subgroup_seed_parent_pc_r   <= '0;
-            subgroup_seed_owner_pc_r    <= '0;
-            subgroup_seed_pred_valid_r  <= 1'b0;
-            subgroup_seed_pred_taken_r  <= 1'b0;
-            subgroup_seed_pred_offset_r <= '0;
-            subgroup_seed_pred_type_r   <= '0;
-            subgroup_seed_pred_target_r <= '0;
-        end else if (redirect_valid) begin
-            subgroup_seed_valid_r       <= 1'b0;
-            subgroup_seed_pc_r          <= '0;
-            subgroup_seed_parent_pc_r   <= '0;
-            subgroup_seed_owner_pc_r    <= '0;
-            subgroup_seed_pred_valid_r  <= 1'b0;
-            subgroup_seed_pred_taken_r  <= 1'b0;
-            subgroup_seed_pred_offset_r <= '0;
-            subgroup_seed_pred_type_r   <= '0;
-            subgroup_seed_pred_target_r <= '0;
-        end else if (subgroup_seed_load_c) begin
-            subgroup_seed_valid_r       <= 1'b1;
-            subgroup_seed_pc_r          <= f2_seq_next_pc;
-            subgroup_seed_parent_pc_r   <= f2_work_pc_c;
-            subgroup_seed_owner_pc_r    <= subgroup_split_pc_c;
-            subgroup_seed_pred_valid_r  <= 1'b1;
-            subgroup_seed_pred_taken_r  <= subgroup_seed_pred_taken_c;
-            subgroup_seed_pred_offset_r <= subgroup_split_pc_c[5:0];
-            subgroup_seed_pred_type_r   <= subgroup_split_type_c;
-            subgroup_seed_pred_target_r <= subgroup_split_target_c;
-        end else if (!fe_stall && ic_req_valid && subgroup_seed_hit_c) begin
-            subgroup_seed_valid_r       <= 1'b0;
-            subgroup_seed_parent_pc_r   <= '0;
-            subgroup_seed_owner_pc_r    <= '0;
-        end
-    end
 
     // =========================================================================
     // Compute sequential next PC from bytes consumed

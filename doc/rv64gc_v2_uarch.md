@@ -455,6 +455,11 @@ These are the structural constraint points that any optimization needs to be awa
   `frontend/instr/rvc_expander.sv`, `frontend/instr/predecode.sv`, and
   `frontend/instr/instr_compact.sv` hold parcel extraction, compressed
   expansion, control-flow predecode, and mechanical fetch-packet assembly.
+- **Prediction checker boundary:** `frontend/pred/pred_checker.sv` owns
+  predicted-control validation, static-control override, subgroup split
+  selection, owner-complete classification, RAS/GHR action requests, and the
+  registered subgroup seed state used to carry branch-owner prediction metadata
+  into the following request.
   Prediction ownership and redirect policy still live above these helpers.
 - **Prediction checker leaf:** `frontend/pred/pred_checker.sv` validates the
   FTQ-predicted control against predecode, selects the packet cut point,

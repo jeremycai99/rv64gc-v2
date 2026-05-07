@@ -8,10 +8,17 @@ module pred_checker
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
+    input  logic                         clk,
+    input  logic                         rst_n,
     input  logic                         valid_i,
     input  logic                         will_emit_i,
     input  logic                         redirect_i,
     input  logic                         stall_i,
+    input  logic                         seed_clear_i,
+    input  logic                         seed_consume_i,
+    input  logic [63:0]                  req_pc_i,
+    input  logic [63:0]                  seq_next_pc_i,
+    input  logic [63:0]                  work_pc_i,
 
     input  logic [2:0]                   extract_count_i,
     input  logic                         slot_valid_i [0:PIPE_WIDTH-1],
@@ -80,6 +87,16 @@ module pred_checker
     output logic [63:0]                  subgroup_split_target_o,
     output logic                         subgroup_seed_load_o,
     output logic                         subgroup_seed_pred_taken_o,
+    output logic                         subgroup_seed_hit_o,
+    output logic                         subgroup_seed_valid_o,
+    output logic [63:0]                  subgroup_seed_pc_o,
+    output logic [63:0]                  subgroup_seed_parent_pc_o,
+    output logic [63:0]                  subgroup_seed_owner_pc_o,
+    output logic                         subgroup_seed_pred_valid_o,
+    output logic                         subgroup_seed_pred_taken_state_o,
+    output logic [5:0]                   subgroup_seed_pred_offset_o,
+    output logic [2:0]                   subgroup_seed_pred_type_o,
+    output logic [63:0]                  subgroup_seed_pred_target_o,
 
     output logic [2:0]                   final_count_o,
     output logic                         owner_complete_o,
@@ -507,6 +524,48 @@ module pred_checker
                 (subgroup_split_target_o == pd_ctl_target_i))
                    ? owner_cond_pred_found_i
                    : 1'b0);
+
+    assign subgroup_seed_hit_o =
+        subgroup_seed_valid_o &&
+        (req_pc_i == subgroup_seed_pc_o);
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            subgroup_seed_valid_o            <= 1'b0;
+            subgroup_seed_pc_o               <= '0;
+            subgroup_seed_parent_pc_o        <= '0;
+            subgroup_seed_owner_pc_o         <= '0;
+            subgroup_seed_pred_valid_o       <= 1'b0;
+            subgroup_seed_pred_taken_state_o <= 1'b0;
+            subgroup_seed_pred_offset_o      <= '0;
+            subgroup_seed_pred_type_o        <= '0;
+            subgroup_seed_pred_target_o      <= '0;
+        end else if (seed_clear_i) begin
+            subgroup_seed_valid_o            <= 1'b0;
+            subgroup_seed_pc_o               <= '0;
+            subgroup_seed_parent_pc_o        <= '0;
+            subgroup_seed_owner_pc_o         <= '0;
+            subgroup_seed_pred_valid_o       <= 1'b0;
+            subgroup_seed_pred_taken_state_o <= 1'b0;
+            subgroup_seed_pred_offset_o      <= '0;
+            subgroup_seed_pred_type_o        <= '0;
+            subgroup_seed_pred_target_o      <= '0;
+        end else if (subgroup_seed_load_o) begin
+            subgroup_seed_valid_o            <= 1'b1;
+            subgroup_seed_pc_o               <= seq_next_pc_i;
+            subgroup_seed_parent_pc_o        <= work_pc_i;
+            subgroup_seed_owner_pc_o         <= subgroup_split_pc_o;
+            subgroup_seed_pred_valid_o       <= 1'b1;
+            subgroup_seed_pred_taken_state_o <= subgroup_seed_pred_taken_o;
+            subgroup_seed_pred_offset_o      <= subgroup_split_pc_o[5:0];
+            subgroup_seed_pred_type_o        <= subgroup_split_type_o;
+            subgroup_seed_pred_target_o      <= subgroup_split_target_o;
+        end else if (seed_consume_i && subgroup_seed_hit_o) begin
+            subgroup_seed_valid_o     <= 1'b0;
+            subgroup_seed_parent_pc_o <= '0;
+            subgroup_seed_owner_pc_o  <= '0;
+        end
+    end
 
     assign owner_complete_o =
         !consume_remainder_i &&
