@@ -185,6 +185,67 @@ identity and golden PC streams pass. It does not close the full Stage 1 gap by
 itself, but it proves the same-owner IFU cursor direction is real when bounded
 by predicted-control reachability.
 
+### Bubble Analysis
+
+The previous 21K-cycle Dhrystone row is real as a Dhrystone measurement, but it
+is not maintainable as default behavior because it advances inside predicted
+control ownership without proving that the next packet cannot cross the
+predicted-control boundary. Dhrystone does not expose that hazard; CoreMark
+does, at `0x80002ffa -> 0x80002ffe -> 0x80003000`.
+
+The accepted gate keeps only the part of the optimization that is outside the
+predicted-control reachability window. That is why Dhrystone gives back most of
+the 21K-cycle improvement.
+
+| Dhrystone row | Correctness | Timed cycles | Frontend zero | `packet_empty_f2_data` | `packet_empty_noemit_dup` | Commit=4 cycles |
+|---|---|---:|---:|---:|---:|---:|
+| Baseline | PASS | 27,093 | 9,770, 35.4% | 9,410 | 9,098 | 307 |
+| Unsafe same-owner shortcut | DS PASS, CM FAIL | 21,597 | 4,085, 18.5% | 3,722 | 3,410 | 1,905 |
+| Control-free-only safe gate | PASS | 26,281 | 8,944, 33.4% | 8,581 | 8,269 | 812 |
+| Accepted predicted-control-distance gate | PASS | 26,080 | 8,742, 32.9% | 8,379 | 8,067 | 813 |
+
+Interpretation:
+
+- The unsafe row removes 5,685 frontend-zero cycles versus baseline, and
+  `packet_empty_noemit_dup` falls by 5,688. This is too exact to be random
+  noise; it is the intended same-owner cursor mechanism.
+- The accepted row removes 1,028 frontend-zero cycles versus baseline and
+  `packet_empty_noemit_dup` falls by 1,031. It keeps about 18% of the unsafe
+  Dhrystone bubble removal because the rest lies in predicted-control hazard
+  windows.
+- Redirect recovery is unchanged on Dhrystone, 126 cycles in all rows, and
+  I-cache wait changes only 271 -> 262 cycles. The Dhrystone delta is therefore
+  frontend duplicate/no-emit pressure, not branch recovery, I-cache miss, or
+  backend scheduling.
+- `xs_ftq_occ_max` remains 1 and `xs_packet_buf_occ_max` remains 0. This slice
+  is not yet true FTQ/IBuffer runahead; it is a bounded same-owner cursor
+  repair in the current flow-through frontend.
+
+CoreMark also confirms the same mechanism once the predicted-control hazard is
+bounded:
+
+| CoreMark row | Timed cycles | Frontend zero | `packet_empty_f2_data` | `packet_empty_noemit_dup` | Commit=4 cycles |
+|---|---:|---:|---:|---:|---:|
+| Baseline | 209,058 | 92,111, 41.9% | 85,756 | 82,614 | 11,638 |
+| Accepted predicted-control-distance gate | 199,331 | 80,548, 38.4% | 74,161 | 70,972 | 12,603 |
+
+CoreMark gains 9,727 timed cycles while reducing `packet_empty_noemit_dup` by
+11,642 cycles. Redirect recovery changes only 2,969 -> 2,995 cycles, so the
+accepted improvement is also frontend supply, not hidden redirect behavior.
+
+Next bubble-analysis gap: add explicit counters for same-owner advance
+eligibility and block reasons:
+
+- eligible and advanced
+- blocked by predicted-control reachability
+- blocked by owner not live
+- blocked by packet not enqueued
+- blocked by remainder or straddle
+
+Those counters will quantify how much of the remaining Dhrystone/CM bubble is
+recoverable by a real predicted-control owner split, as opposed to needing
+deeper FTQ/IBuffer runahead.
+
 ## Current Architecture State
 
 rv64gc-v2 is already aligned with the intended XiangShan/BOOM-style ownership
