@@ -155,6 +155,7 @@ module ifu
     logic        work_same_owner_advance_c;
     logic        pred_control_outside_next_packet_c;
     logic        ftq_next_owner_stable_c;
+    logic [63:0] ftq_next_owner_start_pc_c;
     logic        redirect_next_owner_match_c;
     logic [FTQ_IDX_BITS+1:0] frontend_owner_depth_c;
     logic        runahead_pending_r;
@@ -241,6 +242,9 @@ module ifu
     assign req_block_pc_c = {req_pc_c[63:LINE_BITS], {LINE_BITS{1'b0}}};
     assign ftq_next_owner_stable_c =
         ftq_count_ifu_to_wb_i > {{FTQ_IDX_BITS{1'b0}}, 1'b1};
+    assign ftq_next_owner_start_pc_c =
+        ftq_next_owner_entry_i.block_pc +
+        64'(ftq_next_owner_entry_i.start_offset);
     assign redirect_next_owner_match_c =
         ftq_next_owner_stable_c &&
         ftq_next_owner_valid_i &&
@@ -520,14 +524,15 @@ module ifu
             if (work_take_ftq_next_owner_o) begin
                 work_next_c = '0;
                 work_next_c.valid         = 1'b1;
-                work_next_c.pc            = seq_next_pc_i;
+                work_next_c.pc            = ftq_next_owner_start_pc_c;
                 work_next_c.ftq_valid     = 1'b1;
                 work_next_c.ftq_idx       = ftq_next_owner_idx_i;
                 work_next_c.ftq_epoch     = ftq_current_epoch_i;
                 work_next_c.ftq_alloc_tag = ftq_next_owner_tag_i;
                 work_next_c.ftq_entry     = ftq_next_owner_entry_i;
                 work_next_c.line_valid    = 1'b1;
-                work_next_c.line_addr     = seq_next_pc_i[63:LINE_BITS];
+                work_next_c.line_addr     =
+                    ftq_next_owner_start_pc_c[63:LINE_BITS];
             end else begin
                 if (line_straddle_advance_i)
                     work_pc_next = seq_next_pc_i;
