@@ -57,7 +57,6 @@ module pred_checker
     input  logic                         seq_valid_i,
     input  logic                         consume_remainder_i,
     input  logic                         redirect_without_owner_successor_i,
-    input  logic                         same_owner_continue_i,
     input  logic                         straddle_detected_i,
 
     output logic                         ftq_pred_ctl_valid_o,
@@ -94,6 +93,7 @@ module pred_checker
     output logic [63:0]                  subgroup_seed_pred_target_o,
 
     output logic [2:0]                   final_count_o,
+    output logic                         same_owner_continue_o,
     output logic                         owner_complete_o,
     output logic                         req_redirect_o,
     output logic [63:0]                  bpu_target_o,
@@ -504,6 +504,20 @@ module pred_checker
         end
     end
 
+    // A straight-line continuation within the current cache line remains part
+    // of the same fetch-block owner. Allocate a new FTQ owner only at a real
+    // ownership boundary: control transfer, explicit subgroup split, line end,
+    // or straddle handling.
+    assign same_owner_continue_o =
+        valid_i &&
+        seq_valid_i &&
+        (final_count_o > 3'd0) &&
+        !straddle_detected_i &&
+        !pd_ctl_found_i &&
+        !subgroup_split_before_ctl_o &&
+        !(bp_branch_found_o && bp_taken_o) &&
+        (seq_next_pc_i[63:LINE_BITS] == work_pc_i[63:LINE_BITS]);
+
     assign subgroup_seed_load_o =
         valid_i &&
         will_emit_i &&
@@ -569,7 +583,7 @@ module pred_checker
     assign owner_complete_o =
         !consume_remainder_i &&
         !redirect_without_owner_successor_i &&
-        !same_owner_continue_i &&
+        !same_owner_continue_o &&
         (!straddle_detected_i ||
          (bp_branch_found_o && bp_taken_o && !subgroup_split_before_ctl_o));
 

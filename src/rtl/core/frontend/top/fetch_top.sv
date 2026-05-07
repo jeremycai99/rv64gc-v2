@@ -872,7 +872,6 @@ module fetch_top
         .seq_valid_i                              (f2_seq_valid),
         .consume_remainder_i                      (consume_remainder_c),
         .redirect_without_owner_successor_i       (f2_redirect_without_owner_successor_c),
-        .same_owner_continue_i                    (f2_same_owner_continue_c),
         .straddle_detected_i                      (straddle_detected),
         .ftq_pred_ctl_valid_o                     (ftq_pred_ctl_valid),
         .ftq_pred_ctl_slot_match_o                (ftq_pred_ctl_slot_match),
@@ -905,6 +904,7 @@ module fetch_top
         .subgroup_seed_pred_type_o                (subgroup_seed_pred_type_r),
         .subgroup_seed_pred_target_o              (subgroup_seed_pred_target_r),
         .final_count_o                            (final_count),
+        .same_owner_continue_o                    (f2_same_owner_continue_c),
         .owner_complete_o                         (f2_work_owner_complete_c),
         .req_redirect_o                           (req_redirect_c),
         .bpu_target_o                             (f2_bpu_target),
@@ -914,21 +914,6 @@ module fetch_top
         .tage_spec_update_valid_o                 (tage_spec_update_valid),
         .tage_spec_taken_o                        (tage_spec_taken)
     );
-
-    // A straight-line continuation within the current cache line remains part
-    // of the same fetch-block owner. Allocate a new FTQ owner only at a real
-    // ownership boundary: control transfer, explicit subgroup split, line end,
-    // or straddle handling.
-    assign f2_same_owner_continue_c =
-        f2_work_valid_c &&
-        f2_data_valid &&
-        f2_seq_valid &&
-        (final_count > 3'd0) &&
-        !straddle_detected &&
-        !predecode_ctl_found &&
-        !subgroup_split_before_ctl_c &&
-        !(bp_branch_found && bp_taken) &&
-        (f2_seq_next_pc[63:LINE_BITS] == f2_work_pc_c[63:LINE_BITS]);
 
     assign ftq_pop_valid = ftq_ifu_pop_valid;
 
