@@ -376,9 +376,13 @@ These are the structural constraint points that any optimization needs to be awa
 - **Current advance model:** F1 is still coupled to F2 packet progress. This
   means the BPU can predict a target, but the frontend generally does not build
   a multi-entry predicted-block stream ahead of decode.
-- **Current IFU work cursor:** `frontend/ifu/ifu.sv` owns the stateful work
-  item carrying current PC, line address, FTQ identity, FTQ metadata, and
-  delivery state. It is the single registered F2 work state; request
+- **Current IFU work cursor:** `frontend/ifu/ifu.sv` owns the registered F1
+  PC/valid sequencer and the stateful F2 work item carrying current PC, line
+  address, FTQ identity, FTQ metadata, and delivery state. F1 still advances
+  from the same redirect, BPU redirect, duplicate-suppression, and F2
+  consumption conditions as the previous integration-local logic, so this is a
+  structural ownership move rather than proactive runahead. The cursor is the
+  single registered F2 work state; request
   anti-duplication, NLPB response matching, line acceptance, line-state
   matching, extraction, predecode, owner-live checks, packet construction,
   owner-completion decisions, and debug/profile paths consume the cursor aliases

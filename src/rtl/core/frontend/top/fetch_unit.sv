@@ -136,59 +136,7 @@ module fetch_unit
     logic        consumed_remainder_r;
     logic [63:0] post_remainder_pc_r;
 
-    // =========================================================================
-    // PC generation (F1)
-    // Priority: redirect > BPU redirect > sequential
-    // =========================================================================
-    logic [63:0] next_pc;
-    logic        next_valid;
     logic        fe_stall;
-
-    always_comb begin
-        if (redirect_valid) begin
-            next_pc    = redirect_pc;
-            next_valid = 1'b1;
-        end else if (f2_bpu_redirect) begin
-            next_pc    = f2_bpu_target;
-            next_valid = 1'b1;
-        end else if (f2_duplicate_suppressed_c) begin
-            next_pc    = f2_duplicate_next_pc_c;
-            next_valid = 1'b1;
-        end else if (f2_seq_valid && f2_pc_consumed_c) begin
-            next_pc    = f2_seq_next_pc;
-            next_valid = 1'b1;
-        end else begin
-            next_pc    = f1_pc;
-            next_valid = f1_valid;
-        end
-    end
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            f1_pc    <= RESET_VECTOR;
-            f1_valid <= 1'b1;
-        end else if (redirect_valid) begin
-            f1_pc    <= redirect_pc;
-            f1_valid <= 1'b1;
-        end else if (!fe_stall) begin
-            // When the cycle after a remainder-consume is using the saved
-            // post-remainder PC, keep f1_pc matching the work cursor so the pipeline
-            // re-syncs (f1 should lead f2 again starting the cycle after).
-            //
-            // A same-cycle BPU redirect must still win over that resync.  A
-            // CALL/JAL immediately after a consumed cross-line remainder can
-            // redirect to its target while consumed_remainder_r is still set
-            // from the prior cycle; letting the stale post-remainder PC win
-            // replays the call packet and then emits its fall-through path.
-            if (f2_bpu_redirect)
-                f1_pc    <= f2_bpu_target;
-            else if (consumed_remainder_r)
-                f1_pc    <= post_remainder_pc_r;
-            else
-                f1_pc    <= next_pc;
-            f1_valid <= next_valid;
-        end
-    end
 
     // =========================================================================
     // I-Cache instance
@@ -428,9 +376,11 @@ module fetch_unit
         .clk                                      (clk),
         .rst_n                                    (rst_n),
         .redirect_i                               (redirect_valid),
+        .redirect_pc_i                            (redirect_pc),
         .stall_i                                  (fe_stall),
-        .f1_valid_i                               (f1_valid),
-        .f1_pc_i                                  (f1_pc),
+        .duplicate_suppressed_i                   (f2_duplicate_suppressed_c),
+        .duplicate_next_pc_i                      (f2_duplicate_next_pc_c),
+        .pc_consumed_i                            (f2_pc_consumed_c),
         .req_owner_valid_i                        (ftq_enq_valid),
         .req_pc_i                                 (req_pc_c),
         .req_owner_idx_i                          (ftq_enq_idx),
@@ -452,6 +402,8 @@ module fetch_unit
         .consumed_remainder_i                     (consumed_remainder_r),
         .post_remainder_pc_i                      (post_remainder_pc_r),
         .owner_delivery_push_i                    (f2_owner_delivery_push_c),
+        .f1_valid_o                               (f1_valid),
+        .f1_pc_o                                  (f1_pc),
         .work_valid_o                             (f2_work_valid_c),
         .work_pc_o                                (f2_work_pc_c),
         .work_ftq_valid_o                         (f2_work_ftq_valid_c),

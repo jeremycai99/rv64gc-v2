@@ -11,10 +11,12 @@ module ifu
     input  logic                          clk,
     input  logic                          rst_n,
     input  logic                          redirect_i,
+    input  logic [63:0]                   redirect_pc_i,
     input  logic                          stall_i,
 
-    input  logic                          f1_valid_i,
-    input  logic [63:0]                   f1_pc_i,
+    input  logic                          duplicate_suppressed_i,
+    input  logic [63:0]                   duplicate_next_pc_i,
+    input  logic                          pc_consumed_i,
 
     input  logic                          req_owner_valid_i,
     input  logic [63:0]                   req_pc_i,
@@ -40,6 +42,9 @@ module ifu
     input  logic                          consumed_remainder_i,
     input  logic [63:0]                   post_remainder_pc_i,
     input  logic                          owner_delivery_push_i,
+
+    output logic                          f1_valid_o,
+    output logic [63:0]                   f1_pc_o,
 
     output logic                          work_valid_o,
     output logic [63:0]                   work_pc_o,
@@ -76,6 +81,13 @@ module ifu
 
     ifu_work_item_t work_r;
     ifu_work_item_t work_next_c;
+    logic [63:0] f1_pc_r;
+    logic        f1_valid_r;
+    logic [63:0] next_pc_c;
+    logic        next_valid_c;
+
+    assign f1_valid_o = f1_valid_r;
+    assign f1_pc_o    = f1_pc_r;
 
     assign work_valid_o         = work_r.valid;
     assign work_pc_o            = work_r.pc;
@@ -124,6 +136,25 @@ module ifu
         req_owner_valid_i;
 
     always_comb begin
+        if (redirect_i) begin
+            next_pc_c    = redirect_pc_i;
+            next_valid_c = 1'b1;
+        end else if (bpu_redirect_i) begin
+            next_pc_c    = bpu_target_i;
+            next_valid_c = 1'b1;
+        end else if (duplicate_suppressed_i) begin
+            next_pc_c    = duplicate_next_pc_i;
+            next_valid_c = 1'b1;
+        end else if (seq_valid_i && pc_consumed_i) begin
+            next_pc_c    = seq_next_pc_i;
+            next_valid_c = 1'b1;
+        end else begin
+            next_pc_c    = f1_pc_r;
+            next_valid_c = f1_valid_r;
+        end
+    end
+
+    always_comb begin
         logic [63:0]                   work_pc_next;
         logic                          work_ftq_valid_next;
         logic [FTQ_IDX_BITS-1:0]       work_ftq_idx_next;
@@ -134,7 +165,7 @@ module ifu
 
         work_next_c = work_r;
 
-        work_pc_next            = f1_pc_i;
+        work_pc_next            = f1_pc_r;
         work_ftq_valid_next     = work_r.ftq_valid;
         work_ftq_idx_next       = work_r.ftq_idx;
         work_ftq_epoch_next     = work_r.ftq_epoch;
@@ -191,7 +222,7 @@ module ifu
                 else if (consumed_remainder_i)
                     work_pc_next = post_remainder_pc_i;
                 else
-                    work_pc_next = f1_pc_i;
+                    work_pc_next = f1_pc_r;
 
                 if (line_straddle_advance_i ||
                     consume_remainder_i ||
@@ -213,7 +244,7 @@ module ifu
                     work_ftq_alloc_tag_next = req_owner_tag_i;
                     work_ftq_entry_next     = req_owner_entry_i;
                     work_owner_delivered_next = 1'b0;
-                end else if (!f1_valid_i) begin
+                end else if (!f1_valid_r) begin
                     work_ftq_valid_next     = 1'b0;
                     work_ftq_idx_next       = '0;
                     work_ftq_epoch_next     = '0;
@@ -223,14 +254,14 @@ module ifu
                 end
 
                 work_next_c = '0;
-                work_next_c.valid         = f1_valid_i;
+                work_next_c.valid         = f1_valid_r;
                 work_next_c.pc            = work_pc_next;
                 work_next_c.ftq_valid     = work_ftq_valid_next;
                 work_next_c.ftq_idx       = work_ftq_idx_next;
                 work_next_c.ftq_epoch     = work_ftq_epoch_next;
                 work_next_c.ftq_alloc_tag = work_ftq_alloc_tag_next;
                 work_next_c.ftq_entry     = work_ftq_entry_next;
-                work_next_c.line_valid    = f1_valid_i;
+                work_next_c.line_valid    = f1_valid_r;
                 work_next_c.line_addr     = work_pc_next[63:LINE_BITS];
                 work_next_c.owner_delivered = work_owner_delivered_next;
             end
@@ -238,10 +269,25 @@ module ifu
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
+        if (!rst_n) begin
+            f1_pc_r    <= RESET_VECTOR;
+            f1_valid_r <= 1'b1;
             work_r <= '0;
-        else
+        end else begin
+            if (redirect_i) begin
+                f1_pc_r    <= redirect_pc_i;
+                f1_valid_r <= 1'b1;
+            end else if (!stall_i) begin
+                if (bpu_redirect_i)
+                    f1_pc_r <= bpu_target_i;
+                else if (consumed_remainder_i)
+                    f1_pc_r <= post_remainder_pc_i;
+                else
+                    f1_pc_r <= next_pc_c;
+                f1_valid_r <= next_valid_c;
+            end
             work_r <= work_next_c;
+        end
     end
 
 endmodule
