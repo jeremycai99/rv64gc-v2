@@ -64,7 +64,9 @@ module bpu
 
     input  logic                    f2_stall_i,
     input  logic                    f2_redirect_i,
-    input  logic                    f2_ghr_hold_i,
+    input  logic                    f2_line_straddle_advance_i,
+    input  logic                    f2_consume_remainder_i,
+    input  logic                    f2_consumed_remainder_i,
     output logic                    f2_btb_hit_o,
     output logic [63:0]             f2_btb_target_o,
     output logic [2:0]              f2_btb_type_o,
@@ -114,6 +116,12 @@ module bpu
     logic [2:0]  req_pred_ctl_type_c;
     logic [63:0] req_pred_ctl_target_c;
     logic [63:0] aux_pred_branch_pc_c;
+    logic        f2_ghr_hold_c;
+
+    assign f2_ghr_hold_c =
+        f2_line_straddle_advance_i ||
+        f2_consume_remainder_i ||
+        f2_consumed_remainder_i;
 
     assign tage_lookup_pc_c =
         (btb_hit_o && (btb_type_o == BT_COND))
@@ -214,7 +222,7 @@ module bpu
             f2_btb_alt_type_o   <= btb_alt_type_o;
             f2_btb_alt_offset_o <= btb_alt_offset_o;
             f2_tage_taken_o     <= tage_pred_taken_o;
-            if (f2_redirect_i || !f2_ghr_hold_i) begin
+            if (f2_redirect_i || !f2_ghr_hold_c) begin
                 f2_ghr_snapshot_o <= ghr_o;
             end
         end

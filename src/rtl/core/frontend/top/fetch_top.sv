@@ -535,7 +535,6 @@ module fetch_top
     logic [63:0] predecode_ctl_pc;
     logic [63:0] predecode_ctl_target;
     logic [GHR_BITS-1:0] f2_ghr_snapshot_r;
-    logic        f2_bpu_ghr_hold_c;
     logic        f2_btb_hit_r;
     logic [63:0] f2_btb_target_r;
     logic [2:0]  f2_btb_type_r;
@@ -561,9 +560,6 @@ module fetch_top
     logic [5:0]  f1_aux_pred_ctl_offset_c;
     logic [2:0]  f1_aux_pred_ctl_type_c;
     logic [63:0] f1_aux_pred_ctl_target_c;
-
-    assign f2_bpu_ghr_hold_c =
-        line_straddle_advance_c || consume_remainder_c || consumed_remainder_r;
 
     bpu u_bpu (
         .clk                         (clk),
@@ -614,7 +610,9 @@ module fetch_top
         .ghr_o                       (ghr_out),
         .f2_stall_i                  (fe_stall),
         .f2_redirect_i               (f2_bpu_redirect),
-        .f2_ghr_hold_i               (f2_bpu_ghr_hold_c),
+        .f2_line_straddle_advance_i  (line_straddle_advance_c),
+        .f2_consume_remainder_i      (consume_remainder_c),
+        .f2_consumed_remainder_i     (consumed_remainder_r),
         .f2_btb_hit_o                (f2_btb_hit_r),
         .f2_btb_target_o             (f2_btb_target_r),
         .f2_btb_type_o               (f2_btb_type_r),
