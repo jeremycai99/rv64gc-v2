@@ -376,9 +376,9 @@ These are the structural constraint points that any optimization needs to be awa
 - **Current advance model:** F1 is still coupled to F2 packet progress. This
   means the BPU can predict a target, but the frontend generally does not build
   a multi-entry predicted-block stream ahead of decode.
-- **Current IFU work cursor:** the default RTL has a stateful work item carrying
-  current PC, line address, FTQ identity, FTQ metadata, delivery state, and
-  completion fields. It is the single registered F2 work state; request
+- **Current IFU work cursor:** `frontend/ifu/ifu.sv` owns the stateful work
+  item carrying current PC, line address, FTQ identity, FTQ metadata, and
+  delivery state. It is the single registered F2 work state; request
   anti-duplication, NLPB response matching, line acceptance, line-state
   matching, extraction, predecode, owner-live checks, packet construction,
   owner-completion decisions, and debug/profile paths consume the cursor aliases
@@ -432,8 +432,8 @@ These are the structural constraint points that any optimization needs to be awa
 - **Prediction checker leaf:** `frontend/pred/pred_checker.sv` validates the
   FTQ-predicted control against predecode, selects the packet cut point,
   requests predicted redirects, and emits the associated RAS/GHR actions.
-  Persistent subgroup seed state and IFU cursor state remain in the integration
-  layer until the stateful IFU/BPU split.
+  Persistent subgroup seed state remains in the integration layer until the
+  stateful BPU split.
 - **Current runahead precondition:** the IFU work cursor is still conservative
   and mirror-locked to the registered F1/F2 flow. Before F1 can run ahead by
   default, this cursor must become the independently advanced work item for the
