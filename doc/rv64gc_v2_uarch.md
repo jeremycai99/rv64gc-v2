@@ -471,7 +471,10 @@ These are the structural constraint points that any optimization needs to be awa
   `frontend/instr/instr_compact.sv` hold parcel extraction, compressed
   expansion, control-flow predecode, and mechanical fetch-packet assembly.
   `instr_boundary.sv` also owns the F2 sequential next-PC output used by IFU
-  cursor updates and straddle/remainder handoff.
+  cursor updates and straddle/remainder handoff. `instr_compact.sv` owns the
+  packet emit gate from payload-valid, duplicate-suppression, IBuffer-ready,
+  and line-straddle consume inputs, while preserving the exported emit
+  observation wires used by IFU and simulation binds.
 - **Prediction checker boundary:** `frontend/pred/pred_checker.sv` owns
   predicted-control validation, static-control override, subgroup split
   selection, same-owner continuation classification, owner-complete

@@ -653,10 +653,6 @@ module fetch_top
     logic [2:0]  extract_count;
     logic [5:0]  start_offset;
 
-    // Track the most recent F2 PC emitted to decode. The current f1->f2
-    // pipeline can hold the work cursor on the same fetch group for back-to-back
-    // cycles while the frontend catches up; without a duplicate filter,
-    // decode/rename can consume the same group twice.
     logic        f2_has_emit_payload_c;
     logic        f2_last_emit_valid_r;
     logic [63:0] f2_last_emit_pc_r;
@@ -665,8 +661,6 @@ module fetch_top
     logic [1:0]  f2_replay_block_age_r;
     logic        f2_last_emit_hit_c;
     logic        f2_replay_block_hit_c;
-    assign f2_has_emit_payload_c = f2_work_valid_c && f2_data_valid &&
-                                   (extract_count > 3'd0);
 
     ifu_duplicate_guard u_ifu_duplicate_guard (
         .clk                          (clk),
@@ -699,18 +693,6 @@ module fetch_top
         .replay_block_pc_o            (f2_replay_block_pc_r),
         .replay_block_age_o           (f2_replay_block_age_r)
     );
-    // Iteration alpha' (2026-05-05): explicit packet-buffer backpressure.
-    // F2 must not emit unless the IBuffer can accept the packet. The buffer can
-    // now accept on a full+dequeue cycle and can flow through when empty, so use
-    // its ready rather than the raw full flag.
-    assign f2_will_emit_c = f2_has_emit_payload_c &&
-                             !f2_duplicate_suppressed_c &&
-                             packet_buf_enq_ready;
-    // A duplicate-suppressed F2 group must not advance F1 using the current
-    // group's sequential PC. The bytes were already consumed by the original
-    // emission; advancing again starts the next request inside that packet.
-    assign f2_pc_consumed_c = f2_will_emit_c || line_straddle_advance_c;
-
     // =========================================================================
     // F2: Instruction extraction from cache line
     //
@@ -919,7 +901,11 @@ module fetch_top
     // Fetch packet construction and fetch-buffered output to decode
     // =========================================================================
     instr_compact u_instr_compact (
-        .will_emit_i                  (f2_will_emit_c),
+        .work_valid_i                 (f2_work_valid_c),
+        .data_valid_i                 (f2_data_valid),
+        .duplicate_suppressed_i       (f2_duplicate_suppressed_c),
+        .packet_ready_i               (packet_buf_enq_ready),
+        .line_straddle_advance_i      (line_straddle_advance_c),
         .redirect_i                   (redirect_valid),
         .frontend_hold_i              (frontend_hold),
         .ftq_idx_i                    (f2_work_ftq_idx_c),
@@ -953,6 +939,9 @@ module fetch_top
         .ras_tos_i                    (ras_tos),
         .ras_top_i                    (ras_pop_addr),
         .ghr_i                        (f2_ghr_snapshot_r),
+        .has_emit_payload_o           (f2_has_emit_payload_c),
+        .will_emit_o                  (f2_will_emit_c),
+        .pc_consumed_o                (f2_pc_consumed_c),
         .packet_enq_o                 (packet_buf_enq),
         .packet_o                     (packet_buf_in)
     );

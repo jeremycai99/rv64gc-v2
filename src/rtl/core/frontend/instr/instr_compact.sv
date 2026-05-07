@@ -8,7 +8,11 @@ module instr_compact
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic                         will_emit_i,
+    input  logic                         work_valid_i,
+    input  logic                         data_valid_i,
+    input  logic                         duplicate_suppressed_i,
+    input  logic                         packet_ready_i,
+    input  logic                         line_straddle_advance_i,
     input  logic                         redirect_i,
     input  logic                         frontend_hold_i,
 
@@ -50,6 +54,9 @@ module instr_compact
     input  logic [63:0]                  ras_top_i,
     input  logic [GHR_BITS-1:0]          ghr_i,
 
+    output logic                         has_emit_payload_o,
+    output logic                         will_emit_o,
+    output logic                         pc_consumed_o,
     output logic                         packet_enq_o,
     output fetch_packet_t                packet_o
 );
@@ -70,14 +77,24 @@ module instr_compact
         end
     end
 
+    assign has_emit_payload_o =
+        work_valid_i &&
+        data_valid_i &&
+        (final_count_i > 3'd0);
+    assign will_emit_o =
+        has_emit_payload_o &&
+        !duplicate_suppressed_i &&
+        packet_ready_i;
+    assign pc_consumed_o = will_emit_o || line_straddle_advance_i;
+
     always_comb begin
         packet_enq_o =
-            will_emit_i &&
+            will_emit_o &&
             !redirect_i &&
             !frontend_hold_i;
         packet_o = '0;
 
-        if (will_emit_i) begin
+        if (will_emit_o) begin
             packet_o.valid              = 1'b1;
             packet_o.ftq_idx            = ftq_idx_i;
             packet_o.ftq_epoch          = ftq_epoch_i;
