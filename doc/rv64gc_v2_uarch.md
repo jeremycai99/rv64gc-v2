@@ -466,6 +466,10 @@ These are the structural constraint points that any optimization needs to be awa
   prediction assembly, aux prediction observation, and the BPU-to-FTQ request
   entry adapter. `fetch_top.sv` consumes the assembled FTQ entry instead of
   locally rebuilding predictor metadata.
+- **Simulation checker boundary:** `src/rtl/sim/fetch_delivery_checker.sv`
+  binds to `fetch_top` in simulation and owns the strict fetch delivery stream
+  checker. This keeps the delivery `$display`, `$fatal`, and plusarg handling
+  out of the frontend integration RTL.
   Prediction ownership and redirect policy still live above these helpers.
 - **Prediction checker leaf:** `frontend/pred/pred_checker.sv` validates the
   FTQ-predicted control against predecode, selects the packet cut point,

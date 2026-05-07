@@ -143,6 +143,7 @@ RTL_FILES = \
 	$(RTL_DIR)/core/frontend/ibuffer/fetch_packet_buffer.sv \
 	$(RTL_DIR)/core/frontend/ibuffer/ibuffer.sv \
 	$(RTL_DIR)/core/frontend/top/fetch_top.sv \
+	$(RTL_DIR)/sim/fetch_delivery_checker.sv \
     $(RTL_DIR)/core/decode/decode_slice.sv \
     $(RTL_DIR)/core/decode/decode.sv \
     $(RTL_DIR)/core/decode/fusion_detector.sv \
