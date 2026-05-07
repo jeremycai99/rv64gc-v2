@@ -392,7 +392,10 @@ These are the structural constraint points that any optimization needs to be awa
   rather than proactive runahead. The IFU request boundary computes request PC,
   I-cache request valid/address, FTQ enqueue valid, IFU request-pop fire, and
   frontend stall from registered F1/F2 state plus FTQ, ICQ, and IBuffer
-  readiness. The cursor is the single registered F2 work state; request
+  readiness. The IFU also owns the completion-side delivery push and FTQ
+  IFU-pop decision for the active work owner; the decode/commit-side FTQ pop
+  remains tied to the IBuffer dequeue owner-complete boundary. The cursor is
+  the single registered F2 work state; request
   anti-duplication, NLPB response matching, line acceptance, line-state
   matching, extraction, predecode, owner-live checks, packet construction,
   owner-completion decisions, and debug/profile paths consume the cursor aliases

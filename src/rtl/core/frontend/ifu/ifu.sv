@@ -25,6 +25,7 @@ module ifu
     input  logic                          duplicate_suppressed_i,
     input  logic [63:0]                   duplicate_next_pc_i,
     input  logic                          pc_consumed_i,
+    input  logic                          will_emit_i,
 
     input  logic [FTQ_IDX_BITS-1:0]       req_owner_idx_i,
     input  logic [FTQ_EPOCH_BITS-1:0]     req_owner_epoch_i,
@@ -39,7 +40,7 @@ module ifu
     input  logic [FTQ_ALLOC_TAG_BITS-1:0] ftq_next_owner_tag_i,
     input  ftq_entry_t                    ftq_next_owner_entry_i,
     input  logic [FTQ_EPOCH_BITS-1:0]     ftq_current_epoch_i,
-    input  logic                          ftq_ifu_pop_valid_i,
+    input  logic [FTQ_IDX_BITS:0]         ftq_count_ifu_to_wb_i,
 
     input  logic                          seq_valid_i,
     input  logic [63:0]                   seq_next_pc_i,
@@ -47,7 +48,10 @@ module ifu
     input  logic                          consume_remainder_i,
     input  logic                          consumed_remainder_i,
     input  logic [63:0]                   post_remainder_pc_i,
-    input  logic                          owner_delivery_push_i,
+    input  logic                          owner_complete_i,
+    input  logic                          packet_valid_i,
+    input  logic                          packet_enq_i,
+    input  logic                          owner_live_i,
 
     output logic                          f1_valid_o,
     output logic [63:0]                   f1_pc_o,
@@ -59,9 +63,14 @@ module ifu
     output logic                          ifu_req_fire_o,
     output logic                          ftq_enq_valid_o,
     output logic                          ftq_ifu_req_pop_valid_o,
+    output logic                          ftq_delivery_push_valid_o,
+    output logic                          ftq_ifu_pop_valid_o,
     output logic                          ic_req_valid_o,
     output logic [63:0]                   ic_req_addr_o,
     output logic                          fe_stall_o,
+    output logic                          redirect_without_owner_successor_o,
+    output logic                          owner_completion_candidate_o,
+    output logic                          owner_delivery_push_o,
 
     output logic                          work_valid_o,
     output logic [63:0]                   work_pc_o,
@@ -109,6 +118,10 @@ module ifu
     logic        ifu_req_ready_c;
     logic        ifu_req_fire_c;
     logic        fe_stall_c;
+    logic        redirect_without_owner_successor_c;
+    logic        owner_completion_candidate_c;
+    logic        owner_delivery_push_c;
+    logic        ftq_ifu_pop_valid_c;
 
     assign f1_valid_o              = f1_valid_r;
     assign f1_pc_o                 = f1_pc_r;
@@ -120,9 +133,15 @@ module ifu
     assign ifu_req_fire_o          = ifu_req_fire_c;
     assign ftq_enq_valid_o         = ftq_enq_valid_c;
     assign ftq_ifu_req_pop_valid_o = ifu_req_fire_c;
+    assign ftq_delivery_push_valid_o = owner_delivery_push_c;
+    assign ftq_ifu_pop_valid_o     = ftq_ifu_pop_valid_c;
     assign ic_req_valid_o          = f1_valid_r && !fe_stall_c;
     assign ic_req_addr_o           = req_pc_c;
     assign fe_stall_o              = fe_stall_c;
+    assign redirect_without_owner_successor_o =
+        redirect_without_owner_successor_c;
+    assign owner_completion_candidate_o = owner_completion_candidate_c;
+    assign owner_delivery_push_o        = owner_delivery_push_c;
 
     assign work_valid_o         = work_r.valid;
     assign work_pc_o            = work_r.pc;
@@ -157,6 +176,27 @@ module ifu
     assign ftq_enq_valid_c = f1_valid_r && !fe_stall_c && ftq_need_alloc_c;
     assign ifu_req_ready_c = ftq_enq_ready_i && !icq_full_i && !packet_buf_full_i;
     assign ifu_req_fire_c = ftq_enq_valid_c && ifu_req_ready_c;
+    assign redirect_without_owner_successor_c =
+        req_redirect_i &&
+        !ftq_enq_valid_c &&
+        (ftq_count_ifu_to_wb_i <= {{FTQ_IDX_BITS{1'b0}}, 1'b1});
+    assign owner_completion_candidate_c =
+        will_emit_i &&
+        packet_valid_i &&
+        owner_complete_i &&
+        work_r.ftq_valid &&
+        !redirect_i &&
+        !frontend_hold_i;
+    assign owner_delivery_push_c =
+        packet_enq_i &&
+        work_r.ftq_valid &&
+        owner_live_i &&
+        !work_r.owner_delivered &&
+        !redirect_i &&
+        !frontend_hold_i;
+    assign ftq_ifu_pop_valid_c =
+        owner_completion_candidate_c &&
+        owner_live_i;
 
     assign work_redirect_o =
         bpu_redirect_i && !fe_stall_c;
@@ -177,7 +217,7 @@ module ifu
     assign work_take_ftq_next_owner_o =
         !work_redirect_o &&
         !fe_stall_c &&
-        ftq_ifu_pop_valid_i &&
+        ftq_ifu_pop_valid_c &&
         ftq_next_owner_valid_i &&
         seq_valid_i;
     assign work_take_remainder_request_owner_o =
@@ -230,7 +270,7 @@ module ifu
         work_ftq_alloc_tag_next = work_r.ftq_alloc_tag;
         work_ftq_entry_next     = work_r.ftq_entry;
         work_owner_delivered_next =
-            work_r.owner_delivered || owner_delivery_push_i;
+            work_r.owner_delivered || owner_delivery_push_c;
 
         if (redirect_i) begin
             work_next_c = '0;

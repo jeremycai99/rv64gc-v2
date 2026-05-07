@@ -345,6 +345,7 @@ module fetch_unit
         .duplicate_suppressed_i                   (f2_duplicate_suppressed_c),
         .duplicate_next_pc_i                      (f2_duplicate_next_pc_c),
         .pc_consumed_i                            (f2_pc_consumed_c),
+        .will_emit_i                              (f2_will_emit_c),
         .req_owner_idx_i                          (ftq_enq_idx),
         .req_owner_epoch_i                        (ftq_enq_epoch),
         .req_owner_tag_i                          (ftq_enq_tag),
@@ -356,14 +357,17 @@ module fetch_unit
         .ftq_next_owner_tag_i                     (ftq_next_ifu_owner_tag),
         .ftq_next_owner_entry_i                   (ftq_next_ifu_owner_entry),
         .ftq_current_epoch_i                      (ftq_current_epoch),
-        .ftq_ifu_pop_valid_i                      (ftq_ifu_pop_valid),
+        .ftq_count_ifu_to_wb_i                    (ftq_count_ifu_to_wb),
         .seq_valid_i                              (f2_seq_valid),
         .seq_next_pc_i                            (f2_seq_next_pc),
         .line_straddle_advance_i                  (line_straddle_advance_c),
         .consume_remainder_i                      (consume_remainder_c),
         .consumed_remainder_i                     (consumed_remainder_r),
         .post_remainder_pc_i                      (post_remainder_pc_r),
-        .owner_delivery_push_i                    (f2_owner_delivery_push_c),
+        .owner_complete_i                         (f2_work_owner_complete_c),
+        .packet_valid_i                           (packet_buf_in.valid),
+        .packet_enq_i                             (packet_buf_enq),
+        .owner_live_i                             (f2_ftq_owner_live_c),
         .f1_valid_o                               (f1_valid),
         .f1_pc_o                                  (f1_pc),
         .req_pc_o                                 (req_pc_c),
@@ -374,9 +378,14 @@ module fetch_unit
         .ifu_req_fire_o                           (ifu_req_fire_c),
         .ftq_enq_valid_o                          (ftq_enq_valid),
         .ftq_ifu_req_pop_valid_o                  (ftq_ifu_req_pop_valid),
+        .ftq_delivery_push_valid_o                (ftq_delivery_push_valid),
+        .ftq_ifu_pop_valid_o                      (ftq_ifu_pop_valid),
         .ic_req_valid_o                           (ic_req_valid),
         .ic_req_addr_o                            (ic_req_addr),
         .fe_stall_o                               (fe_stall),
+        .redirect_without_owner_successor_o       (f2_redirect_without_owner_successor_c),
+        .owner_completion_candidate_o             (f2_owner_completion_candidate_c),
+        .owner_delivery_push_o                    (f2_owner_delivery_push_c),
         .work_valid_o                             (f2_work_valid_c),
         .work_pc_o                                (f2_work_pc_c),
         .work_ftq_valid_o                         (f2_work_ftq_valid_c),
@@ -1266,17 +1275,6 @@ module fetch_unit
         !(bp_branch_found && bp_taken) &&
         (f2_seq_next_pc[63:LINE_BITS] == f2_work_pc_c[63:LINE_BITS]);
 
-    // Completion is a property of the current IFU work item after extraction and
-    // predecode. A straddle-remainder consume or redirect without a successor
-    // owner may emit instructions, but the owner can still have a same-owner
-    // continuation packet on the following cycle. Keep completion gated until
-    // that continuation point so FTQ writeback/pop and packet metadata agree on
-    // the owner lifetime.
-    assign f2_redirect_without_owner_successor_c =
-        req_redirect_c &&
-        !ftq_enq_valid &&
-        (ftq_count_ifu_to_wb <= {{FTQ_IDX_BITS{1'b0}}, 1'b1});
-
     // Decode no longer consumes a separate packet_buf_in bypass. Flow-through
     // is an IBuffer-owned empty-buffer delivery observation.
     assign packet_flowthrough_candidate = packet_buf_flowthrough_c;
@@ -1285,24 +1283,6 @@ module fetch_unit
         packet_buf_owner_match_c;
     assign packet_flowthrough_valid = packet_buf_flowthrough_c;
 
-    assign f2_owner_completion_candidate_c =
-        f2_will_emit_c &&
-        packet_buf_in.valid &&
-        f2_work_owner_complete_c &&
-        f2_work_ftq_valid_c &&
-        !redirect_valid &&
-        !frontend_hold;
-    assign f2_owner_delivery_push_c =
-        packet_buf_enq &&
-        f2_work_ftq_valid_c &&
-        f2_ftq_owner_live_c &&
-        !f2_work_owner_delivered_c &&
-        !redirect_valid &&
-        !frontend_hold;
-    assign ftq_delivery_push_valid = f2_owner_delivery_push_c;
-    assign ftq_ifu_pop_valid =
-        f2_owner_completion_candidate_c &&
-        f2_ftq_owner_live_c;
     assign ftq_commit_pop_valid =
         (packet_buf_deq_fire &&
          packet_buf_owner_match_c &&
