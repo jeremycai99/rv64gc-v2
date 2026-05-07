@@ -563,6 +563,50 @@ select the current commit owner packet even when future owners have already
 been fetched. The owner-gated IBuffer change is kept because it makes this
 contract violation visible instead of silently leaking stale packets to decode.
 
+Rejected owner-complete successor allocation trial:
+
+- `benchmark_results/20260507_stage2_owner_complete_successor_smoke`
+- `benchmark_results/20260507_stage2_owner_complete_successor_broad`
+- Follow-up debug attempts:
+  `benchmark_results/20260507_stage2_owner_complete_successor_pcfix_smoke`,
+  `benchmark_results/20260507_stage2_owner_complete_successor_nextguard_smoke`,
+  and
+  `benchmark_results/20260507_stage2_owner_complete_successor_dupguard_smoke`.
+
+The trial narrowed successor allocation to packets that were already
+owner-complete. The two primary rows improved and stayed endpoint-clean:
+
+| Workload | Owner-keyed baseline timed cycles | Trial timed cycles | Metric | Strict result |
+|---|---:|---:|---:|---|
+| Dhrystone 100 | 22,189 | 21,990 | 2.588231 DMIPS/MHz | PASS |
+| CoreMark 1 | 195,632 | 188,212 | 5.313158 CoreMark/MHz | PASS |
+
+But the broad manifest rejects the implementation:
+
+| Workload | Result | Failure |
+|---|---|---|
+| `probe_state_crc_branch_hotspot` | UNKNOWN under strict delivery | Non-contiguous owner stream: expected owner-start PC `0x800000a2`, got `0x800000a8`. |
+| `coremark_iter10` | Endpoint failed | Timed cycles improved to 1,852,632, but checksum was `37896` instead of expected `64687`. |
+
+Debug readout:
+
+- The first bug was that successor allocation requested the parent fall-through
+  PC instead of the subgroup owner-start PC. Fixing that did not clear the
+  branch hotspot.
+- Additional guards that blocked allocation when a next IFU owner already
+  existed, and when the requested successor matched the current owner start,
+  still failed the same strict-delivery check.
+- The remaining root cause is deeper than a missing guard. The IFU work cursor
+  can already be past the FTQ owner's start PC when the same-line subgroup
+  owner transition is attempted. Allocating a new owner in that state creates
+  an owner-start contract that the current packet stream cannot satisfy.
+
+Verdict: keep this as direction evidence only. The measured two-row gain says
+the owner-complete transition gap is real, but the implementation is not
+scoreable until owner-start packet delivery is made atomic with FTQ owner
+allocation and IFU work-cursor selection. Do not carry the successor trial RTL
+forward.
+
 ## Stage 2 Signoff Risk And Phase Gates
 
 The accepted same-owner/predicted-control work is a real architectural
