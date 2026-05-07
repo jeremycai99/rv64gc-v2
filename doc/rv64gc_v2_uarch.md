@@ -408,11 +408,11 @@ These are the structural constraint points that any optimization needs to be awa
   I-cache request valid/address, FTQ enqueue valid, IFU request-pop fire, and
   frontend stall from registered F1/F2 state plus FTQ, ICQ, and IBuffer
   readiness. It also owns the last-allocation anti-duplicate register,
-  straddle-remainder cursor, completion-side delivery push, and FTQ IFU-pop
-  decision for the active work owner; the decode/commit-side FTQ pop remains
-  tied to the IBuffer dequeue owner-complete boundary. The cursor is the single
-  registered F2 work state; request anti-duplication, NLPB response matching,
-  line acceptance, line-state
+  straddle-remainder cursor, completion owner-live comparison against the FTQ
+  IFU-writeback owner, completion-side delivery push, and FTQ IFU-pop decision
+  for the active work owner; the decode/commit-side FTQ pop remains tied to the
+  IBuffer dequeue owner-complete boundary. The cursor is the single registered
+  F2 work state; request anti-duplication, NLPB response matching, line acceptance, line-state
   matching, extraction, predecode, owner-live checks, packet construction,
   owner-completion decisions, and debug/profile paths consume the cursor aliases
   rather than raw F2 PC/owner signals. Owner completion is delayed when the

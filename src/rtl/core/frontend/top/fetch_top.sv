@@ -317,6 +317,9 @@ module fetch_top
         .ftq_next_owner_idx_i                     (ftq_next_ifu_owner_idx),
         .ftq_next_owner_tag_i                     (ftq_next_ifu_owner_tag),
         .ftq_next_owner_entry_i                   (ftq_next_ifu_owner_entry),
+        .ftq_wb_owner_valid_i                     (ftq_ifu_wb_owner_valid),
+        .ftq_wb_owner_idx_i                       (ftq_ifu_wb_owner_idx),
+        .ftq_wb_owner_tag_i                       (ftq_ifu_wb_owner_tag),
         .ftq_current_epoch_i                      (ftq_current_epoch),
         .ftq_count_ifu_to_wb_i                    (ftq_count_ifu_to_wb),
         .seq_valid_i                              (f2_seq_valid),
@@ -326,7 +329,6 @@ module fetch_top
         .owner_complete_i                         (f2_work_owner_complete_c),
         .packet_valid_i                           (packet_buf_in.valid),
         .packet_enq_i                             (packet_buf_enq),
-        .owner_live_i                             (f2_ftq_owner_live_c),
         .f1_valid_o                               (f1_valid),
         .f1_pc_o                                  (f1_pc),
         .req_pc_o                                 (req_pc_c),
@@ -343,6 +345,7 @@ module fetch_top
         .ic_req_addr_o                            (ic_req_addr),
         .fe_stall_o                               (fe_stall),
         .consumed_remainder_o                     (consumed_remainder_r),
+        .owner_live_o                             (f2_ftq_owner_live_c),
         .redirect_without_owner_successor_o       (f2_redirect_without_owner_successor_c),
         .owner_completion_candidate_o             (f2_owner_completion_candidate_c),
         .owner_delivery_push_o                    (f2_owner_delivery_push_c),
@@ -430,12 +433,6 @@ module fetch_top
         (icq_deq_ftq_idx == ftq_ifu_wb_owner_idx) &&
         (icq_deq_ftq_epoch == ftq_current_epoch) &&
         (icq_deq_ftq_alloc_tag == ftq_ifu_wb_owner_tag);
-    assign f2_ftq_owner_live_c =
-        f2_work_ftq_valid_c &&
-        ftq_ifu_wb_owner_valid &&
-        (f2_work_ftq_idx_c == ftq_ifu_wb_owner_idx) &&
-        (f2_work_ftq_epoch_c == ftq_current_epoch) &&
-        (f2_work_ftq_alloc_tag_c == ftq_ifu_wb_owner_tag);
     assign packet_buf_deq = !backend_stall && !frontend_hold;
 
     ftq u_ftq (
