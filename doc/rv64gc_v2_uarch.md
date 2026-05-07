@@ -143,8 +143,9 @@ Current default RTL:
   while final owner completion is delayed until the continuation is exhausted.
   The next XiangShan-style split is to make this cursor-to-FTQ handoff more
   complete under explicit owner/completion rules.
-- `fetch_packet_buffer.sv` is the decode-facing owner-aware IBuffer boundary.
-  It stores complete fetch packets with FTQ idx/epoch/alloc-tag and explicit
+- `frontend/ibuffer/ibuffer.sv` is the decode-facing owner-aware IBuffer
+  boundary. It currently wraps `fetch_packet_buffer.sv`, which stores complete
+  fetch packets with FTQ idx/epoch/alloc-tag and explicit
   IFU line metadata (`ifu_line_addr`, `ifu_line_reused`), exposes
   enqueue/dequeue fire events, and classifies the head packet as matching,
   stale, or owner-complete against the FTQ commit owner. When empty, it may
@@ -407,8 +408,10 @@ These are the structural constraint points that any optimization needs to be awa
   the owner cursor. The extraction datapath may consume the line-state record
   when the line and epoch match `ifu_work_r.line_addr`; otherwise it waits for
   an accepted queue response.
-- **Current IBuffer boundary:** `fetch_packet_buffer` is the only packet source
-  for decode. Its empty-buffer flow-through preserves the previous fast path
+- **Current IBuffer boundary:** `frontend/ibuffer/ibuffer.sv` is the
+  decode-facing packet boundary and currently wraps the existing
+  `fetch_packet_buffer` FIFO implementation. It is the only packet source for
+  decode. Its empty-buffer flow-through preserves the previous fast path
   without letting `fetch_unit.sv` bypass the owner-aware buffer. F2 emission is
   gated by the IBuffer enqueue-ready signal rather than the raw full flag, so a
   full buffer can still accept a packet on a same-cycle dequeue. The old
@@ -551,8 +554,9 @@ These are the structural constraint points that any optimization needs to be awa
   on a full-plus-pop cycle so a one-cycle I-cache response is not dropped when
   F2 frees a slot at the same edge.
 - **Owner-aware IBuffer**
-  (`src/rtl/core/frontend/ibuffer/fetch_packet_buffer.sv`): current buffer between
-  IF2 and decode; stores complete fetch packets with per-packet FTQ
+  (`src/rtl/core/frontend/ibuffer/ibuffer.sv`): current wrapper between IF2 and
+  decode; wraps `fetch_packet_buffer.sv`, which stores complete fetch packets
+  with per-packet FTQ
   idx/epoch/alloc-tag, block PC, start offset, IFU line address/reuse bit,
   per-slot PCs, predicted-control metadata, and `owner_complete`. The IFU line
   address names the cache-line data used by F2; for a line-straddling 32-bit

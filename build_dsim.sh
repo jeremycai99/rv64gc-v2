@@ -88,6 +88,7 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/frontend/ifu/next_line_prefetch_buffer.sv \
      src/rtl/core/frontend/ftq/ftq.sv \
      src/rtl/core/frontend/ibuffer/fetch_packet_buffer.sv \
+     src/rtl/core/frontend/ibuffer/ibuffer.sv \
      src/rtl/core/frontend/top/fetch_unit.sv \
      src/rtl/core/decode/decode_slice.sv \
      src/rtl/core/decode/decode.sv \

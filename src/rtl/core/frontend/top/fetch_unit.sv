@@ -810,7 +810,7 @@ module fetch_unit
         .empty        (ftq_empty)
     );
 
-    fetch_packet_buffer u_fetch_packet_buffer (
+    ibuffer u_ibuffer (
         .clk        (clk),
         .rst_n      (rst_n),
         .flush      (redirect_valid),

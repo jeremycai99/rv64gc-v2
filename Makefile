@@ -137,6 +137,7 @@ RTL_FILES = \
 	$(RTL_DIR)/core/frontend/ifu/next_line_prefetch_buffer.sv \
 	$(RTL_DIR)/core/frontend/ftq/ftq.sv \
 	$(RTL_DIR)/core/frontend/ibuffer/fetch_packet_buffer.sv \
+	$(RTL_DIR)/core/frontend/ibuffer/ibuffer.sv \
 	$(RTL_DIR)/core/frontend/top/fetch_unit.sv \
     $(RTL_DIR)/core/decode/decode_slice.sv \
     $(RTL_DIR)/core/decode/decode.sv \

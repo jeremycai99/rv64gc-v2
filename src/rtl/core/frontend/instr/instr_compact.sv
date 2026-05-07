@@ -103,7 +103,7 @@ module instr_compact
             packet_o.pd_ctl_target      = pd_ctl_target_i;
             packet_o.fetch_count        = final_count_i;
 
-            // Fetch packets carry the request-time repair snapshot owned by
+            // Fetch packets carry the request time repair snapshot owned by
             // the FTQ entry instead of the live frontend state.
             if (ftq_valid_i) begin
                 packet_o.fetch_bp_ras_tos = ftq_entry_i.ras_tos_snapshot;
