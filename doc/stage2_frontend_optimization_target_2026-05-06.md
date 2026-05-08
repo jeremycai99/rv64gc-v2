@@ -30,7 +30,8 @@ Latest scoreable successor point:
   fire aligned to IFU stall, plus same-owner advance when the already allocated
   next FTQ owner is a backward target behind the current work PC, plus
   weak-TAGE gated local arbitration and a chooser-gated loop-exit
-  speculative-count bypass.
+  speculative-count bypass. The latest accepted loop-predictor tuning enables
+  that bypass one chooser step earlier, at `loop_bypass_conf >= 2`.
 - Rejected and removed: benchmark-window trace probes and previous unguarded
   successor variants.
 
@@ -38,17 +39,17 @@ Current scoreable rows:
 
 | Workload | Source | mcycle | Metric | Status |
 |---|---|---:|---:|---|
-| Dhrystone 100 | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 18,577 | 3.133924 DMIPS/MHz | PASS |
-| CoreMark 1 | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 163,727 | 6.453820 CoreMark/MHz | PASS |
-| CoreMark 10 | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 1,525,168 | 6.594618 CoreMark/MHz | PASS |
-| Branch hotspot probe | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 141,326 | 1.108734 IPC | PASS |
-| Dhrystone 300 | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 53,890 | 3.193357 DMIPS/MHz | PASS |
+| Dhrystone 100 | `benchmark_results/signoff_signoff_20260508_loop_bypass_threshold2_goal` | 18,577 | 3.133924 DMIPS/MHz | PASS |
+| CoreMark 1 | `benchmark_results/signoff_signoff_20260508_loop_bypass_threshold2_goal` | 163,013 | 6.483697 CoreMark/MHz | PASS |
+| CoreMark 10 | `benchmark_results/signoff_signoff_20260508_loop_bypass_threshold2_goal` | 1,500,110 | 6.705406 CoreMark/MHz | PASS |
+| Branch hotspot probe | `benchmark_results/signoff_signoff_20260508_loop_bypass_threshold2_goal` | 141,326 | 1.108734 IPC | PASS |
+| Dhrystone 300 | `benchmark_results/signoff_signoff_20260508_loop_bypass_threshold2_goal` | 53,890 | 3.193357 DMIPS/MHz | PASS |
 
 Current gap to the Stage 2 stretch targets:
 
 | Metric | Current row | Target | Required score uplift | Equivalent cycle reduction |
 |---|---:|---:|---:|---:|
-| CoreMark/MHz | 6.594618 | 7.5 | +13.7% | 12.1% |
+| CoreMark/MHz | 6.705406 | 7.5 | +11.9% | 10.6% |
 | DMIPS/MHz | 3.193357 | 4.0 | +25.3% | 20.2% |
 
 Current calibrated MegaBOOM comparison on shared smoke rows:
@@ -56,7 +57,7 @@ Current calibrated MegaBOOM comparison on shared smoke rows:
 | Workload | MegaBOOM calibrated | rv64gc-v2 current | Current gap |
 |---|---:|---:|---:|
 | Dhrystone 100 | 23,814 cycles | 18,577 cycles | rv64gc-v2 22.0% faster |
-| CoreMark 1 | 192,249 cycles | 163,727 cycles | rv64gc-v2 14.8% faster |
+| CoreMark 1 | 192,249 cycles | 163,013 cycles | rv64gc-v2 15.2% faster |
 
 Interpretation:
 
@@ -86,6 +87,10 @@ Interpretation:
   loop entries that repeatedly miss loop exits. This preserves the CoreMark
   loops that the baseline already handled well while fixing stale speculative
   counts on Dhrystone and the residual CoreMark matrix loop.
+- The latest threshold-2 chooser activation keeps the same mechanism but lets
+  the sideband engage one confidence step earlier. The full 16-row signoff is
+  strict-clean and raises CoreMark 10 from `6.594618` to `6.705406` CM/MHz
+  without regressing Dhrystone, Dhrystone 300, or the branch hotspot.
 - The aggressive 7.5 CM/MHz and 4.0 DMIPS/MHz targets still require another
   structural step. The remaining gap is smaller, but not closed.
 
@@ -105,10 +110,11 @@ The accepted frontend path so far:
 | Backward-next-owner same-owner safety | CoreMark 1 `169,049 -> 164,550`, CoreMark 10 `1,570,351 -> 1,528,608`; Dhrystone 300 improves to `54,926`, while Dhrystone 100 and branch hotspot are unchanged. | Keep. A next FTQ owner whose start PC is behind the current work PC is a backward target, not a forward overlap hazard. Same-owner straight-line delivery can continue until the predicted-control packet without replaying the same F2 PC. |
 | Weak-TAGE gated local alternation filter | Dhrystone 100 stays `18,913`, CoreMark 1 improves `164,550 -> 164,364`, CoreMark 10 improves `1,528,608 -> 1,526,048`, and branch hotspot improves `141,408 -> 141,326`. | Keep. This is a general BPU arbitration rule, not fixed-PC steering: local alternation may override only weak TAGE predictions and only when a per-branch bias table is not fully opposed. |
 | Loop-exit speculative-count bypass chooser | Dhrystone 100 improves `18,913 -> 18,577`, CoreMark 1 improves `164,364 -> 163,727`, CoreMark 10 improves `1,526,048 -> 1,525,168`, Dhrystone 300 improves `54,926 -> 53,890`, and branch hotspot stays `141,326`. | Keep. The bypass uses the FTQ owner's predicted conditional to avoid stale loop speculative counts, but a per-loop chooser enables it only after saturated loop confidence plus repeated exit misses. This avoids the broad CoreMark regression seen with an always-on bypass. |
+| Loop-exit bypass threshold-2 activation | Dhrystone 100 stays `18,577`, CoreMark 1 improves `163,727 -> 163,013`, CoreMark 10 improves `1,525,168 -> 1,500,110`, Dhrystone 300 stays `53,890`, and branch hotspot stays `141,326`. | Keep. The sideband is still chooser-gated, but engaging it at `loop_bypass_conf >= 2` fixes residual loop-exit miss timing earlier without becoming the rejected always-on policy. |
 
 Current important counters from the accepted CoreMark 10 row, with the latest
 profiling attribution from
-`benchmark_results/dse_dse_20260508_loop_bypass_chooser_coremark10`:
+`benchmark_results/signoff_signoff_20260508_loop_bypass_threshold2_goal`:
 
 | Counter | Value | Meaning |
 |---|---:|---|
@@ -117,24 +123,24 @@ profiling attribution from
 | `xs_packet_buffer_stale_owner` | 0 | No stale owner packet consumed. |
 | `xs_ftq_occ_max` | 2 | Runahead exists but remains shallow. |
 | `xs_packet_buf_occ_max` | 8 | IBuffer can hold packets on the heavy row. |
-| `packet_buf_full_cycles` | 15,159 | The IBuffer is active enough to backpressure F2 on CoreMark 10. |
-| `same_owner_advanced` | 354,709 | Same-owner cursor movement is now a major useful path. |
+| `packet_buf_full_cycles` | 14,640 | The IBuffer is active enough to backpressure F2 on CoreMark 10. |
+| `same_owner_advanced` | 341,599 | Same-owner cursor movement is now a major useful path. |
 | `same_owner_block_pred_ctl` | 0 | The stale pre-window attribution remains gone. |
-| `same_owner_block_no_emit` | 14,565 | Down from `45,436`; residual no-emit is smaller but still real. |
-| `same_owner_block_rem` | 34,812 | Remainder and straddle policy is now the largest same-owner residual bucket. |
+| `same_owner_block_no_emit` | 12,782 | Down from `45,436`; residual no-emit is smaller but still real. |
+| `same_owner_block_rem` | 34,907 | Remainder and straddle policy is now the largest same-owner residual bucket. |
 | `same_owner_block_rem_straddle` | 0 | The residual is not direct line-straddle blocking. |
-| `same_owner_block_rem_consume` | 24,121 | Most remainder blocking is the consume-remainder phase. |
-| `same_owner_block_rem_consumed` | 10,691 | A smaller but material post-consume hold remains. |
-| `same_owner_block_other` | 39 | Down from `33,142`; backward next-owner blocking was the root cause of this bucket. |
-| `same_owner_no_emit_fe_stall` | 6,203 | Largest residual same-owner no-emit sub-bucket. |
-| `same_owner_no_emit_redirect` | 5,187 | Redirect recovery still overlaps useful same-owner candidate cycles. |
-| `same_owner_no_emit_pkt_not_ready` | 2,434 | Packet buffer backpressure is visible but not dominant. |
-| `same_owner_no_emit_dup` | 741 | Same-owner no-emit is no longer mainly duplicate suppression. |
-| `packet_empty_noemit_dup` | 34,055 | Down from `63,848`; the duplicate replay tax remains about half the old value. |
-| `packet_empty_f2_data` | 62,549 | Down from `92,059`; this counter means F2 had data but emitted no packet. |
-| `xs_f2_data_wait` | 459 | True missing F2 data wait is tiny on this row. |
-| `xs_f2_data_wait_icq_empty` | 459 | The true F2 wait is fully ICQ-empty in this run. |
-| `packet_empty_wait_icresp` | 33,749 | Slightly down from the previous accepted row. |
+| `same_owner_block_rem_consume` | 24,223 | Most remainder blocking is the consume-remainder phase. |
+| `same_owner_block_rem_consumed` | 10,684 | A smaller but material post-consume hold remains. |
+| `same_owner_block_other` | 36 | Down from `33,142`; backward next-owner blocking was the root cause of this bucket. |
+| `same_owner_no_emit_fe_stall` | 6,054 | Largest residual same-owner no-emit sub-bucket. |
+| `same_owner_no_emit_redirect` | 3,583 | Redirect recovery still overlaps useful same-owner candidate cycles. |
+| `same_owner_no_emit_pkt_not_ready` | 2,425 | Packet buffer backpressure is visible but not dominant. |
+| `same_owner_no_emit_dup` | 720 | Same-owner no-emit is no longer mainly duplicate suppression. |
+| `packet_empty_noemit_dup` | 32,151 | Down from `63,848`; the duplicate replay tax remains about half the old value. |
+| `packet_empty_f2_data` | 60,845 | Down from `92,059`; this counter means F2 had data but emitted no packet. |
+| `xs_f2_data_wait` | 480 | True missing F2 data wait is tiny on this row. |
+| `xs_f2_data_wait_icq_empty` | 480 | The true F2 wait is fully ICQ-empty in this run. |
+| `packet_empty_wait_icresp` | 31,100 | Down from the previous accepted row. |
 
 ## Rejected Evidence
 
@@ -406,11 +412,28 @@ that broad CoreMark loop pollution. CoreMark 10 committed mispredicts improve
 from `33,593` to `33,293`, and dynamic BPU-update misses improve from
 `18,352` to `17,794`.
 
+Follow-up threshold tuning is accepted. The chooser threshold now enables the
+same sideband at `loop_bypass_conf >= 2` instead of only at saturated
+confidence. This is still not the rejected always-on policy: the loop must
+already have repeated exit-miss evidence before the bypass engages. Evidence:
+
+| Row | Loop bypass chooser | Threshold-2 chooser | Verdict |
+|---|---:|---:|---|
+| Dhrystone 100 | 18,577 | 18,577 | Accepted, unchanged. |
+| CoreMark 1 | 163,727 | 163,013 | Accepted, strict-clean improvement. |
+| CoreMark 10 | 1,525,168 | 1,500,110 | Accepted, strict-clean improvement. |
+| Dhrystone 300 | 53,890 | 53,890 | Accepted, unchanged. |
+| Branch hotspot | 141,326 | 141,326 | Accepted, unchanged. |
+
+The CoreMark 10 dynamic BPU-update miss total improves from `17,794` to
+`16,086`. The residual matrix bitextract loop at `0x800031ec` is the main
+winner, with BPU-update misses reduced from `2,077` to `529`.
+
 Clean committed goal run:
-`benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` passes all 16
-Stage 1 manifest rows from commit `36a1e2f` with strict owner/delivery checks,
-`+PERF_PROFILE +PERF_COUNTERS +STAT_DUMP`, loop-buffer activity zero, and
-standalone decoded-op replay activity zero.
+`benchmark_results/signoff_signoff_20260508_loop_bypass_threshold2_goal`
+passes all 16 Stage 1 manifest rows from commit `476dc67` with strict
+owner/delivery checks, `+PERF_PROFILE +PERF_COUNTERS +STAT_DUMP`, loop-buffer
+activity zero, and standalone decoded-op replay activity zero.
 
 Update, 2026-05-08: raw load speculation past unresolved store-address entries
 using `+ALLOW_LOAD_SPEC_PAST_STA` is endpoint-clean but performance-identical
@@ -670,7 +693,7 @@ Promotion conditions:
 |---|---|---|
 | A | Lock current accepted RTL as scoreable baseline. | Full scoreable run from committed RTL, strict checks, endpoint identity, broad smoke pass. |
 | B | Prove true frontend runahead. | Achieved for depth-1 successor, predicted-control-window same-owner advance, and backward-next-owner safety: `xs_ftq_occ_max=2`, nonzero IBuffer occupancy on CoreMark, lower duplicate/no-emit broadly, no owner/stale drift. |
-| C | Score frontend-only ceiling. | CoreMark now reaches 6.59 CM/MHz; the longer Dhrystone anchor reaches 3.19 DMIPS/MHz. Frontend-only work still has measurable residual before declaring the ceiling. |
+| C | Score frontend-only ceiling. | CoreMark now reaches 6.71 CM/MHz; the longer Dhrystone anchor reaches 3.19 DMIPS/MHz. Frontend-only work still has measurable residual before declaring the ceiling. |
 | D | Pick second-domain limiter. | Branch/recovery, uop-count, LSU/load-use, ROB-head, and scheduler counters identify one dominant residual. |
 | E | Stretch to final target. | Full manifest passes, no major off-target regression, then compare against 7.5 CM/MHz and 4.0 DMIPS/MHz. |
 
@@ -697,7 +720,7 @@ counter-backed second domain instead.
 | Refcounted rename move elimination | Rejected standalone, keep as paired candidate | CoreMark 10 reports 258,574 dynamic move candidates, and the RTL trial proves backend pressure can drop. Net performance still regresses because redirect/mispredict and operand-ready stalls rise. | Reopen only after branch recovery/update timing is improved, or with pressure-aware enable evidence. Keep physical-register refcounting as the required correctness mechanism if this path returns. |
 | ROB/PRF capacity | Rejected in raw and combinational timing forms | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical, ROB-head bypass regresses CoreMark 1, and same-cycle free-list release forwarding trips a simulator iteration loop. | Reopen only with a registered allocation, free, or commit-drain mechanism, not raw depth or comb release-forwarding. |
 | BPU local-vs-SC chooser | Accepted in weak-TAGE gated form | Dynamic BPU attribution showed forward state-machine branches where local alternation fought stronger non-local predictions. The accepted form improves CoreMark 10 and the smoke set without fixed-PC steering. | Keep local alternation narrow: it may override only weak TAGE and only when the per-PC bias is not fully opposed. Do not broaden local override without full smoke plus CoreMark 10 evidence. |
-| Loop predictor speculative count policy | Accepted in chooser-gated form | The FTQ-owner sideband bypass improves Dhrystone 100, CoreMark 1, CoreMark 10, and Dhrystone 300 when gated by a per-loop exit-miss chooser. | Keep the original sequential speculative-count update and the chooser. Do not use direct current-cycle bypass, allocation-time update, or always-on sideband bypass. |
+| Loop predictor speculative count policy | Accepted in threshold-2 chooser-gated form | The FTQ-owner sideband bypass improves Dhrystone 100, CoreMark 1, CoreMark 10, and Dhrystone 300 when gated by a per-loop exit-miss chooser. The latest threshold-2 activation raises CoreMark 10 to `1,500,110` cycles and `6.705406` CM/MHz. | Keep the original sequential speculative-count update and the chooser. Do not use direct current-cycle bypass, allocation-time update, or always-on sideband bypass. |
 | Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. The direct non-head partial trial proves the current checkpoint manager cannot yet support general execute-time recovery. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Without that, keep partial recovery head-only and do not promote early recovery. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
 | Downstream packet drain / scheduling | Still open, simple packet coalescing, blind decode queues, and IBuffer depth-only policies rejected | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. Head-only and selected-owner IBuffer packet coalescing were strict-clean but cycle-identical no-ops. Blind decoded queues moved pressure but regressed CoreMark 10. Blind IBuffer depth 16 improved CoreMark 10 to `1,498,650`, but regressed CoreMark 1 to `163,991`; control-aware watermarks either became no-ops or preserved the short-row regression. | Next attempt needs conditional-branch ownership or BPU checkpoint semantics, or a paired backend policy, not another packet merge, generic queue, or raw IBuffer depth increase. Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without increasing `packet_empty`, redirect recovery, or DS/CoreMark cycles. |
@@ -750,7 +773,7 @@ Every accepted performance row must report:
 | 21 | Reopen downstream drain only with branch/control-aware policy. | Candidate lowers packet-full or backend-packet-ready stalls without increasing packet-empty, redirect recovery, or CoreMark 10 cycles. |
 | 22 | Split duplicate/remainder residuals by owner/control context. | Done by `dse_dse_20260508_dup_reason_attrib_coremark10`: the no-owner duplicate residual has no safe no-control bucket, and is dominated by straddle/control context. |
 | 23 | Try predicted-not-taken same-owner fall-through only if ownership evidence supports it. | Done and rejected in local forms: plain owner relaxation and live-snapshot repair both regress or fail. |
-| 24 | Lock the loop-exit speculative-count bypass chooser. | Dhrystone 100, CoreMark 1, CoreMark 10, Dhrystone 300, branch hotspot, and frontend branch broad rows pass strict checks, with loop-buffer and standalone replay activity zero. |
+| 24 | Lock the loop-exit speculative-count bypass chooser and threshold-2 activation. | Dhrystone 100, CoreMark 1, CoreMark 10, Dhrystone 300, branch hotspot, and frontend branch broad rows pass strict checks, with loop-buffer and standalone replay activity zero. Current accepted artifact is `signoff_signoff_20260508_loop_bypass_threshold2_goal`. |
 | 25 | Probe IBuffer depth and control-aware packet buffering. | Done and rejected in current forms: blind depth 16 improves CoreMark 10 but regresses CoreMark 1; control/type/confidence watermarks either become no-ops or retain the short-row regression. |
 | 26 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
@@ -772,7 +795,10 @@ weak-TAGE local arbitration, and loop-exit speculative-count bypass chooser
 should be pursued. They are strict-clean on the scoreable smoke, CoreMark 10,
 and broad Stage 1 DSE rows, they beat the calibrated MegaBOOM smoke rows, and
 they cut the dominant CoreMark 10 frontend-empty and branch-miss buckets while
-lifting CoreMark 10 to 6.59 CM/MHz.
+lifting CoreMark 10 to 6.71 CM/MHz. The latest accepted row still has material
+residual pressure: CoreMark 10 reports `packet_empty_f2_data=60,845`,
+`packet_empty_noemit_dup=32,151`, `redirect_recovery=29,575`, and
+`xs_backend_stall_pkt_ready=34,950`.
 
 Near-term objective: keep this as the Stage 2 frontend baseline. The branch
 recovery direction still has evidence, but the next branch RTL work is not
