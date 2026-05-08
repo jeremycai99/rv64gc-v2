@@ -109,7 +109,8 @@ module fetch_frontend_profiler
     input logic                             ifu_runahead_depth_gt1_c
 );
 
-    localparam logic [2:0] BT_RET = 3'd4;
+    localparam logic [2:0] BT_COND = 3'd0;
+    localparam logic [2:0] BT_RET  = 3'd4;
     localparam int XS_CATCHUP_TOPN = 8;
 
     logic xs_catchup_probe_en;
@@ -174,6 +175,21 @@ module fetch_frontend_profiler
     integer xs_packet_buf_full_drain_ready_cycles;
     integer xs_packet_buf_full_frontend_hold_cycles;
     integer xs_packet_buf_full_other_cycles;
+    integer xs_packet_full_head_ctl_cycles;
+    integer xs_packet_full_head_cond_cycles;
+    integer xs_packet_full_head_taken_cycles;
+    integer xs_packet_full_head_complete_cycles;
+    integer xs_packet_full_head_multi_cycles;
+    integer xs_packet_full_drain_head_ctl_cycles;
+    integer xs_packet_full_drain_head_cond_cycles;
+    integer xs_packet_full_drain_head_taken_cycles;
+    integer xs_packet_full_drain_head_complete_cycles;
+    integer xs_packet_full_drain_head_multi_cycles;
+    integer xs_backend_stall_pkt_head_ctl_cycles;
+    integer xs_backend_stall_pkt_head_cond_cycles;
+    integer xs_backend_stall_pkt_head_taken_cycles;
+    integer xs_backend_stall_pkt_head_complete_cycles;
+    integer xs_backend_stall_pkt_head_multi_cycles;
     integer xs_dup_last_emit_cycles;
     integer xs_dup_replay_guard_cycles;
     integer xs_dup_both_reasons_cycles;
@@ -369,6 +385,12 @@ module fetch_frontend_profiler
     logic xs_packet_buf_full_drain_ready_c;
     logic xs_packet_buf_full_frontend_hold_c;
     logic xs_packet_buf_full_other_c;
+    logic xs_packet_head_valid_c;
+    logic xs_packet_head_ctl_c;
+    logic xs_packet_head_cond_c;
+    logic xs_packet_head_taken_c;
+    logic xs_packet_head_complete_c;
+    logic xs_packet_head_multi_c;
     logic xs_icq_future_head_block_c;
     logic xs_f2_data_wait_c;
     logic xs_f2_data_wait_icq_empty_c;
@@ -819,6 +841,25 @@ module fetch_frontend_profiler
         !xs_packet_buf_full_owner_wait_c &&
         !xs_packet_buf_full_drain_ready_c &&
         !xs_packet_buf_full_frontend_hold_c;
+    assign xs_packet_head_valid_c =
+        packet_buf_valid &&
+        packet_buf_head.valid;
+    assign xs_packet_head_ctl_c =
+        xs_packet_head_valid_c &&
+        packet_buf_head.pd_ctl_valid;
+    assign xs_packet_head_cond_c =
+        xs_packet_head_ctl_c &&
+        (packet_buf_head.pd_ctl_type == BT_COND);
+    assign xs_packet_head_taken_c =
+        xs_packet_head_valid_c &&
+        packet_buf_head.ftq_pred_valid &&
+        packet_buf_head.ftq_pred_taken;
+    assign xs_packet_head_complete_c =
+        xs_packet_head_valid_c &&
+        packet_buf_head.ftq_owner_complete;
+    assign xs_packet_head_multi_c =
+        xs_packet_head_valid_c &&
+        (packet_buf_head.fetch_count > 3'd1);
     assign xs_icq_future_head_block_c =
         icq_deq_valid &&
         f2_work_line_valid_c &&
@@ -892,6 +933,21 @@ module fetch_frontend_profiler
             xs_packet_buf_full_drain_ready_cycles <= 0;
             xs_packet_buf_full_frontend_hold_cycles <= 0;
             xs_packet_buf_full_other_cycles <= 0;
+            xs_packet_full_head_ctl_cycles <= 0;
+            xs_packet_full_head_cond_cycles <= 0;
+            xs_packet_full_head_taken_cycles <= 0;
+            xs_packet_full_head_complete_cycles <= 0;
+            xs_packet_full_head_multi_cycles <= 0;
+            xs_packet_full_drain_head_ctl_cycles <= 0;
+            xs_packet_full_drain_head_cond_cycles <= 0;
+            xs_packet_full_drain_head_taken_cycles <= 0;
+            xs_packet_full_drain_head_complete_cycles <= 0;
+            xs_packet_full_drain_head_multi_cycles <= 0;
+            xs_backend_stall_pkt_head_ctl_cycles <= 0;
+            xs_backend_stall_pkt_head_cond_cycles <= 0;
+            xs_backend_stall_pkt_head_taken_cycles <= 0;
+            xs_backend_stall_pkt_head_complete_cycles <= 0;
+            xs_backend_stall_pkt_head_multi_cycles <= 0;
             xs_dup_last_emit_cycles       <= 0;
             xs_dup_replay_guard_cycles    <= 0;
             xs_dup_both_reasons_cycles    <= 0;
@@ -1063,6 +1119,21 @@ module fetch_frontend_profiler
             if (backend_stall && (packet_buf_valid || packet_flowthrough_valid))
                 xs_backend_stall_packet_ready_cycles <=
                     xs_backend_stall_packet_ready_cycles + 1;
+            if (backend_stall && xs_packet_head_ctl_c)
+                xs_backend_stall_pkt_head_ctl_cycles <=
+                    xs_backend_stall_pkt_head_ctl_cycles + 1;
+            if (backend_stall && xs_packet_head_cond_c)
+                xs_backend_stall_pkt_head_cond_cycles <=
+                    xs_backend_stall_pkt_head_cond_cycles + 1;
+            if (backend_stall && xs_packet_head_taken_c)
+                xs_backend_stall_pkt_head_taken_cycles <=
+                    xs_backend_stall_pkt_head_taken_cycles + 1;
+            if (backend_stall && xs_packet_head_complete_c)
+                xs_backend_stall_pkt_head_complete_cycles <=
+                    xs_backend_stall_pkt_head_complete_cycles + 1;
+            if (backend_stall && xs_packet_head_multi_c)
+                xs_backend_stall_pkt_head_multi_cycles <=
+                    xs_backend_stall_pkt_head_multi_cycles + 1;
             if (backend_stall && !packet_buf_valid && !packet_flowthrough_valid)
                 xs_backend_stall_packet_empty_cycles <=
                     xs_backend_stall_packet_empty_cycles + 1;
@@ -1292,6 +1363,36 @@ module fetch_frontend_profiler
             if (xs_packet_buf_full_other_c)
                 xs_packet_buf_full_other_cycles <=
                     xs_packet_buf_full_other_cycles + 1;
+            if (packet_buf_full && xs_packet_head_ctl_c)
+                xs_packet_full_head_ctl_cycles <=
+                    xs_packet_full_head_ctl_cycles + 1;
+            if (packet_buf_full && xs_packet_head_cond_c)
+                xs_packet_full_head_cond_cycles <=
+                    xs_packet_full_head_cond_cycles + 1;
+            if (packet_buf_full && xs_packet_head_taken_c)
+                xs_packet_full_head_taken_cycles <=
+                    xs_packet_full_head_taken_cycles + 1;
+            if (packet_buf_full && xs_packet_head_complete_c)
+                xs_packet_full_head_complete_cycles <=
+                    xs_packet_full_head_complete_cycles + 1;
+            if (packet_buf_full && xs_packet_head_multi_c)
+                xs_packet_full_head_multi_cycles <=
+                    xs_packet_full_head_multi_cycles + 1;
+            if (xs_packet_buf_full_drain_ready_c && xs_packet_head_ctl_c)
+                xs_packet_full_drain_head_ctl_cycles <=
+                    xs_packet_full_drain_head_ctl_cycles + 1;
+            if (xs_packet_buf_full_drain_ready_c && xs_packet_head_cond_c)
+                xs_packet_full_drain_head_cond_cycles <=
+                    xs_packet_full_drain_head_cond_cycles + 1;
+            if (xs_packet_buf_full_drain_ready_c && xs_packet_head_taken_c)
+                xs_packet_full_drain_head_taken_cycles <=
+                    xs_packet_full_drain_head_taken_cycles + 1;
+            if (xs_packet_buf_full_drain_ready_c && xs_packet_head_complete_c)
+                xs_packet_full_drain_head_complete_cycles <=
+                    xs_packet_full_drain_head_complete_cycles + 1;
+            if (xs_packet_buf_full_drain_ready_c && xs_packet_head_multi_c)
+                xs_packet_full_drain_head_multi_cycles <=
+                    xs_packet_full_drain_head_multi_cycles + 1;
 
             if (xs_dup_last_emit_c)
                 xs_dup_last_emit_cycles <= xs_dup_last_emit_cycles + 1;
@@ -1868,6 +1969,36 @@ module fetch_frontend_profiler
                      xs_packet_buf_full_frontend_hold_cycles);
             $display("xs packet full other        : %0d",
                      xs_packet_buf_full_other_cycles);
+            $display("xs packet full head ctl     : %0d",
+                     xs_packet_full_head_ctl_cycles);
+            $display("xs packet full head cond    : %0d",
+                     xs_packet_full_head_cond_cycles);
+            $display("xs packet full head taken   : %0d",
+                     xs_packet_full_head_taken_cycles);
+            $display("xs packet full head complete: %0d",
+                     xs_packet_full_head_complete_cycles);
+            $display("xs packet full head multi   : %0d",
+                     xs_packet_full_head_multi_cycles);
+            $display("xs packet full drain head ctl: %0d",
+                     xs_packet_full_drain_head_ctl_cycles);
+            $display("xs packet full drain head cond: %0d",
+                     xs_packet_full_drain_head_cond_cycles);
+            $display("xs packet full drain head taken: %0d",
+                     xs_packet_full_drain_head_taken_cycles);
+            $display("xs packet full drain head complete: %0d",
+                     xs_packet_full_drain_head_complete_cycles);
+            $display("xs packet full drain head multi: %0d",
+                     xs_packet_full_drain_head_multi_cycles);
+            $display("xs backend stall pkt head ctl: %0d",
+                     xs_backend_stall_pkt_head_ctl_cycles);
+            $display("xs backend stall pkt head cond: %0d",
+                     xs_backend_stall_pkt_head_cond_cycles);
+            $display("xs backend stall pkt head taken: %0d",
+                     xs_backend_stall_pkt_head_taken_cycles);
+            $display("xs backend stall pkt head complete: %0d",
+                     xs_backend_stall_pkt_head_complete_cycles);
+            $display("xs backend stall pkt head multi: %0d",
+                     xs_backend_stall_pkt_head_multi_cycles);
             $display("xs dup last emit            : %0d",
                      xs_dup_last_emit_cycles);
             $display("xs dup replay guard         : %0d",

@@ -8,6 +8,39 @@ The target is a structurally decoupled, BPU-owned frontend that can run ahead
 safely while preserving FTQ identity through IFU, IBuffer, decode, and
 commit/training.
 
+## Architecture Guardrails
+
+The current optimization line must stay on the XiangShan/BOOM-style ownership
+path:
+
+`BPU prediction -> FTQ owner -> IFU work item -> owner-aware IBuffer -> decode`.
+
+Allowed mechanisms:
+
+- BPU predictor quality or timing repairs that operate through FTQ owner
+  metadata, such as the accepted loop-exit speculative-count sideband.
+- FTQ, IFU, and IBuffer decoupling that preserves one owner identity for every
+  delivered fetch packet.
+- Control-aware packet scheduling or downstream drain changes that improve
+  useful delivered work without changing architectural fetch ownership.
+- Backend recovery or useful-work reduction only when checkpoint, rename,
+  free-list, and ROB ordering contracts are explicit and endpoint-clean.
+
+Forbidden mechanisms for this path:
+
+- Reviving a legacy loop buffer or any loop-body replay structure that owns
+  fetch delivery outside the FTQ owner contract.
+- Fixed benchmark-PC steering, benchmark-window special cases, or decoded-body
+  replay that bypasses normal BPU/FTQ/IFU ownership.
+- Local same-line, same-tail, or fall-through shortcuts that relax owner
+  identity without a full branch-owner sequencing contract.
+- Treating marginal threshold or scalar knob movement as architectural
+  progress unless the underlying predictor mechanism is general and broader
+  benchmark evidence stays clean.
+
+Threshold calibration is acceptable only as tuning of a general predictor
+mechanism. It is not by itself the next architectural direction.
+
 Aggressive multi-stage signoff targets:
 
 | Metric | Target |
@@ -260,6 +293,54 @@ packet-empty counters sharply. Both still regress the heavy CoreMark row
 because they create a denser packet burst than the backend/IBuffer can drain.
 This moves the next viable work away from local remainder cursor removal and
 toward a downstream drain or packet scheduling mechanism.
+
+Current plan execution, 2026-05-08:
+
+- XSim was rebuilt from the current tree at `a4131c0` before the fresh quick
+  baseline. XSim ignores several SVA properties, so this is a profiled smoke,
+  not a replacement for the DSim strict full signoff artifact.
+- Fresh rebuilt-XSim quick artifact:
+  `benchmark_results/dse_20260508_current_baseline_profile_quick`.
+- Passed rows: Dhrystone 100 `18,577` cycles, CoreMark 1 `163,013` cycles,
+  branch hotspot `141,326` cycles. Loop-buffer activity and standalone
+  decoded-op replay remain zero.
+- CoreMark 10 remains covered by the existing full strict signoff artifact
+  `benchmark_results/signoff_signoff_20260508_loop_bypass_threshold2_goal`,
+  because XSim CoreMark 10 is too slow for the quick planning loop.
+
+The fresh quick counters confirm that the next useful slice is not another
+local loop or threshold knob:
+
+| Row | `packet_empty_f2_data` | `packet_empty_noemit_dup` | `xs_packet_buf_full_cycles` | `xs_backend_stall_pkt_ready` | Readout |
+|---|---:|---:|---:|---:|---|
+| Dhrystone 100 | 526 | 212 | 0 | 0 | No packet-drain pressure. |
+| CoreMark 1 | 6,653 | 3,569 | 1,613 | 3,595 | Packet/backpressure is visible even on the short row. |
+| Branch hotspot | 31,408 | 21,794 | 0 | 51 | Mostly duplicate/redirect no-emit, not downstream drain. |
+| CoreMark 10, full signoff | 60,845 | 32,151 | 14,640 | 34,950 | Heavy row has real packet/backpressure pressure. |
+
+Follow-up instrumentation:
+`benchmark_results/dse_20260508_packet_head_class_prof_smoke` adds
+simulation-only head-class attribution for packet-buffer-full and
+backend-packet-ready cycles. It is endpoint-clean on Dhrystone 100 and
+CoreMark 1. CoreMark 1 reports:
+
+| Counter | Value | Interpretation |
+|---|---:|---|
+| `xs_packet_buf_full_cycles` | 1,613 | Full-buffer pressure exists in the short CoreMark row. |
+| `xs_packet_full_head_multi` | 1,608 | Almost every full-buffer cycle has a multi-instruction packet at the head. |
+| `xs_packet_full_head_ctl` | 777 | About half of full-buffer cycles have a control-bearing head packet. |
+| `xs_packet_full_head_taken` | 1,239 | Most full-buffer cycles are behind a predicted-taken owner. |
+| `xs_packet_full_drain_ready` | 1,148 | Most full-buffer cycles are not owner-wait. The buffer can drain, but downstream cannot absorb enough. |
+| `xs_backend_stall_pkt_ready` | 3,595 | Backend backpressure with a packet ready is still larger than packet-full time. |
+| `xs_backend_stall_pkt_head_multi` | 3,158 | Backend packet-ready stalls are mostly multi-instruction packet heads. |
+| `xs_backend_stall_pkt_head_complete` | 2,119 | Many stalls occur with an owner-complete head packet, suggesting the next scheduler should treat owner completion and control boundaries explicitly. |
+
+Near-term structural target: control-aware packet/drain scheduling. The first
+candidate should not produce more packets blindly. It should schedule or pace
+multi-instruction, control-bearing, and owner-complete packet heads so that
+CoreMark 1 and CoreMark 10 reduce `xs_backend_stall_pkt_ready` and
+`xs_packet_buf_full_cycles` without increasing branch-hotspot duplicate or
+redirect no-emit pressure.
 
 Additional top-PC attribution from
 `benchmark_results/dse_20260508_remainder_noemit_top_pc_coremark10` keeps the
@@ -740,7 +821,7 @@ counter-backed second domain instead.
 | Loop predictor speculative count policy | Accepted in threshold-2 chooser-gated form | The FTQ-owner sideband bypass improves Dhrystone 100, CoreMark 1, CoreMark 10, and Dhrystone 300 when gated by a per-loop exit-miss chooser with decay. The latest threshold-2 activation raises CoreMark 10 to `1,500,110` cycles and `6.705406` CM/MHz. | Keep the original sequential speculative-count update, FTQ-owner sideband, per-loop exit-miss chooser, decay, and threshold-2 baseline. Do not use direct current-cycle bypass, allocation-time update, always-on sideband bypass, threshold-1 activation, or sticky/no-decay chooser behavior without a general predictor mechanism and broader benchmark evidence. |
 | Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. The direct non-head partial trial proves the current checkpoint manager cannot yet support general execute-time recovery. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Without that, keep partial recovery head-only and do not promote early recovery. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
-| Downstream packet drain / scheduling | Still open, simple packet coalescing, blind decode queues, and IBuffer depth-only policies rejected | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. Head-only and selected-owner IBuffer packet coalescing were strict-clean but cycle-identical no-ops. Blind decoded queues moved pressure but regressed CoreMark 10. Blind IBuffer depth 16 improved CoreMark 10 to `1,498,650`, but regressed CoreMark 1 to `163,991`; control-aware watermarks either became no-ops or preserved the short-row regression. | Next attempt needs conditional-branch ownership or BPU checkpoint semantics, or a paired backend policy, not another packet merge, generic queue, raw IBuffer depth increase, or loop-threshold tuning. Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without increasing `packet_empty`, redirect recovery, or DS/CoreMark cycles. |
+| Downstream packet drain / scheduling | Next structural target | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. Head-only and selected-owner IBuffer packet coalescing were strict-clean but cycle-identical no-ops. Blind decoded queues moved pressure but regressed CoreMark 10. Blind IBuffer depth 16 improved CoreMark 10 to `1,498,650`, but regressed CoreMark 1 to `163,991`; control-aware watermarks either became no-ops or preserved the short-row regression. New head-class profiling shows CoreMark 1 full-buffer and backend-packet-ready stalls are mostly multi-instruction packet heads, often control-bearing, predicted-taken, or owner-complete. | Next attempt needs packet/drain scheduling using owner completion and control class, or a paired backend policy, not another packet merge, generic queue, raw IBuffer depth increase, or loop-threshold tuning. Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without increasing `packet_empty`, redirect recovery, or DS/CoreMark cycles. |
 | Predicted-not-taken owner fall-through | Rejected local forms | Attribution shows many duplicate cycles are same-line sequential, so this looked tempting. The local owner relaxation regressed Dhrystone and broke CoreMark/hotspot. A live-snapshot repair still timed out with owner/stale mismatches. | Reopen only with explicit branch-owner and FTQ/IBuffer sequencing semantics, not by relaxing `same_owner_continue` alone. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
@@ -793,7 +874,9 @@ Every accepted performance row must report:
 | 24 | Lock the loop-exit speculative-count bypass chooser and threshold-2 activation. | Dhrystone 100, CoreMark 1, CoreMark 10, Dhrystone 300, branch hotspot, and frontend branch broad rows pass strict checks, with loop-buffer and standalone replay activity zero. Current accepted artifact is `signoff_signoff_20260508_loop_bypass_threshold2_goal`; threshold-1 and sticky/no-decay variants are rejected or quarantined DSE-only evidence. |
 | 25 | Probe IBuffer depth and control-aware packet buffering. | Done and rejected in current forms: blind depth 16 improves CoreMark 10 but regresses CoreMark 1; control/type/confidence watermarks either become no-ops or retain the short-row regression. |
 | 26 | Resume from a structural bottleneck instead of loop threshold tuning. | Next RTL candidates come from branch ownership/recovery, control-aware packet buffering, downstream drain scheduling, or another counter-backed structural mechanism. |
-| 27 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 27 | Add packet head-class attribution for downstream drain scheduling. | Done by `dse_20260508_packet_head_class_prof_smoke`: CoreMark 1 packet-full and backend-packet-ready stalls are mostly multi-instruction heads, often control-bearing, predicted-taken, or owner-complete. |
+| 28 | Design a control-aware packet/drain scheduler. | Candidate reduces `xs_backend_stall_pkt_ready` or `xs_packet_buf_full_cycles` on CoreMark 1 and CoreMark 10 without increasing branch-hotspot duplicate/redirect no-emit pressure. |
+| 29 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
