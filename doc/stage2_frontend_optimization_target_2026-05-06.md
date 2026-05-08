@@ -884,6 +884,21 @@ Initial checker smoke:
 - Branch hotspot: PASS, `mcycle=141,326`, `minstret=156,693`,
   branch-recovery checker invalid/duplicate/restore-conflict counts all zero.
 
+Fresh `+EXEC_PARTIAL_BRANCH_RECOVERY` probe with the checker:
+
+- Branch hotspot: PASS and contract-clean with `checkpoint_restores=1,793`,
+  but regresses `141,326 -> 142,321` cycles.
+- Dhrystone 100: PASS and contract-clean with `checkpoint_restores=113`, but
+  regresses `18,577 -> 21,730` cycles. The regression is resource-pressure
+  shaped: `backend_stall=2,976`, packet-buffer full cycles `2,679`, and
+  free-list minimum popcount drops to `1`.
+
+Interpretation: the current partial recovery path is now observable and does
+not trip the first checkpoint-order checker, but it is not a performance
+candidate. The next RTL slice should add explicit recovery selection and
+resource-headroom gating before any early frontend redirect or default-on
+promotion.
+
 Branch-order recovery contract draft:
 
 - **Checkpoint owner.** A checkpoint belongs to exactly one unresolved branch
