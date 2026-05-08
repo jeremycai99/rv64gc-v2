@@ -46,6 +46,7 @@ module fetch_frontend_profiler
     input logic [2:0]                       predecode_ctl_type_c,
     input logic [63:0]                      predecode_ctl_pc_c,
     input logic [63:0]                      predecode_ctl_target_c,
+    input logic                             straddle_detected_c,
     input logic                             ftq_pred_ctl_valid_c,
     input logic                             ftq_pred_ctl_taken_c,
     input logic [2:0]                       ftq_pred_ctl_type_c,
@@ -187,6 +188,21 @@ module fetch_frontend_profiler
     integer xs_dup_runahead_pending_cycles;
     integer xs_dup_bpu_redirect_overlap_cycles;
     integer xs_dup_req_redirect_overlap_cycles;
+    integer xs_dup_same_owner_recover_cycles;
+    integer xs_dup_no_same_owner_cycles;
+    integer xs_dup_no_same_owner_no_seq_cycles;
+    integer xs_dup_no_same_owner_extract0_cycles;
+    integer xs_dup_no_same_owner_final0_cycles;
+    integer xs_dup_no_same_owner_control_cycles;
+    integer xs_dup_no_same_owner_taken_cycles;
+    integer xs_dup_no_same_owner_subgroup_cycles;
+    integer xs_dup_no_same_owner_straddle_cycles;
+    integer xs_dup_no_same_owner_remainder_cycles;
+    integer xs_dup_no_same_owner_crossline_cycles;
+    integer xs_dup_no_same_owner_owner_not_live_cycles;
+    integer xs_dup_no_same_owner_owner_complete_cycles;
+    integer xs_dup_no_same_owner_safe_noctl_cycles;
+    integer xs_dup_no_same_owner_other_cycles;
     integer xs_f2_owner_no_head_cycles;
     integer xs_f2_owner_idx_mismatch_cycles;
     integer xs_f2_owner_epoch_mismatch_cycles;
@@ -274,6 +290,21 @@ module fetch_frontend_profiler
     logic xs_dup_runahead_pending_c;
     logic xs_dup_bpu_redirect_overlap_c;
     logic xs_dup_req_redirect_overlap_c;
+    logic xs_dup_same_owner_recover_c;
+    logic xs_dup_no_same_owner_c;
+    logic xs_dup_no_same_owner_no_seq_c;
+    logic xs_dup_no_same_owner_extract0_c;
+    logic xs_dup_no_same_owner_final0_c;
+    logic xs_dup_no_same_owner_control_c;
+    logic xs_dup_no_same_owner_taken_c;
+    logic xs_dup_no_same_owner_subgroup_c;
+    logic xs_dup_no_same_owner_straddle_c;
+    logic xs_dup_no_same_owner_remainder_c;
+    logic xs_dup_no_same_owner_crossline_c;
+    logic xs_dup_no_same_owner_owner_not_live_c;
+    logic xs_dup_no_same_owner_owner_complete_c;
+    logic xs_dup_no_same_owner_safe_noctl_c;
+    logic xs_dup_no_same_owner_other_c;
     logic xs_f2_owner_no_head_c;
     logic xs_f2_owner_idx_mismatch_c;
     logic xs_f2_owner_epoch_mismatch_c;
@@ -433,6 +464,78 @@ module fetch_frontend_profiler
     assign xs_dup_req_redirect_overlap_c =
         f2_duplicate_suppressed_c &&
         req_redirect_c;
+    assign xs_dup_same_owner_recover_c =
+        f2_duplicate_suppressed_c &&
+        f2_same_owner_continue_c;
+    assign xs_dup_no_same_owner_c =
+        f2_duplicate_suppressed_c &&
+        !f2_same_owner_continue_c;
+    assign xs_dup_no_same_owner_no_seq_c =
+        xs_dup_no_same_owner_c &&
+        !f2_seq_valid;
+    assign xs_dup_no_same_owner_extract0_c =
+        xs_dup_no_same_owner_c &&
+        (extract_count == 3'd0);
+    assign xs_dup_no_same_owner_final0_c =
+        xs_dup_no_same_owner_c &&
+        (final_count == 3'd0);
+    assign xs_dup_no_same_owner_control_c =
+        xs_dup_no_same_owner_c &&
+        predecode_ctl_found_c;
+    assign xs_dup_no_same_owner_taken_c =
+        xs_dup_no_same_owner_c &&
+        bp_branch_found_c &&
+        bp_taken_c;
+    assign xs_dup_no_same_owner_subgroup_c =
+        xs_dup_no_same_owner_c &&
+        subgroup_split_before_ctl_c;
+    assign xs_dup_no_same_owner_straddle_c =
+        xs_dup_no_same_owner_c &&
+        straddle_detected_c;
+    assign xs_dup_no_same_owner_remainder_c =
+        xs_dup_no_same_owner_c &&
+        (line_straddle_advance_c ||
+         consume_remainder_c ||
+         consumed_remainder_r);
+    assign xs_dup_no_same_owner_crossline_c =
+        xs_dup_no_same_owner_c &&
+        f2_seq_valid &&
+        f2_work_line_valid_c &&
+        (f2_seq_next_pc[63:LINE_BITS] != f2_work_line_addr_c);
+    assign xs_dup_no_same_owner_owner_not_live_c =
+        xs_dup_no_same_owner_c &&
+        f2_work_ftq_valid_c &&
+        !f2_ftq_owner_live_c;
+    assign xs_dup_no_same_owner_owner_complete_c =
+        xs_dup_no_same_owner_c &&
+        f2_work_owner_complete_c;
+    assign xs_dup_no_same_owner_safe_noctl_c =
+        xs_dup_no_same_owner_c &&
+        xs_dup_next_seq_c &&
+        xs_dup_next_same_line_c &&
+        f2_work_line_valid_c &&
+        !xs_dup_no_same_owner_no_seq_c &&
+        !xs_dup_no_same_owner_control_c &&
+        !xs_dup_no_same_owner_taken_c &&
+        !xs_dup_no_same_owner_subgroup_c &&
+        !xs_dup_no_same_owner_straddle_c &&
+        !xs_dup_no_same_owner_remainder_c &&
+        !xs_dup_no_same_owner_crossline_c &&
+        !xs_dup_no_same_owner_owner_not_live_c &&
+        !xs_dup_no_same_owner_owner_complete_c;
+    assign xs_dup_no_same_owner_other_c =
+        xs_dup_no_same_owner_c &&
+        !xs_dup_no_same_owner_no_seq_c &&
+        !xs_dup_no_same_owner_extract0_c &&
+        !xs_dup_no_same_owner_final0_c &&
+        !xs_dup_no_same_owner_control_c &&
+        !xs_dup_no_same_owner_taken_c &&
+        !xs_dup_no_same_owner_subgroup_c &&
+        !xs_dup_no_same_owner_straddle_c &&
+        !xs_dup_no_same_owner_remainder_c &&
+        !xs_dup_no_same_owner_crossline_c &&
+        !xs_dup_no_same_owner_owner_not_live_c &&
+        !xs_dup_no_same_owner_owner_complete_c;
     assign xs_f2_cursor_wb_no_head_c =
         f2_work_ftq_valid_c && !ftq_ifu_wb_owner_valid;
     assign xs_f2_cursor_wb_idx_skew_c =
@@ -803,6 +906,21 @@ module fetch_frontend_profiler
             xs_dup_runahead_pending_cycles <= 0;
             xs_dup_bpu_redirect_overlap_cycles <= 0;
             xs_dup_req_redirect_overlap_cycles <= 0;
+            xs_dup_same_owner_recover_cycles <= 0;
+            xs_dup_no_same_owner_cycles <= 0;
+            xs_dup_no_same_owner_no_seq_cycles <= 0;
+            xs_dup_no_same_owner_extract0_cycles <= 0;
+            xs_dup_no_same_owner_final0_cycles <= 0;
+            xs_dup_no_same_owner_control_cycles <= 0;
+            xs_dup_no_same_owner_taken_cycles <= 0;
+            xs_dup_no_same_owner_subgroup_cycles <= 0;
+            xs_dup_no_same_owner_straddle_cycles <= 0;
+            xs_dup_no_same_owner_remainder_cycles <= 0;
+            xs_dup_no_same_owner_crossline_cycles <= 0;
+            xs_dup_no_same_owner_owner_not_live_cycles <= 0;
+            xs_dup_no_same_owner_owner_complete_cycles <= 0;
+            xs_dup_no_same_owner_safe_noctl_cycles <= 0;
+            xs_dup_no_same_owner_other_cycles <= 0;
             xs_f2_owner_no_head_cycles    <= 0;
             xs_f2_owner_idx_mismatch_cycles <= 0;
             xs_f2_owner_epoch_mismatch_cycles <= 0;
@@ -1253,6 +1371,51 @@ module fetch_frontend_profiler
             if (xs_dup_req_redirect_overlap_c)
                 xs_dup_req_redirect_overlap_cycles <=
                     xs_dup_req_redirect_overlap_cycles + 1;
+            if (xs_dup_same_owner_recover_c)
+                xs_dup_same_owner_recover_cycles <=
+                    xs_dup_same_owner_recover_cycles + 1;
+            if (xs_dup_no_same_owner_c)
+                xs_dup_no_same_owner_cycles <=
+                    xs_dup_no_same_owner_cycles + 1;
+            if (xs_dup_no_same_owner_no_seq_c)
+                xs_dup_no_same_owner_no_seq_cycles <=
+                    xs_dup_no_same_owner_no_seq_cycles + 1;
+            if (xs_dup_no_same_owner_extract0_c)
+                xs_dup_no_same_owner_extract0_cycles <=
+                    xs_dup_no_same_owner_extract0_cycles + 1;
+            if (xs_dup_no_same_owner_final0_c)
+                xs_dup_no_same_owner_final0_cycles <=
+                    xs_dup_no_same_owner_final0_cycles + 1;
+            if (xs_dup_no_same_owner_control_c)
+                xs_dup_no_same_owner_control_cycles <=
+                    xs_dup_no_same_owner_control_cycles + 1;
+            if (xs_dup_no_same_owner_taken_c)
+                xs_dup_no_same_owner_taken_cycles <=
+                    xs_dup_no_same_owner_taken_cycles + 1;
+            if (xs_dup_no_same_owner_subgroup_c)
+                xs_dup_no_same_owner_subgroup_cycles <=
+                    xs_dup_no_same_owner_subgroup_cycles + 1;
+            if (xs_dup_no_same_owner_straddle_c)
+                xs_dup_no_same_owner_straddle_cycles <=
+                    xs_dup_no_same_owner_straddle_cycles + 1;
+            if (xs_dup_no_same_owner_remainder_c)
+                xs_dup_no_same_owner_remainder_cycles <=
+                    xs_dup_no_same_owner_remainder_cycles + 1;
+            if (xs_dup_no_same_owner_crossline_c)
+                xs_dup_no_same_owner_crossline_cycles <=
+                    xs_dup_no_same_owner_crossline_cycles + 1;
+            if (xs_dup_no_same_owner_owner_not_live_c)
+                xs_dup_no_same_owner_owner_not_live_cycles <=
+                    xs_dup_no_same_owner_owner_not_live_cycles + 1;
+            if (xs_dup_no_same_owner_owner_complete_c)
+                xs_dup_no_same_owner_owner_complete_cycles <=
+                    xs_dup_no_same_owner_owner_complete_cycles + 1;
+            if (xs_dup_no_same_owner_safe_noctl_c)
+                xs_dup_no_same_owner_safe_noctl_cycles <=
+                    xs_dup_no_same_owner_safe_noctl_cycles + 1;
+            if (xs_dup_no_same_owner_other_c)
+                xs_dup_no_same_owner_other_cycles <=
+                    xs_dup_no_same_owner_other_cycles + 1;
             if (xs_f2_owner_no_head_c)
                 xs_f2_owner_no_head_cycles <= xs_f2_owner_no_head_cycles + 1;
             if (xs_f2_owner_idx_mismatch_c)
@@ -1733,6 +1896,36 @@ module fetch_frontend_profiler
                      xs_dup_bpu_redirect_overlap_cycles);
             $display("xs dup req redirect overlap : %0d",
                      xs_dup_req_redirect_overlap_cycles);
+            $display("xs dup same-owner recover   : %0d",
+                     xs_dup_same_owner_recover_cycles);
+            $display("xs dup no same owner        : %0d",
+                     xs_dup_no_same_owner_cycles);
+            $display("xs dup no owner no seq      : %0d",
+                     xs_dup_no_same_owner_no_seq_cycles);
+            $display("xs dup no owner extract0    : %0d",
+                     xs_dup_no_same_owner_extract0_cycles);
+            $display("xs dup no owner final0      : %0d",
+                     xs_dup_no_same_owner_final0_cycles);
+            $display("xs dup no owner control     : %0d",
+                     xs_dup_no_same_owner_control_cycles);
+            $display("xs dup no owner taken       : %0d",
+                     xs_dup_no_same_owner_taken_cycles);
+            $display("xs dup no owner subgroup    : %0d",
+                     xs_dup_no_same_owner_subgroup_cycles);
+            $display("xs dup no owner straddle    : %0d",
+                     xs_dup_no_same_owner_straddle_cycles);
+            $display("xs dup no owner remainder   : %0d",
+                     xs_dup_no_same_owner_remainder_cycles);
+            $display("xs dup no owner crossline   : %0d",
+                     xs_dup_no_same_owner_crossline_cycles);
+            $display("xs dup no owner not live    : %0d",
+                     xs_dup_no_same_owner_owner_not_live_cycles);
+            $display("xs dup no owner complete    : %0d",
+                     xs_dup_no_same_owner_owner_complete_cycles);
+            $display("xs dup no owner safe noctl  : %0d",
+                     xs_dup_no_same_owner_safe_noctl_cycles);
+            $display("xs dup no owner other       : %0d",
+                     xs_dup_no_same_owner_other_cycles);
             $display("xs f2 owner live            : %0d",
                      xs_f2_owner_live_cycles);
             $display("xs f2 owner no head         : %0d",
@@ -1922,6 +2115,7 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .predecode_ctl_type_c            (predecode_ctl_type),
     .predecode_ctl_pc_c              (predecode_ctl_pc),
     .predecode_ctl_target_c          (predecode_ctl_target),
+    .straddle_detected_c             (straddle_detected),
     .ftq_pred_ctl_valid_c            (ftq_pred_ctl_valid),
     .ftq_pred_ctl_taken_c            (ftq_pred_ctl_taken),
     .ftq_pred_ctl_type_c             (ftq_pred_ctl_type),

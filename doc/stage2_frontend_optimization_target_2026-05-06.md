@@ -464,6 +464,36 @@ Verdict: live branch snapshots alone are not sufficient. The rejected row hit
 the hotspot. This points to the FTQ/IBuffer owner sequencing contract itself,
 not only the branch snapshot fields.
 
+Follow-up, 2026-05-08, duplicate owner-context attribution: a profiler-only
+slice in
+`benchmark_results/dse_dse_20260508_dup_reason_attrib_coremark10` keeps the
+accepted CoreMark 10 timing cycle-identical at `1,528,608` cycles and
+`6.579328` CoreMark/MHz. The strict smoke artifact is
+`benchmark_results/dse_dse_20260508_dup_reason_attrib_smoke`, with Dhrystone
+100 `18,913`, CoreMark 1 `164,550`, and branch hotspot `141,408`.
+
+| Counter | Value | Interpretation |
+|---|---:|---|
+| `xs_dup_suppressed` | 41,442 | Total duplicate-suppressed data-present cycles. |
+| `xs_dup_same_owner_recover` | 11,419 | Already covered by the accepted same-owner recovery path. |
+| `xs_dup_no_same_owner` | 30,023 | Residual duplicates that are not currently allowed to use same-owner recovery. |
+| `xs_dup_no_owner_straddle` | 29,987 | Nearly every no-owner duplicate overlaps line-end straddle classification. |
+| `xs_dup_no_owner_control` | 9,177 | A large subset also contains a control instruction. |
+| `xs_dup_no_owner_subgroup` | 42 | Subgroup split is not the broad limiter. |
+| `xs_dup_no_owner_not_live` | 36 | Owner-liveness misses are negligible. |
+| `xs_dup_no_owner_complete` | 73 | Owner-complete misses are negligible. |
+| `xs_dup_no_owner_safe_noctl` | 0 | There is no remaining safe, same-line, no-control, no-straddle duplicate bucket. |
+| `xs_same_owner_block_rem` | 34,820 | Remainder remains material, dominated by consume/post-consume phases. |
+| `xs_same_owner_block_rem_consume` | 24,084 | Most remainder blocking is the active consume cycle. |
+| `xs_same_owner_block_rem_consumed` | 10,736 | Post-consume hold is smaller but still visible. |
+
+Verdict: the tempting "same-line sequential duplicate" residual is not an
+owner-free no-control case. It is mostly straddle and sometimes control-owner
+work. That matches the rejected straddle handoff and predicted-not-taken owner
+relaxation results. The next useful frontend attempt must change the
+branch/straddle owner sequencing contract or the downstream drain contract; it
+should not be another local `same_owner_continue` predicate relaxation.
+
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
@@ -489,7 +519,7 @@ counter-backed second domain instead.
 | Capacity-bounded depth-2 runahead | Recalibrate before another RTL trial | The first owner-queue attempt was dormant, so more depth alone is not enough. | Reopen only with evidence that the next predicted owner is not already the FTQ next owner and has a useful distinct target. |
 | Early fetch-line metadata | Conditional | Local straddle handoff reduces frontend bubbles but regresses CoreMark 10 through downstream pressure. | Reopen only as part of a packet scheduling or drain improvement, not as another standalone cursor shortcut. |
 | Same-owner remainder policy | Rejected in local forms | Post-consume bypass and line-end straddle handoff both improve short rows but regress CoreMark 10. | Do not continue local remainder bypass DSE until downstream packet drain is improved. |
-| Same-owner residual attribution | Keep active | The corrected profiler has now isolated predicted-control and backward-target artifacts. | Add a narrower remainder/no-emit split before the next RTL slice. |
+| Same-owner residual attribution | Keep active as a guardrail | The corrected profiler has now isolated predicted-control, backward-target, and no-owner duplicate context. | The latest no-owner split reports `xs_dup_no_owner_safe_noctl=0`; do not reopen local same-owner relaxation without a branch/straddle owner redesign. |
 | BPU/FTQ training metadata cleanup | High value | Improves attribution and enables safe prediction experiments. | Preserve GHR/RAS/target snapshots per owner. |
 | BPU S0/uBTB | Conditional | May help if lookup latency or direction quality blocks runahead. | Promote only with per-PC branch data or timing evidence. |
 | Indirect prediction | Conditional | Helps if indirect MPKI is material. | Per-PC evidence required. |
@@ -547,7 +577,7 @@ Every accepted performance row must report:
 | 19 | Record simple IBuffer packet coalescing as rejected. | Done: head-only and selected-owner adjacent coalescing are strict-clean but cycle-identical no-ops, so RTL was not kept. |
 | 20 | Try real decode or rename decoupling before more packet production shortcuts. | Done and rejected in blind form: decoded queues are strict-clean but CoreMark 10 regresses. |
 | 21 | Reopen downstream drain only with branch/control-aware policy. | Candidate lowers packet-full or backend-packet-ready stalls without increasing packet-empty, redirect recovery, or CoreMark 10 cycles. |
-| 22 | Split duplicate/remainder residuals by owner/control context. | Done by `dse_dse_20260508_dup_rem_attrib_coremark10`: duplicates are same-line sequential last-emit replays, not branch-target replays. |
+| 22 | Split duplicate/remainder residuals by owner/control context. | Done by `dse_dse_20260508_dup_reason_attrib_coremark10`: the no-owner duplicate residual has no safe no-control bucket, and is dominated by straddle/control context. |
 | 23 | Try predicted-not-taken same-owner fall-through only if ownership evidence supports it. | Done and rejected in local forms: plain owner relaxation and live-snapshot repair both regress or fail. |
 | 24 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
