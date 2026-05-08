@@ -61,6 +61,10 @@ module tage_sc_l
     localparam int LOCAL_PHT_BITS  = LOCAL_IDX_BITS + LOCAL_HIST_BITS;
     localparam int LOCAL_HIST_ENTRIES = (1 << LOCAL_IDX_BITS);
     localparam int LOCAL_PHT_ENTRIES  = (1 << LOCAL_PHT_BITS);
+    localparam int LOCAL_BIAS_BITS = 3;
+    localparam logic [LOCAL_BIAS_BITS-1:0] LOCAL_BIAS_STRONG_NT = '0;
+    localparam logic [LOCAL_BIAS_BITS-1:0] LOCAL_BIAS_STRONG_T =
+        {LOCAL_BIAS_BITS{1'b1}};
 
 `ifdef SIMULATION
     logic sim_disable_local_pred;
@@ -334,6 +338,7 @@ module tage_sc_l
     logic                       local_last_actual [LOCAL_HIST_ENTRIES];
     logic                       local_last_spec   [LOCAL_HIST_ENTRIES];
     logic [1:0]                 local_alt_conf    [LOCAL_HIST_ENTRIES];
+    logic [LOCAL_BIAS_BITS-1:0] local_bias         [LOCAL_HIST_ENTRIES];
 
     logic [LOCAL_IDX_BITS-1:0]  local_idx;
     logic [LOCAL_IDX_BITS-1:0]  aux_local_idx;
@@ -353,12 +358,16 @@ module tage_sc_l
     logic                       local_override;
     logic                       local_alt_pred;
     logic                       local_alt_strong;
+    logic [LOCAL_BIAS_BITS-1:0] local_bias_val;
+    logic                       local_bias_against_alt;
     logic                       aux_local_pred;
     logic                       aux_local_strong;
     logic                       aux_local_forward;
     logic                       aux_local_override;
     logic                       aux_local_alt_pred;
     logic                       aux_local_alt_strong;
+    logic [LOCAL_BIAS_BITS-1:0] aux_local_bias_val;
+    logic                       aux_local_bias_against_alt;
     logic                       upd_local_forward;
     logic                       upd_local_alternates;
 
@@ -385,6 +394,14 @@ module tage_sc_l
     assign aux_local_alt_pred = ~local_last_spec[aux_local_idx];
     assign local_alt_strong = (local_alt_conf[local_idx] == 2'd3);
     assign aux_local_alt_strong = (local_alt_conf[aux_local_idx] == 2'd3);
+    assign local_bias_val = local_bias[local_idx];
+    assign aux_local_bias_val = local_bias[aux_local_idx];
+    assign local_bias_against_alt =
+        (local_alt_pred && (local_bias_val == LOCAL_BIAS_STRONG_NT)) ||
+        (!local_alt_pred && (local_bias_val == LOCAL_BIAS_STRONG_T));
+    assign aux_local_bias_against_alt =
+        (aux_local_alt_pred && (aux_local_bias_val == LOCAL_BIAS_STRONG_NT)) ||
+        (!aux_local_alt_pred && (aux_local_bias_val == LOCAL_BIAS_STRONG_T));
     assign local_pred = local_alt_strong ? local_alt_pred
                                          : local_ctr_val[BASE_CTR_BITS-1];
     assign aux_local_pred = aux_local_alt_strong ? aux_local_alt_pred
@@ -400,12 +417,12 @@ module tage_sc_l
     assign local_override =
         !sim_disable_local_pred &&
         local_forward &&
-        (local_alt_strong ||
+        ((local_alt_strong && tage_pred_weak && !local_bias_against_alt) ||
          (sim_enable_local_pht_override && local_strong));
     assign aux_local_override =
         !sim_disable_local_pred &&
         aux_local_forward &&
-        (aux_local_alt_strong ||
+        ((aux_local_alt_strong && aux_tage_pred_weak && !aux_local_bias_against_alt) ||
          (sim_enable_local_pht_override && aux_local_strong));
     assign upd_local_forward = (update_target != 64'd0) && (update_target > update_pc);
     assign upd_local_alternates = update_taken != local_last_actual[upd_local_idx];
@@ -1318,6 +1335,7 @@ module tage_sc_l
                 local_last_actual[i] <= 1'b0;
                 local_last_spec[i] <= 1'b0;
                 local_alt_conf[i] <= 2'd0;
+                local_bias[i] <= 3'd3;
             end
             for (int i = 0; i < LOCAL_PHT_ENTRIES; i++) begin
                 local_pht[i] <= 2'd1; // weakly not-taken
@@ -1450,6 +1468,19 @@ module tage_sc_l
             end
             local_hist[upd_local_idx] <= update_taken;
             if (upd_local_forward) begin
+                if (update_taken) begin
+                    local_bias[upd_local_idx] <=
+                        (local_bias[upd_local_idx] == {LOCAL_BIAS_BITS{1'b1}})
+                            ? local_bias[upd_local_idx]
+                            : local_bias[upd_local_idx] +
+                              {{(LOCAL_BIAS_BITS-1){1'b0}}, 1'b1};
+                end else begin
+                    local_bias[upd_local_idx] <=
+                        (local_bias[upd_local_idx] == '0)
+                            ? local_bias[upd_local_idx]
+                            : local_bias[upd_local_idx] -
+                              {{(LOCAL_BIAS_BITS-1){1'b0}}, 1'b1};
+                end
                 if (upd_local_alternates) begin
                     local_alt_conf[upd_local_idx] <=
                         (local_alt_conf[upd_local_idx] == 2'd3)
