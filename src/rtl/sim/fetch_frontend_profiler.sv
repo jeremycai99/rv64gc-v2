@@ -309,9 +309,7 @@ module fetch_frontend_profiler
     assign xs_same_owner_pred_ctl_window_c =
         xs_same_owner_emit_candidate_c &&
         f2_work_ftq_entry_c.pred_ctl_valid &&
-        ({1'b0, f2_seq_next_pc[5:0]} !=
-         {1'b0, f2_work_ftq_entry_c.pred_ctl_offset}) &&
-        (({1'b0, f2_seq_next_pc[5:0]} + 7'd16) >
+        ({1'b0, f2_seq_next_pc[5:0]} >
          {1'b0, f2_work_ftq_entry_c.pred_ctl_offset});
     assign xs_same_owner_remainder_hold_c =
         xs_same_owner_emit_candidate_c &&

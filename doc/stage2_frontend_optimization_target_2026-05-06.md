@@ -83,7 +83,9 @@ The accepted frontend path so far:
 | Owner-complete successor allocation plus rename total-block stall | Dhrystone 100 `22,189 -> 19,611`, CoreMark 1 `195,632 -> 175,318`, CoreMark 10 `1,926,763 -> 1,642,655`; branch hotspot also improves `152,021 -> 146,142`. | Keep. This is the first broad, strict-clean successor-runahead improvement. |
 | Predicted-control-window same-owner advance plus F2 fire contract | Dhrystone 100 `19,611 -> 18,913`, CoreMark 1 `175,318 -> 169,049`, CoreMark 10 `1,642,655 -> 1,570,351`; branch hotspot improves `146,142 -> 141,408`. | Keep. This is an architectural cleanup: same-owner advance can cover packets up to the predicted control, but F2 `will_emit` must mean an accepted packet fire and must be blocked by IFU stall. |
 
-Current important counters from the accepted CoreMark 10 row:
+Current important counters from the accepted CoreMark 10 row, reconfirmed by
+`benchmark_results/20260507_pred_ctl_profiler_fix_coremark10` after the
+profiler attribution correction:
 
 | Counter | Value | Meaning |
 |---|---:|---|
@@ -94,7 +96,10 @@ Current important counters from the accepted CoreMark 10 row:
 | `xs_packet_buf_occ_max` | 8 | IBuffer can hold packets on the heavy row. |
 | `packet_buf_full_cycles` | 13,666 | The IBuffer is now active enough to backpressure F2 on CoreMark 10. |
 | `same_owner_advanced` | 317,538 | Same-owner cursor movement is now a major useful path. |
-| `same_owner_block_pred_ctl` | 167,903 | Predicted-control boundary remains the largest same-owner block. |
+| `same_owner_block_pred_ctl` | 0 after profiler correction | The old `167,903` value was stale attribution from the pre-window same-owner rule. |
+| `same_owner_block_no_emit` | 45,436 | Remaining same-owner candidates often lack an accepted F2 packet fire. |
+| `same_owner_block_rem` | 33,816 | Remainder and straddle policy is now a visible residual bucket. |
+| `same_owner_block_other` | 33,142 | Residual same-owner blocks need another attribution slice before RTL work. |
 | `packet_empty_noemit_dup` | 63,848 | Down 67.5% from the previous accepted successor row. |
 | `packet_empty_f2_data` | 92,059 | Down 60.0% from the previous accepted successor row. |
 | `packet_empty_wait_icresp` | 36,987 | Slightly down from the previous accepted successor row. |
@@ -114,6 +119,8 @@ Rejected trials that should not be revived in their old form:
 | Depth-2 budget without owner queue | Strict-clean but performance-identical to the accepted successor row; `xs_ftq_depth_gt1_cycles=0`. | Rejected as a no-op. Raising the budget alone does not create a second safe owner because IFU still has only a single pending successor relation. |
 | Predicted-control-window advance without F2 fire contract | Dhrystone improves to `18,913` cycles, but CoreMark times out with stale owner and packet-stale counters. | Direction has leverage, but packet side effects fired while the IFU cursor was stalled. |
 | Predicted-control-window advance with only packet enqueue stall gating | Owner/stale counters are clean, but strict delivery skips `0x80002fce` inside the `0x80002fc0` owner. | `will_emit` still updated duplicate and cursor state without an accepted packet. F2 fire must gate `will_emit`, not just `packet_enq`. |
+| Two-entry pending owner queue plus cancel-all younger FTQ policy | Strict-clean on smoke and CoreMark 10, but performance-identical: CoreMark 10 remains `1,570,351` cycles and `6.403369` CoreMark/MHz. `xs_ftq_depth_gt1_cycles` reaches only `92`, with only `46` queued runahead candidates. | Rejected as insufficient leverage in this form. The queued target is usually absent or already represented by the next FTQ owner, so extra owner depth is dormant rather than supply-producing. |
+| Two-entry future-line buffer in `ifu_line_fetch` | Strict-clean but performance-identical on smoke and CoreMark 10; `xs_icq_future_head_block` remains `6,176` on CoreMark 10. | Rejected as a no-op. The counted future-head cycles are mostly waiting for owner promotion, not lost because the single future-line slot is full. |
 
 The resolved successor lesson is specific: allocating a new owner was not the
 only risk. The first packet for that owner must be delivered from the owner
@@ -197,8 +204,9 @@ counter-backed second domain instead.
 | Successor runahead | Accepted depth-1 slice | Keeps owner-complete successor allocation active and broadly profitable. | Any further change still needs endpoint, strict owner/delivery, and golden-PC evidence where available. |
 | Predicted-control-window same-owner advance | Accepted depth-1 slice | Removes conservative F2 duplication before predicted-control packets. | `will_emit`, duplicate tracking, packet enqueue, and IFU cursor movement must share one accepted-packet fire. |
 | Owner request queue / IFU work queue | Primary next structural frontend slice | Lets IFU request and F2 delivery decouple by FTQ owner instead of relying on a single pending successor. | Owner-start PC delivery exactly once; no stale ICQ response consumption. |
-| Capacity-bounded depth-2 runahead | Next candidate after queue cleanup | More useful fetch overlap and fewer F2 no-emit cycles. | Do not promote if it increases redirect or ICQ head blocking enough to erase gains. |
+| Capacity-bounded depth-2 runahead | Recalibrate before another RTL trial | The first owner-queue attempt was dormant, so more depth alone is not enough. | Reopen only with evidence that the next predicted owner is not already the FTQ next owner and has a useful distinct target. |
 | Early fetch-line metadata | High value | Reduces conservative predicted-control and RVC boundary stalls. | Golden PC clean on mixed RVC/control windows. |
+| Same-owner residual attribution | Required next analysis slice | The corrected profiler moved the stale predicted-control bucket to no-emit, remainder, and other. | Add data before changing RTL; avoid another no-op structural queue. |
 | BPU/FTQ training metadata cleanup | High value | Improves attribution and enables safe prediction experiments. | Preserve GHR/RAS/target snapshots per owner. |
 | BPU S0/uBTB | Conditional | May help if lookup latency or direction quality blocks runahead. | Promote only with per-PC branch data or timing evidence. |
 | Indirect prediction | Conditional | Helps if indirect MPKI is material. | Per-PC evidence required. |
@@ -230,9 +238,9 @@ Every accepted performance row must report:
 | 0 | Lock the accepted successor and rename backpressure slice. | Gate A candidate is trackable from source control and has final strict smoke plus CoreMark 10 evidence. |
 | 1 | Lock the predicted-control-window same-owner advance and F2 fire contract. | Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot pass strict checks from committed RTL. |
 | 2 | Reconfirm from a clean committed checkout if needed. | Results match the accepted rows within normal determinism and no stale debug harness is required. |
-| 3 | Add a real owner request queue / IFU work queue. | Owner-start delivery remains exact; CoreMark 10, Dhrystone, and branch hotspot pass. |
-| 4 | Re-score queued successor/runahead. | Duplicate/no-emit falls further without ICQ wait, redirect recovery, or rename stalls replacing it. |
-| 5 | Try capacity-bounded depth-2 runahead. | Heavy rows improve with no endpoint drift and no off-target regression. |
+| 3 | Re-attribute residual same-owner and F2-data bubbles with the corrected profiler. | CoreMark 10 reports no stale predicted-control bucket and names the dominant remaining no-emit/remainder/other causes. |
+| 4 | Reopen owner queue only if the attribution shows distinct useful future targets. | Candidate count is large enough to move cycles, not merely strict-clean. |
+| 5 | Try the next architecture slice from evidence: early line metadata, better same-owner remainder policy, or BPU metadata quality. | Heavy rows improve with no endpoint drift and no off-target regression. |
 | 6 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
 | 7 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
 | 8 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
