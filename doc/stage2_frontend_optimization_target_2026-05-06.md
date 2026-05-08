@@ -140,6 +140,8 @@ Rejected trials that should not be revived in their old form:
 | Two-entry future-line buffer in `ifu_line_fetch` | Strict-clean but performance-identical on smoke and CoreMark 10; `xs_icq_future_head_block` remains `6,176` on CoreMark 10. | Rejected as a no-op. The counted future-head cycles are mostly waiting for owner promotion, not lost because the single future-line slot is full. |
 | Direct post-consume remainder hold bypass | Strict-clean and improves smoke rows: Dhrystone 100 `18,913 -> 18,812`, CoreMark 1 `164,550 -> 163,958`. CoreMark 10 regresses `1,528,608 -> 1,542,985`, with `xs_packet_buf_full_cycles` rising `14,753 -> 21,022` and `xs_backend_stall_pkt_ready` rising `35,109 -> 40,730`. | Rejected in this form. The post-consume hold is not purely wasted frontend time; removing it creates a denser packet burst that overfills the downstream packet buffer on the heavy row. |
 | IBuffer-credit-gated post-consume remainder bypass | Same smoke win as direct bypass, but CoreMark 10 still regresses to `1,542,985`. Full-buffer cycles improve versus direct bypass but backend packet-ready stall remains `40,730`. | Rejected in this form. Current-cycle IBuffer occupancy is not enough credit information for this burst; future remainder work must coordinate with downstream drain or owner work scheduling, not just local cursor motion. |
+| TAGE mispredicted-conditional-first training | Smoke regresses: CoreMark 1 `164,550 -> 167,213`, branch hotspot `141,408 -> 146,011`. | Rejected as the next BPU training policy. Prioritizing a mispredicted conditional in the commit group hurts broader branch behavior. |
+| Execute-time BRU recovery plus partial recovery knobs | Branch hotspot improves `141,408 -> 131,707`, but CoreMark 1 fails with `TOHOST_3`, flags `1`, checksum `36549` instead of `59156`. | Rejected as-is. Execute-time branch recovery has leverage, but the current recovery contract is not endpoint-safe enough to harden. |
 
 The resolved successor lesson is specific: allocating a new owner was not the
 only risk. The first packet for that owner must be delivered from the owner
@@ -218,6 +220,27 @@ This moves the next viable frontend work away from local remainder cursor
 removal and toward coordinated owner work scheduling, packet-buffer credit
 policy, or a second-domain backend drain limiter.
 
+The `20260507_packet_pressure_attrib_coremark10` row resolves the next
+bottleneck selection:
+
+| Counter | Value | Interpretation |
+|---|---:|---|
+| `xs_data_present_no_emit` | 86,522 | Most remaining `packet_empty_f2_data` style cycles are data-present no-emit, not missing I-cache data. |
+| `xs_data_no_emit_dup` | 41,442 | Duplicate suppression is the largest data-present no-emit cause. |
+| `xs_data_no_emit_redirect` | 33,202 | Redirect recovery is the second-largest data-present no-emit cause. |
+| `xs_data_no_emit_fe_stall` | 8,286 | Backend/F2 stall overlap is material but smaller. |
+| `xs_packet_buf_full_cycles` | 14,753 | IBuffer fullness exists but is not an owner-selection problem. |
+| `xs_packet_full_owner_wait` | 0 | The owner-aware IBuffer is not blocked by waiting for the matching owner. |
+| `xs_packet_full_backend` | 4,169 | Some full-buffer time overlaps backend stall. |
+| `xs_packet_full_drain_ready` | 10,584 | Most full-buffer cycles are already drain-ready. |
+| `xs_backend_stall_pkt_ready` | 35,109 | Backend cannot accept while fetch has a packet ready. |
+| `rob_full` | 34,217 | Rename/backpressure is strongly correlated with ROB capacity. |
+| `stall_preg` | 33,177 | Slot-0 rename stall is also strongly correlated with integer physical register pressure. |
+
+Verdict: frontend ownership is no longer the only active limiter on CoreMark
+10. The next accepted performance slice should test ROB/PRF capacity or a
+real backend drain improvement before more frontend-local cursor work.
+
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
@@ -248,7 +271,8 @@ counter-backed second domain instead.
 | BPU S0/uBTB | Conditional | May help if lookup latency or direction quality blocks runahead. | Promote only with per-PC branch data or timing evidence. |
 | Indirect prediction | Conditional | Helps if indirect MPKI is material. | Per-PC evidence required. |
 | Fusion/uop accounting | Orthogonal candidate | Reduces useful work per frontend slot and backend pressure. | Pattern frequency and retired-stream identity required. |
-| LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open only after Gate C or counter evidence says frontend is no longer dominant. |
+| ROB/PRF capacity | Promote to next DSE | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`; this explains the packet-ready backend stalls exposed by frontend runahead. | Must improve CoreMark 10 without Dhrystone/CoreMark 1 regression; keep width unchanged. |
+| LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
 ## Evidence Required
 
@@ -280,10 +304,11 @@ Every accepted performance row must report:
 | 5 | Lock backward-next-owner same-owner safety. | CoreMark 1, CoreMark 10, Dhrystone 300, Dhrystone 100, branch hotspot, and broad Stage 1 DSE rows pass strict checks. |
 | 6 | Split the remaining same-owner remainder and no-emit buckets. | Done by `20260507_same_owner_remainder_attrib_coremark10`: remainder is consume/post-consume, no-emit is mainly frontend stall, redirect, and packet-ready. |
 | 7 | Try post-consume remainder bypass variants. | Rejected: strict-clean but CoreMark 10 regresses from downstream packet pressure. |
-| 8 | Re-attribute duplicate/no-emit and packet-buffer full cycles, then choose owner work scheduling, packet-buffer credit policy, or a second-domain backend drain limiter. | Candidate is selected by heavy-row counters, not smoke-only wins. |
-| 9 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
-| 10 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
-| 11 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 8 | Re-attribute duplicate/no-emit and packet-buffer full cycles, then choose owner work scheduling, packet-buffer credit policy, or a second-domain backend drain limiter. | Done by `20260507_packet_pressure_attrib_coremark10`: packet full is not owner-wait, backend stall is ROB/PRF-correlated. |
+| 9 | Try a ROB/PRF capacity DSE while keeping width unchanged. | Heavy rows improve with no endpoint drift and no Dhrystone/CoreMark 1 regression. |
+| 10 | Score frontend-only plus first backend-capacity ceiling. | Gate C passes or fails explicitly. |
+| 11 | Open a deeper backend DSE if capacity alone fails. | Gate D names the limiter before RTL work starts. |
+| 12 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 

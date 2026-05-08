@@ -44,6 +44,7 @@ module fetch_frontend_profiler
     input logic [FTQ_EPOCH_BITS-1:0]        ftq_current_epoch,
     input logic                             f2_owner_completion_candidate_c,
     input logic                             packet_buf_valid,
+    input logic                             packet_buf_owner_match_c,
     input fetch_packet_t                    packet_buf_head,
     input logic                             ftq_commit_owner_valid,
     input logic [FTQ_IDX_BITS-1:0]          ftq_commit_owner_idx,
@@ -132,7 +133,30 @@ module fetch_frontend_profiler
     integer xs_ic_req_stall_ftq_full_cycles;
     integer xs_backend_stall_cycles;
     integer xs_backend_stall_packet_ready_cycles;
+    integer xs_backend_stall_packet_empty_cycles;
     integer xs_frontend_hold_cycles;
+    integer xs_data_present_no_emit_cycles;
+    integer xs_data_no_emit_dup_cycles;
+    integer xs_data_no_emit_pkt_not_ready_cycles;
+    integer xs_data_no_emit_redirect_cycles;
+    integer xs_data_no_emit_frontend_hold_cycles;
+    integer xs_data_no_emit_fe_stall_cycles;
+    integer xs_data_no_emit_other_cycles;
+    integer xs_dup_suppressed_cycles;
+    integer xs_dup_same_owner_cycles;
+    integer xs_dup_remainder_cycles;
+    integer xs_dup_owner_not_live_cycles;
+    integer xs_dup_owner_complete_cycles;
+    integer xs_dup_redirect_cycles;
+    integer xs_dup_fe_stall_cycles;
+    integer xs_dup_packet_not_ready_cycles;
+    integer xs_dup_no_data_cycles;
+    integer xs_dup_other_cycles;
+    integer xs_packet_buf_full_backend_cycles;
+    integer xs_packet_buf_full_owner_wait_cycles;
+    integer xs_packet_buf_full_drain_ready_cycles;
+    integer xs_packet_buf_full_frontend_hold_cycles;
+    integer xs_packet_buf_full_other_cycles;
     integer xs_dup_last_emit_cycles;
     integer xs_dup_replay_guard_cycles;
     integer xs_dup_both_reasons_cycles;
@@ -235,6 +259,27 @@ module fetch_frontend_profiler
     logic xs_same_owner_no_emit_frontend_hold_c;
     logic xs_same_owner_no_emit_fe_stall_c;
     logic xs_same_owner_no_emit_other_c;
+    logic xs_data_present_no_emit_c;
+    logic xs_data_no_emit_dup_c;
+    logic xs_data_no_emit_pkt_not_ready_c;
+    logic xs_data_no_emit_redirect_c;
+    logic xs_data_no_emit_frontend_hold_c;
+    logic xs_data_no_emit_fe_stall_c;
+    logic xs_data_no_emit_other_c;
+    logic xs_dup_same_owner_c;
+    logic xs_dup_remainder_c;
+    logic xs_dup_owner_not_live_c;
+    logic xs_dup_owner_complete_c;
+    logic xs_dup_redirect_c;
+    logic xs_dup_fe_stall_c;
+    logic xs_dup_packet_not_ready_c;
+    logic xs_dup_no_data_c;
+    logic xs_dup_other_c;
+    logic xs_packet_buf_full_backend_c;
+    logic xs_packet_buf_full_owner_wait_c;
+    logic xs_packet_buf_full_drain_ready_c;
+    logic xs_packet_buf_full_frontend_hold_c;
+    logic xs_packet_buf_full_other_c;
     logic xs_icq_future_head_block_c;
     logic xs_f2_data_wait_c;
     logic xs_f2_data_wait_icq_empty_c;
@@ -461,6 +506,103 @@ module fetch_frontend_profiler
         !xs_same_owner_no_emit_redirect_c &&
         !xs_same_owner_no_emit_frontend_hold_c &&
         !xs_same_owner_no_emit_fe_stall_c;
+    assign xs_data_present_no_emit_c =
+        f2_work_valid_c &&
+        f2_data_valid &&
+        f2_has_emit_payload_c &&
+        !f2_will_emit_c;
+    assign xs_data_no_emit_dup_c =
+        xs_data_present_no_emit_c &&
+        f2_duplicate_suppressed_c;
+    assign xs_data_no_emit_pkt_not_ready_c =
+        xs_data_present_no_emit_c &&
+        !f2_duplicate_suppressed_c &&
+        !packet_buf_enq_ready;
+    assign xs_data_no_emit_redirect_c =
+        xs_data_present_no_emit_c &&
+        !f2_duplicate_suppressed_c &&
+        packet_buf_enq_ready &&
+        redirect_valid;
+    assign xs_data_no_emit_frontend_hold_c =
+        xs_data_present_no_emit_c &&
+        !f2_duplicate_suppressed_c &&
+        packet_buf_enq_ready &&
+        !redirect_valid &&
+        frontend_hold;
+    assign xs_data_no_emit_fe_stall_c =
+        xs_data_present_no_emit_c &&
+        !f2_duplicate_suppressed_c &&
+        packet_buf_enq_ready &&
+        !redirect_valid &&
+        !frontend_hold &&
+        fe_stall;
+    assign xs_data_no_emit_other_c =
+        xs_data_present_no_emit_c &&
+        !xs_data_no_emit_dup_c &&
+        !xs_data_no_emit_pkt_not_ready_c &&
+        !xs_data_no_emit_redirect_c &&
+        !xs_data_no_emit_frontend_hold_c &&
+        !xs_data_no_emit_fe_stall_c;
+    assign xs_dup_same_owner_c =
+        f2_duplicate_suppressed_c &&
+        f2_same_owner_continue_c;
+    assign xs_dup_remainder_c =
+        f2_duplicate_suppressed_c &&
+        (line_straddle_advance_c ||
+         consume_remainder_c ||
+         consumed_remainder_r);
+    assign xs_dup_owner_not_live_c =
+        f2_duplicate_suppressed_c &&
+        f2_work_ftq_valid_c &&
+        !f2_ftq_owner_live_c;
+    assign xs_dup_owner_complete_c =
+        f2_duplicate_suppressed_c &&
+        f2_work_owner_complete_c;
+    assign xs_dup_redirect_c =
+        f2_duplicate_suppressed_c &&
+        redirect_valid;
+    assign xs_dup_fe_stall_c =
+        f2_duplicate_suppressed_c &&
+        fe_stall;
+    assign xs_dup_packet_not_ready_c =
+        f2_duplicate_suppressed_c &&
+        !packet_buf_enq_ready;
+    assign xs_dup_no_data_c =
+        f2_duplicate_suppressed_c &&
+        !f2_data_valid;
+    assign xs_dup_other_c =
+        f2_duplicate_suppressed_c &&
+        !xs_dup_same_owner_c &&
+        !xs_dup_remainder_c &&
+        !xs_dup_owner_not_live_c &&
+        !xs_dup_owner_complete_c &&
+        !xs_dup_redirect_c &&
+        !xs_dup_fe_stall_c &&
+        !xs_dup_packet_not_ready_c &&
+        !xs_dup_no_data_c;
+    assign xs_packet_buf_full_backend_c =
+        packet_buf_full &&
+        backend_stall;
+    assign xs_packet_buf_full_owner_wait_c =
+        packet_buf_full &&
+        !backend_stall &&
+        packet_buf_valid &&
+        !packet_buf_owner_match_c;
+    assign xs_packet_buf_full_drain_ready_c =
+        packet_buf_full &&
+        !backend_stall &&
+        packet_buf_owner_match_c;
+    assign xs_packet_buf_full_frontend_hold_c =
+        packet_buf_full &&
+        !backend_stall &&
+        !packet_buf_owner_match_c &&
+        frontend_hold;
+    assign xs_packet_buf_full_other_c =
+        packet_buf_full &&
+        !xs_packet_buf_full_backend_c &&
+        !xs_packet_buf_full_owner_wait_c &&
+        !xs_packet_buf_full_drain_ready_c &&
+        !xs_packet_buf_full_frontend_hold_c;
     assign xs_icq_future_head_block_c =
         icq_deq_valid &&
         f2_work_line_valid_c &&
@@ -510,7 +652,30 @@ module fetch_frontend_profiler
             xs_ic_req_stall_ftq_full_cycles      <= 0;
             xs_backend_stall_cycles       <= 0;
             xs_backend_stall_packet_ready_cycles <= 0;
+            xs_backend_stall_packet_empty_cycles <= 0;
             xs_frontend_hold_cycles       <= 0;
+            xs_data_present_no_emit_cycles <= 0;
+            xs_data_no_emit_dup_cycles    <= 0;
+            xs_data_no_emit_pkt_not_ready_cycles <= 0;
+            xs_data_no_emit_redirect_cycles <= 0;
+            xs_data_no_emit_frontend_hold_cycles <= 0;
+            xs_data_no_emit_fe_stall_cycles <= 0;
+            xs_data_no_emit_other_cycles  <= 0;
+            xs_dup_suppressed_cycles      <= 0;
+            xs_dup_same_owner_cycles      <= 0;
+            xs_dup_remainder_cycles       <= 0;
+            xs_dup_owner_not_live_cycles  <= 0;
+            xs_dup_owner_complete_cycles  <= 0;
+            xs_dup_redirect_cycles        <= 0;
+            xs_dup_fe_stall_cycles        <= 0;
+            xs_dup_packet_not_ready_cycles <= 0;
+            xs_dup_no_data_cycles         <= 0;
+            xs_dup_other_cycles           <= 0;
+            xs_packet_buf_full_backend_cycles <= 0;
+            xs_packet_buf_full_owner_wait_cycles <= 0;
+            xs_packet_buf_full_drain_ready_cycles <= 0;
+            xs_packet_buf_full_frontend_hold_cycles <= 0;
+            xs_packet_buf_full_other_cycles <= 0;
             xs_dup_last_emit_cycles       <= 0;
             xs_dup_replay_guard_cycles    <= 0;
             xs_dup_both_reasons_cycles    <= 0;
@@ -641,8 +806,70 @@ module fetch_frontend_profiler
             if (backend_stall && (packet_buf_valid || packet_flowthrough_valid))
                 xs_backend_stall_packet_ready_cycles <=
                     xs_backend_stall_packet_ready_cycles + 1;
+            if (backend_stall && !packet_buf_valid && !packet_flowthrough_valid)
+                xs_backend_stall_packet_empty_cycles <=
+                    xs_backend_stall_packet_empty_cycles + 1;
             if (frontend_hold)
                 xs_frontend_hold_cycles <= xs_frontend_hold_cycles + 1;
+            if (xs_data_present_no_emit_c)
+                xs_data_present_no_emit_cycles <=
+                    xs_data_present_no_emit_cycles + 1;
+            if (xs_data_no_emit_dup_c)
+                xs_data_no_emit_dup_cycles <=
+                    xs_data_no_emit_dup_cycles + 1;
+            if (xs_data_no_emit_pkt_not_ready_c)
+                xs_data_no_emit_pkt_not_ready_cycles <=
+                    xs_data_no_emit_pkt_not_ready_cycles + 1;
+            if (xs_data_no_emit_redirect_c)
+                xs_data_no_emit_redirect_cycles <=
+                    xs_data_no_emit_redirect_cycles + 1;
+            if (xs_data_no_emit_frontend_hold_c)
+                xs_data_no_emit_frontend_hold_cycles <=
+                    xs_data_no_emit_frontend_hold_cycles + 1;
+            if (xs_data_no_emit_fe_stall_c)
+                xs_data_no_emit_fe_stall_cycles <=
+                    xs_data_no_emit_fe_stall_cycles + 1;
+            if (xs_data_no_emit_other_c)
+                xs_data_no_emit_other_cycles <=
+                    xs_data_no_emit_other_cycles + 1;
+            if (f2_duplicate_suppressed_c)
+                xs_dup_suppressed_cycles <= xs_dup_suppressed_cycles + 1;
+            if (xs_dup_same_owner_c)
+                xs_dup_same_owner_cycles <= xs_dup_same_owner_cycles + 1;
+            if (xs_dup_remainder_c)
+                xs_dup_remainder_cycles <= xs_dup_remainder_cycles + 1;
+            if (xs_dup_owner_not_live_c)
+                xs_dup_owner_not_live_cycles <=
+                    xs_dup_owner_not_live_cycles + 1;
+            if (xs_dup_owner_complete_c)
+                xs_dup_owner_complete_cycles <=
+                    xs_dup_owner_complete_cycles + 1;
+            if (xs_dup_redirect_c)
+                xs_dup_redirect_cycles <= xs_dup_redirect_cycles + 1;
+            if (xs_dup_fe_stall_c)
+                xs_dup_fe_stall_cycles <= xs_dup_fe_stall_cycles + 1;
+            if (xs_dup_packet_not_ready_c)
+                xs_dup_packet_not_ready_cycles <=
+                    xs_dup_packet_not_ready_cycles + 1;
+            if (xs_dup_no_data_c)
+                xs_dup_no_data_cycles <= xs_dup_no_data_cycles + 1;
+            if (xs_dup_other_c)
+                xs_dup_other_cycles <= xs_dup_other_cycles + 1;
+            if (xs_packet_buf_full_backend_c)
+                xs_packet_buf_full_backend_cycles <=
+                    xs_packet_buf_full_backend_cycles + 1;
+            if (xs_packet_buf_full_owner_wait_c)
+                xs_packet_buf_full_owner_wait_cycles <=
+                    xs_packet_buf_full_owner_wait_cycles + 1;
+            if (xs_packet_buf_full_drain_ready_c)
+                xs_packet_buf_full_drain_ready_cycles <=
+                    xs_packet_buf_full_drain_ready_cycles + 1;
+            if (xs_packet_buf_full_frontend_hold_c)
+                xs_packet_buf_full_frontend_hold_cycles <=
+                    xs_packet_buf_full_frontend_hold_cycles + 1;
+            if (xs_packet_buf_full_other_c)
+                xs_packet_buf_full_other_cycles <=
+                    xs_packet_buf_full_other_cycles + 1;
 
             if (xs_dup_last_emit_c)
                 xs_dup_last_emit_cycles <= xs_dup_last_emit_cycles + 1;
@@ -1039,8 +1266,54 @@ module fetch_frontend_profiler
                      xs_backend_stall_cycles);
             $display("xs backend stall pkt ready  : %0d",
                      xs_backend_stall_packet_ready_cycles);
+            $display("xs backend stall pkt empty  : %0d",
+                     xs_backend_stall_packet_empty_cycles);
             $display("xs frontend hold cycles     : %0d",
                      xs_frontend_hold_cycles);
+            $display("xs data present no emit     : %0d",
+                     xs_data_present_no_emit_cycles);
+            $display("xs data no emit dup         : %0d",
+                     xs_data_no_emit_dup_cycles);
+            $display("xs data no emit pkt not ready: %0d",
+                     xs_data_no_emit_pkt_not_ready_cycles);
+            $display("xs data no emit redirect    : %0d",
+                     xs_data_no_emit_redirect_cycles);
+            $display("xs data no emit frontend hold: %0d",
+                     xs_data_no_emit_frontend_hold_cycles);
+            $display("xs data no emit fe stall    : %0d",
+                     xs_data_no_emit_fe_stall_cycles);
+            $display("xs data no emit other       : %0d",
+                     xs_data_no_emit_other_cycles);
+            $display("xs dup suppressed           : %0d",
+                     xs_dup_suppressed_cycles);
+            $display("xs dup same owner           : %0d",
+                     xs_dup_same_owner_cycles);
+            $display("xs dup remainder            : %0d",
+                     xs_dup_remainder_cycles);
+            $display("xs dup owner not live       : %0d",
+                     xs_dup_owner_not_live_cycles);
+            $display("xs dup owner complete       : %0d",
+                     xs_dup_owner_complete_cycles);
+            $display("xs dup redirect             : %0d",
+                     xs_dup_redirect_cycles);
+            $display("xs dup fe stall             : %0d",
+                     xs_dup_fe_stall_cycles);
+            $display("xs dup pkt not ready        : %0d",
+                     xs_dup_packet_not_ready_cycles);
+            $display("xs dup no data              : %0d",
+                     xs_dup_no_data_cycles);
+            $display("xs dup other                : %0d",
+                     xs_dup_other_cycles);
+            $display("xs packet full backend      : %0d",
+                     xs_packet_buf_full_backend_cycles);
+            $display("xs packet full owner wait   : %0d",
+                     xs_packet_buf_full_owner_wait_cycles);
+            $display("xs packet full drain ready  : %0d",
+                     xs_packet_buf_full_drain_ready_cycles);
+            $display("xs packet full frontend hold: %0d",
+                     xs_packet_buf_full_frontend_hold_cycles);
+            $display("xs packet full other        : %0d",
+                     xs_packet_buf_full_other_cycles);
             $display("xs dup last emit            : %0d",
                      xs_dup_last_emit_cycles);
             $display("xs dup replay guard         : %0d",
@@ -1184,6 +1457,7 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .ftq_current_epoch               (ftq_current_epoch),
     .f2_owner_completion_candidate_c (f2_owner_completion_candidate_c),
     .packet_buf_valid                (packet_buf_valid),
+    .packet_buf_owner_match_c        (packet_buf_owner_match_c),
     .packet_buf_head                 (packet_buf_head),
     .ftq_commit_owner_valid          (ftq_commit_owner_valid),
     .ftq_commit_owner_idx            (ftq_commit_owner_idx),
