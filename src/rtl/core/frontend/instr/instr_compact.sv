@@ -84,14 +84,13 @@ module instr_compact
     assign will_emit_o =
         has_emit_payload_o &&
         !duplicate_suppressed_i &&
-        packet_ready_i;
+        packet_ready_i &&
+        !redirect_i &&
+        !frontend_hold_i;
     assign pc_consumed_o = will_emit_o || line_straddle_advance_i;
 
     always_comb begin
-        packet_enq_o =
-            will_emit_o &&
-            !redirect_i &&
-            !frontend_hold_i;
+        packet_enq_o = will_emit_o;
         packet_o = '0;
 
         if (will_emit_o) begin

@@ -964,7 +964,7 @@ module fetch_top
         .packet_ready_i               (packet_buf_enq_ready),
         .line_straddle_advance_i      (line_straddle_advance_c),
         .redirect_i                   (redirect_valid),
-        .frontend_hold_i              (frontend_hold),
+        .frontend_hold_i              (frontend_hold || fe_stall),
         .ftq_idx_i                    (f2_work_ftq_idx_c),
         .ftq_epoch_i                  (f2_work_ftq_epoch_c),
         .ftq_alloc_tag_i              (f2_work_ftq_alloc_tag_c),
