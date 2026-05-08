@@ -544,6 +544,39 @@ cycles rose to `55,074`. Verdict: the bottleneck is not solved by adding a
 generic queue. Any future drain mechanism needs branch/control awareness or a
 joint frontend/backend scheduling policy, not blind decoupling.
 
+Follow-up, 2026-05-08, IBuffer depth and control-aware buffering: deeper
+packet buffering has real CoreMark 10 leverage, but not yet a signoff-safe
+policy. A blind IBuffer depth increase from 8 to 16 entries was strict-clean
+and improved CoreMark 10 from `1,525,168` to `1,498,650` cycles
+(`6.594618 -> 6.711860` CoreMark/MHz). It reduced CoreMark 10 packet pressure
+(`packet_empty 96,280 -> 92,430`,
+`packet_empty_f2_data 62,549 -> 60,964`,
+`packet_empty_noemit_dup 34,055 -> 32,245`,
+`xs_packet_buf_full_cycles 15,159 -> 7,391`), but CoreMark 1 regressed
+`163,727 -> 163,991`. Therefore the blind depth change is rejected.
+
+Additional strict-clean classifier trials were also rejected or no-op:
+
+| Trial | Smoke result | CoreMark 10 result | Verdict |
+|---|---|---|---|
+| Blind IBuffer 16 | Dhrystone 100 and hotspot unchanged; CoreMark 1 regresses to `163,991`. | Improves to `1,498,650`. | Rejected. Useful pressure relief, but not broad. |
+| Any-control watermark at 8 | Smoke matches baseline exactly. | Matches baseline exactly at `1,525,168`. | Rejected no-op. Gating all control packets removes the long-row win. |
+| Any-control watermark at 10/12/9 | CoreMark 1 regresses to `163,785` at watermark 10 and `163,991` at 9 or 12. | Not promoted. | Rejected. Threshold tuning is not stable. |
+| Predicted-taken-control watermark at 8 | Smoke matches baseline exactly. | Matches baseline exactly. | Rejected no-op. Extra depth for not-taken/fallthrough traffic is not the useful class. |
+| Backward conditional allowlist | Smoke matches baseline exactly. | Matches baseline exactly. | Rejected no-op. Simple loop-back control is not enough. |
+| Non-conditional-control allowlist | Smoke matches baseline exactly. | Matches baseline exactly. | Rejected no-op. Calls, returns, and jumps are not the useful class here. |
+| Conditional-branch allowlist | CoreMark 1 regresses to `163,991`. | Not promoted. | Rejected. This confirms conditional-branch buffering is the coupled win/loss class. |
+| TAGE-confident conditional allowlist | CoreMark 1 still regresses to `163,991`. | Not promoted. | Rejected. The existing `tage_confident` bit is not a sufficient safety discriminator. |
+| Blind IBuffer 16 plus speculative-update window at 8 | CoreMark 1 regresses badly to `166,007`. | Not promoted. | Rejected. Suppressing speculative BPU state while still fetching deep is worse than the original coupling. |
+
+Verdict: IBuffer capacity is a real downstream-drain lever, but conditional
+branch buffering couples useful packet burst absorption to branch-predictor
+state and short-row mispredict timing. Do not keep any of the RTL from this
+slice. Reopen only with a stronger conditional-branch ownership or BPU
+checkpoint contract, for example a way to let buffered conditional packets use
+extra capacity without advancing predictor state beyond a restorable owner
+snapshot.
+
 Follow-up, 2026-05-08, duplicate/remainder attribution: a profiler-only slice
 in `benchmark_results/dse_dse_20260508_dup_rem_attrib_coremark10` keeps
 CoreMark 10 cycle-identical at `1,528,608` cycles and `6.579328` CoreMark/MHz,
@@ -667,7 +700,7 @@ counter-backed second domain instead.
 | Loop predictor speculative count policy | Accepted in chooser-gated form | The FTQ-owner sideband bypass improves Dhrystone 100, CoreMark 1, CoreMark 10, and Dhrystone 300 when gated by a per-loop exit-miss chooser. | Keep the original sequential speculative-count update and the chooser. Do not use direct current-cycle bypass, allocation-time update, or always-on sideband bypass. |
 | Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. The direct non-head partial trial proves the current checkpoint manager cannot yet support general execute-time recovery. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Without that, keep partial recovery head-only and do not promote early recovery. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
-| Downstream packet drain / scheduling | Still open, simple packet coalescing and blind decode queues rejected | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. Head-only and selected-owner IBuffer packet coalescing were strict-clean but cycle-identical no-ops. Blind decoded queues moved pressure but regressed CoreMark 10. | Next attempt needs branch/control-aware scheduling or a paired backend policy, not another packet merge or generic queue. Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without increasing `packet_empty`, redirect recovery, or DS/CoreMark cycles. |
+| Downstream packet drain / scheduling | Still open, simple packet coalescing, blind decode queues, and IBuffer depth-only policies rejected | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. Head-only and selected-owner IBuffer packet coalescing were strict-clean but cycle-identical no-ops. Blind decoded queues moved pressure but regressed CoreMark 10. Blind IBuffer depth 16 improved CoreMark 10 to `1,498,650`, but regressed CoreMark 1 to `163,991`; control-aware watermarks either became no-ops or preserved the short-row regression. | Next attempt needs conditional-branch ownership or BPU checkpoint semantics, or a paired backend policy, not another packet merge, generic queue, or raw IBuffer depth increase. Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without increasing `packet_empty`, redirect recovery, or DS/CoreMark cycles. |
 | Predicted-not-taken owner fall-through | Rejected local forms | Attribution shows many duplicate cycles are same-line sequential, so this looked tempting. The local owner relaxation regressed Dhrystone and broke CoreMark/hotspot. A live-snapshot repair still timed out with owner/stale mismatches. | Reopen only with explicit branch-owner and FTQ/IBuffer sequencing semantics, not by relaxing `same_owner_continue` alone. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
@@ -718,7 +751,8 @@ Every accepted performance row must report:
 | 22 | Split duplicate/remainder residuals by owner/control context. | Done by `dse_dse_20260508_dup_reason_attrib_coremark10`: the no-owner duplicate residual has no safe no-control bucket, and is dominated by straddle/control context. |
 | 23 | Try predicted-not-taken same-owner fall-through only if ownership evidence supports it. | Done and rejected in local forms: plain owner relaxation and live-snapshot repair both regress or fail. |
 | 24 | Lock the loop-exit speculative-count bypass chooser. | Dhrystone 100, CoreMark 1, CoreMark 10, Dhrystone 300, branch hotspot, and frontend branch broad rows pass strict checks, with loop-buffer and standalone replay activity zero. |
-| 25 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 25 | Probe IBuffer depth and control-aware packet buffering. | Done and rejected in current forms: blind depth 16 improves CoreMark 10 but regresses CoreMark 1; control/type/confidence watermarks either become no-ops or retain the short-row regression. |
+| 26 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
