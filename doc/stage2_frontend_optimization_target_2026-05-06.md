@@ -166,6 +166,7 @@ Rejected trials that should not be revived in their old form:
 | Local component chooser, SC-biased reset | Dhrystone 100 is unchanged and branch hotspot improves `141,408 -> 140,709`, but CoreMark 1 regresses `164,550 -> 164,966`. | Rejected. The direction can suppress harmful local behavior, but the warmup and chooser signal still trade away CoreMark. |
 | Local component chooser, local-biased reset | Dhrystone 100 is unchanged and branch hotspot improves `141,408 -> 140,195`, but CoreMark 1 regresses `164,550 -> 166,501`. | Rejected. Starting from baseline-local behavior helps the branch probe more, but the CoreMark cost grows. |
 | Bias-only local alternation filters | Non-saturated bias improves CoreMark 1 `164,550 -> 163,000` but regresses the branch hotspot `141,408 -> 141,959`. Saturated bias gives CoreMark 1 `164,285` and branch hotspot `142,325`. | Rejected. Bias alone is not the right selector; the accepted follow-up also requires weak TAGE before local alternation can override. |
+| Weak-TAGE-only local alternation filter | Dhrystone 100 is unchanged, but CoreMark 1 regresses from the accepted row `164,364 -> 164,782` and the branch hotspot regresses `141,326 -> 143,909`. | Rejected. The weak-TAGE guard and per-PC bias guard are both required. |
 | Disable loop speculative count | Dhrystone 100 is unchanged at `18,913`, while CoreMark 1 regresses `164,550 -> 176,523` and the branch hotspot regresses `141,408 -> 142,828`. | Rejected. The loop predictor's speculative count path is not the broad limiter; using committed counts increases frontend zero and redirect pressure on CoreMark. |
 | NLPB full-depth duplicate check | Dhrystone 100 and branch hotspot are unchanged; CoreMark 1 moves only `164,550 -> 164,556`. | Not a performance slice. This may be a cleanup candidate, but it does not close the Stage 2 target gap. |
 
@@ -356,6 +357,12 @@ improves the forward state-machine branch at `0x800036b4`
 (`1,250 -> 573`), while making some loop/data-dependent branches worse
 (`0x800031ec` moves `1,264 -> 1,827`). Net performance still improves, but
 this is a narrow BPU quality step, not a packet-empty fix.
+
+Follow-up simplification rejected: removing the per-PC bias guard and using
+only the weak-TAGE condition keeps Dhrystone 100 unchanged, but regresses
+CoreMark 1 `164,364 -> 164,782` and the branch hotspot
+`141,326 -> 143,909` versus the accepted weak-TAGE gated bias row. Keep the
+bias guard.
 
 Update, 2026-05-08: raw load speculation past unresolved store-address entries
 using `+ALLOW_LOAD_SPEC_PAST_STA` is endpoint-clean but performance-identical
