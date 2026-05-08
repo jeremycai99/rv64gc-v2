@@ -149,7 +149,8 @@ Rejected trials that should not be revived in their old form:
 | ROB slot-2 writeback-ready bypass | Dhrystone 100 and branch hotspot are unchanged, while CoreMark 1 regresses `164,550 -> 165,565`. The broader full writeback bypass plusarg regresses CoreMark 1 to `167,527`. | Rejected. Same-cycle ROB head ready bypass is not a useful commit-side fix in this pipeline shape. |
 | Load speculation past unresolved store-address entries | `+ALLOW_LOAD_SPEC_PAST_STA` is strict-clean, but Dhrystone 100 and CoreMark 1 are cycle-identical to the accepted baseline: `18,913` and `164,550` cycles. | Rejected as a raw no-op. Do not promote this plusarg without a deeper LSU dependency predictor or replay contract that can demonstrate counter movement. |
 | Standalone refcounted rename move elimination | Endpoint-clean and active, but not a performance win. Dhrystone 100 is effectively unchanged at `18,912`, CoreMark 1 regresses `164,550 -> 165,430`, CoreMark 10 regresses `1,528,608 -> 1,545,737`, and the branch hotspot regresses `141,408 -> 143,204`. A ready-source-only variant is worse on CoreMark 1 at `166,609`; a one-cycle delayed move-ready path matches the same regression. | Rejected in standalone form. It reduces backend pressure, but the saved work exposes more branch/redirect and operand-ready stalls. Reopen only with a predictor/recovery companion or a stronger pressure-aware policy that is proven on CoreMark 1, CoreMark 10, and the branch hotspot. |
-| BRU early fetch redirect isolation | Early redirect alone improves CoreMark 1 slightly `164,550 -> 163,960`, but regresses Dhrystone 100 `18,913 -> 18,922` and branch hotspot `141,408 -> 144,962`. Combining it with keep-frontend, partial recovery, or execute-time BPU update regresses CoreMark 1 or fails endpoint identity. | Rejected for now. Branch/recovery still has leverage, but the current execution-time recovery contract is not broad enough. |
+| BRU early fetch redirect isolation | The latest profiled current-RTL recheck regresses all smoke rows: Dhrystone 100 `18,913 -> 18,921`, CoreMark 1 `164,550 -> 165,800`, and branch hotspot `141,408 -> 146,756`. | Rejected as a global policy. Branch/recovery still has leverage, but raw early redirect injects too much quarantine and timing disturbance. |
+| BRU early redirect plus partial recovery | Endpoint-clean and improves the branch hotspot `141,408 -> 138,564`, but regresses Dhrystone 100 `18,913 -> 18,920` and CoreMark 1 `164,550 -> 166,483`. | Mixed evidence only. Partial recovery has a real branch-heavy signal, but the current policy is too broad for scoreable RTL. Reopen as a structurally selective recovery policy, not a global plusarg. |
 | Local PHT global override | Branch hotspot improves `141,408 -> 138,680`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 169,642` with mispredicts rising from `4,250` to `5,025`. | Rejected as a global policy. Local history has useful information, but it needs per-PC arbitration against TAGE/SC instead of overriding everywhere. |
 | Disable local predictor | Branch hotspot improves `141,408 -> 137,606`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 165,487`. | Rejected. Current local alternation support is useful on CoreMark but harmful on the branch probe, so the right direction is a chooser, not all-on or all-off. |
 | Local PHT-only chooser | Dhrystone 100 is unchanged, CoreMark 1 regresses `164,550 -> 167,144`, and branch hotspot regresses `141,408 -> 141,738`. | Rejected. Gating only the PHT path misses the larger mixed signal from the local alternation path. |
@@ -323,6 +324,27 @@ path cannot absorb the changed timing. The next accepted architectural step
 should therefore target branch recovery/update timing or predictor ownership
 before reopening move elimination as a paired optimization.
 
+Update, 2026-05-08: branch recovery timing has now been rechecked from the
+current accepted RTL with `+TRACE_BRU_RECOVERY`. The global policies are not
+acceptable, but the attribution is useful:
+
+| Row | Dhrystone 100 | CoreMark 1 | Branch hotspot | Verdict |
+|---|---:|---:|---:|---|
+| Accepted baseline | 18,913 | 164,550 | 141,408 | Scoreable baseline. |
+| Early redirect | 18,921 | 165,800 | 146,756 | Rejected, broad regression. |
+| Early redirect plus partial recovery | 18,920 | 166,483 | 138,564 | Mixed signal, hotspot improves but DS and CoreMark regress. |
+
+CoreMark 1 with early plus partial recovery reports `22,981` BRU quarantine
+cycles, `4,319` committed mispredicts, and `9,592` safe-boundary quarantine
+cycles. Several top CoreMark recovery PCs have long average quarantine and are
+not consistently checkpoint-at-branch safe. The branch hotspot, in contrast,
+benefits from the partial policy because the recovery windows are short and
+regular: `23,871` quarantine cycles, `7,805` mispredicts, and max quarantine
+of only 4 cycles. The next branch slice must therefore be selective by
+architectural recovery metadata, such as checkpoint-at-branch availability,
+ROB-age/quarantine bound, and branch/control type. It must not steer on fixed
+benchmark PCs.
+
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
@@ -356,6 +378,7 @@ counter-backed second domain instead.
 | Refcounted rename move elimination | Rejected standalone, keep as paired candidate | CoreMark 10 reports 258,574 dynamic move candidates, and the RTL trial proves backend pressure can drop. Net performance still regresses because redirect/mispredict and operand-ready stalls rise. | Reopen only after branch recovery/update timing is improved, or with pressure-aware enable evidence. Keep physical-register refcounting as the required correctness mechanism if this path returns. |
 | ROB/PRF capacity | Rejected in raw and combinational timing forms | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical, ROB-head bypass regresses CoreMark 1, and same-cycle free-list release forwarding trips a simulator iteration loop. | Reopen only with a registered allocation, free, or commit-drain mechanism, not raw depth or comb release-forwarding. |
 | BPU local-vs-SC chooser | Rejected in first form | Global local override improves the branch hotspot while regressing CoreMark; the first chooser variants remain endpoint-clean but still trade one row against the other. | Reopen only with dynamic hot-PC attribution and a stronger training contract. |
+| Selective branch recovery/update timing | Promote to next RTL slice | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. | Enable early/partial recovery only under structural safety and low-cost conditions. Required pass set is Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot with strict owner/delivery checks. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
 | Downstream packet drain / scheduling | Promote to next RTL slice | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. | Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without DS/CoreMark regression. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
@@ -397,9 +420,10 @@ Every accepted performance row must report:
 | 12 | Try local same-owner remainder/straddle bubble removal. | Done and rejected in local form: frontend bubbles drop, but heavy CoreMark regresses from packet-buffer and backend drain pressure. |
 | 13 | Open the downstream drain or useful-work-per-packet slice. | Done by `dse_20260508_issue_fusion_move_attrib_coremark10`: macro-fusion is low-frequency, move candidates are high-frequency, and issue pressure is operand-ready dominated. |
 | 14 | Design and score alias-safe rename move elimination. | Done and rejected in standalone form: endpoint-clean and backend pressure drops, but CoreMark 1, CoreMark 10, and the branch hotspot regress. |
-| 15 | Open branch recovery/update timing as the next architectural slice. | Dynamic branch attribution identifies where extra mispredicts/redirect recovery appear, then an RTL change reduces redirect cost without DS/CoreMark/hotspot regression. |
-| 16 | Reopen useful-work reduction only as a paired optimization. | Move elimination or another uop-reduction path is retried only after branch/recovery can absorb the timing change. |
-| 17 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 15 | Record global branch recovery probes. | Done: early redirect is rejected broadly; early plus partial recovery is mixed and only improves the branch hotspot. |
+| 16 | Design selective branch recovery/update timing. | Recovery enable is gated by structural metadata, not benchmark PC, and reduces redirect cost without DS/CoreMark/hotspot regression. |
+| 17 | Reopen useful-work reduction only as a paired optimization. | Move elimination or another uop-reduction path is retried only after branch/recovery can absorb the timing change. |
+| 18 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -421,6 +445,9 @@ cuts the dominant CoreMark 10 frontend-empty buckets while lifting CoreMark 10
 to 6.58 CM/MHz.
 
 Near-term objective: keep this as the Stage 2 frontend baseline, and move the
-next RTL work to branch recovery/update timing. Long-term objective remains
-7.5 CM/MHz and 4.0 DMIPS/MHz, with a required second-domain escalation if
-frontend-only work does not reach the Gate C ceiling.
+next RTL work to selective branch recovery/update timing. Global early recovery
+is rejected; the viable direction is a structural gate that captures the short,
+safe branch-hotspot recovery benefit without paying the CoreMark quarantine
+cost. Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a
+required second-domain escalation if frontend-only work does not reach the Gate
+C ceiling.
