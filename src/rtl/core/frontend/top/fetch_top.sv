@@ -124,6 +124,8 @@ module fetch_top
     logic [63:0] bp_target_addr;
     logic [2:0]  bp_branch_slot;
     logic [2:0]  bp_type;
+    logic        successor_req_valid_c;
+    logic [63:0] successor_req_pc_c;
     logic [2:0]  final_count;
     logic        subgroup_split_before_ctl_c;
 
@@ -326,6 +328,8 @@ module fetch_top
         .ftq_count_alloc_to_ifu_i                 (ftq_count_alloc_to_ifu),
         .seq_valid_i                              (f2_seq_valid),
         .seq_next_pc_i                            (f2_seq_next_pc),
+        .successor_req_valid_i                    (successor_req_valid_c),
+        .successor_req_pc_i                       (successor_req_pc_c),
         .line_straddle_advance_i                  (line_straddle_advance_c),
         .consume_remainder_i                      (consume_remainder_c),
         .owner_complete_i                         (f2_work_owner_complete_c),
@@ -938,6 +942,8 @@ module fetch_top
         .final_count_o                            (final_count),
         .same_owner_continue_o                    (f2_same_owner_continue_c),
         .owner_complete_o                         (f2_work_owner_complete_c),
+        .successor_req_valid_o                    (successor_req_valid_c),
+        .successor_req_pc_o                       (successor_req_pc_c),
         .req_redirect_o                           (req_redirect_c),
         .bpu_redirect_o                           (f2_bpu_redirect),
         .bpu_target_o                             (f2_bpu_target),

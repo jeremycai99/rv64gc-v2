@@ -46,6 +46,8 @@ module ifu
 
     input  logic                          seq_valid_i,
     input  logic [63:0]                   seq_next_pc_i,
+    input  logic                          successor_req_valid_i,
+    input  logic [63:0]                   successor_req_pc_i,
     input  logic                          line_straddle_advance_i,
     input  logic                          consume_remainder_i,
     input  logic                          owner_complete_i,
@@ -154,6 +156,7 @@ module ifu
     logic        work_same_owner_dup_advance_c;
     logic        work_same_owner_advance_c;
     logic        work_same_owner_event_c;
+    logic        work_undelivered_owner_hold_c;
     logic        pred_control_outside_next_packet_c;
     logic        ftq_next_owner_stable_c;
     logic [63:0] ftq_next_owner_start_pc_c;
@@ -169,6 +172,8 @@ module ifu
     logic        runahead_target_direct_c;
     logic        runahead_target_before_ctl_c;
     logic        runahead_next_owner_match_c;
+    logic        successor_next_owner_match_c;
+    logic        successor_req_allowed_c;
     logic        runahead_candidate_c;
     logic        selected_req_is_runahead_c;
     logic        runahead_cancel_next_c;
@@ -235,7 +240,9 @@ module ifu
                              ? bpu_target_i
                              : (line_straddle_advance_i
                                    ? seq_next_pc_i
-                                   : f1_pc_r);
+                                   : (successor_req_allowed_c
+                                         ? successor_req_pc_i
+                                         : f1_pc_r));
     assign runahead_req_pc_c = work_r.ftq_entry.pred_ctl_target;
     assign req_pc_c = selected_req_is_runahead_c
                       ? runahead_req_pc_c
@@ -260,6 +267,7 @@ module ifu
         !same_owner_continue_i &&
         !(req_redirect_i && redirect_next_owner_match_c) &&
         (req_redirect_i ||
+         successor_req_allowed_c ||
          !(work_r.valid && (normal_req_pc_c == work_r.pc))) &&
         (req_redirect_i || !last_alloc_valid_r ||
          (normal_req_pc_c != last_alloc_req_pc_r));
@@ -288,6 +296,17 @@ module ifu
         (ftq_next_owner_entry_i.block_pc ==
          {runahead_req_pc_c[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
         (ftq_next_owner_entry_i.start_offset == runahead_req_pc_c[5:0]);
+    assign successor_next_owner_match_c =
+        ftq_next_owner_stable_c &&
+        ftq_next_owner_valid_i &&
+        (ftq_next_owner_entry_i.block_pc ==
+         {successor_req_pc_i[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
+        (ftq_next_owner_entry_i.start_offset == successor_req_pc_i[5:0]);
+    assign successor_req_allowed_c =
+        successor_req_valid_i &&
+        runahead_budget_avail_c &&
+        !runahead_pending_r &&
+        !successor_next_owner_match_c;
     assign runahead_candidate_c =
         !required_ftq_need_alloc_c &&
         !redirect_i &&
@@ -369,7 +388,6 @@ module ifu
         duplicate_suppressed_i &&
         owner_live_c &&
         work_r.ftq_valid &&
-        work_r.owner_delivered &&
         !owner_complete_i &&
         pred_control_outside_next_packet_c &&
         !line_straddle_advance_i &&
@@ -380,6 +398,11 @@ module ifu
     assign work_same_owner_advance_c =
         work_same_owner_emit_advance_c ||
         work_same_owner_dup_advance_c;
+    assign work_undelivered_owner_hold_c =
+        work_r.valid &&
+        work_r.ftq_valid &&
+        !work_r.owner_delivered &&
+        !owner_delivery_push_c;
 
     assign owner_live_c =
         work_r.ftq_valid &&
@@ -469,6 +492,9 @@ module ifu
         end else if (bpu_redirect_i) begin
             next_pc_c    = bpu_target_i;
             next_valid_c = 1'b1;
+        end else if (successor_req_allowed_c) begin
+            next_pc_c    = successor_req_pc_i;
+            next_valid_c = 1'b1;
         end else if (duplicate_suppressed_i) begin
             next_pc_c    = duplicate_next_pc_i;
             next_valid_c = 1'b1;
@@ -551,6 +577,8 @@ module ifu
                     work_pc_next = post_remainder_pc_r;
                 else if (work_same_owner_advance_c)
                     work_pc_next = seq_next_pc_i;
+                else if (work_undelivered_owner_hold_c)
+                    work_pc_next = work_r.pc;
                 else
                     work_pc_next = f1_pc_r;
 

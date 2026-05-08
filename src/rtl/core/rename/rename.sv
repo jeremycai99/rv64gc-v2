@@ -209,7 +209,8 @@ module rename
     logic [2:0] out_dest [0:PIPE_WIDTH-1];
 
     // Stall intermediates
-    logic [2:0] remaining_count;
+    logic       any_work_advance_c;
+    logic       capture_nonadvance_c;
 
     // Holding register next-state compaction
     logic [2:0] next_hold_dest [0:PIPE_WIDTH-1];
@@ -704,24 +705,15 @@ module rename
     // =========================================================================
     // Stall: backpressure to decode/fetch
     //
-    // Stall when the holding register will still be non-empty after this
-    // cycle (some work slots didn't advance) and there is no room for new
-    // decode input.
+    // The hold buffer owns rename while active because fresh decode slots are
+    // not merged into the held work set. For a fresh decode packet, assert
+    // backpressure only when no slot can advance; partial progress captures
+    // the non-advanced tail into hold and lets decode accept the next packet.
     // =========================================================================
-    always_comb begin
-        remaining_count = '0;
-        for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if (work_valid[i] && !slot_can_advance[i]) begin
-                remaining_count = remaining_count + 3'd1;
-            end
-        end
-
-        // Stall if remaining non-advanced insns fill all slots,
-        // or if holding register is occupied and nothing advanced.
-        stall = hold_active_c ||
-                (remaining_count >= 3'(PIPE_WIDTH)) ||
-                ((|hold_valid) && !(|slot_can_advance));
-    end
+    assign any_work_advance_c = |slot_can_advance;
+    assign capture_nonadvance_c = hold_active_c || any_work_advance_c;
+    assign stall = hold_active_c ||
+                   ((|work_valid) && !any_work_advance_c);
 
     // =========================================================================
     // Holding register next-state compaction indices
@@ -762,7 +754,9 @@ module rename
             end
             // Pack non-advanced work slots into bottom of holding register
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (work_valid[i] && !slot_can_advance[i]) begin
+                if (capture_nonadvance_c &&
+                    work_valid[i] &&
+                    !slot_can_advance[i]) begin
                     hold_valid[next_hold_dest[i]] <= 1'b1;
                     hold_insn_flat[next_hold_dest[i]]  <= HI_W'(work_insn[i]);
                 end

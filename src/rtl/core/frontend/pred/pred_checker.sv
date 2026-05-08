@@ -95,6 +95,8 @@ module pred_checker
     output logic [2:0]                   final_count_o,
     output logic                         same_owner_continue_o,
     output logic                         owner_complete_o,
+    output logic                         successor_req_valid_o,
+    output logic [63:0]                  successor_req_pc_o,
     output logic                         req_redirect_o,
     output logic                         bpu_redirect_o,
     output logic [63:0]                  bpu_target_o,
@@ -587,6 +589,15 @@ module pred_checker
         !same_owner_continue_o &&
         (!straddle_detected_i ||
          (bp_branch_found_o && bp_taken_o && !subgroup_split_before_ctl_o));
+    assign successor_req_valid_o =
+        valid_i &&
+        will_emit_i &&
+        seq_valid_i &&
+        owner_complete_o &&
+        !req_redirect_o &&
+        !redirect_i;
+    assign successor_req_pc_o =
+        subgroup_split_before_ctl_o ? subgroup_split_pc_o : seq_next_pc_i;
 
     assign req_redirect_o =
         will_emit_i &&

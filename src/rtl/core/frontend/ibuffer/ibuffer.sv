@@ -84,7 +84,7 @@ module ibuffer
         .count             (count)
     );
 
-    assign packet_out_valid = deq_valid && deq_owner_match;
+    assign packet_out_valid = deq_fire && deq_owner_match;
     assign packet_out       = deq_packet;
     assign flowthrough_candidate   = deq_flowthrough;
     assign flowthrough_owner_match = deq_flowthrough && deq_owner_match;
