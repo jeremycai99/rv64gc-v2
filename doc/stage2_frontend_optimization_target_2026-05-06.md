@@ -142,6 +142,12 @@ Rejected trials that should not be revived in their old form:
 | IBuffer-credit-gated post-consume remainder bypass | Same smoke win as direct bypass, but CoreMark 10 still regresses to `1,542,985`. Full-buffer cycles improve versus direct bypass but backend packet-ready stall remains `40,730`. | Rejected in this form. Current-cycle IBuffer occupancy is not enough credit information for this burst; future remainder work must coordinate with downstream drain or owner work scheduling, not just local cursor motion. |
 | TAGE mispredicted-conditional-first training | Smoke regresses: CoreMark 1 `164,550 -> 167,213`, branch hotspot `141,408 -> 146,011`. | Rejected as the next BPU training policy. Prioritizing a mispredicted conditional in the commit group hurts broader branch behavior. |
 | Execute-time BRU recovery plus partial recovery knobs | Branch hotspot improves `141,408 -> 131,707`, but CoreMark 1 fails with `TOHOST_3`, flags `1`, checksum `36549` instead of `59156`. | Rejected as-is. Execute-time branch recovery has leverage, but the current recovery contract is not endpoint-safe enough to harden. |
+| Integer PRF depth 192 | Dhrystone 100, CoreMark 1, branch hotspot, and CoreMark 10 are cycle-identical to the accepted baseline. | Rejected as a no-op for the current limiter. Raw PRF capacity does not move the measured rows even though CoreMark 10 reports integer physical-register pressure. |
+| ROB slot-2 writeback-ready bypass | Dhrystone 100 and branch hotspot are unchanged, while CoreMark 1 regresses `164,550 -> 165,565`. The broader full writeback bypass plusarg regresses CoreMark 1 to `167,527`. | Rejected. Same-cycle ROB head ready bypass is not a useful commit-side fix in this pipeline shape. |
+| BRU early fetch redirect isolation | Early redirect alone improves CoreMark 1 slightly `164,550 -> 163,960`, but regresses Dhrystone 100 `18,913 -> 18,922` and branch hotspot `141,408 -> 144,962`. Combining it with keep-frontend, partial recovery, or execute-time BPU update regresses CoreMark 1 or fails endpoint identity. | Rejected for now. Branch/recovery still has leverage, but the current execution-time recovery contract is not broad enough. |
+| Local PHT global override | Branch hotspot improves `141,408 -> 138,680`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 169,642` with mispredicts rising from `4,250` to `5,025`. | Rejected as a global policy. Local history has useful information, but it needs per-PC arbitration against TAGE/SC instead of overriding everywhere. |
+| Disable local predictor | Branch hotspot improves `141,408 -> 137,606`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 165,487`. | Rejected. Current local alternation support is useful on CoreMark but harmful on the branch probe, so the right direction is a chooser, not all-on or all-off. |
+| NLPB full-depth duplicate check | Dhrystone 100 and branch hotspot are unchanged; CoreMark 1 moves only `164,550 -> 164,556`. | Not a performance slice. This may be a cleanup candidate, but it does not close the Stage 2 target gap. |
 
 The resolved successor lesson is specific: allocating a new owner was not the
 only risk. The first packet for that owner must be delivered from the owner
@@ -238,8 +244,13 @@ bottleneck selection:
 | `stall_preg` | 33,177 | Slot-0 rename stall is also strongly correlated with integer physical register pressure. |
 
 Verdict: frontend ownership is no longer the only active limiter on CoreMark
-10. The next accepted performance slice should test ROB/PRF capacity or a
-real backend drain improvement before more frontend-local cursor work.
+10. Raw ROB/PRF capacity and ROB-head bypass did not move the broad rows, so
+the next architectural slice should focus on predictor arbitration and recovery
+quality before more frontend-local cursor work. The local-history experiments
+show a real signal: local information improves the branch hotspot but hurts
+CoreMark when applied globally. The next BPU slice should therefore add
+component attribution and a per-PC local-vs-SC chooser, then accept it only if
+it improves the heavy CoreMark row without Dhrystone or branch-probe regression.
 
 Promotion conditions:
 
@@ -271,7 +282,8 @@ counter-backed second domain instead.
 | BPU S0/uBTB | Conditional | May help if lookup latency or direction quality blocks runahead. | Promote only with per-PC branch data or timing evidence. |
 | Indirect prediction | Conditional | Helps if indirect MPKI is material. | Per-PC evidence required. |
 | Fusion/uop accounting | Orthogonal candidate | Reduces useful work per frontend slot and backend pressure. | Pattern frequency and retired-stream identity required. |
-| ROB/PRF capacity | Promote to next DSE | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`; this explains the packet-ready backend stalls exposed by frontend runahead. | Must improve CoreMark 10 without Dhrystone/CoreMark 1 regression; keep width unchanged. |
+| ROB/PRF capacity | Rejected in raw form | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical and ROB-head bypass regresses CoreMark 1. | Reopen only with a concrete allocation, free, or commit-drain mechanism, not raw depth. |
+| BPU local-vs-SC chooser | Primary next BPU slice | Global local override improves the branch hotspot while regressing CoreMark; disabling local does the opposite. This is the signature for selective arbitration. | Train per PC from component correctness, keep local alternation support, and reject any row that improves only one benchmark. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
 ## Evidence Required
@@ -305,10 +317,11 @@ Every accepted performance row must report:
 | 6 | Split the remaining same-owner remainder and no-emit buckets. | Done by `20260507_same_owner_remainder_attrib_coremark10`: remainder is consume/post-consume, no-emit is mainly frontend stall, redirect, and packet-ready. |
 | 7 | Try post-consume remainder bypass variants. | Rejected: strict-clean but CoreMark 10 regresses from downstream packet pressure. |
 | 8 | Re-attribute duplicate/no-emit and packet-buffer full cycles, then choose owner work scheduling, packet-buffer credit policy, or a second-domain backend drain limiter. | Done by `20260507_packet_pressure_attrib_coremark10`: packet full is not owner-wait, backend stall is ROB/PRF-correlated. |
-| 9 | Try a ROB/PRF capacity DSE while keeping width unchanged. | Heavy rows improve with no endpoint drift and no Dhrystone/CoreMark 1 regression. |
-| 10 | Score frontend-only plus first backend-capacity ceiling. | Gate C passes or fails explicitly. |
-| 11 | Open a deeper backend DSE if capacity alone fails. | Gate D names the limiter before RTL work starts. |
-| 12 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 9 | Record raw capacity and commit-bypass probes. | Done: PRF192 is a no-op, ROB-head bypass regresses CoreMark 1, and neither is the next accepted path. |
+| 10 | Add BPU component attribution and try selective local-vs-SC arbitration. | The row improves CoreMark 10 or CoreMark 1 without Dhrystone or branch-probe regression, and the counters show the chooser replaced wrong global local decisions rather than overfitting one PC. |
+| 11 | Score the BPU arbitration ceiling. | Gate C passes or fails explicitly with heavy CoreMark and broad smoke evidence. |
+| 12 | Open a deeper backend DSE if BPU arbitration fails. | Gate D names the limiter before RTL work starts. |
+| 13 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
