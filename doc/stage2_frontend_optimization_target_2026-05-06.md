@@ -38,11 +38,11 @@ Current scoreable rows:
 
 | Workload | Source | mcycle | Metric | Status |
 |---|---|---:|---:|---|
-| Dhrystone 100 | `benchmark_results/dse_dse_20260508_loop_bypass_chooser_smoke` | 18,577 | 3.133924 DMIPS/MHz | PASS |
-| CoreMark 1 | `benchmark_results/dse_dse_20260508_loop_bypass_chooser_smoke` | 163,727 | 6.453820 CoreMark/MHz | PASS |
-| CoreMark 10 | `benchmark_results/dse_dse_20260508_loop_bypass_chooser_coremark10` | 1,525,168 | 6.594618 CoreMark/MHz | PASS |
-| Branch hotspot probe | `benchmark_results/dse_dse_20260508_loop_bypass_chooser_smoke` | 141,326 | 1.108734 IPC | PASS |
-| Dhrystone 300 | `benchmark_results/dse_dse_20260508_loop_bypass_chooser_broad` | 53,890 | 3.193357 DMIPS/MHz | PASS |
+| Dhrystone 100 | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 18,577 | 3.133924 DMIPS/MHz | PASS |
+| CoreMark 1 | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 163,727 | 6.453820 CoreMark/MHz | PASS |
+| CoreMark 10 | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 1,525,168 | 6.594618 CoreMark/MHz | PASS |
+| Branch hotspot probe | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 141,326 | 1.108734 IPC | PASS |
+| Dhrystone 300 | `benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` | 53,890 | 3.193357 DMIPS/MHz | PASS |
 
 Current gap to the Stage 2 stretch targets:
 
@@ -405,6 +405,12 @@ Dhrystone's hot loop but damaged CoreMark loops such as `0x80002446` and
 that broad CoreMark loop pollution. CoreMark 10 committed mispredicts improve
 from `33,593` to `33,293`, and dynamic BPU-update misses improve from
 `18,352` to `17,794`.
+
+Clean committed goal run:
+`benchmark_results/signoff_signoff_20260508_loop_bypass_chooser_goal` passes all 16
+Stage 1 manifest rows from commit `36a1e2f` with strict owner/delivery checks,
+`+PERF_PROFILE +PERF_COUNTERS +STAT_DUMP`, loop-buffer activity zero, and
+standalone decoded-op replay activity zero.
 
 Update, 2026-05-08: raw load speculation past unresolved store-address entries
 using `+ALLOW_LOAD_SPEC_PAST_STA` is endpoint-clean but performance-identical
