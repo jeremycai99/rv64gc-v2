@@ -46,17 +46,23 @@ module tb_top
     // Core instantiation
     // =========================================================================
     logic [63:0] sim_tohost_addr;
-    logic        backend_admission_throttle_enable;
+    logic        backend_admission_throttle_enable = 1'b0;
+    logic        iq_ready_enq_bypass_enable = 1'b0;
 
     initial begin
         sim_tohost_addr = TOHOST_ADDR;
         backend_admission_throttle_enable =
             $test$plusargs("BACKEND_ADMISSION_THROTTLE");
+        iq_ready_enq_bypass_enable =
+            $test$plusargs("IQ_READY_ENQ_BYPASS");
         if ($value$plusargs("TOHOST_ADDR=%h", sim_tohost_addr)) begin
             $display("[SIM_PLATFORM] TOHOST_ADDR=%016h", sim_tohost_addr);
         end
         if (backend_admission_throttle_enable) begin
             $display("[SIM_PLATFORM] BACKEND_ADMISSION_THROTTLE=1");
+        end
+        if (iq_ready_enq_bypass_enable) begin
+            $display("[SIM_PLATFORM] IQ_READY_ENQ_BYPASS=1");
         end
     end
 
@@ -86,6 +92,7 @@ module tb_top
 
         // Optional DSE controls
         .backend_admission_throttle_enable(backend_admission_throttle_enable),
+        .iq_ready_enq_bypass_enable(iq_ready_enq_bypass_enable),
 
         // Performance counters
         .perf_mcycle     (perf_mcycle),
@@ -562,6 +569,10 @@ module tb_top
     integer btl_iq_selected_uops [0:BTL_IQ_COUNT-1];
     integer btl_iq_arb_loss [0:BTL_IQ_COUNT-1];
     integer btl_iq_oldest_not_ready_age_max [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_ready_hidden [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_ready_issued_bypass [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_wakeup_hit [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_bypass_suppressed [0:BTL_IQ_COUNT-1];
     integer btl_dep_src1_wait;
     integer btl_dep_src2_wait;
     integer btl_dep_both_src_wait;
@@ -1023,6 +1034,10 @@ module tb_top
                 btl_iq_selected_uops[i] <= 0;
                 btl_iq_arb_loss[i] <= 0;
                 btl_iq_oldest_not_ready_age_max[i] <= 0;
+                btl_iq_enq_ready_hidden[i] <= 0;
+                btl_iq_enq_ready_issued_bypass[i] <= 0;
+                btl_iq_enq_wakeup_hit[i] <= 0;
+                btl_iq_enq_bypass_suppressed[i] <= 0;
             end
             btl_dep_src1_wait <= 0;
             btl_dep_src2_wait <= 0;
@@ -1087,6 +1102,10 @@ module tb_top
             automatic int btl_iq_eligible_now [0:BTL_IQ_COUNT-1];
             automatic int btl_iq_selected_now [0:BTL_IQ_COUNT-1];
             automatic int btl_iq_oldest_wait_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_ready_hidden_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_ready_issued_bypass_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_wakeup_hit_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_bypass_suppressed_now [0:BTL_IQ_COUNT-1];
             automatic int btl_src1_wait_now;
             automatic int btl_src2_wait_now;
             automatic int btl_both_src_wait_now;
@@ -1134,6 +1153,10 @@ module tb_top
                 btl_iq_eligible_now[i] = 0;
                 btl_iq_selected_now[i] = 0;
                 btl_iq_oldest_wait_now[i] = 0;
+                btl_iq_enq_ready_hidden_now[i] = 0;
+                btl_iq_enq_ready_issued_bypass_now[i] = 0;
+                btl_iq_enq_wakeup_hit_now[i] = 0;
+                btl_iq_enq_bypass_suppressed_now[i] = 0;
             end
             btl_src1_wait_now = 0;
             btl_src2_wait_now = 0;
@@ -1325,6 +1348,54 @@ module tb_top
                 btl_iq_selected_now[BTL_IQ_LOAD] = $countones(u_core.u_iq_load.issue_valid);
                 btl_iq_selected_now[BTL_IQ_STORE] = $countones(u_core.u_iq_store.issue_valid);
                 btl_iq_selected_now[BTL_IQ_STD] = $countones(u_core.u_iq_store_data.issue_valid);
+                btl_iq_enq_ready_hidden_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_ready_hidden);
+                btl_iq_enq_ready_hidden_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_ready_hidden);
+                btl_iq_enq_ready_hidden_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_ready_hidden);
+                btl_iq_enq_ready_hidden_now[BTL_IQ_LOAD] =
+                    $countones(u_core.u_iq_load.enq_ready_hidden);
+                btl_iq_enq_ready_hidden_now[BTL_IQ_STORE] =
+                    $countones(u_core.u_iq_store.enq_ready_hidden);
+                btl_iq_enq_ready_hidden_now[BTL_IQ_STD] =
+                    $countones(u_core.u_iq_store_data.enq_ready_hidden);
+                btl_iq_enq_ready_issued_bypass_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_ready_issued_bypass);
+                btl_iq_enq_ready_issued_bypass_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_ready_issued_bypass);
+                btl_iq_enq_ready_issued_bypass_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_ready_issued_bypass);
+                btl_iq_enq_ready_issued_bypass_now[BTL_IQ_LOAD] =
+                    $countones(u_core.u_iq_load.enq_ready_issued_bypass);
+                btl_iq_enq_ready_issued_bypass_now[BTL_IQ_STORE] =
+                    $countones(u_core.u_iq_store.enq_ready_issued_bypass);
+                btl_iq_enq_ready_issued_bypass_now[BTL_IQ_STD] =
+                    $countones(u_core.u_iq_store_data.enq_ready_issued_bypass);
+                btl_iq_enq_wakeup_hit_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_wakeup_hit);
+                btl_iq_enq_wakeup_hit_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_wakeup_hit);
+                btl_iq_enq_wakeup_hit_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_wakeup_hit);
+                btl_iq_enq_wakeup_hit_now[BTL_IQ_LOAD] =
+                    $countones(u_core.u_iq_load.enq_wakeup_hit);
+                btl_iq_enq_wakeup_hit_now[BTL_IQ_STORE] =
+                    $countones(u_core.u_iq_store.enq_wakeup_hit);
+                btl_iq_enq_wakeup_hit_now[BTL_IQ_STD] =
+                    $countones(u_core.u_iq_store_data.enq_wakeup_hit);
+                btl_iq_enq_bypass_suppressed_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_bypass_suppressed);
+                btl_iq_enq_bypass_suppressed_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_bypass_suppressed);
+                btl_iq_enq_bypass_suppressed_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_bypass_suppressed);
+                btl_iq_enq_bypass_suppressed_now[BTL_IQ_LOAD] =
+                    $countones(u_core.u_iq_load.enq_bypass_suppressed);
+                btl_iq_enq_bypass_suppressed_now[BTL_IQ_STORE] =
+                    $countones(u_core.u_iq_store.enq_bypass_suppressed);
+                btl_iq_enq_bypass_suppressed_now[BTL_IQ_STD] =
+                    $countones(u_core.u_iq_store_data.enq_bypass_suppressed);
 
                 for (int e = 0; e < IQ_INT_DEPTH; e++) begin
                     if (u_core.u_iq0.entry_valid[e]) begin
@@ -1700,6 +1771,18 @@ module tb_top
                         btl_iq_oldest_not_ready_age_max[i])
                         btl_iq_oldest_not_ready_age_max[i] <=
                             btl_iq_oldest_wait_now[i];
+                    btl_iq_enq_ready_hidden[i] <=
+                        btl_iq_enq_ready_hidden[i] +
+                        btl_iq_enq_ready_hidden_now[i];
+                    btl_iq_enq_ready_issued_bypass[i] <=
+                        btl_iq_enq_ready_issued_bypass[i] +
+                        btl_iq_enq_ready_issued_bypass_now[i];
+                    btl_iq_enq_wakeup_hit[i] <=
+                        btl_iq_enq_wakeup_hit[i] +
+                        btl_iq_enq_wakeup_hit_now[i];
+                    btl_iq_enq_bypass_suppressed[i] <=
+                        btl_iq_enq_bypass_suppressed[i] +
+                        btl_iq_enq_bypass_suppressed_now[i];
                 end
 
                 btl_dep_src1_wait <= btl_dep_src1_wait + btl_src1_wait_now;
@@ -2628,6 +2711,10 @@ module tb_top
                 $display("xs bottleneck_iq0_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ0]);
                 $display("xs bottleneck_iq0_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ0]);
                 $display("xs bottleneck_iq0_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_ready_hidden : %0d", btl_iq_enq_ready_hidden[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_ready_issued_bypass : %0d", btl_iq_enq_ready_issued_bypass[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ0]);
                 $display("xs bottleneck_iq1_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ1]);
                 $display("xs bottleneck_iq1_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ1]);
                 $display("xs bottleneck_iq1_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ1]);
@@ -2637,6 +2724,10 @@ module tb_top
                 $display("xs bottleneck_iq1_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ1]);
                 $display("xs bottleneck_iq1_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ1]);
                 $display("xs bottleneck_iq1_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_ready_hidden : %0d", btl_iq_enq_ready_hidden[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_ready_issued_bypass : %0d", btl_iq_enq_ready_issued_bypass[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ1]);
                 $display("xs bottleneck_iq2_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ2]);
                 $display("xs bottleneck_iq2_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ2]);
                 $display("xs bottleneck_iq2_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ2]);
@@ -2646,6 +2737,10 @@ module tb_top
                 $display("xs bottleneck_iq2_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ2]);
                 $display("xs bottleneck_iq2_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ2]);
                 $display("xs bottleneck_iq2_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_ready_hidden : %0d", btl_iq_enq_ready_hidden[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_ready_issued_bypass : %0d", btl_iq_enq_ready_issued_bypass[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ2]);
                 $display("xs bottleneck_iq_load_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ_LOAD]);
                 $display("xs bottleneck_iq_load_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ_LOAD]);
                 $display("xs bottleneck_iq_load_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ_LOAD]);
@@ -2655,6 +2750,10 @@ module tb_top
                 $display("xs bottleneck_iq_load_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ_LOAD]);
                 $display("xs bottleneck_iq_load_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ_LOAD]);
                 $display("xs bottleneck_iq_load_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_enq_ready_hidden : %0d", btl_iq_enq_ready_hidden[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_enq_ready_issued_bypass : %0d", btl_iq_enq_ready_issued_bypass[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ_LOAD]);
                 $display("xs bottleneck_iq_store_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ_STORE]);
                 $display("xs bottleneck_iq_store_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ_STORE]);
                 $display("xs bottleneck_iq_store_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ_STORE]);
@@ -2664,6 +2763,10 @@ module tb_top
                 $display("xs bottleneck_iq_store_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ_STORE]);
                 $display("xs bottleneck_iq_store_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ_STORE]);
                 $display("xs bottleneck_iq_store_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_enq_ready_hidden : %0d", btl_iq_enq_ready_hidden[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_enq_ready_issued_bypass : %0d", btl_iq_enq_ready_issued_bypass[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ_STORE]);
                 $display("xs bottleneck_iq_std_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ_STD]);
                 $display("xs bottleneck_iq_std_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ_STD]);
                 $display("xs bottleneck_iq_std_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ_STD]);
@@ -2673,6 +2776,10 @@ module tb_top
                 $display("xs bottleneck_iq_std_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ_STD]);
                 $display("xs bottleneck_iq_std_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ_STD]);
                 $display("xs bottleneck_iq_std_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_enq_ready_hidden : %0d", btl_iq_enq_ready_hidden[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_enq_ready_issued_bypass : %0d", btl_iq_enq_ready_issued_bypass[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ_STD]);
                 $display("xs bottleneck_dep_src1_wait : %0d", btl_dep_src1_wait);
                 $display("xs bottleneck_dep_src2_wait : %0d", btl_dep_src2_wait);
                 $display("xs bottleneck_dep_both_src_wait : %0d", btl_dep_both_src_wait);

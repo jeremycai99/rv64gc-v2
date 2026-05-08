@@ -11,6 +11,7 @@ module issue_queue
     parameter int DEPTH      = 32,
     parameter int NUM_ENQUEUE = 2,
     parameter int NUM_SELECT  = 2,
+    parameter int SUPPORT_ENQ_ISSUE_BYPASS = 0,
     // When non-zero, entries whose fu_type matches PORT0_ONLY_FU are
     // excluded from port 1 selection (they can only issue on port 0).
     // Set to a fu_type_e value (e.g., 3'd1 for FU_BRU) or 0 to disable.
@@ -61,6 +62,7 @@ module issue_queue
     // Backpressure: suppress issue on selected ports and preserve the
     // corresponding entry for re-issue on a later cycle.
     input  logic [NUM_SELECT-1:0]  issue_suppress,
+    input  logic                   enq_issue_bypass_enable,
     input  logic [1:0]             older_probe_valid,
     input  logic [ROB_IDX_BITS-1:0] older_probe_rob_idx [0:1],
     output logic [1:0]             has_older_entry,
@@ -81,6 +83,7 @@ module issue_queue
     // Local parameters
     // =====================================================================
     localparam int IDX_BITS  = $clog2(DEPTH);
+    localparam int ENQ_IDX_BITS = (NUM_ENQUEUE <= 1) ? 1 : $clog2(NUM_ENQUEUE);
     localparam int PW        = $bits(iq_entry_t);
     // For age calculations with non-power-of-2 ROB
     localparam int AGE_BITS  = ROB_IDX_BITS + 1;  // extra bit for wrapping
@@ -100,6 +103,11 @@ module issue_queue
     // Store payload as flat bit vectors to avoid Verilator packed-struct
     // array misalignment.  Cast to/from iq_entry_t at write/read boundaries.
     logic [PW-1:0]                payload_r    [0:DEPTH-1];
+    logic [NUM_ENQUEUE-1:0]       enq_ready_candidate;
+    logic [NUM_ENQUEUE-1:0]       enq_ready_hidden;
+    logic [NUM_ENQUEUE-1:0]       enq_ready_issued_bypass;
+    logic [NUM_ENQUEUE-1:0]       enq_wakeup_hit;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_suppressed;
 
     // =====================================================================
     // Entry count and full flag
@@ -150,6 +158,10 @@ module issue_queue
     // Per-entry spec-cancel match (combinational, used by both paths)
     logic [DEPTH-1:0] spec_cancel_rs1;
     logic [DEPTH-1:0] spec_cancel_rs2;
+    logic [NUM_ENQUEUE-1:0] enq_s1_rdy;
+    logic [NUM_ENQUEUE-1:0] enq_s2_rdy;
+    logic [NUM_ENQUEUE-1:0] enq_s1_wakeup_hit;
+    logic [NUM_ENQUEUE-1:0] enq_s2_wakeup_hit;
 
     always_comb begin
         next_src1_ready = src1_ready;
@@ -269,6 +281,8 @@ module issue_queue
     // =====================================================================
     logic [IDX_BITS-1:0] sel_idx    [0:NUM_SELECT-1];
     logic [NUM_SELECT-1:0] sel_found;
+    logic [NUM_SELECT-1:0] issue_from_enq;
+    logic [ENQ_IDX_BITS-1:0] issue_enq_lane [0:NUM_SELECT-1];
 
     // Pre-compute ages for all entries (outside the selection always_comb)
     logic [AGE_BITS-1:0] entry_age [0:DEPTH-1];
@@ -344,16 +358,57 @@ module issue_queue
         end
     endgenerate
 
+    // =====================================================================
+    // Ready enqueue idle-port bypass
+    //
+    // This does not participate in the resident oldest-ready arbitration. It
+    // only fills issue ports left unused by resident entries, then suppresses
+    // allocation for the fired enqueue lane.
+    // =====================================================================
+    always_comb begin
+        enq_ready_issued_bypass = '0;
+        for (int p = 0; p < NUM_SELECT; p++) begin
+            issue_from_enq[p] = 1'b0;
+            issue_enq_lane[p] = '0;
+        end
+
+        if ((SUPPORT_ENQ_ISSUE_BYPASS != 0) &&
+            enq_issue_bypass_enable &&
+            !flush_valid) begin
+            for (int p = 0; p < NUM_SELECT; p++) begin
+                if (!sel_found[p] && !issue_suppress[p]) begin
+                    for (int q = 0; q < NUM_ENQUEUE; q++) begin
+                        if (!issue_from_enq[p] &&
+                            !enq_ready_issued_bypass[q] &&
+                            enq_ready_candidate[q] &&
+                            !(PORT0_ONLY_FU != 0 && p != 0 &&
+                              enq_data[q].fu_type == PORT0_ONLY_FU[2:0])) begin
+                            issue_from_enq[p] = 1'b1;
+                            issue_enq_lane[p] = ENQ_IDX_BITS'(q);
+                            enq_ready_issued_bypass[q] = 1'b1;
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     // Drive issue outputs
     always_comb begin
         for (int p = 0; p < NUM_SELECT; p++) begin
-            issue_candidate_valid[p] = sel_found[p];
-            issue_valid[p] = sel_found[p] & ~issue_suppress[p];
-            issue_data[p]  = iq_entry_t'(payload_r[sel_idx[p]]);
-            // Override ready flags with wakeup results so downstream sees
-            // correct readiness even on the issue cycle.
-            issue_data[p].rs1_ready = next_src1_ready[sel_idx[p]];
-            issue_data[p].rs2_ready = next_src2_ready[sel_idx[p]];
+            issue_candidate_valid[p] = sel_found[p] || issue_from_enq[p];
+            issue_valid[p] = (sel_found[p] || issue_from_enq[p]) & ~issue_suppress[p];
+            if (issue_from_enq[p]) begin
+                issue_data[p] = enq_data[issue_enq_lane[p]];
+                issue_data[p].rs1_ready = enq_s1_rdy[issue_enq_lane[p]];
+                issue_data[p].rs2_ready = enq_s2_rdy[issue_enq_lane[p]];
+            end else begin
+                issue_data[p]  = iq_entry_t'(payload_r[sel_idx[p]]);
+                // Override ready flags with wakeup results so downstream sees
+                // correct readiness even on the issue cycle.
+                issue_data[p].rs1_ready = next_src1_ready[sel_idx[p]];
+                issue_data[p].rs2_ready = next_src2_ready[sel_idx[p]];
+            end
         end
     end
 
@@ -384,12 +439,29 @@ module issue_queue
         end
 
         slots_found = 0;
-        for (int e = 0; e < DEPTH; e++) begin
-            if (!fs_occupied[e] && slots_found < NUM_ENQUEUE) begin
-                free_idx[slots_found]   = e[IDX_BITS-1:0];
-                free_found[slots_found] = 1'b1;
-                fs_occupied[e] = 1'b1;  // mark taken for subsequent searches
-                slots_found = slots_found + 1;
+        if ((SUPPORT_ENQ_ISSUE_BYPASS != 0) &&
+            enq_issue_bypass_enable) begin
+            for (int q = 0; q < NUM_ENQUEUE; q++) begin
+                if (enq_ready_issued_bypass[q]) begin
+                    free_found[q] = 1'b1;
+                end else if (enq_valid[q]) begin
+                    for (int e = 0; e < DEPTH; e++) begin
+                        if (!fs_occupied[e] && !free_found[q]) begin
+                            free_idx[q]   = e[IDX_BITS-1:0];
+                            free_found[q] = 1'b1;
+                            fs_occupied[e] = 1'b1;
+                        end
+                    end
+                end
+            end
+        end else begin
+            for (int e = 0; e < DEPTH; e++) begin
+                if (!fs_occupied[e] && slots_found < NUM_ENQUEUE) begin
+                    free_idx[slots_found]   = e[IDX_BITS-1:0];
+                    free_found[slots_found] = 1'b1;
+                    fs_occupied[e] = 1'b1;  // mark taken for subsequent searches
+                    slots_found = slots_found + 1;
+                end
             end
         end
     end
@@ -442,7 +514,7 @@ module issue_queue
         end
         // Add enqueued entries
         for (int q = 0; q < NUM_ENQUEUE; q++) begin
-            if (enq_valid[q] && free_found[q])
+            if (enq_valid[q] && free_found[q] && !enq_ready_issued_bypass[q])
                 count_next = count_next + 1'b1;
         end
     end
@@ -465,7 +537,7 @@ module issue_queue
                 flush_valid_count = flush_valid_count + 1'b1;
         end
         for (int q = 0; q < NUM_ENQUEUE; q++) begin
-            if (enq_valid[q] && free_found[q])
+            if (enq_valid[q] && free_found[q] && !enq_ready_issued_bypass[q])
                 flush_valid_count = flush_valid_count + 1'b1;
         end
     end
@@ -473,13 +545,12 @@ module issue_queue
     // =====================================================================
     // Enqueue source readiness (combinational, for ff enqueue path)
     // =====================================================================
-    logic [NUM_ENQUEUE-1:0] enq_s1_rdy;
-    logic [NUM_ENQUEUE-1:0] enq_s2_rdy;
-
     always_comb begin
         for (int q = 0; q < NUM_ENQUEUE; q++) begin
             enq_s1_rdy[q] = enq_data[q].rs1_ready;
             enq_s2_rdy[q] = enq_data[q].rs2_ready;
+            enq_s1_wakeup_hit[q] = 1'b0;
+            enq_s2_wakeup_hit[q] = 1'b0;
             // preg_ready_table snoop (covers older broadcasts)
             if (preg_ready_table[enq_data[q].rs1_phys])
                 enq_s1_rdy[q] = 1'b1;
@@ -488,23 +559,69 @@ module issue_queue
             // Check CDB for source match (override ready to 1)
             for (int c = 0; c < CDB_WIDTH; c++) begin
                 if (cdb_valid[c]) begin
-                    if (cdb_tag[c] == enq_data[q].rs1_phys)
+                    if (cdb_tag[c] == enq_data[q].rs1_phys) begin
                         enq_s1_rdy[q] = 1'b1;
-                    if (cdb_tag[c] == enq_data[q].rs2_phys)
+                        enq_s1_wakeup_hit[q] = 1'b1;
+                    end
+                    if (cdb_tag[c] == enq_data[q].rs2_phys) begin
                         enq_s2_rdy[q] = 1'b1;
+                        enq_s2_wakeup_hit[q] = 1'b1;
+                    end
                 end
             end
             // Check load_wb sideband for source match at enqueue time.
             // Handles instructions enqueued on the same cycle a load writes
             // back (preg_ready_table may not yet be updated).
             if (load_wb_wk_valid0) begin
-                if (load_wb_wk_tag0 == enq_data[q].rs1_phys) enq_s1_rdy[q] = 1'b1;
-                if (load_wb_wk_tag0 == enq_data[q].rs2_phys) enq_s2_rdy[q] = 1'b1;
+                if (load_wb_wk_tag0 == enq_data[q].rs1_phys) begin
+                    enq_s1_rdy[q] = 1'b1;
+                    enq_s1_wakeup_hit[q] = 1'b1;
+                end
+                if (load_wb_wk_tag0 == enq_data[q].rs2_phys) begin
+                    enq_s2_rdy[q] = 1'b1;
+                    enq_s2_wakeup_hit[q] = 1'b1;
+                end
             end
             if (load_wb_wk_valid1) begin
-                if (load_wb_wk_tag1 == enq_data[q].rs1_phys) enq_s1_rdy[q] = 1'b1;
-                if (load_wb_wk_tag1 == enq_data[q].rs2_phys) enq_s2_rdy[q] = 1'b1;
+                if (load_wb_wk_tag1 == enq_data[q].rs1_phys) begin
+                    enq_s1_rdy[q] = 1'b1;
+                    enq_s1_wakeup_hit[q] = 1'b1;
+                end
+                if (load_wb_wk_tag1 == enq_data[q].rs2_phys) begin
+                    enq_s2_rdy[q] = 1'b1;
+                    enq_s2_wakeup_hit[q] = 1'b1;
+                end
             end
+        end
+    end
+
+    always_comb begin
+        for (int q = 0; q < NUM_ENQUEUE; q++) begin
+            enq_ready_candidate[q] =
+                (SUPPORT_ENQ_ISSUE_BYPASS != 0) &&
+                enq_issue_bypass_enable &&
+                enq_valid[q] &&
+                enq_s1_rdy[q] &&
+                enq_s2_rdy[q] &&
+                !flush_valid;
+            enq_wakeup_hit[q] =
+                enq_valid[q] &&
+                ((enq_s1_wakeup_hit[q] && !enq_data[q].rs1_ready) ||
+                 (enq_s2_wakeup_hit[q] && !enq_data[q].rs2_ready));
+        end
+    end
+
+    always_comb begin
+        for (int q = 0; q < NUM_ENQUEUE; q++) begin
+            enq_ready_hidden[q] =
+                enq_valid[q] &&
+                enq_s1_rdy[q] &&
+                enq_s2_rdy[q] &&
+                !enq_ready_issued_bypass[q] &&
+                !flush_valid;
+            enq_bypass_suppressed[q] =
+                enq_ready_candidate[q] &&
+                !enq_ready_issued_bypass[q];
         end
     end
 
@@ -573,7 +690,7 @@ module issue_queue
             // held the consumer in the FIFO while the producer already
             // wrote back through the CDB).
             for (int q = 0; q < NUM_ENQUEUE; q++) begin
-                if (enq_valid[q] && free_found[q]) begin
+                if (enq_valid[q] && free_found[q] && !enq_ready_issued_bypass[q]) begin
                     entry_valid[free_idx[q]] <= 1'b1;
                     payload_r[free_idx[q]]   <= PW'(enq_data[q]);
                     rs1_phys_r[free_idx[q]]  <= enq_data[q].rs1_phys;

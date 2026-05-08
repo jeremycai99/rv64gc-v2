@@ -71,6 +71,7 @@ SIGNOFF_ALLOWED_PLUSARGS = {
     "PERF_COUNTERS",
     "STAT_DUMP",
     "BOTTLENECK_PROFILE",
+    "IQ_READY_ENQ_BYPASS",
     "FETCH_DELIVERY_CHECK",
     "FETCH_DELIVERY_STRICT",
     "FETCH_OWNER_CHECK",
@@ -103,6 +104,7 @@ SIGNOFF_MECHANISM_CLASSES = {
     "fetch_block_handoff",
     "frontend_prefetch_fdip",
     "decoded_op_cache_ftq_attached",
+    "issue_wakeup_bypass",
 }
 
 SIGNOFF_REJECTED_MECHANISM_CLASSES = {
@@ -1737,7 +1739,8 @@ def main(argv: list[str] | None = None) -> int:
             "Architectural class for the tested mechanism. Scoreable signoff "
             "classes include ftq_owned_delivery, ibuffer_delivery, "
             "bpu_loop_exit_prediction, fetch_block_handoff, "
-            "frontend_prefetch_fdip, and decoded_op_cache_ftq_attached. "
+            "frontend_prefetch_fdip, decoded_op_cache_ftq_attached, "
+            "and issue_wakeup_bypass. "
             "Loop-replay-like classes are DSE/debug-only."
         ),
     )

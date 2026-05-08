@@ -30,6 +30,7 @@ module rv64gc_core_top
 
     // Optional DSE controls
     input  logic        backend_admission_throttle_enable,
+    input  logic        iq_ready_enq_bypass_enable,
 
     // Performance counters (for IPC measurement / benchmarking)
     output logic [63:0] perf_mcycle,
@@ -1823,6 +1824,7 @@ module rv64gc_core_top
     // IQ instances
     // =========================================================================
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2),
+                  .SUPPORT_ENQ_ISSUE_BYPASS(1),
                   .PORT0_ONLY_FU(3'd0))  // BRU can issue from either port
     u_iq0 (
         .clk             (clk),
@@ -1856,6 +1858,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
+        .enq_issue_bypass_enable(iq_ready_enq_bypass_enable),
         .occupancy       (iq0_occ)
     );
 
@@ -1863,7 +1866,8 @@ module rv64gc_core_top
     // ALU3/DIV/CSR respectively.  NUM_SELECT=1 prevents the IQ from
     // retiring entries on port 1 that no functional unit executes
     // (which would cause the ROB to fill up with orphaned entries).
-    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
+    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
+                  .SUPPORT_ENQ_ISSUE_BYPASS(1))
     u_iq1 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -1896,6 +1900,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
+        .enq_issue_bypass_enable(iq_ready_enq_bypass_enable),
         .occupancy       (iq1_occ)
     );
     assign iq1_issue_valid[0] = iq1_issue_valid_s[0];
@@ -1903,7 +1908,8 @@ module rv64gc_core_top
     assign iq1_issue_data[0]  = iq1_issue_data_s[0];
     assign iq1_issue_data[1]  = '0;
 
-    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
+    issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
+                  .SUPPORT_ENQ_ISSUE_BYPASS(1))
     u_iq2 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -1936,6 +1942,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
+        .enq_issue_bypass_enable(iq_ready_enq_bypass_enable),
         .occupancy       (iq2_occ)
     );
     assign iq2_issue_valid[0] = iq2_issue_valid_s[0];
@@ -1977,6 +1984,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  (lsu_load_issue_suppress),
+        .enq_issue_bypass_enable(1'b0),
         .occupancy       (iq_load_occ)
     );
 
@@ -2014,6 +2022,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
+        .enq_issue_bypass_enable(1'b0),
         .occupancy       (iq_store_occ)
     );
     assign iq_store_issue_valid[0] = iq_store_issue_valid_s[0];
@@ -2056,6 +2065,7 @@ module rv64gc_core_top
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
+        .enq_issue_bypass_enable(1'b0),
         .occupancy       (iq_std_occ)
     );
 
