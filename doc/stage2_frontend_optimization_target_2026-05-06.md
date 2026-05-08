@@ -138,6 +138,8 @@ Rejected trials that should not be revived in their old form:
 | Predicted-control-window advance with only packet enqueue stall gating | Owner/stale counters are clean, but strict delivery skips `0x80002fce` inside the `0x80002fc0` owner. | `will_emit` still updated duplicate and cursor state without an accepted packet. F2 fire must gate `will_emit`, not just `packet_enq`. |
 | Two-entry pending owner queue plus cancel-all younger FTQ policy | Strict-clean on smoke and CoreMark 10, but performance-identical: CoreMark 10 remains `1,570,351` cycles and `6.403369` CoreMark/MHz. `xs_ftq_depth_gt1_cycles` reaches only `92`, with only `46` queued runahead candidates. | Rejected as insufficient leverage in this form. The queued target is usually absent or already represented by the next FTQ owner, so extra owner depth is dormant rather than supply-producing. |
 | Two-entry future-line buffer in `ifu_line_fetch` | Strict-clean but performance-identical on smoke and CoreMark 10; `xs_icq_future_head_block` remains `6,176` on CoreMark 10. | Rejected as a no-op. The counted future-head cycles are mostly waiting for owner promotion, not lost because the single future-line slot is full. |
+| Direct post-consume remainder hold bypass | Strict-clean and improves smoke rows: Dhrystone 100 `18,913 -> 18,812`, CoreMark 1 `164,550 -> 163,958`. CoreMark 10 regresses `1,528,608 -> 1,542,985`, with `xs_packet_buf_full_cycles` rising `14,753 -> 21,022` and `xs_backend_stall_pkt_ready` rising `35,109 -> 40,730`. | Rejected in this form. The post-consume hold is not purely wasted frontend time; removing it creates a denser packet burst that overfills the downstream packet buffer on the heavy row. |
+| IBuffer-credit-gated post-consume remainder bypass | Same smoke win as direct bypass, but CoreMark 10 still regresses to `1,542,985`. Full-buffer cycles improve versus direct bypass but backend packet-ready stall remains `40,730`. | Rejected in this form. Current-cycle IBuffer occupancy is not enough credit information for this burst; future remainder work must coordinate with downstream drain or owner work scheduling, not just local cursor motion. |
 
 The resolved successor lesson is specific: allocating a new owner was not the
 only risk. The first packet for that owner must be delivered from the owner
@@ -209,6 +211,13 @@ correctness bubble or a leftover cursor serialization point. If it is required,
 promote early line metadata or a deeper owner work queue instead of patching
 local PC steering.
 
+The first post-consume hold bypass proved the correctness side but failed the
+performance side: short rows improved, while CoreMark 10 regressed because the
+frontend generated a denser packet burst than the backend/IBuffer could drain.
+This moves the next viable frontend work away from local remainder cursor
+removal and toward coordinated owner work scheduling, packet-buffer credit
+policy, or a second-domain backend drain limiter.
+
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
@@ -270,10 +279,11 @@ Every accepted performance row must report:
 | 4 | Reopen owner queue only if the attribution shows distinct useful future targets. | Candidate count is large enough to move cycles, not merely strict-clean. |
 | 5 | Lock backward-next-owner same-owner safety. | CoreMark 1, CoreMark 10, Dhrystone 300, Dhrystone 100, branch hotspot, and broad Stage 1 DSE rows pass strict checks. |
 | 6 | Split the remaining same-owner remainder and no-emit buckets. | Done by `20260507_same_owner_remainder_attrib_coremark10`: remainder is consume/post-consume, no-emit is mainly frontend stall, redirect, and packet-ready. |
-| 7 | Try the next architecture slice from evidence: same-owner remainder post-consume policy first, then early line metadata or owner work queue if the hold is required. | Heavy rows improve with no endpoint drift and no off-target regression. |
-| 8 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
-| 9 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
-| 10 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 7 | Try post-consume remainder bypass variants. | Rejected: strict-clean but CoreMark 10 regresses from downstream packet pressure. |
+| 8 | Re-attribute duplicate/no-emit and packet-buffer full cycles, then choose owner work scheduling, packet-buffer credit policy, or a second-domain backend drain limiter. | Candidate is selected by heavy-row counters, not smoke-only wins. |
+| 9 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
+| 10 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
+| 11 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
