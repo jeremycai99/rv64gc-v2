@@ -93,7 +93,7 @@ The accepted frontend path so far:
 
 Current important counters from the accepted CoreMark 10 row, with the latest
 profiling-only attribution reconfirmed by
-`benchmark_results/20260507_same_owner_remainder_attrib_coremark10`:
+`benchmark_results/dse_20260508_issue_fusion_move_attrib_coremark10`:
 
 | Counter | Value | Meaning |
 |---|---:|---|
@@ -147,6 +147,7 @@ Rejected trials that should not be revived in their old form:
 | Integer PRF depth 192 | Dhrystone 100, CoreMark 1, branch hotspot, and CoreMark 10 are cycle-identical to the accepted baseline. | Rejected as a no-op for the current limiter. Raw PRF capacity does not move the measured rows even though CoreMark 10 reports integer physical-register pressure. |
 | Same-cycle free-list release forwarding | Build passes, but Dhrystone 100 hits the DSim iteration limit after only 9 sampled cycles. The release mask creates a same-cycle commit-release to allocation/rename availability path. | Rejected in combinational form. Do not forward commit releases directly into the allocator ready network; reopen only with a registered credit or queue structure that cannot form a stall/allocation loop. |
 | ROB slot-2 writeback-ready bypass | Dhrystone 100 and branch hotspot are unchanged, while CoreMark 1 regresses `164,550 -> 165,565`. The broader full writeback bypass plusarg regresses CoreMark 1 to `167,527`. | Rejected. Same-cycle ROB head ready bypass is not a useful commit-side fix in this pipeline shape. |
+| Load speculation past unresolved store-address entries | `+ALLOW_LOAD_SPEC_PAST_STA` is strict-clean, but Dhrystone 100 and CoreMark 1 are cycle-identical to the accepted baseline: `18,913` and `164,550` cycles. | Rejected as a raw no-op. Do not promote this plusarg without a deeper LSU dependency predictor or replay contract that can demonstrate counter movement. |
 | BRU early fetch redirect isolation | Early redirect alone improves CoreMark 1 slightly `164,550 -> 163,960`, but regresses Dhrystone 100 `18,913 -> 18,922` and branch hotspot `141,408 -> 144,962`. Combining it with keep-frontend, partial recovery, or execute-time BPU update regresses CoreMark 1 or fails endpoint identity. | Rejected for now. Branch/recovery still has leverage, but the current execution-time recovery contract is not broad enough. |
 | Local PHT global override | Branch hotspot improves `141,408 -> 138,680`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 169,642` with mispredicts rising from `4,250` to `5,025`. | Rejected as a global policy. Local history has useful information, but it needs per-PC arbitration against TAGE/SC instead of overriding everywhere. |
 | Disable local predictor | Branch hotspot improves `141,408 -> 137,606`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 165,487`. | Rejected. Current local alternation support is useful on CoreMark but harmful on the branch probe, so the right direction is a chooser, not all-on or all-off. |
@@ -262,22 +263,40 @@ bottleneck selection:
 | `rob_full` | 34,217 | Rename/backpressure is strongly correlated with ROB capacity. |
 | `stall_preg` | 33,177 | Slot-0 rename stall is also strongly correlated with integer physical register pressure. |
 
+The same profiling-only row keeps the accepted CoreMark 10 timing
+cycle-identical at `1,528,608` cycles and `6.579328` CoreMark/MHz while adding
+backend attribution:
+
+| Counter | Value | Interpretation |
+|---|---:|---|
+| `issue_stall_operand_cyc` | 619,195 | Operand readiness, not FU contention, dominates issue pressure. |
+| `issue_stall_arb_cyc` | 189,596 | Selection pressure is real but secondary to operand readiness. |
+| `iq0 operand/arb/issued/eligible_avg` | `233,534 / 108,244 / 1,651,528 / 1.16` | IQ0 carries most integer issue pressure. |
+| `iq1 operand/arb/issued/eligible_avg` | `227,742 / 63,012 / 638,300 / 0.46` | IQ1 is also materially blocked on operands. |
+| `iq2 operand/arb/issued/eligible_avg` | `293,745 / 38,258 / 430,440 / 0.30` | IQ2 sees fewer eligible uops but the largest operand-blocked cycle count. |
+| `rename_fused_uops` | 89 | Macro-fusion frequency is too low to be the next broad lever. |
+| `commit_fused_uops` | 71 | Committed fused work is negligible on CoreMark 10. |
+| `rename_move_candidate_total` | 258,574 | Move elimination has large dynamic frequency, about 8 percent of the retired stream. |
+| `rename_zero_elim_total` | 33,292 | Zero elimination is already active and safe, but smaller than the remaining move opportunity. |
+
 Verdict: frontend ownership is no longer the only active limiter on CoreMark
 10. Raw ROB/PRF capacity and ROB-head bypass did not move the broad rows, so
-the next architectural slice should focus on predictor arbitration and recovery
-quality before more frontend-local cursor work. The local-history experiments
-show a real signal: local information improves the branch hotspot but hurts
-CoreMark when applied globally. The next BPU slice should therefore add
-component attribution and a per-PC local-vs-SC chooser, then accept it only if
-it improves the heavy CoreMark row without Dhrystone or branch-probe regression.
+the next architectural slice should reduce useful backend work per architectural
+instruction instead of adding raw capacity. The strongest current lever is
+alias-safe rename move elimination: the dynamic move-candidate count is large,
+while macro-fusion is negligible on CoreMark 10.
 
 Update, 2026-05-08: the first local-vs-SC chooser family is rejected. It is
 functionally clean, but it trades CoreMark against the branch hotspot instead
 of improving both. Do not promote local arbitration without a better training
 contract and dynamic hot-PC attribution that covers the branch probe PCs, not
 only the fixed CoreMark hot-PC list. The next architectural slice should move
-to either safer branch recovery ownership or a non-BPU limiter with direct
-CoreMark 10 evidence, such as uop-count/fusion or issue/wakeup arbitration.
+to a non-BPU limiter with direct CoreMark 10 evidence.
+
+Update, 2026-05-08: raw load speculation past unresolved store-address entries
+using `+ALLOW_LOAD_SPEC_PAST_STA` is endpoint-clean but performance-identical
+on Dhrystone 100 and CoreMark 1. It is not a useful next slice in its current
+form.
 
 Promotion conditions:
 
@@ -308,10 +327,11 @@ counter-backed second domain instead.
 | BPU/FTQ training metadata cleanup | High value | Improves attribution and enables safe prediction experiments. | Preserve GHR/RAS/target snapshots per owner. |
 | BPU S0/uBTB | Conditional | May help if lookup latency or direction quality blocks runahead. | Promote only with per-PC branch data or timing evidence. |
 | Indirect prediction | Conditional | Helps if indirect MPKI is material. | Per-PC evidence required. |
-| Fusion/uop accounting | Orthogonal candidate | Reduces useful work per frontend slot and backend pressure. | Pattern frequency and retired-stream identity required. |
+| Macro-fusion expansion | Deprioritized by evidence | Existing macro-fusion commits only 71 fused uops on CoreMark 10, so expanding this path is unlikely to close the stretch gap. | Reopen only if a broader benchmark suite shows high dynamic fused-pattern frequency. |
+| Refcounted rename move elimination | Promote to next RTL design slice | CoreMark 10 reports 258,574 dynamic move candidates while also showing PRF/rename pressure. Eliminating true moves can reduce rename allocation, IQ occupancy, wakeup pressure, and commit bandwidth without benchmark-PC steering. | Do not enable arbitrary source aliasing until physical-register lifetime/refcount support is implemented and validated through commit and recovery. |
 | ROB/PRF capacity | Rejected in raw and combinational timing forms | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical, ROB-head bypass regresses CoreMark 1, and same-cycle free-list release forwarding trips a simulator iteration loop. | Reopen only with a registered allocation, free, or commit-drain mechanism, not raw depth or comb release-forwarding. |
 | BPU local-vs-SC chooser | Rejected in first form | Global local override improves the branch hotspot while regressing CoreMark; the first chooser variants remain endpoint-clean but still trade one row against the other. | Reopen only with dynamic hot-PC attribution and a stronger training contract. |
-| Uop-count and fusion accounting | Promote to next evidence slice | CoreMark 10 still has low effective commit width and heavy head valid-not-ready time after frontend cleanup. Reducing useful work per frontend/backend slot may attack the remaining stretch gap without predictor overfitting. | Measure pattern frequency and retired-stream identity before RTL. No benchmark-PC steering. |
+| Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
 | Downstream packet drain / scheduling | Promote to next RTL slice | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. | Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without DS/CoreMark regression. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
@@ -350,9 +370,10 @@ Every accepted performance row must report:
 | 10 | Add BPU component attribution and try selective local-vs-SC arbitration. | Done and rejected in first form: endpoint-clean, but CoreMark regresses when branch hotspot improves. |
 | 11 | Add dynamic branch-hot-PC attribution before reopening local arbitration. | The profiler captures the actual top PCs from arbitrary benchmark rows, including branch probes, and reports local/SC correctness by PC. |
 | 12 | Try local same-owner remainder/straddle bubble removal. | Done and rejected in local form: frontend bubbles drop, but heavy CoreMark regresses from packet-buffer and backend drain pressure. |
-| 13 | Open the downstream drain or useful-work-per-packet slice. | Packet scheduling, fusion/uop count, or issue/wakeup counters name the limiter before RTL work starts. |
-| 14 | Score the next accepted architectural slice. | Gate C passes or fails explicitly with heavy CoreMark and broad smoke evidence. |
-| 15 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 13 | Open the downstream drain or useful-work-per-packet slice. | Done by `dse_20260508_issue_fusion_move_attrib_coremark10`: macro-fusion is low-frequency, move candidates are high-frequency, and issue pressure is operand-ready dominated. |
+| 14 | Design alias-safe rename move elimination. | Add physical-register lifetime/refcount support before enabling arbitrary source aliasing. Prove recovery, commit release, and free-list accounting with assertions before scoring. |
+| 15 | Score the next accepted architectural slice. | Dhrystone 100, CoreMark 1, CoreMark 10, branch hotspot, and broad smoke pass strict checks. Counters show fewer move candidates reaching allocation or issue, lower `stall_preg` or `rename_stall`, and no endpoint drift. |
+| 16 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -362,7 +383,8 @@ Every accepted performance row must report:
 - No duplicate suppression as the final correctness mechanism.
 - No widening decode, rename, or commit in this frontend slice.
 - No active XiangShan-style `pfPtr` until demand ownership is working.
-- No LSU, cache, or backend latency DSE until counters justify the domain.
+- No raw load-speculation plusarg promotion without LSU dependency prediction
+  and replay evidence.
 
 ## Verdict
 
@@ -373,7 +395,6 @@ cuts the dominant CoreMark 10 frontend-empty buckets while lifting CoreMark 10
 to 6.58 CM/MHz.
 
 Near-term objective: keep this as the Stage 2 frontend baseline, and move the
-next RTL work to downstream packet drain or useful-work-per-packet
-optimization. Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with
-a required second-domain escalation if frontend-only work does not reach the
-Gate C ceiling.
+next RTL work to refcounted rename move elimination. Long-term objective
+remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a required second-domain escalation
+if frontend-only work does not reach the Gate C ceiling.

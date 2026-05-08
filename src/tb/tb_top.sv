@@ -519,6 +519,18 @@ module tb_top
     integer issue_stall_operand_cyc;   // entries valid but no src ready
     integer issue_stall_fu_cyc;        // operands ready but FU suppress dropped grant
     integer issue_stall_arb_cyc;       // eligible_count > NUM_SELECT (selection ceiling)
+    integer iq0_operand_stall_cyc, iq1_operand_stall_cyc, iq2_operand_stall_cyc;
+    integer iq0_arb_loss_cyc, iq1_arb_loss_cyc, iq2_arb_loss_cyc;
+    integer iq0_issue_uops, iq1_issue_uops, iq2_issue_uops;
+    integer iq0_eligible_sum, iq1_eligible_sum, iq2_eligible_sum;
+    integer macro_fused_rename_total;
+    integer macro_fused_commit_total;
+    integer macro_fused_commit_alu;
+    integer macro_fused_commit_branch;
+    integer macro_fused_commit_load;
+    integer macro_fused_commit_store;
+    integer rename_move_candidate_total;
+    integer rename_zero_elim_total;
     integer backend_stall_cyc;
     integer flush_cyc;
     integer perf_total_cyc;
@@ -924,6 +936,26 @@ module tb_top
             issue_stall_operand_cyc <= 0;
             issue_stall_fu_cyc      <= 0;
             issue_stall_arb_cyc     <= 0;
+            iq0_operand_stall_cyc   <= 0;
+            iq1_operand_stall_cyc   <= 0;
+            iq2_operand_stall_cyc   <= 0;
+            iq0_arb_loss_cyc        <= 0;
+            iq1_arb_loss_cyc        <= 0;
+            iq2_arb_loss_cyc        <= 0;
+            iq0_issue_uops          <= 0;
+            iq1_issue_uops          <= 0;
+            iq2_issue_uops          <= 0;
+            iq0_eligible_sum        <= 0;
+            iq1_eligible_sum        <= 0;
+            iq2_eligible_sum        <= 0;
+            macro_fused_rename_total <= 0;
+            macro_fused_commit_total <= 0;
+            macro_fused_commit_alu <= 0;
+            macro_fused_commit_branch <= 0;
+            macro_fused_commit_load <= 0;
+            macro_fused_commit_store <= 0;
+            rename_move_candidate_total <= 0;
+            rename_zero_elim_total <= 0;
             prev_p1_retry_valid <= 1'b0;
         end else if (pp_en) begin
             automatic int frontend_bin;
@@ -932,6 +964,17 @@ module tb_top
             automatic int load_lat_pending_now;
             automatic logic [63:0] pc_div_next_bitmap;
             automatic int pc_div_unique_now;
+            automatic int iq0_elig_cnt, iq1_elig_cnt, iq2_elig_cnt;
+            automatic int iq0_issue_cnt, iq1_issue_cnt, iq2_issue_cnt;
+            automatic int iq0_valid_cnt, iq1_valid_cnt, iq2_valid_cnt;
+            automatic int fused_rename_cyc;
+            automatic int fused_commit_cyc;
+            automatic int fused_commit_alu_cyc;
+            automatic int fused_commit_branch_cyc;
+            automatic int fused_commit_load_cyc;
+            automatic int fused_commit_store_cyc;
+            automatic int move_candidate_cyc;
+            automatic int zero_elim_cyc;
             automatic int misp_hit_idx;
             automatic int misp_free_idx;
             automatic int misp_min_idx;
@@ -947,10 +990,73 @@ module tb_top
             load_lat_pending_now = 0;
             pc_div_next_bitmap = pc_div_bitmap;
             pc_div_unique_now = 0;
+            iq0_elig_cnt = $countones(u_core.u_iq0.eligible);
+            iq1_elig_cnt = $countones(u_core.u_iq1.eligible);
+            iq2_elig_cnt = $countones(u_core.u_iq2.eligible);
+            iq0_issue_cnt = $countones(u_core.u_iq0.issue_valid);
+            iq1_issue_cnt = $countones(u_core.u_iq1.issue_valid);
+            iq2_issue_cnt = $countones(u_core.u_iq2.issue_valid);
+            iq0_valid_cnt = u_core.u_iq0.count_r;
+            iq1_valid_cnt = u_core.u_iq1.count_r;
+            iq2_valid_cnt = u_core.u_iq2.count_r;
+            fused_rename_cyc = 0;
+            fused_commit_cyc = 0;
+            fused_commit_alu_cyc = 0;
+            fused_commit_branch_cyc = 0;
+            fused_commit_load_cyc = 0;
+            fused_commit_store_cyc = 0;
+            move_candidate_cyc = 0;
+            zero_elim_cyc = 0;
 
             fetch_hist[u_core.fetch_count]        <= fetch_hist[u_core.fetch_count] + 1;
             frontend_hist[frontend_bin]           <= frontend_hist[frontend_bin] + 1;
             commit_hist[u_core.commit_count]      <= commit_hist[u_core.commit_count] + 1;
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if ((3'(i) < u_core.ren_count_w) &&
+                    u_core.ren_insn[i].base.valid &&
+                    u_core.ren_insn[i].base.is_fused)
+                    fused_rename_cyc++;
+                if ((3'(i) < u_core.ren_count_w) &&
+                    u_core.ren_insn[i].base.valid &&
+                    u_core.ren_insn[i].base.rd_valid &&
+                    (u_core.ren_insn[i].base.rd_arch != 5'd0) &&
+                    (u_core.ren_insn[i].base.fu_type == FU_ALU) &&
+                    (u_core.ren_insn[i].base.alu_op == ALU_ADD) &&
+                    u_core.ren_insn[i].base.use_imm &&
+                    (u_core.ren_insn[i].base.imm == 64'd0) &&
+                    (u_core.ren_insn[i].base.rs1_arch != 5'd0))
+                    move_candidate_cyc++;
+                if (u_core.ren_zero_eliminated[i])
+                    zero_elim_cyc++;
+                if (u_core.commit_out[i].valid && u_core.rob_head_is_fused[i]) begin
+                    fused_commit_cyc++;
+                    if (u_core.rob_head_is_branch[i] ||
+                        (u_core.rob_head_bpu_type[i] != 3'd0))
+                        fused_commit_branch_cyc++;
+                    else if (u_core.rob_head_is_load[i])
+                        fused_commit_load_cyc++;
+                    else if (u_core.rob_head_is_store[i])
+                        fused_commit_store_cyc++;
+                    else
+                        fused_commit_alu_cyc++;
+                end
+            end
+            macro_fused_rename_total <=
+                macro_fused_rename_total + fused_rename_cyc;
+            macro_fused_commit_total <=
+                macro_fused_commit_total + fused_commit_cyc;
+            macro_fused_commit_alu <=
+                macro_fused_commit_alu + fused_commit_alu_cyc;
+            macro_fused_commit_branch <=
+                macro_fused_commit_branch + fused_commit_branch_cyc;
+            macro_fused_commit_load <=
+                macro_fused_commit_load + fused_commit_load_cyc;
+            macro_fused_commit_store <=
+                macro_fused_commit_store + fused_commit_store_cyc;
+            rename_move_candidate_total <=
+                rename_move_candidate_total + move_candidate_cyc;
+            rename_zero_elim_total <=
+                rename_zero_elim_total + zero_elim_cyc;
             if (u_core.uoc_active)
                 uoc_active_cycles <= uoc_active_cycles + 1;
             // µop cache telemetry
@@ -1001,6 +1107,12 @@ module tb_top
             iq0_cnt_sum <= iq0_cnt_sum + u_core.u_iq0.count_r;
             iq1_cnt_sum <= iq1_cnt_sum + u_core.u_iq1.count_r;
             iq2_cnt_sum <= iq2_cnt_sum + u_core.u_iq2.count_r;
+            iq0_eligible_sum <= iq0_eligible_sum + iq0_elig_cnt;
+            iq1_eligible_sum <= iq1_eligible_sum + iq1_elig_cnt;
+            iq2_eligible_sum <= iq2_eligible_sum + iq2_elig_cnt;
+            iq0_issue_uops <= iq0_issue_uops + iq0_issue_cnt;
+            iq1_issue_uops <= iq1_issue_uops + iq1_issue_cnt;
+            iq2_issue_uops <= iq2_issue_uops + iq2_issue_cnt;
             // Per-IQ issue-stall classification (Phase A.2). Cycle-OR semantics:
             // a cycle counts toward a bucket if ANY IQ matches that bucket.
             // NUM_SELECT: u_iq0=2, u_iq1=1, u_iq2=1.
@@ -1008,35 +1120,46 @@ module tb_top
                 automatic logic any_iq_operand_stall;
                 automatic logic any_iq_fu_stall;
                 automatic logic any_iq_arb_stall;
-                automatic int   elig_cnt, issue_cnt, valid_cnt;
 
                 any_iq_operand_stall = 1'b0;
                 any_iq_fu_stall      = 1'b0;
                 any_iq_arb_stall     = 1'b0;
 
                 // IQ0 (NUM_SELECT=2)
-                elig_cnt  = $countones(u_core.u_iq0.eligible);
-                issue_cnt = $countones(u_core.u_iq0.issue_valid);
-                valid_cnt = u_core.u_iq0.count_r;
-                if (valid_cnt > 0 && elig_cnt == 0) any_iq_operand_stall = 1'b1;
-                if (elig_cnt > 0 && issue_cnt < elig_cnt && issue_cnt < 2) any_iq_fu_stall = 1'b1;
-                if (elig_cnt > 2) any_iq_arb_stall = 1'b1;
+                if (iq0_valid_cnt > 0 && iq0_elig_cnt == 0) begin
+                    any_iq_operand_stall = 1'b1;
+                    iq0_operand_stall_cyc <= iq0_operand_stall_cyc + 1;
+                end
+                if (iq0_elig_cnt > 0 && iq0_issue_cnt < iq0_elig_cnt && iq0_issue_cnt < 2)
+                    any_iq_fu_stall = 1'b1;
+                if (iq0_elig_cnt > 2) begin
+                    any_iq_arb_stall = 1'b1;
+                    iq0_arb_loss_cyc <= iq0_arb_loss_cyc + 1;
+                end
 
                 // IQ1 (NUM_SELECT=1)
-                elig_cnt  = $countones(u_core.u_iq1.eligible);
-                issue_cnt = $countones(u_core.u_iq1.issue_valid);
-                valid_cnt = u_core.u_iq1.count_r;
-                if (valid_cnt > 0 && elig_cnt == 0) any_iq_operand_stall = 1'b1;
-                if (elig_cnt > 0 && issue_cnt < elig_cnt && issue_cnt < 1) any_iq_fu_stall = 1'b1;
-                if (elig_cnt > 1) any_iq_arb_stall = 1'b1;
+                if (iq1_valid_cnt > 0 && iq1_elig_cnt == 0) begin
+                    any_iq_operand_stall = 1'b1;
+                    iq1_operand_stall_cyc <= iq1_operand_stall_cyc + 1;
+                end
+                if (iq1_elig_cnt > 0 && iq1_issue_cnt < iq1_elig_cnt && iq1_issue_cnt < 1)
+                    any_iq_fu_stall = 1'b1;
+                if (iq1_elig_cnt > 1) begin
+                    any_iq_arb_stall = 1'b1;
+                    iq1_arb_loss_cyc <= iq1_arb_loss_cyc + 1;
+                end
 
                 // IQ2 (NUM_SELECT=1)
-                elig_cnt  = $countones(u_core.u_iq2.eligible);
-                issue_cnt = $countones(u_core.u_iq2.issue_valid);
-                valid_cnt = u_core.u_iq2.count_r;
-                if (valid_cnt > 0 && elig_cnt == 0) any_iq_operand_stall = 1'b1;
-                if (elig_cnt > 0 && issue_cnt < elig_cnt && issue_cnt < 1) any_iq_fu_stall = 1'b1;
-                if (elig_cnt > 1) any_iq_arb_stall = 1'b1;
+                if (iq2_valid_cnt > 0 && iq2_elig_cnt == 0) begin
+                    any_iq_operand_stall = 1'b1;
+                    iq2_operand_stall_cyc <= iq2_operand_stall_cyc + 1;
+                end
+                if (iq2_elig_cnt > 0 && iq2_issue_cnt < iq2_elig_cnt && iq2_issue_cnt < 1)
+                    any_iq_fu_stall = 1'b1;
+                if (iq2_elig_cnt > 1) begin
+                    any_iq_arb_stall = 1'b1;
+                    iq2_arb_loss_cyc <= iq2_arb_loss_cyc + 1;
+                end
 
                 if (any_iq_operand_stall) issue_stall_operand_cyc <= issue_stall_operand_cyc + 1;
                 if (any_iq_fu_stall)      issue_stall_fu_cyc      <= issue_stall_fu_cyc + 1;
@@ -1695,6 +1818,30 @@ module tb_top
             $display("  operand_not_ready: %0d", issue_stall_operand_cyc);
             $display("  fu_contention   : %0d", issue_stall_fu_cyc);
             $display("  arb_loss        : %0d", issue_stall_arb_cyc);
+            $display("Issue queue detail:");
+            $display("  iq0 operand/arb/issued/eligible_avg: %0d / %0d / %0d / %0d.%02d",
+                     iq0_operand_stall_cyc, iq0_arb_loss_cyc, iq0_issue_uops,
+                     iq0_eligible_sum / perf_total_cyc,
+                     ((iq0_eligible_sum * 100) / perf_total_cyc) % 100);
+            $display("  iq1 operand/arb/issued/eligible_avg: %0d / %0d / %0d / %0d.%02d",
+                     iq1_operand_stall_cyc, iq1_arb_loss_cyc, iq1_issue_uops,
+                     iq1_eligible_sum / perf_total_cyc,
+                     ((iq1_eligible_sum * 100) / perf_total_cyc) % 100);
+            $display("  iq2 operand/arb/issued/eligible_avg: %0d / %0d / %0d / %0d.%02d",
+                     iq2_operand_stall_cyc, iq2_arb_loss_cyc, iq2_issue_uops,
+                     iq2_eligible_sum / perf_total_cyc,
+                     ((iq2_eligible_sum * 100) / perf_total_cyc) % 100);
+            $display("Macro-fusion accounting:");
+            $display("  rename_fused_uops: %0d", macro_fused_rename_total);
+            $display("  commit_fused_uops: %0d", macro_fused_commit_total);
+            $display("  commit fused alu/branch/load/store: %0d / %0d / %0d / %0d",
+                     macro_fused_commit_alu,
+                     macro_fused_commit_branch,
+                     macro_fused_commit_load,
+                     macro_fused_commit_store);
+            $display("Rename elimination accounting:");
+            $display("  move_candidates: %0d", rename_move_candidate_total);
+            $display("  zero_eliminated: %0d", rename_zero_elim_total);
             $display("Average IQ occupancy (of 32):");
             $display("  iq0_avg: %0d.%02d", iq0_cnt_sum / perf_total_cyc,
                      ((iq0_cnt_sum * 100) / perf_total_cyc) % 100);
