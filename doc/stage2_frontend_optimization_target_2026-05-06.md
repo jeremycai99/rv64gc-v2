@@ -147,6 +147,9 @@ Rejected trials that should not be revived in their old form:
 | BRU early fetch redirect isolation | Early redirect alone improves CoreMark 1 slightly `164,550 -> 163,960`, but regresses Dhrystone 100 `18,913 -> 18,922` and branch hotspot `141,408 -> 144,962`. Combining it with keep-frontend, partial recovery, or execute-time BPU update regresses CoreMark 1 or fails endpoint identity. | Rejected for now. Branch/recovery still has leverage, but the current execution-time recovery contract is not broad enough. |
 | Local PHT global override | Branch hotspot improves `141,408 -> 138,680`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 169,642` with mispredicts rising from `4,250` to `5,025`. | Rejected as a global policy. Local history has useful information, but it needs per-PC arbitration against TAGE/SC instead of overriding everywhere. |
 | Disable local predictor | Branch hotspot improves `141,408 -> 137,606`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 165,487`. | Rejected. Current local alternation support is useful on CoreMark but harmful on the branch probe, so the right direction is a chooser, not all-on or all-off. |
+| Local PHT-only chooser | Dhrystone 100 is unchanged, CoreMark 1 regresses `164,550 -> 167,144`, and branch hotspot regresses `141,408 -> 141,738`. | Rejected. Gating only the PHT path misses the larger mixed signal from the local alternation path. |
+| Local component chooser, SC-biased reset | Dhrystone 100 is unchanged and branch hotspot improves `141,408 -> 140,709`, but CoreMark 1 regresses `164,550 -> 164,966`. | Rejected. The direction can suppress harmful local behavior, but the warmup and chooser signal still trade away CoreMark. |
+| Local component chooser, local-biased reset | Dhrystone 100 is unchanged and branch hotspot improves `141,408 -> 140,195`, but CoreMark 1 regresses `164,550 -> 166,501`. | Rejected. Starting from baseline-local behavior helps the branch probe more, but the CoreMark cost grows. |
 | NLPB full-depth duplicate check | Dhrystone 100 and branch hotspot are unchanged; CoreMark 1 moves only `164,550 -> 164,556`. | Not a performance slice. This may be a cleanup candidate, but it does not close the Stage 2 target gap. |
 
 The resolved successor lesson is specific: allocating a new owner was not the
@@ -252,6 +255,14 @@ CoreMark when applied globally. The next BPU slice should therefore add
 component attribution and a per-PC local-vs-SC chooser, then accept it only if
 it improves the heavy CoreMark row without Dhrystone or branch-probe regression.
 
+Update, 2026-05-08: the first local-vs-SC chooser family is rejected. It is
+functionally clean, but it trades CoreMark against the branch hotspot instead
+of improving both. Do not promote local arbitration without a better training
+contract and dynamic hot-PC attribution that covers the branch probe PCs, not
+only the fixed CoreMark hot-PC list. The next architectural slice should move
+to either safer branch recovery ownership or a non-BPU limiter with direct
+CoreMark 10 evidence, such as uop-count/fusion or issue/wakeup arbitration.
+
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
@@ -283,7 +294,8 @@ counter-backed second domain instead.
 | Indirect prediction | Conditional | Helps if indirect MPKI is material. | Per-PC evidence required. |
 | Fusion/uop accounting | Orthogonal candidate | Reduces useful work per frontend slot and backend pressure. | Pattern frequency and retired-stream identity required. |
 | ROB/PRF capacity | Rejected in raw form | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical and ROB-head bypass regresses CoreMark 1. | Reopen only with a concrete allocation, free, or commit-drain mechanism, not raw depth. |
-| BPU local-vs-SC chooser | Primary next BPU slice | Global local override improves the branch hotspot while regressing CoreMark; disabling local does the opposite. This is the signature for selective arbitration. | Train per PC from component correctness, keep local alternation support, and reject any row that improves only one benchmark. |
+| BPU local-vs-SC chooser | Rejected in first form | Global local override improves the branch hotspot while regressing CoreMark; the first chooser variants remain endpoint-clean but still trade one row against the other. | Reopen only with dynamic hot-PC attribution and a stronger training contract. |
+| Uop-count and fusion accounting | Promote to next evidence slice | CoreMark 10 still has low effective commit width and heavy head valid-not-ready time after frontend cleanup. Reducing useful work per frontend/backend slot may attack the remaining stretch gap without predictor overfitting. | Measure pattern frequency and retired-stream identity before RTL. No benchmark-PC steering. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
 ## Evidence Required
@@ -318,10 +330,11 @@ Every accepted performance row must report:
 | 7 | Try post-consume remainder bypass variants. | Rejected: strict-clean but CoreMark 10 regresses from downstream packet pressure. |
 | 8 | Re-attribute duplicate/no-emit and packet-buffer full cycles, then choose owner work scheduling, packet-buffer credit policy, or a second-domain backend drain limiter. | Done by `20260507_packet_pressure_attrib_coremark10`: packet full is not owner-wait, backend stall is ROB/PRF-correlated. |
 | 9 | Record raw capacity and commit-bypass probes. | Done: PRF192 is a no-op, ROB-head bypass regresses CoreMark 1, and neither is the next accepted path. |
-| 10 | Add BPU component attribution and try selective local-vs-SC arbitration. | The row improves CoreMark 10 or CoreMark 1 without Dhrystone or branch-probe regression, and the counters show the chooser replaced wrong global local decisions rather than overfitting one PC. |
-| 11 | Score the BPU arbitration ceiling. | Gate C passes or fails explicitly with heavy CoreMark and broad smoke evidence. |
-| 12 | Open a deeper backend DSE if BPU arbitration fails. | Gate D names the limiter before RTL work starts. |
-| 13 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 10 | Add BPU component attribution and try selective local-vs-SC arbitration. | Done and rejected in first form: endpoint-clean, but CoreMark regresses when branch hotspot improves. |
+| 11 | Add dynamic branch-hot-PC attribution before reopening local arbitration. | The profiler captures the actual top PCs from arbitrary benchmark rows, including branch probes, and reports local/SC correctness by PC. |
+| 12 | Open a non-BPU evidence slice if local arbitration remains mixed. | Pattern/uop-count or issue/wakeup counters name the limiter before RTL work starts. |
+| 13 | Score the next accepted architectural slice. | Gate C passes or fails explicitly with heavy CoreMark and broad smoke evidence. |
+| 14 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
