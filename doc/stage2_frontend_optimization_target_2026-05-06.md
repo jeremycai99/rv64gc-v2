@@ -91,8 +91,9 @@ The accepted frontend path so far:
 | Predicted-control-window same-owner advance plus F2 fire contract | Dhrystone 100 `19,611 -> 18,913`, CoreMark 1 `175,318 -> 169,049`, CoreMark 10 `1,642,655 -> 1,570,351`; branch hotspot improves `146,142 -> 141,408`. | Keep. This is an architectural cleanup: same-owner advance can cover packets up to the predicted control, but F2 `will_emit` must mean an accepted packet fire and must be blocked by IFU stall. |
 | Backward-next-owner same-owner safety | CoreMark 1 `169,049 -> 164,550`, CoreMark 10 `1,570,351 -> 1,528,608`; Dhrystone 300 improves to `54,926`, while Dhrystone 100 and branch hotspot are unchanged. | Keep. A next FTQ owner whose start PC is behind the current work PC is a backward target, not a forward overlap hazard. Same-owner straight-line delivery can continue until the predicted-control packet without replaying the same F2 PC. |
 
-Current important counters from the accepted CoreMark 10 row, reconfirmed by
-`benchmark_results/20260507_same_owner_backward_next_owner_coremark10`:
+Current important counters from the accepted CoreMark 10 row, with the latest
+profiling-only attribution reconfirmed by
+`benchmark_results/20260507_same_owner_remainder_attrib_coremark10`:
 
 | Counter | Value | Meaning |
 |---|---:|---|
@@ -106,9 +107,18 @@ Current important counters from the accepted CoreMark 10 row, reconfirmed by
 | `same_owner_block_pred_ctl` | 0 | The stale pre-window attribution remains gone. |
 | `same_owner_block_no_emit` | 12,799 | Down from `45,436`; residual no-emit is smaller but still real. |
 | `same_owner_block_rem` | 34,820 | Remainder and straddle policy is now the largest same-owner residual bucket. |
+| `same_owner_block_rem_straddle` | 0 | The residual is not direct line-straddle blocking. |
+| `same_owner_block_rem_consume` | 24,084 | Most remainder blocking is the consume-remainder phase. |
+| `same_owner_block_rem_consumed` | 10,736 | A smaller but material post-consume hold remains. |
 | `same_owner_block_other` | 39 | Down from `33,142`; backward next-owner blocking was the root cause of this bucket. |
+| `same_owner_no_emit_fe_stall` | 6,018 | Largest residual same-owner no-emit sub-bucket. |
+| `same_owner_no_emit_redirect` | 3,687 | Redirect recovery still overlaps useful same-owner candidate cycles. |
+| `same_owner_no_emit_pkt_not_ready` | 2,395 | Packet buffer backpressure is visible but not dominant. |
+| `same_owner_no_emit_dup` | 699 | Same-owner no-emit is no longer mainly duplicate suppression. |
 | `packet_empty_noemit_dup` | 32,112 | Down from `63,848`; the duplicate replay tax was nearly halved. |
-| `packet_empty_f2_data` | 60,689 | Down from `92,059`; same-owner progress reduced repeated F2 data bubbles. |
+| `packet_empty_f2_data` | 60,689 | Down from `92,059`; this counter means F2 had data but emitted no packet. |
+| `xs_f2_data_wait` | 466 | True missing F2 data wait is tiny on this row. |
+| `xs_f2_data_wait_icq_empty` | 466 | The true F2 wait is fully ICQ-empty in this run. |
 | `packet_empty_wait_icresp` | 34,569 | Slightly down from the previous accepted row. |
 
 ## Rejected Evidence
@@ -186,11 +196,18 @@ but it is not yet deep enough.
 The accepted successor path, predicted-control fire contract, and
 backward-next-owner safety rule remove a large part of the F2 data/no-emit and
 duplicate/no-emit buckets. The old `same_owner_block_other` bucket is now gone.
-The largest same-owner residual is `same_owner_block_rem`; the largest broader
-frontend residuals are still `packet_empty_f2_data`, duplicate no-emit, and
-redirect recovery. The next improvement should split remainder/no-emit more
-finely before choosing between remainder policy, early line metadata, or BPU
-metadata work.
+The latest attribution shows that `packet_empty_f2_data` is not true missing
+F2 data; true no-data wait is only `466` cycles on CoreMark 10. The large
+`packet_empty_f2_data` bucket is therefore data-present no-emit and overlaps
+with remainder, redirect, packet-ready, and frontend-stall causes.
+
+The next structural target should be same-owner remainder policy first:
+`same_owner_block_rem` splits into `24,084` consume-remainder cycles and
+`10,736` post-consume hold cycles, with direct straddle blocking at zero. The
+trial should first prove whether the post-consume hold is a necessary
+correctness bubble or a leftover cursor serialization point. If it is required,
+promote early line metadata or a deeper owner work queue instead of patching
+local PC steering.
 
 Promotion conditions:
 
@@ -252,8 +269,8 @@ Every accepted performance row must report:
 | 3 | Re-attribute residual same-owner and F2-data bubbles with the corrected profiler. | CoreMark 10 reports no stale predicted-control bucket and names the dominant remaining no-emit/remainder/other causes. |
 | 4 | Reopen owner queue only if the attribution shows distinct useful future targets. | Candidate count is large enough to move cycles, not merely strict-clean. |
 | 5 | Lock backward-next-owner same-owner safety. | CoreMark 1, CoreMark 10, Dhrystone 300, Dhrystone 100, branch hotspot, and broad Stage 1 DSE rows pass strict checks. |
-| 6 | Split the remaining same-owner remainder and no-emit buckets. | The next candidate names a specific residual cause before RTL work starts. |
-| 7 | Try the next architecture slice from evidence: remainder policy, early line metadata, or BPU metadata quality. | Heavy rows improve with no endpoint drift and no off-target regression. |
+| 6 | Split the remaining same-owner remainder and no-emit buckets. | Done by `20260507_same_owner_remainder_attrib_coremark10`: remainder is consume/post-consume, no-emit is mainly frontend stall, redirect, and packet-ready. |
+| 7 | Try the next architecture slice from evidence: same-owner remainder post-consume policy first, then early line metadata or owner work queue if the hold is required. | Heavy rows improve with no endpoint drift and no off-target regression. |
 | 8 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
 | 9 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
 | 10 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |

@@ -22,7 +22,10 @@ module fetch_frontend_profiler
     input logic                             frontend_hold,
     input logic                             fe_stall,
     input logic [2:0]                       fetch_count,
+    input logic                             f2_work_valid_c,
     input logic [63:0]                      f2_work_pc_c,
+    input logic                             f2_data_valid,
+    input logic                             f2_has_emit_payload_c,
     input logic                             nlpb_aux_hit_comb,
     input logic                             f1_aux_pred_ctl_valid_c,
     input logic                             f1_aux_pred_ctl_taken_c,
@@ -61,7 +64,10 @@ module fetch_frontend_profiler
     input logic                             f2_seq_valid,
     input logic [63:0]                      f2_seq_next_pc,
     input logic                             f2_will_emit_c,
+    input logic                             packet_buf_enq_ready,
     input logic                             packet_buf_enq,
+    input logic [2:0]                       extract_count,
+    input logic [2:0]                       final_count,
     input logic                             line_straddle_advance_c,
     input logic                             consume_remainder_c,
     input logic                             consumed_remainder_r,
@@ -156,8 +162,20 @@ module fetch_frontend_profiler
     integer xs_same_owner_block_owner_complete_cycles;
     integer xs_same_owner_block_pred_ctl_cycles;
     integer xs_same_owner_block_remainder_cycles;
+    integer xs_same_owner_block_rem_straddle_cycles;
+    integer xs_same_owner_block_rem_consume_cycles;
+    integer xs_same_owner_block_rem_consumed_cycles;
     integer xs_same_owner_block_crossline_cycles;
     integer xs_same_owner_block_other_cycles;
+    integer xs_same_owner_no_emit_no_payload_cycles;
+    integer xs_same_owner_no_emit_extract0_cycles;
+    integer xs_same_owner_no_emit_final0_cycles;
+    integer xs_same_owner_no_emit_dup_cycles;
+    integer xs_same_owner_no_emit_pkt_not_ready_cycles;
+    integer xs_same_owner_no_emit_redirect_cycles;
+    integer xs_same_owner_no_emit_frontend_hold_cycles;
+    integer xs_same_owner_no_emit_fe_stall_cycles;
+    integer xs_same_owner_no_emit_other_cycles;
     integer xs_runahead_req_valid_cycles;
     integer xs_runahead_req_fire_cycles;
     integer xs_runahead_cancel_next_cycles;
@@ -166,6 +184,11 @@ module fetch_frontend_profiler
     integer xs_runahead_duplicate_alloc_blocked_cycles;
     integer xs_ftq_depth_gt1_cycles;
     integer xs_icq_future_head_block_cycles;
+    integer xs_f2_data_wait_cycles;
+    integer xs_f2_data_wait_icq_empty_cycles;
+    integer xs_f2_data_wait_icq_valid_cycles;
+    integer xs_f2_data_wait_icq_line_mismatch_cycles;
+    integer xs_f2_data_wait_line_invalid_cycles;
 
     logic [63:0] xs_catchup_top_pc [0:XS_CATCHUP_TOPN-1];
     integer xs_catchup_top_count [0:XS_CATCHUP_TOPN-1];
@@ -198,9 +221,26 @@ module fetch_frontend_profiler
     logic xs_same_owner_block_owner_complete_c;
     logic xs_same_owner_block_pred_ctl_c;
     logic xs_same_owner_block_remainder_c;
+    logic xs_same_owner_block_rem_straddle_c;
+    logic xs_same_owner_block_rem_consume_c;
+    logic xs_same_owner_block_rem_consumed_c;
     logic xs_same_owner_block_crossline_c;
     logic xs_same_owner_block_other_c;
+    logic xs_same_owner_no_emit_no_payload_c;
+    logic xs_same_owner_no_emit_extract0_c;
+    logic xs_same_owner_no_emit_final0_c;
+    logic xs_same_owner_no_emit_dup_c;
+    logic xs_same_owner_no_emit_pkt_not_ready_c;
+    logic xs_same_owner_no_emit_redirect_c;
+    logic xs_same_owner_no_emit_frontend_hold_c;
+    logic xs_same_owner_no_emit_fe_stall_c;
+    logic xs_same_owner_no_emit_other_c;
     logic xs_icq_future_head_block_c;
+    logic xs_f2_data_wait_c;
+    logic xs_f2_data_wait_icq_empty_c;
+    logic xs_f2_data_wait_icq_valid_c;
+    logic xs_f2_data_wait_icq_line_mismatch_c;
+    logic xs_f2_data_wait_line_invalid_c;
 
     initial begin
         xs_catchup_probe_en = 1'b0;
@@ -345,6 +385,18 @@ module fetch_frontend_profiler
         !f2_work_owner_complete_c &&
         !xs_same_owner_pred_ctl_window_c &&
         xs_same_owner_remainder_hold_c;
+    assign xs_same_owner_block_rem_straddle_c =
+        xs_same_owner_block_remainder_c &&
+        line_straddle_advance_c;
+    assign xs_same_owner_block_rem_consume_c =
+        xs_same_owner_block_remainder_c &&
+        !line_straddle_advance_c &&
+        consume_remainder_c;
+    assign xs_same_owner_block_rem_consumed_c =
+        xs_same_owner_block_remainder_c &&
+        !line_straddle_advance_c &&
+        !consume_remainder_c &&
+        consumed_remainder_r;
     assign xs_same_owner_block_crossline_c =
         xs_same_owner_emit_candidate_c &&
         packet_buf_enq &&
@@ -362,10 +414,73 @@ module fetch_frontend_profiler
         !xs_same_owner_remainder_hold_c &&
         !xs_same_owner_crossline_c &&
         !ifu_work_same_owner_advance_c;
+    assign xs_same_owner_no_emit_no_payload_c =
+        xs_same_owner_block_no_emit_c &&
+        !f2_has_emit_payload_c;
+    assign xs_same_owner_no_emit_extract0_c =
+        xs_same_owner_block_no_emit_c &&
+        (extract_count == 3'd0);
+    assign xs_same_owner_no_emit_final0_c =
+        xs_same_owner_block_no_emit_c &&
+        (final_count == 3'd0);
+    assign xs_same_owner_no_emit_dup_c =
+        xs_same_owner_block_no_emit_c &&
+        f2_has_emit_payload_c &&
+        f2_duplicate_suppressed_c;
+    assign xs_same_owner_no_emit_pkt_not_ready_c =
+        xs_same_owner_block_no_emit_c &&
+        f2_has_emit_payload_c &&
+        !f2_duplicate_suppressed_c &&
+        !packet_buf_enq_ready;
+    assign xs_same_owner_no_emit_redirect_c =
+        xs_same_owner_block_no_emit_c &&
+        f2_has_emit_payload_c &&
+        !f2_duplicate_suppressed_c &&
+        packet_buf_enq_ready &&
+        redirect_valid;
+    assign xs_same_owner_no_emit_frontend_hold_c =
+        xs_same_owner_block_no_emit_c &&
+        f2_has_emit_payload_c &&
+        !f2_duplicate_suppressed_c &&
+        packet_buf_enq_ready &&
+        !redirect_valid &&
+        frontend_hold;
+    assign xs_same_owner_no_emit_fe_stall_c =
+        xs_same_owner_block_no_emit_c &&
+        f2_has_emit_payload_c &&
+        !f2_duplicate_suppressed_c &&
+        packet_buf_enq_ready &&
+        !redirect_valid &&
+        !frontend_hold &&
+        fe_stall;
+    assign xs_same_owner_no_emit_other_c =
+        xs_same_owner_block_no_emit_c &&
+        !xs_same_owner_no_emit_no_payload_c &&
+        !xs_same_owner_no_emit_dup_c &&
+        !xs_same_owner_no_emit_pkt_not_ready_c &&
+        !xs_same_owner_no_emit_redirect_c &&
+        !xs_same_owner_no_emit_frontend_hold_c &&
+        !xs_same_owner_no_emit_fe_stall_c;
     assign xs_icq_future_head_block_c =
         icq_deq_valid &&
         f2_work_line_valid_c &&
         (icq_deq_line_addr != f2_work_line_addr_c);
+    assign xs_f2_data_wait_c =
+        f2_work_valid_c &&
+        !f2_data_valid;
+    assign xs_f2_data_wait_icq_empty_c =
+        xs_f2_data_wait_c &&
+        !icq_deq_valid;
+    assign xs_f2_data_wait_icq_valid_c =
+        xs_f2_data_wait_c &&
+        icq_deq_valid;
+    assign xs_f2_data_wait_icq_line_mismatch_c =
+        xs_f2_data_wait_icq_valid_c &&
+        f2_work_line_valid_c &&
+        (icq_deq_line_addr != f2_work_line_addr_c);
+    assign xs_f2_data_wait_line_invalid_c =
+        xs_f2_data_wait_c &&
+        !f2_work_line_valid_c;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -425,8 +540,20 @@ module fetch_frontend_profiler
             xs_same_owner_block_owner_complete_cycles <= 0;
             xs_same_owner_block_pred_ctl_cycles <= 0;
             xs_same_owner_block_remainder_cycles <= 0;
+            xs_same_owner_block_rem_straddle_cycles <= 0;
+            xs_same_owner_block_rem_consume_cycles <= 0;
+            xs_same_owner_block_rem_consumed_cycles <= 0;
             xs_same_owner_block_crossline_cycles <= 0;
             xs_same_owner_block_other_cycles   <= 0;
+            xs_same_owner_no_emit_no_payload_cycles <= 0;
+            xs_same_owner_no_emit_extract0_cycles <= 0;
+            xs_same_owner_no_emit_final0_cycles <= 0;
+            xs_same_owner_no_emit_dup_cycles <= 0;
+            xs_same_owner_no_emit_pkt_not_ready_cycles <= 0;
+            xs_same_owner_no_emit_redirect_cycles <= 0;
+            xs_same_owner_no_emit_frontend_hold_cycles <= 0;
+            xs_same_owner_no_emit_fe_stall_cycles <= 0;
+            xs_same_owner_no_emit_other_cycles <= 0;
             xs_runahead_req_valid_cycles       <= 0;
             xs_runahead_req_fire_cycles        <= 0;
             xs_runahead_cancel_next_cycles      <= 0;
@@ -435,6 +562,11 @@ module fetch_frontend_profiler
             xs_runahead_duplicate_alloc_blocked_cycles <= 0;
             xs_ftq_depth_gt1_cycles            <= 0;
             xs_icq_future_head_block_cycles    <= 0;
+            xs_f2_data_wait_cycles             <= 0;
+            xs_f2_data_wait_icq_empty_cycles   <= 0;
+            xs_f2_data_wait_icq_valid_cycles   <= 0;
+            xs_f2_data_wait_icq_line_mismatch_cycles <= 0;
+            xs_f2_data_wait_line_invalid_cycles <= 0;
             for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
                 xs_catchup_top_pc[i]    <= 64'd0;
                 xs_catchup_top_count[i] <= 0;
@@ -635,12 +767,48 @@ module fetch_frontend_profiler
             if (xs_same_owner_block_remainder_c)
                 xs_same_owner_block_remainder_cycles <=
                     xs_same_owner_block_remainder_cycles + 1;
+            if (xs_same_owner_block_rem_straddle_c)
+                xs_same_owner_block_rem_straddle_cycles <=
+                    xs_same_owner_block_rem_straddle_cycles + 1;
+            if (xs_same_owner_block_rem_consume_c)
+                xs_same_owner_block_rem_consume_cycles <=
+                    xs_same_owner_block_rem_consume_cycles + 1;
+            if (xs_same_owner_block_rem_consumed_c)
+                xs_same_owner_block_rem_consumed_cycles <=
+                    xs_same_owner_block_rem_consumed_cycles + 1;
             if (xs_same_owner_block_crossline_c)
                 xs_same_owner_block_crossline_cycles <=
                     xs_same_owner_block_crossline_cycles + 1;
             if (xs_same_owner_block_other_c)
                 xs_same_owner_block_other_cycles <=
                     xs_same_owner_block_other_cycles + 1;
+            if (xs_same_owner_no_emit_no_payload_c)
+                xs_same_owner_no_emit_no_payload_cycles <=
+                    xs_same_owner_no_emit_no_payload_cycles + 1;
+            if (xs_same_owner_no_emit_extract0_c)
+                xs_same_owner_no_emit_extract0_cycles <=
+                    xs_same_owner_no_emit_extract0_cycles + 1;
+            if (xs_same_owner_no_emit_final0_c)
+                xs_same_owner_no_emit_final0_cycles <=
+                    xs_same_owner_no_emit_final0_cycles + 1;
+            if (xs_same_owner_no_emit_dup_c)
+                xs_same_owner_no_emit_dup_cycles <=
+                    xs_same_owner_no_emit_dup_cycles + 1;
+            if (xs_same_owner_no_emit_pkt_not_ready_c)
+                xs_same_owner_no_emit_pkt_not_ready_cycles <=
+                    xs_same_owner_no_emit_pkt_not_ready_cycles + 1;
+            if (xs_same_owner_no_emit_redirect_c)
+                xs_same_owner_no_emit_redirect_cycles <=
+                    xs_same_owner_no_emit_redirect_cycles + 1;
+            if (xs_same_owner_no_emit_frontend_hold_c)
+                xs_same_owner_no_emit_frontend_hold_cycles <=
+                    xs_same_owner_no_emit_frontend_hold_cycles + 1;
+            if (xs_same_owner_no_emit_fe_stall_c)
+                xs_same_owner_no_emit_fe_stall_cycles <=
+                    xs_same_owner_no_emit_fe_stall_cycles + 1;
+            if (xs_same_owner_no_emit_other_c)
+                xs_same_owner_no_emit_other_cycles <=
+                    xs_same_owner_no_emit_other_cycles + 1;
             if (ifu_runahead_req_valid_c)
                 xs_runahead_req_valid_cycles <=
                     xs_runahead_req_valid_cycles + 1;
@@ -668,6 +836,20 @@ module fetch_frontend_profiler
             if (xs_icq_future_head_block_c)
                 xs_icq_future_head_block_cycles <=
                     xs_icq_future_head_block_cycles + 1;
+            if (xs_f2_data_wait_c)
+                xs_f2_data_wait_cycles <= xs_f2_data_wait_cycles + 1;
+            if (xs_f2_data_wait_icq_empty_c)
+                xs_f2_data_wait_icq_empty_cycles <=
+                    xs_f2_data_wait_icq_empty_cycles + 1;
+            if (xs_f2_data_wait_icq_valid_c)
+                xs_f2_data_wait_icq_valid_cycles <=
+                    xs_f2_data_wait_icq_valid_cycles + 1;
+            if (xs_f2_data_wait_icq_line_mismatch_c)
+                xs_f2_data_wait_icq_line_mismatch_cycles <=
+                    xs_f2_data_wait_icq_line_mismatch_cycles + 1;
+            if (xs_f2_data_wait_line_invalid_c)
+                xs_f2_data_wait_line_invalid_cycles <=
+                    xs_f2_data_wait_line_invalid_cycles + 1;
 
             if (xs_catchup_base_c)
                 xs_catchup_base_cycles <= xs_catchup_base_cycles + 1;
@@ -811,6 +993,16 @@ module fetch_frontend_profiler
                      xs_ftq_depth_gt1_cycles);
             $display("xs icq future head block    : %0d",
                      xs_icq_future_head_block_cycles);
+            $display("xs f2 data wait             : %0d",
+                     xs_f2_data_wait_cycles);
+            $display("xs f2 data wait icq empty   : %0d",
+                     xs_f2_data_wait_icq_empty_cycles);
+            $display("xs f2 data wait icq valid   : %0d",
+                     xs_f2_data_wait_icq_valid_cycles);
+            $display("xs f2 data wait icq line mismatch: %0d",
+                     xs_f2_data_wait_icq_line_mismatch_cycles);
+            $display("xs f2 data wait line invalid: %0d",
+                     xs_f2_data_wait_line_invalid_cycles);
             $display("xs packet buf empty cycles  : %0d",
                      xs_packet_buf_empty_cycles);
             $display("xs packet buf full cycles   : %0d",
@@ -907,10 +1099,34 @@ module fetch_frontend_profiler
                      xs_same_owner_block_pred_ctl_cycles);
             $display("xs same owner block rem     : %0d",
                      xs_same_owner_block_remainder_cycles);
+            $display("xs same owner block rem straddle: %0d",
+                     xs_same_owner_block_rem_straddle_cycles);
+            $display("xs same owner block rem consume: %0d",
+                     xs_same_owner_block_rem_consume_cycles);
+            $display("xs same owner block rem consumed: %0d",
+                     xs_same_owner_block_rem_consumed_cycles);
             $display("xs same owner block crossln : %0d",
                      xs_same_owner_block_crossline_cycles);
             $display("xs same owner block other   : %0d",
                      xs_same_owner_block_other_cycles);
+            $display("xs same owner no emit no payload: %0d",
+                     xs_same_owner_no_emit_no_payload_cycles);
+            $display("xs same owner no emit extract0: %0d",
+                     xs_same_owner_no_emit_extract0_cycles);
+            $display("xs same owner no emit final0: %0d",
+                     xs_same_owner_no_emit_final0_cycles);
+            $display("xs same owner no emit dup   : %0d",
+                     xs_same_owner_no_emit_dup_cycles);
+            $display("xs same owner no emit pkt not ready: %0d",
+                     xs_same_owner_no_emit_pkt_not_ready_cycles);
+            $display("xs same owner no emit redirect: %0d",
+                     xs_same_owner_no_emit_redirect_cycles);
+            $display("xs same owner no emit frontend hold: %0d",
+                     xs_same_owner_no_emit_frontend_hold_cycles);
+            $display("xs same owner no emit fe stall: %0d",
+                     xs_same_owner_no_emit_fe_stall_cycles);
+            $display("xs same owner no emit other : %0d",
+                     xs_same_owner_no_emit_other_cycles);
             $display("recoverable top F1 PCs:");
             for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
                 if (xs_catchup_top_count[i] != 0) begin
@@ -946,7 +1162,10 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .frontend_hold                   (frontend_hold),
     .fe_stall                        (fe_stall),
     .fetch_count                     (fetch_count),
+    .f2_work_valid_c                 (f2_work_valid_c),
     .f2_work_pc_c                    (f2_work_pc_c),
+    .f2_data_valid                   (f2_data_valid),
+    .f2_has_emit_payload_c           (f2_has_emit_payload_c),
     .nlpb_aux_hit_comb               (nlpb_aux_hit_comb),
     .f1_aux_pred_ctl_valid_c         (f1_aux_pred_ctl_valid_c),
     .f1_aux_pred_ctl_taken_c         (f1_aux_pred_ctl_taken_c),
@@ -985,7 +1204,10 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .f2_seq_valid                    (f2_seq_valid),
     .f2_seq_next_pc                  (f2_seq_next_pc),
     .f2_will_emit_c                  (f2_will_emit_c),
+    .packet_buf_enq_ready            (packet_buf_enq_ready),
     .packet_buf_enq                  (packet_buf_enq),
+    .extract_count                   (extract_count),
+    .final_count                     (final_count),
     .line_straddle_advance_c         (line_straddle_advance_c),
     .consume_remainder_c             (consume_remainder_c),
     .consumed_remainder_r            (consumed_remainder_r),
