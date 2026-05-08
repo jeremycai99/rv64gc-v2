@@ -109,6 +109,7 @@ dsim -sv +define+SIMULATION +acc+rwb \
      src/rtl/core/rename/rat.sv \
      src/rtl/core/rename/free_list.sv \
      src/rtl/core/rename/checkpoint.sv \
+     src/rtl/sim/branch_recovery_contract_checker.sv \
      src/rtl/core/rename/rename.sv \
      src/rtl/core/dispatch/dispatch_queue.sv \
      src/rtl/core/issue/wakeup_network.sv \

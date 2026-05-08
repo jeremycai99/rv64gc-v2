@@ -92,6 +92,7 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/rename/rat.sv" \
       "$P/src/rtl/core/rename/free_list.sv" \
       "$P/src/rtl/core/rename/checkpoint.sv" \
+      "$P/src/rtl/sim/branch_recovery_contract_checker.sv" \
       "$P/src/rtl/core/rename/rename.sv" \
       "$P/src/rtl/core/dispatch/dispatch_queue.sv" \
       "$P/src/rtl/core/issue/wakeup_network.sv" \

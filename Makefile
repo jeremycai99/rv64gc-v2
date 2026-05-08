@@ -158,6 +158,7 @@ RTL_FILES = \
     $(RTL_DIR)/core/rename/rat.sv \
     $(RTL_DIR)/core/rename/free_list.sv \
     $(RTL_DIR)/core/rename/checkpoint.sv \
+    $(RTL_DIR)/sim/branch_recovery_contract_checker.sv \
     $(RTL_DIR)/core/rename/rename.sv \
     $(RTL_DIR)/core/dispatch/dispatch_queue.sv \
     $(RTL_DIR)/core/issue/wakeup_network.sv \

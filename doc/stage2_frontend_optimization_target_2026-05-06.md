@@ -844,6 +844,46 @@ counter-backed second domain instead.
 | Predicted-not-taken owner fall-through | Rejected local forms | Attribution shows many duplicate cycles are same-line sequential, so this looked tempting. The local owner relaxation regressed Dhrystone and broke CoreMark/hotspot. A live-snapshot repair still timed out with owner/stale mismatches. | Reopen only with explicit branch-owner and FTQ/IBuffer sequencing semantics, not by relaxing `same_owner_continue` alone. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
+## Direction 1 Todo: Branch Ownership and Recovery Contract
+
+Status on May 8, 2026: Direction 1 is open. The first objective is
+correctness observability, not a performance claim. The accepted loop-exit
+threshold-2 baseline remains the scoreable baseline until non-head branch
+recovery is endpoint-clean and broadly non-regressing.
+
+| Step | Status | Exit criterion |
+|---|---|---|
+| 1.1 | Done | Added `branch_recovery_contract_checker.sv`; both DSim and XSim compile it. |
+| 1.2 | DSim smoke done | Dhrystone 100, CoreMark 1, and branch hotspot pass with `+BRANCH_RECOVERY_CHECK +BRANCH_RECOVERY_STRICT` added to the existing strict fetch owner/delivery/profile plusargs. XSim runtime smoke is still optional cross-check. |
+| 1.3 | Pending | Document the exact branch-order recovery contract across checkpoint, RAT, free-list, ROB, commit release, writeback, LSU side effects, and frontend redirect ownership. |
+| 1.4 | Pending | Harden checkpoint ownership behavior behind an opt-in path while preserving default behavior. |
+| 1.5 | Pending | Enable direct non-head partial recovery without early frontend redirect and prove Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot are endpoint-clean. |
+| 1.6 | Pending | Only after 1.5, reintroduce selective early frontend redirect with a resource/headroom guard. |
+| 1.7 | Pending | Promote only if branch hotspot improves without Dhrystone/CoreMark regression and contract counters show active non-head recovery with no free-list leak, checkpoint orphan, stale owner, or endpoint drift. |
+
+Required Direction 1 checker plusargs:
+
+- `+BRANCH_RECOVERY_CHECK`
+- `+BRANCH_RECOVERY_STRICT`
+
+Stop conditions:
+
+- Invalid checkpoint restore or release.
+- Duplicate checkpoint release in one commit group.
+- Restore of a checkpoint that is also released in the same cycle.
+- Free-list popcount drain or leak.
+- Checkpoint orphan or wrong branch-order preservation.
+- Any endpoint mismatch or timeout.
+
+Initial checker smoke:
+
+- Dhrystone 100: PASS, `mcycle=18,577`, `minstret=49,088`, branch-recovery
+  checker invalid/duplicate/restore-conflict counts all zero.
+- CoreMark 1: PASS, `mcycle=163,013`, `minstret=332,154`, branch-recovery
+  checker invalid/duplicate/restore-conflict counts all zero.
+- Branch hotspot: PASS, `mcycle=141,326`, `minstret=156,693`,
+  branch-recovery checker invalid/duplicate/restore-conflict counts all zero.
+
 ## Evidence Required
 
 Every accepted performance row must report:
@@ -896,7 +936,11 @@ Every accepted performance row must report:
 | 27 | Add packet head-class attribution for downstream drain scheduling. | Done by `dse_20260508_packet_head_class_prof_smoke`: CoreMark 1 packet-full and backend-packet-ready stalls are mostly multi-instruction heads, often control-bearing, predicted-taken, or owner-complete. |
 | 28 | Try first downstream-drain structural candidates. | Done and rejected: counted ROB admission improves CoreMark 1 but regresses CoreMark 10; counted admission plus larger ROB/PRF capacity also regresses CoreMark 10. RTL was restored to the committed threshold-2 baseline. |
 | 29 | Resume from a higher-leverage structural path. | Next candidate should be branch ownership/recovery or useful-work reduction with explicit checkpoint/resource contracts, not raw capacity, packet merge, generic queueing, or loop-threshold tuning. |
-| 30 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 30 | Add branch recovery contract checkers. | DSim and XSim compile the simulation-only checker, and baseline smoke passes with strict branch recovery checks enabled. |
+| 31 | Document and harden the non-head recovery contract. | Checkpoint, RAT, free-list, ROB, same-cycle commit release, writeback filtering, LSU side-effect filtering, and frontend redirect ownership have explicit invariants. |
+| 32 | Reopen direct non-head partial recovery without early redirect. | Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot are endpoint-clean before any performance claim. |
+| 33 | Reopen selective early frontend redirect. | Branch hotspot improves without Dhrystone/CoreMark regression and without contract checker failures. |
+| 34 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
