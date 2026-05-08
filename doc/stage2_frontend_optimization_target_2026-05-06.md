@@ -140,6 +140,8 @@ Rejected trials that should not be revived in their old form:
 | Two-entry future-line buffer in `ifu_line_fetch` | Strict-clean but performance-identical on smoke and CoreMark 10; `xs_icq_future_head_block` remains `6,176` on CoreMark 10. | Rejected as a no-op. The counted future-head cycles are mostly waiting for owner promotion, not lost because the single future-line slot is full. |
 | Direct post-consume remainder hold bypass | Strict-clean and improves smoke rows: Dhrystone 100 `18,913 -> 18,812`, CoreMark 1 `164,550 -> 163,958`. CoreMark 10 regresses `1,528,608 -> 1,542,985`, with `xs_packet_buf_full_cycles` rising `14,753 -> 21,022` and `xs_backend_stall_pkt_ready` rising `35,109 -> 40,730`. | Rejected in this form. The post-consume hold is not purely wasted frontend time; removing it creates a denser packet burst that overfills the downstream packet buffer on the heavy row. |
 | IBuffer-credit-gated post-consume remainder bypass | Same smoke win as direct bypass, but CoreMark 10 still regresses to `1,542,985`. Full-buffer cycles improve versus direct bypass but backend packet-ready stall remains `40,730`. | Rejected in this form. Current-cycle IBuffer occupancy is not enough credit information for this burst; future remainder work must coordinate with downstream drain or owner work scheduling, not just local cursor motion. |
+| Line-end straddle handoff | Unguarded handoff improves Dhrystone 100 `18,913 -> 18,705` but trips strict delivery on CoreMark 10 by skipping a control-owner PC near `0x800038ba`. Control-gated handoff is endpoint-clean but regresses CoreMark 1 `164,550 -> 164,941` and CoreMark 10 `1,528,608 -> 1,543,758`. It reduces CoreMark 10 packet-empty pressure (`packet_empty_f2_data 60,689 -> 35,796`, `packet_empty_noemit_dup 32,112 -> 21,607`) but raises backpressure (`xs_packet_buf_full_cycles 14,753 -> 26,215`, `xs_backend_stall_pkt_ready 35,109 -> 40,342`). | Rejected in this form. It proves the frontend can remove real no-emit work, but the dense packet burst exposes the same downstream drain limiter as the post-consume bypass. |
+| Credit-aware line-end straddle handoff | Dhrystone 100 keeps the gain at `18,709`, CoreMark 1 still regresses to `164,799`, and CoreMark 10 regresses further to `1,545,490`. | Rejected. A simple current-cycle IBuffer credit gate is not a sufficient scheduler. The next useful step is not another local straddle gate; it is a downstream drain or packet scheduling mechanism that can absorb the frontend burst. |
 | TAGE mispredicted-conditional-first training | Smoke regresses: CoreMark 1 `164,550 -> 167,213`, branch hotspot `141,408 -> 146,011`. | Rejected as the next BPU training policy. Prioritizing a mispredicted conditional in the commit group hurts broader branch behavior. |
 | Execute-time BRU recovery plus partial recovery knobs | Branch hotspot improves `141,408 -> 131,707`, but CoreMark 1 fails with `TOHOST_3`, flags `1`, checksum `36549` instead of `59156`. | Rejected as-is. Execute-time branch recovery has leverage, but the current recovery contract is not endpoint-safe enough to harden. |
 | Integer PRF depth 192 | Dhrystone 100, CoreMark 1, branch hotspot, and CoreMark 10 are cycle-identical to the accepted baseline. | Rejected as a no-op for the current limiter. Raw PRF capacity does not move the measured rows even though CoreMark 10 reports integer physical-register pressure. |
@@ -214,20 +216,13 @@ F2 data; true no-data wait is only `466` cycles on CoreMark 10. The large
 `packet_empty_f2_data` bucket is therefore data-present no-emit and overlaps
 with remainder, redirect, packet-ready, and frontend-stall causes.
 
-The next structural target should be same-owner remainder policy first:
-`same_owner_block_rem` splits into `24,084` consume-remainder cycles and
-`10,736` post-consume hold cycles, with direct straddle blocking at zero. The
-trial should first prove whether the post-consume hold is a necessary
-correctness bubble or a leftover cursor serialization point. If it is required,
-promote early line metadata or a deeper owner work queue instead of patching
-local PC steering.
-
-The first post-consume hold bypass proved the correctness side but failed the
-performance side: short rows improved, while CoreMark 10 regressed because the
-frontend generated a denser packet burst than the backend/IBuffer could drain.
-This moves the next viable frontend work away from local remainder cursor
-removal and toward coordinated owner work scheduling, packet-buffer credit
-policy, or a second-domain backend drain limiter.
+The same-owner remainder family has now been tested in two useful forms:
+post-consume hold bypass and line-end straddle handoff. Both remove real
+frontend bubbles on short rows, and the straddle handoff also cuts CoreMark 10
+packet-empty counters sharply. Both still regress the heavy CoreMark row
+because they create a denser packet burst than the backend/IBuffer can drain.
+This moves the next viable work away from local remainder cursor removal and
+toward a downstream drain or packet scheduling mechanism.
 
 Additional top-PC attribution from
 `benchmark_results/dse_20260508_remainder_noemit_top_pc_coremark10` keeps the
@@ -241,15 +236,13 @@ accepted RTL cycle-identical at CoreMark 10 `1,528,608` cycles and
 | Data-present no-emit redirect | `0x800023ac` in `core_list_mergesort`, `0x8000315c` in `matrix_mul_matrix`, `0x8000242c` in list handling | Redirect recovery remains the second large packet-empty cause after duplicate suppression. |
 | Data-present no-emit stall | `0x800039f8/0x800039ee` in `crcu16`, plus list and CRC tail PCs | Some residual packet-empty time overlaps backend or packet-ready stalls, consistent with the rejected post-remainder bypass backpressure result. |
 
-Verdict from this attribution: do not count all `same_owner_block_rem_consume`
-cycles as waste. The next frontend trial should first remove the redundant
-line-end straddle handoff before the consume point, not the post-consume hold
-that already proved backpressure-sensitive on CoreMark 10. A useful structural
-trial is to let `instr_boundary` move directly from a packet ending before a
-detected line-end straddled 32-bit instruction to the next cache line, carrying
-the saved low halfword, instead of spending a separate no-emit cycle at the
-straddle PC. This is a general RVC/32-bit boundary policy, not benchmark-PC
-steering.
+Verdict from this attribution and the follow-up trials: do not count all
+`same_owner_block_rem_consume` cycles as waste. The local cursor bubbles are
+real, but removing them alone is not enough; it shifts the bottleneck into
+packet-buffer fullness, backend packet-ready stalls, and ROB/PRF-correlated
+rename pressure. The next architectural optimization should therefore target
+useful work per delivered packet or downstream drain, not another local
+straddle/remainder shortcut.
 
 The `20260507_packet_pressure_attrib_coremark10` row resolves the next
 bottleneck selection:
@@ -308,8 +301,8 @@ counter-backed second domain instead.
 | Backward-next-owner same-owner safety | Accepted depth-1 slice | Removes false overlap blocking when a predicted next owner is a backward loop target. | Only treat the next owner as non-blocking when its start PC is behind the current work PC. |
 | Owner request queue / IFU work queue | Deferred structural depth slice | Lets IFU request and F2 delivery decouple by FTQ owner instead of relying on a single pending successor. | Reopen after residual attribution shows useful future targets; owner-start PC delivery exactly once. |
 | Capacity-bounded depth-2 runahead | Recalibrate before another RTL trial | The first owner-queue attempt was dormant, so more depth alone is not enough. | Reopen only with evidence that the next predicted owner is not already the FTQ next owner and has a useful distinct target. |
-| Early fetch-line metadata | High value | Reduces conservative RVC boundary, remainder, and line-response stalls. | Golden PC clean on mixed RVC/control windows. |
-| Same-owner remainder policy | Primary next residual frontend slice | `same_owner_block_rem` is now the largest same-owner block after backward-target cleanup. | Must preserve exact straddled RVC/32-bit delivery and endpoint identity. |
+| Early fetch-line metadata | Conditional | Local straddle handoff reduces frontend bubbles but regresses CoreMark 10 through downstream pressure. | Reopen only as part of a packet scheduling or drain improvement, not as another standalone cursor shortcut. |
+| Same-owner remainder policy | Rejected in local forms | Post-consume bypass and line-end straddle handoff both improve short rows but regress CoreMark 10. | Do not continue local remainder bypass DSE until downstream packet drain is improved. |
 | Same-owner residual attribution | Keep active | The corrected profiler has now isolated predicted-control and backward-target artifacts. | Add a narrower remainder/no-emit split before the next RTL slice. |
 | BPU/FTQ training metadata cleanup | High value | Improves attribution and enables safe prediction experiments. | Preserve GHR/RAS/target snapshots per owner. |
 | BPU S0/uBTB | Conditional | May help if lookup latency or direction quality blocks runahead. | Promote only with per-PC branch data or timing evidence. |
@@ -318,6 +311,7 @@ counter-backed second domain instead.
 | ROB/PRF capacity | Rejected in raw form | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical and ROB-head bypass regresses CoreMark 1. | Reopen only with a concrete allocation, free, or commit-drain mechanism, not raw depth. |
 | BPU local-vs-SC chooser | Rejected in first form | Global local override improves the branch hotspot while regressing CoreMark; the first chooser variants remain endpoint-clean but still trade one row against the other. | Reopen only with dynamic hot-PC attribution and a stronger training contract. |
 | Uop-count and fusion accounting | Promote to next evidence slice | CoreMark 10 still has low effective commit width and heavy head valid-not-ready time after frontend cleanup. Reducing useful work per frontend/backend slot may attack the remaining stretch gap without predictor overfitting. | Measure pattern frequency and retired-stream identity before RTL. No benchmark-PC steering. |
+| Downstream packet drain / scheduling | Promote to next RTL slice | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. | Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without DS/CoreMark regression. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
 ## Evidence Required
@@ -354,9 +348,10 @@ Every accepted performance row must report:
 | 9 | Record raw capacity and commit-bypass probes. | Done: PRF192 is a no-op, ROB-head bypass regresses CoreMark 1, and neither is the next accepted path. |
 | 10 | Add BPU component attribution and try selective local-vs-SC arbitration. | Done and rejected in first form: endpoint-clean, but CoreMark regresses when branch hotspot improves. |
 | 11 | Add dynamic branch-hot-PC attribution before reopening local arbitration. | The profiler captures the actual top PCs from arbitrary benchmark rows, including branch probes, and reports local/SC correctness by PC. |
-| 12 | Open a non-BPU evidence slice if local arbitration remains mixed. | Pattern/uop-count or issue/wakeup counters name the limiter before RTL work starts. |
-| 13 | Score the next accepted architectural slice. | Gate C passes or fails explicitly with heavy CoreMark and broad smoke evidence. |
-| 14 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 12 | Try local same-owner remainder/straddle bubble removal. | Done and rejected in local form: frontend bubbles drop, but heavy CoreMark regresses from packet-buffer and backend drain pressure. |
+| 13 | Open the downstream drain or useful-work-per-packet slice. | Packet scheduling, fusion/uop count, or issue/wakeup counters name the limiter before RTL work starts. |
+| 14 | Score the next accepted architectural slice. | Gate C passes or fails explicitly with heavy CoreMark and broad smoke evidence. |
+| 15 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -376,8 +371,8 @@ broad Stage 1 DSE rows, it beats the calibrated MegaBOOM smoke rows, and it
 cuts the dominant CoreMark 10 frontend-empty buckets while lifting CoreMark 10
 to 6.58 CM/MHz.
 
-Near-term objective: use this as the new Stage 2 frontend baseline, then split
-the remaining same-owner remainder and no-emit buckets before another RTL
-change. Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a
-required second-domain escalation if frontend-only work does not reach the
+Near-term objective: keep this as the Stage 2 frontend baseline, and move the
+next RTL work to downstream packet drain or useful-work-per-packet
+optimization. Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with
+a required second-domain escalation if frontend-only work does not reach the
 Gate C ceiling.
