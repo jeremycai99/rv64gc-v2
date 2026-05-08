@@ -159,6 +159,7 @@ module ifu
     logic        work_undelivered_owner_hold_c;
     logic        pred_control_outside_next_packet_c;
     logic        same_owner_next_owner_safe_c;
+    logic        ftq_next_owner_behind_work_c;
     logic        ftq_next_owner_stable_c;
     logic [63:0] ftq_next_owner_start_pc_c;
     logic        redirect_next_owner_match_c;
@@ -368,9 +369,14 @@ module ifu
         !work_r.ftq_entry.pred_ctl_valid ||
         ({1'b0, seq_next_pc_i[5:0]} <=
          {1'b0, work_r.ftq_entry.pred_ctl_offset});
+    assign ftq_next_owner_behind_work_c =
+        ftq_next_owner_stable_c &&
+        ftq_next_owner_valid_i &&
+        (ftq_next_owner_start_pc_c < work_r.pc);
     assign same_owner_next_owner_safe_c =
         (!ftq_next_owner_stable_c ||
          !ftq_next_owner_valid_i ||
+         ftq_next_owner_behind_work_c ||
          (seq_next_pc_i < ftq_next_owner_start_pc_c));
     assign work_same_owner_emit_advance_c =
         same_owner_continue_i &&

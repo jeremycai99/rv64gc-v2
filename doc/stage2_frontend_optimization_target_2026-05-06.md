@@ -27,33 +27,34 @@ Latest scoreable successor point:
 - Accepted RTL delta: owner-complete successor allocation, IFU successor request
   selection, IBuffer fire-qualified decode valid, and rename total-block
   backpressure, plus predicted-control-window same-owner advance with F2 packet
-  fire aligned to IFU stall.
+  fire aligned to IFU stall, plus same-owner advance when the already allocated
+  next FTQ owner is a backward target behind the current work PC.
 - Rejected and removed: benchmark-window trace probes and previous unguarded
   successor variants.
 
 Current scoreable rows:
 
-| Workload | Source | Timed cycles | Metric | Status |
+| Workload | Source | mcycle | Metric | Status |
 |---|---|---:|---:|---|
-| Dhrystone 100 | `benchmark_results/20260507_pred_ctl_window_f2_fire_accept_smoke` | 18,913 | 3.076996 DMIPS/MHz | PASS |
-| CoreMark 1 | `benchmark_results/20260507_pred_ctl_window_f2_fire_accept_smoke` | 169,049 | 6.234414 CoreMark/MHz | PASS |
-| CoreMark 10 | `benchmark_results/20260507_pred_ctl_window_f2_fire_accept_coremark10` | 1,570,351 | 6.403369 CoreMark/MHz | PASS |
-| Branch hotspot probe | `benchmark_results/20260507_pred_ctl_window_f2_fire_accept_smoke` | 141,408 | 1.108091 IPC | PASS |
-| Dhrystone 300 | `benchmark_results/20260507_pred_ctl_start_stage1_goal` | 64,719 | 2.638261 DMIPS/MHz | PASS, previous full-goal row |
+| Dhrystone 100 | `benchmark_results/20260507_same_owner_backward_next_owner_smoke` | 18,913 | 3.076996 DMIPS/MHz | PASS |
+| CoreMark 1 | `benchmark_results/20260507_same_owner_backward_next_owner_smoke` | 164,550 | 6.416426 CoreMark/MHz | PASS |
+| CoreMark 10 | `benchmark_results/20260507_same_owner_backward_next_owner_coremark10` | 1,528,608 | 6.579328 CoreMark/MHz | PASS |
+| Branch hotspot probe | `benchmark_results/20260507_same_owner_backward_next_owner_smoke` | 141,408 | 1.108091 IPC | PASS |
+| Dhrystone 300 | `benchmark_results/20260507_same_owner_backward_next_owner_broad` | 54,926 | 3.132659 DMIPS/MHz | PASS |
 
 Current gap to the Stage 2 stretch targets:
 
 | Metric | Current row | Target | Required score uplift | Equivalent cycle reduction |
 |---|---:|---:|---:|---:|
-| CoreMark/MHz | 6.403369 | 7.5 | +17.1% | 14.6% |
-| DMIPS/MHz | 3.076996 | 4.0 | +30.0% | 23.1% |
+| CoreMark/MHz | 6.579328 | 7.5 | +14.0% | 12.3% |
+| DMIPS/MHz | 3.132659 | 4.0 | +27.7% | 21.7% |
 
 Current calibrated MegaBOOM comparison on shared smoke rows:
 
 | Workload | MegaBOOM calibrated | rv64gc-v2 current | Current gap |
 |---|---:|---:|---:|
 | Dhrystone 100 | 23,814 cycles | 18,913 cycles | rv64gc-v2 20.6% faster |
-| CoreMark 1 | 192,249 cycles | 169,049 cycles | rv64gc-v2 12.1% faster |
+| CoreMark 1 | 192,249 cycles | 164,550 cycles | rv64gc-v2 14.4% faster |
 
 Interpretation:
 
@@ -64,6 +65,12 @@ Interpretation:
   CoreMark 10 improves `1,642,655 -> 1,570,351` cycles and
   `6.120764 -> 6.403369` CoreMark/MHz, while Dhrystone 100 improves
   `19,611 -> 18,913` cycles and `2.965569 -> 3.076996` DMIPS/MHz.
+- The backward-next-owner safety extension is now the latest accepted frontend
+  step: CoreMark 10 improves `1,570,351 -> 1,528,608` cycles and
+  `6.403369 -> 6.579328` CoreMark/MHz. CoreMark 1 improves
+  `169,049 -> 164,550` cycles. Dhrystone 100 is unchanged, while the longer
+  Dhrystone 300 anchor improves to `54,926` cycles and
+  `3.132659` DMIPS/MHz.
 - The new row beats the calibrated MegaBOOM smoke baseline on the shared
   Dhrystone 100 and CoreMark 1 timing windows.
 - The aggressive 7.5 CM/MHz and 4.0 DMIPS/MHz targets still require another
@@ -82,10 +89,10 @@ The accepted frontend path so far:
 | Rename hold ownership fix | CoreMark 10 passes with checksum `64687`, flags `0`, 1,926,763 timed cycles. | Keep. It fixes a traced dropped-tail bug when held rename work shares a cycle with a fresh decode packet. |
 | Owner-complete successor allocation plus rename total-block stall | Dhrystone 100 `22,189 -> 19,611`, CoreMark 1 `195,632 -> 175,318`, CoreMark 10 `1,926,763 -> 1,642,655`; branch hotspot also improves `152,021 -> 146,142`. | Keep. This is the first broad, strict-clean successor-runahead improvement. |
 | Predicted-control-window same-owner advance plus F2 fire contract | Dhrystone 100 `19,611 -> 18,913`, CoreMark 1 `175,318 -> 169,049`, CoreMark 10 `1,642,655 -> 1,570,351`; branch hotspot improves `146,142 -> 141,408`. | Keep. This is an architectural cleanup: same-owner advance can cover packets up to the predicted control, but F2 `will_emit` must mean an accepted packet fire and must be blocked by IFU stall. |
+| Backward-next-owner same-owner safety | CoreMark 1 `169,049 -> 164,550`, CoreMark 10 `1,570,351 -> 1,528,608`; Dhrystone 300 improves to `54,926`, while Dhrystone 100 and branch hotspot are unchanged. | Keep. A next FTQ owner whose start PC is behind the current work PC is a backward target, not a forward overlap hazard. Same-owner straight-line delivery can continue until the predicted-control packet without replaying the same F2 PC. |
 
 Current important counters from the accepted CoreMark 10 row, reconfirmed by
-`benchmark_results/20260507_pred_ctl_profiler_fix_coremark10` after the
-profiler attribution correction:
+`benchmark_results/20260507_same_owner_backward_next_owner_coremark10`:
 
 | Counter | Value | Meaning |
 |---|---:|---|
@@ -94,15 +101,15 @@ profiler attribution correction:
 | `xs_packet_buffer_stale_owner` | 0 | No stale owner packet consumed. |
 | `xs_ftq_occ_max` | 2 | Runahead exists but remains shallow. |
 | `xs_packet_buf_occ_max` | 8 | IBuffer can hold packets on the heavy row. |
-| `packet_buf_full_cycles` | 13,666 | The IBuffer is now active enough to backpressure F2 on CoreMark 10. |
-| `same_owner_advanced` | 317,538 | Same-owner cursor movement is now a major useful path. |
-| `same_owner_block_pred_ctl` | 0 after profiler correction | The old `167,903` value was stale attribution from the pre-window same-owner rule. |
-| `same_owner_block_no_emit` | 45,436 | Remaining same-owner candidates often lack an accepted F2 packet fire. |
-| `same_owner_block_rem` | 33,816 | Remainder and straddle policy is now a visible residual bucket. |
-| `same_owner_block_other` | 33,142 | Residual same-owner blocks need another attribution slice before RTL work. |
-| `packet_empty_noemit_dup` | 63,848 | Down 67.5% from the previous accepted successor row. |
-| `packet_empty_f2_data` | 92,059 | Down 60.0% from the previous accepted successor row. |
-| `packet_empty_wait_icresp` | 36,987 | Slightly down from the previous accepted successor row. |
+| `packet_buf_full_cycles` | 14,753 | The IBuffer is active enough to backpressure F2 on CoreMark 10. |
+| `same_owner_advanced` | 349,504 | Same-owner cursor movement is now a major useful path. |
+| `same_owner_block_pred_ctl` | 0 | The stale pre-window attribution remains gone. |
+| `same_owner_block_no_emit` | 12,799 | Down from `45,436`; residual no-emit is smaller but still real. |
+| `same_owner_block_rem` | 34,820 | Remainder and straddle policy is now the largest same-owner residual bucket. |
+| `same_owner_block_other` | 39 | Down from `33,142`; backward next-owner blocking was the root cause of this bucket. |
+| `packet_empty_noemit_dup` | 32,112 | Down from `63,848`; the duplicate replay tax was nearly halved. |
+| `packet_empty_f2_data` | 60,689 | Down from `92,059`; same-owner progress reduced repeated F2 data bubbles. |
+| `packet_empty_wait_icresp` | 34,569 | Slightly down from the previous accepted row. |
 
 ## Rejected Evidence
 
@@ -170,26 +177,28 @@ but it is not yet deep enough.
 |---|---|---|
 | BPU | Can launch bounded depth-1 direct-taken runahead and accepted owner-complete successor requests. JALR/RET are excluded. | Not yet a sustained predicted owner stream. BPU timing/quality has not been proven the limiter. |
 | FTQ | Allocation, IFU request, IFU writeback, and commit/training views are split. `xs_ftq_occ_max=2` on the accepted heavy row. | Depth is still effectively shallow. Depth-2 needs an owner request queue before promotion. |
-| IFU | `ifu_work_item_t` carries PC, line address, FTQ identity, and owner-delivered state. It can select a successor request after owner completion, hold an undelivered owner stable, and advance within an owner up to the predicted-control packet when no next owner would be crossed. | Needs a real owner work/request queue before deeper runahead. Duplicate suppression remains a crutch. |
+| IFU | `ifu_work_item_t` carries PC, line address, FTQ identity, and owner-delivered state. It can select a successor request after owner completion, hold an undelivered owner stable, advance within an owner up to the predicted-control packet, and keep advancing when the next owner is a backward target behind the current work PC. | Needs a real owner work/request queue before deeper runahead. Duplicate suppression remains a crutch, and remainder handling is now the largest same-owner residual. |
 | IBuffer | Decode-facing packet buffer is owner-aware and decode valid is qualified by actual dequeue fire. | It must be fed by deeper owner-tagged upstream backlog, then scored by occupancy and stale-owner counters. |
 | Rename | Held work owns rename input; fresh packets stall when no slot can advance, while partial progress captures the non-advanced tail. | This is now a required frontend-runahead contract. Remaining rename stalls should be tracked as backend pressure, not frontend supply. |
 
 ## Active Bottleneck Hypothesis
 
-The accepted successor path removes a large part of the F2 data/no-emit and
-duplicate/no-emit buckets, but those buckets remain the largest frontend
-opportunity on CoreMark 10. The likely residual root cause is not nominal
-decode width; it is still insufficient owner-decoupled frontend supply. The
-next improvement must make FTQ, IFU, ICQ, and IBuffer operate as independent
-owner-tagged stages, not as a mirrored F1/F2 flow-through path.
+The accepted successor path, predicted-control fire contract, and
+backward-next-owner safety rule remove a large part of the F2 data/no-emit and
+duplicate/no-emit buckets. The old `same_owner_block_other` bucket is now gone.
+The largest same-owner residual is `same_owner_block_rem`; the largest broader
+frontend residuals are still `packet_empty_f2_data`, duplicate no-emit, and
+redirect recovery. The next improvement should split remainder/no-emit more
+finely before choosing between remainder policy, early line metadata, or BPU
+metadata work.
 
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
 |---|---|---|
 | A | Lock current accepted RTL as scoreable baseline. | Full scoreable run from committed RTL, strict checks, endpoint identity, broad smoke pass. |
-| B | Prove true frontend runahead. | Achieved for depth-1 successor plus predicted-control-window same-owner advance: `xs_ftq_occ_max=2`, nonzero IBuffer occupancy on CoreMark, lower duplicate/no-emit broadly, no owner/stale drift. |
-| C | Score frontend-only ceiling. | CoreMark now exceeds 6.4 CM/MHz; Dhrystone is above 3.0 DMIPS/MHz but still needs movement toward roughly 3.2 DMIPS/MHz before deciding frontend-only has topped out. |
+| B | Prove true frontend runahead. | Achieved for depth-1 successor, predicted-control-window same-owner advance, and backward-next-owner safety: `xs_ftq_occ_max=2`, nonzero IBuffer occupancy on CoreMark, lower duplicate/no-emit broadly, no owner/stale drift. |
+| C | Score frontend-only ceiling. | CoreMark now reaches 6.58 CM/MHz; the longer Dhrystone anchor reaches 3.13 DMIPS/MHz. Frontend-only work still has measurable residual before declaring the ceiling. |
 | D | Pick second-domain limiter. | Branch/recovery, uop-count, LSU/load-use, ROB-head, and scheduler counters identify one dominant residual. |
 | E | Stretch to final target. | Full manifest passes, no major off-target regression, then compare against 7.5 CM/MHz and 4.0 DMIPS/MHz. |
 
@@ -203,10 +212,12 @@ counter-backed second domain instead.
 | Baseline counter pass | Required after commit | Prevents another stale methodology loop. | Use committed RTL and full strict plusargs. |
 | Successor runahead | Accepted depth-1 slice | Keeps owner-complete successor allocation active and broadly profitable. | Any further change still needs endpoint, strict owner/delivery, and golden-PC evidence where available. |
 | Predicted-control-window same-owner advance | Accepted depth-1 slice | Removes conservative F2 duplication before predicted-control packets. | `will_emit`, duplicate tracking, packet enqueue, and IFU cursor movement must share one accepted-packet fire. |
-| Owner request queue / IFU work queue | Primary next structural frontend slice | Lets IFU request and F2 delivery decouple by FTQ owner instead of relying on a single pending successor. | Owner-start PC delivery exactly once; no stale ICQ response consumption. |
+| Backward-next-owner same-owner safety | Accepted depth-1 slice | Removes false overlap blocking when a predicted next owner is a backward loop target. | Only treat the next owner as non-blocking when its start PC is behind the current work PC. |
+| Owner request queue / IFU work queue | Deferred structural depth slice | Lets IFU request and F2 delivery decouple by FTQ owner instead of relying on a single pending successor. | Reopen after residual attribution shows useful future targets; owner-start PC delivery exactly once. |
 | Capacity-bounded depth-2 runahead | Recalibrate before another RTL trial | The first owner-queue attempt was dormant, so more depth alone is not enough. | Reopen only with evidence that the next predicted owner is not already the FTQ next owner and has a useful distinct target. |
-| Early fetch-line metadata | High value | Reduces conservative predicted-control and RVC boundary stalls. | Golden PC clean on mixed RVC/control windows. |
-| Same-owner residual attribution | Required next analysis slice | The corrected profiler moved the stale predicted-control bucket to no-emit, remainder, and other. | Add data before changing RTL; avoid another no-op structural queue. |
+| Early fetch-line metadata | High value | Reduces conservative RVC boundary, remainder, and line-response stalls. | Golden PC clean on mixed RVC/control windows. |
+| Same-owner remainder policy | Primary next residual frontend slice | `same_owner_block_rem` is now the largest same-owner block after backward-target cleanup. | Must preserve exact straddled RVC/32-bit delivery and endpoint identity. |
+| Same-owner residual attribution | Keep active | The corrected profiler has now isolated predicted-control and backward-target artifacts. | Add a narrower remainder/no-emit split before the next RTL slice. |
 | BPU/FTQ training metadata cleanup | High value | Improves attribution and enables safe prediction experiments. | Preserve GHR/RAS/target snapshots per owner. |
 | BPU S0/uBTB | Conditional | May help if lookup latency or direction quality blocks runahead. | Promote only with per-PC branch data or timing evidence. |
 | Indirect prediction | Conditional | Helps if indirect MPKI is material. | Per-PC evidence required. |
@@ -240,10 +251,12 @@ Every accepted performance row must report:
 | 2 | Reconfirm from a clean committed checkout if needed. | Results match the accepted rows within normal determinism and no stale debug harness is required. |
 | 3 | Re-attribute residual same-owner and F2-data bubbles with the corrected profiler. | CoreMark 10 reports no stale predicted-control bucket and names the dominant remaining no-emit/remainder/other causes. |
 | 4 | Reopen owner queue only if the attribution shows distinct useful future targets. | Candidate count is large enough to move cycles, not merely strict-clean. |
-| 5 | Try the next architecture slice from evidence: early line metadata, better same-owner remainder policy, or BPU metadata quality. | Heavy rows improve with no endpoint drift and no off-target regression. |
-| 6 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
-| 7 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
-| 8 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 5 | Lock backward-next-owner same-owner safety. | CoreMark 1, CoreMark 10, Dhrystone 300, Dhrystone 100, branch hotspot, and broad Stage 1 DSE rows pass strict checks. |
+| 6 | Split the remaining same-owner remainder and no-emit buckets. | The next candidate names a specific residual cause before RTL work starts. |
+| 7 | Try the next architecture slice from evidence: remainder policy, early line metadata, or BPU metadata quality. | Heavy rows improve with no endpoint drift and no off-target regression. |
+| 8 | Score frontend-only ceiling. | Gate C passes or fails explicitly. |
+| 9 | Open one second-domain DSE if Gate C fails. | Gate D names the limiter before RTL work starts. |
+| 10 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -257,13 +270,14 @@ Every accepted performance row must report:
 
 ## Verdict
 
-The successor plus predicted-control-window path should be pursued. It is now
-strict-clean on the scoreable smoke plus CoreMark 10, it beats the calibrated
-MegaBOOM smoke rows, and it cuts the dominant CoreMark 10 frontend-empty
-buckets substantially while lifting CoreMark 10 into the 6.4 CM/MHz range.
+The successor plus predicted-control-window plus backward-next-owner path
+should be pursued. It is strict-clean on the scoreable smoke, CoreMark 10, and
+broad Stage 1 DSE rows, it beats the calibrated MegaBOOM smoke rows, and it
+cuts the dominant CoreMark 10 frontend-empty buckets while lifting CoreMark 10
+to 6.58 CM/MHz.
 
-Near-term objective: use this as the new Stage 2 frontend baseline, then
-replace the single pending successor mechanism with an owner-tagged IFU
-request/work queue. Long-term objective remains 7.5 CM/MHz and 4.0
-DMIPS/MHz, with a required second-domain escalation if frontend-only work does
-not reach the Gate C ceiling.
+Near-term objective: use this as the new Stage 2 frontend baseline, then split
+the remaining same-owner remainder and no-emit buckets before another RTL
+change. Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a
+required second-domain escalation if frontend-only work does not reach the
+Gate C ceiling.
