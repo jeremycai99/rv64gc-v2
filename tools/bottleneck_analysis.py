@@ -35,6 +35,45 @@ from pathlib import Path
 # Counters whose "high" values indicate frontend bubble or pipeline stall.
 # Each entry: (counter_name, attribution, what_it_means).
 BOTTLENECK_COUNTERS = [
+    # Full bottleneck DSE grouped counters.
+    ("xs_bottleneck_dep_wait_on_load", "dependency/wakeup", "IQ source-wait slots whose producer was a load"),
+    ("xs_bottleneck_dep_wait_on_alu", "dependency/wakeup", "IQ source-wait slots whose producer was an ALU uop"),
+    ("xs_bottleneck_dep_wait_on_branch", "dependency/wakeup", "IQ source-wait slots whose producer was branch/link work"),
+    ("xs_bottleneck_dep_wait_on_mul", "dependency/wakeup", "IQ source-wait slots whose producer was multiply"),
+    ("xs_bottleneck_dep_wait_on_div", "dependency/wakeup", "IQ source-wait slots whose producer was divide"),
+    ("xs_bottleneck_dep_wait_on_store", "dependency/wakeup", "IQ source-wait slots whose producer was store-side work"),
+    ("xs_bottleneck_dep_wait_on_csr", "dependency/wakeup", "IQ source-wait slots whose producer was CSR"),
+    ("xs_bottleneck_dep_wait_on_unknown", "dependency/wakeup", "IQ source-wait slots with unknown producer class"),
+    ("xs_bottleneck_wakeup_same_cycle_missed", "dependency/wakeup", "entries made eligible by wakeup but not selected that cycle"),
+    ("xs_bottleneck_iq0_not_ready_entry_sum", "issue queue", "IQ0 valid-entry cycles blocked on operands"),
+    ("xs_bottleneck_iq1_not_ready_entry_sum", "issue queue", "IQ1 valid-entry cycles blocked on operands"),
+    ("xs_bottleneck_iq2_not_ready_entry_sum", "issue queue", "IQ2 valid-entry cycles blocked on operands"),
+    ("xs_bottleneck_iq_load_not_ready_entry_sum", "issue queue", "load IQ valid-entry cycles blocked on operands"),
+    ("xs_bottleneck_iq_store_not_ready_entry_sum", "issue queue", "store-address IQ valid-entry cycles blocked on operands"),
+    ("xs_bottleneck_iq_std_not_ready_entry_sum", "issue queue", "store-data IQ valid-entry cycles blocked on operands"),
+    ("xs_bottleneck_iq0_arb_loss", "issue queue", "eligible IQ0 entries beyond selected issue capacity"),
+    ("xs_bottleneck_iq1_arb_loss", "issue queue", "eligible IQ1 entries beyond selected issue capacity"),
+    ("xs_bottleneck_iq2_arb_loss", "issue queue", "eligible IQ2 entries beyond selected issue capacity"),
+    ("xs_bottleneck_iq_load_arb_loss", "issue queue", "eligible load IQ entries beyond selected issue capacity"),
+    ("xs_bottleneck_rob_commit_zero_cycles", "commit", "cycles with no committed instructions"),
+    ("xs_bottleneck_rob_commit_slots_lost_head_block", "commit", "ready younger commit slots hidden behind a not-ready head"),
+    ("xs_bottleneck_lsu_load_reissue_total", "LSU", "load issues that replaced an already tracked pending load"),
+    ("xs_bottleneck_lsu_load_latency_8_15", "LSU", "loads with 8-15 cycle issue-to-WB latency"),
+    ("xs_bottleneck_lsu_load_latency_16_31", "LSU", "loads with 16-31 cycle issue-to-WB latency"),
+    ("xs_bottleneck_lsu_load_latency_32plus", "LSU", "loads with 32+ cycle issue-to-WB latency"),
+    ("xs_bottleneck_lsu_store_forward_wait", "LSU", "load cycles waiting for store forwarding"),
+    ("xs_bottleneck_lsu_dcache_port_wait", "LSU", "second load blocked by D-cache port/conflict path"),
+    ("xs_bottleneck_branch_mispredicts", "control flow", "committed mispredict count"),
+    ("xs_bottleneck_branch_ghr_restore", "control flow", "GHR restore events"),
+    ("xs_bottleneck_fe_zero_cycles", "frontend supply", "cycles where rename saw zero frontend instructions"),
+    ("xs_bottleneck_fe_redirect_recovery", "control flow", "fetch-zero cycles attributed to redirect recovery"),
+    ("xs_bottleneck_fe_packet_empty", "frontend supply", "fetch-zero cycles with empty decode packet"),
+    ("xs_bottleneck_fe_packet_empty_f2_data", "frontend supply", "fetch-zero cycles with F2 data but no useful packet"),
+    ("xs_bottleneck_fe_packet_empty_noemit_dup", "frontend supply", "fetch-zero cycles suppressed as duplicate/no emit"),
+    ("xs_bottleneck_rename_slots_lost_total", "rename/window", "frontend slots that did not advance through rename"),
+    ("xs_bottleneck_rename_stall_preg", "rename/window", "rename stalls caused by physical register pressure"),
+    ("xs_bottleneck_rename_stall_rob", "rename/window", "rename stalls caused by ROB pressure"),
+    ("xs_bottleneck_rename_stall_dq", "rename/window", "rename stalls caused by dispatch queue pressure"),
     # Empty-packet attribution (frontend supply gap)
     ("packet_empty",                 "frontend supply",         "F2 emitted no packet this cycle"),
     ("packet_empty_f2_data",         "frontend supply",         "F2 had no fresh icache data"),
@@ -78,12 +117,10 @@ def load_results(path: Path) -> list[dict]:
 
 def total_cycles(row: dict) -> int | None:
     pc = row.get("perf_counters") or {}
-    # Prefer the bench-window timed cycles for normalization. Fall back to
-    # mcycle if not available.
-    if (cyc := row.get("cycle")) is not None:
-        return int(cyc)
     if (mc := row.get("mcycle")) is not None:
         return int(mc)
+    if (cyc := row.get("cycle")) is not None:
+        return int(cyc)
     if (mc := pc.get("xs_ic_req_valid_cycles")) is not None:
         return int(mc)
     return None
@@ -138,7 +175,7 @@ def render_one(row: dict, top_n: int) -> str:
 
     out.append("**Per-counter ranking (some entries overlap; bypass-corrected view above is authoritative):**")
     out.append("")
-    out.append("| Rank | Counter | Cycles | % of run | Attribution | Meaning |")
+    out.append("| Rank | Counter | Count | Count / timed cycle | Attribution | Meaning |")
     out.append("|---:|---|---:|---:|---|---|")
     for i, (counter, attribution, meaning, val, pct) in enumerate(rows[:top_n], 1):
         flag = " ⚠ artifact" if counter == "xs_packet_buf_empty_cycles" else ""
@@ -151,7 +188,7 @@ def render_one(row: dict, top_n: int) -> str:
     if actionable:
         top = actionable[0]
         out.append(f"**Dominant actionable bottleneck:** `{top[0]}` "
-                   f"({top[3]:,} cycles, {top[4]:.1f}% of run)")
+                   f"({top[3]:,} count, {top[4]:.1f}% of timed cycles)")
         out.append("")
         out.append("**Required for next RTL iteration (per feedback_perf_discipline.md):**")
         out.append("- Identify a specific RTL change that addresses this counter")

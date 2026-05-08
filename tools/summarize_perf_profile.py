@@ -55,6 +55,7 @@ KEY_XS_PREFIX = [
     "packet_stale_",
     "flowthrough_",
     "same_owner_",
+    "bottleneck_",
 ]
 
 

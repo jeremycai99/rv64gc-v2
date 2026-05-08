@@ -465,9 +465,15 @@ module tb_top
     // Per-stage pipeline counters (enabled with +PERF_PROFILE)
     // =========================================================================
     logic pp_en;
+    logic btl_en;
     initial begin
         pp_en = 0;
+        btl_en = 0;
         if ($test$plusargs("PERF_PROFILE")) pp_en = 1;
+        if ($test$plusargs("BOTTLENECK_PROFILE")) begin
+            pp_en = 1;
+            btl_en = 1;
+        end
     end
 
     // Raw fetch histogram: cycles where fetch_count = N from fetch_top
@@ -523,6 +529,49 @@ module tb_top
     integer iq0_arb_loss_cyc, iq1_arb_loss_cyc, iq2_arb_loss_cyc;
     integer iq0_issue_uops, iq1_issue_uops, iq2_issue_uops;
     integer iq0_eligible_sum, iq1_eligible_sum, iq2_eligible_sum;
+    localparam int BTL_IQ0 = 0;
+    localparam int BTL_IQ1 = 1;
+    localparam int BTL_IQ2 = 2;
+    localparam int BTL_IQ_LOAD = 3;
+    localparam int BTL_IQ_STORE = 4;
+    localparam int BTL_IQ_STD = 5;
+    localparam int BTL_IQ_COUNT = 6;
+    localparam int BTL_PROD_UNKNOWN = 0;
+    localparam int BTL_PROD_ALU = 1;
+    localparam int BTL_PROD_LOAD = 2;
+    localparam int BTL_PROD_BRANCH = 3;
+    localparam int BTL_PROD_MUL = 4;
+    localparam int BTL_PROD_DIV = 5;
+    localparam int BTL_PROD_STORE = 6;
+    localparam int BTL_PROD_CSR = 7;
+    integer btl_iq_valid_entry_sum [0:BTL_IQ_COUNT-1];
+    integer btl_iq_ready_entry_sum [0:BTL_IQ_COUNT-1];
+    integer btl_iq_not_ready_entry_sum [0:BTL_IQ_COUNT-1];
+    integer btl_iq_eligible_zero_cycles [0:BTL_IQ_COUNT-1];
+    integer btl_iq_eligible_one_cycles [0:BTL_IQ_COUNT-1];
+    integer btl_iq_eligible_multi_cycles [0:BTL_IQ_COUNT-1];
+    integer btl_iq_selected_uops [0:BTL_IQ_COUNT-1];
+    integer btl_iq_arb_loss [0:BTL_IQ_COUNT-1];
+    integer btl_iq_oldest_not_ready_age_max [0:BTL_IQ_COUNT-1];
+    integer btl_dep_src1_wait;
+    integer btl_dep_src2_wait;
+    integer btl_dep_both_src_wait;
+    integer btl_dep_wait_on_alu;
+    integer btl_dep_wait_on_load;
+    integer btl_dep_wait_on_branch;
+    integer btl_dep_wait_on_mul;
+    integer btl_dep_wait_on_div;
+    integer btl_dep_wait_on_store;
+    integer btl_dep_wait_on_csr;
+    integer btl_dep_wait_on_unknown;
+    integer btl_wakeup_same_cycle_candidate;
+    integer btl_wakeup_same_cycle_missed;
+    integer btl_rename_slots_lost_total;
+    integer btl_rename_free_preg_min;
+    integer btl_rename_rob_free_min;
+    integer btl_rob_younger_ready_behind_head;
+    integer btl_rob_commit_slots_lost_head_block;
+    integer btl_preg_class [0:INT_PRF_DEPTH-1];
     integer macro_fused_rename_total;
     integer macro_fused_commit_total;
     integer macro_fused_commit_alu;
@@ -948,6 +997,38 @@ module tb_top
             iq0_eligible_sum        <= 0;
             iq1_eligible_sum        <= 0;
             iq2_eligible_sum        <= 0;
+            for (int i = 0; i < BTL_IQ_COUNT; i++) begin
+                btl_iq_valid_entry_sum[i] <= 0;
+                btl_iq_ready_entry_sum[i] <= 0;
+                btl_iq_not_ready_entry_sum[i] <= 0;
+                btl_iq_eligible_zero_cycles[i] <= 0;
+                btl_iq_eligible_one_cycles[i] <= 0;
+                btl_iq_eligible_multi_cycles[i] <= 0;
+                btl_iq_selected_uops[i] <= 0;
+                btl_iq_arb_loss[i] <= 0;
+                btl_iq_oldest_not_ready_age_max[i] <= 0;
+            end
+            btl_dep_src1_wait <= 0;
+            btl_dep_src2_wait <= 0;
+            btl_dep_both_src_wait <= 0;
+            btl_dep_wait_on_alu <= 0;
+            btl_dep_wait_on_load <= 0;
+            btl_dep_wait_on_branch <= 0;
+            btl_dep_wait_on_mul <= 0;
+            btl_dep_wait_on_div <= 0;
+            btl_dep_wait_on_store <= 0;
+            btl_dep_wait_on_csr <= 0;
+            btl_dep_wait_on_unknown <= 0;
+            btl_wakeup_same_cycle_candidate <= 0;
+            btl_wakeup_same_cycle_missed <= 0;
+            btl_rename_slots_lost_total <= 0;
+            btl_rename_free_preg_min <= INT_PRF_DEPTH;
+            btl_rename_rob_free_min <= ROB_DEPTH;
+            btl_rob_younger_ready_behind_head <= 0;
+            btl_rob_commit_slots_lost_head_block <= 0;
+            for (int i = 0; i < INT_PRF_DEPTH; i++) begin
+                btl_preg_class[i] <= BTL_PROD_UNKNOWN;
+            end
             macro_fused_rename_total <= 0;
             macro_fused_commit_total <= 0;
             macro_fused_commit_alu <= 0;
@@ -980,6 +1061,25 @@ module tb_top
             automatic int misp_min_idx;
             automatic int misp_min_count;
             automatic int misp_use_idx;
+            automatic int btl_iq_valid_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_ready_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_eligible_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_selected_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_oldest_wait_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_src1_wait_now;
+            automatic int btl_src2_wait_now;
+            automatic int btl_both_src_wait_now;
+            automatic int btl_wait_alu_now;
+            automatic int btl_wait_load_now;
+            automatic int btl_wait_branch_now;
+            automatic int btl_wait_mul_now;
+            automatic int btl_wait_div_now;
+            automatic int btl_wait_store_now;
+            automatic int btl_wait_csr_now;
+            automatic int btl_wait_unknown_now;
+            automatic int btl_wakeup_candidate_now;
+            automatic int btl_wakeup_missed_now;
+            automatic int btl_younger_ready_now;
 
             perf_total_cyc    <= perf_total_cyc + 1;
             frontend_bin = int'(u_core.rename_dec_count);
@@ -1007,6 +1107,27 @@ module tb_top
             fused_commit_store_cyc = 0;
             move_candidate_cyc = 0;
             zero_elim_cyc = 0;
+            for (int i = 0; i < BTL_IQ_COUNT; i++) begin
+                btl_iq_valid_now[i] = 0;
+                btl_iq_ready_now[i] = 0;
+                btl_iq_eligible_now[i] = 0;
+                btl_iq_selected_now[i] = 0;
+                btl_iq_oldest_wait_now[i] = 0;
+            end
+            btl_src1_wait_now = 0;
+            btl_src2_wait_now = 0;
+            btl_both_src_wait_now = 0;
+            btl_wait_alu_now = 0;
+            btl_wait_load_now = 0;
+            btl_wait_branch_now = 0;
+            btl_wait_mul_now = 0;
+            btl_wait_div_now = 0;
+            btl_wait_store_now = 0;
+            btl_wait_csr_now = 0;
+            btl_wait_unknown_now = 0;
+            btl_wakeup_candidate_now = 0;
+            btl_wakeup_missed_now = 0;
+            btl_younger_ready_now = 0;
 
             fetch_hist[u_core.fetch_count]        <= fetch_hist[u_core.fetch_count] + 1;
             frontend_hist[frontend_bin]           <= frontend_hist[frontend_bin] + 1;
@@ -1164,6 +1285,487 @@ module tb_top
                 if (any_iq_operand_stall) issue_stall_operand_cyc <= issue_stall_operand_cyc + 1;
                 if (any_iq_fu_stall)      issue_stall_fu_cyc      <= issue_stall_fu_cyc + 1;
                 if (any_iq_arb_stall)     issue_stall_arb_cyc     <= issue_stall_arb_cyc + 1;
+            end
+
+            begin : bottleneck_profile
+                automatic logic selected_now;
+                automatic logic ready_now;
+                automatic logic wakeup_now;
+
+                btl_iq_eligible_now[BTL_IQ0] = $countones(u_core.u_iq0.eligible);
+                btl_iq_eligible_now[BTL_IQ1] = $countones(u_core.u_iq1.eligible);
+                btl_iq_eligible_now[BTL_IQ2] = $countones(u_core.u_iq2.eligible);
+                btl_iq_eligible_now[BTL_IQ_LOAD] = $countones(u_core.u_iq_load.eligible);
+                btl_iq_eligible_now[BTL_IQ_STORE] = $countones(u_core.u_iq_store.eligible);
+                btl_iq_eligible_now[BTL_IQ_STD] = $countones(u_core.u_iq_store_data.eligible);
+                btl_iq_selected_now[BTL_IQ0] = $countones(u_core.u_iq0.issue_valid);
+                btl_iq_selected_now[BTL_IQ1] = $countones(u_core.u_iq1.issue_valid);
+                btl_iq_selected_now[BTL_IQ2] = $countones(u_core.u_iq2.issue_valid);
+                btl_iq_selected_now[BTL_IQ_LOAD] = $countones(u_core.u_iq_load.issue_valid);
+                btl_iq_selected_now[BTL_IQ_STORE] = $countones(u_core.u_iq_store.issue_valid);
+                btl_iq_selected_now[BTL_IQ_STD] = $countones(u_core.u_iq_store_data.issue_valid);
+
+                for (int e = 0; e < IQ_INT_DEPTH; e++) begin
+                    if (u_core.u_iq0.entry_valid[e]) begin
+                        btl_iq_valid_now[BTL_IQ0]++;
+                        ready_now = u_core.u_iq0.next_src1_ready[e] &&
+                                    u_core.u_iq0.next_src2_ready[e];
+                        if (ready_now) begin
+                            btl_iq_ready_now[BTL_IQ0]++;
+                        end else begin
+                            if (int'(u_core.u_iq0.entry_age[e]) >
+                                btl_iq_oldest_wait_now[BTL_IQ0])
+                                btl_iq_oldest_wait_now[BTL_IQ0] =
+                                    int'(u_core.u_iq0.entry_age[e]);
+                        end
+                        if (!u_core.u_iq0.next_src1_ready[e]) begin
+                            btl_src1_wait_now++;
+                            case (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq0.next_src2_ready[e]) begin
+                            btl_src2_wait_now++;
+                            case (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq0.next_src1_ready[e] &&
+                            !u_core.u_iq0.next_src2_ready[e])
+                            btl_both_src_wait_now++;
+                        wakeup_now =
+                            (!u_core.u_iq0.src1_ready[e] ||
+                             !u_core.u_iq0.src2_ready[e]) &&
+                            u_core.u_iq0.eligible[e];
+                        if (wakeup_now) begin
+                            selected_now = 1'b0;
+                            for (int p = 0; p < 2; p++) begin
+                                if (u_core.u_iq0.sel_found[p] &&
+                                    !u_core.u_iq0.issue_suppress[p] &&
+                                    (u_core.u_iq0.sel_idx[p] == e[$clog2(IQ_INT_DEPTH)-1:0]))
+                                    selected_now = 1'b1;
+                            end
+                            btl_wakeup_candidate_now++;
+                            if (!selected_now)
+                                btl_wakeup_missed_now++;
+                        end
+                    end
+
+                    if (u_core.u_iq1.entry_valid[e]) begin
+                        btl_iq_valid_now[BTL_IQ1]++;
+                        ready_now = u_core.u_iq1.next_src1_ready[e] &&
+                                    u_core.u_iq1.next_src2_ready[e];
+                        if (ready_now) begin
+                            btl_iq_ready_now[BTL_IQ1]++;
+                        end else begin
+                            if (int'(u_core.u_iq1.entry_age[e]) >
+                                btl_iq_oldest_wait_now[BTL_IQ1])
+                                btl_iq_oldest_wait_now[BTL_IQ1] =
+                                    int'(u_core.u_iq1.entry_age[e]);
+                        end
+                        if (!u_core.u_iq1.next_src1_ready[e]) begin
+                            btl_src1_wait_now++;
+                            case (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq1.next_src2_ready[e]) begin
+                            btl_src2_wait_now++;
+                            case (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq1.next_src1_ready[e] &&
+                            !u_core.u_iq1.next_src2_ready[e])
+                            btl_both_src_wait_now++;
+                        wakeup_now =
+                            (!u_core.u_iq1.src1_ready[e] ||
+                             !u_core.u_iq1.src2_ready[e]) &&
+                            u_core.u_iq1.eligible[e];
+                        if (wakeup_now) begin
+                            selected_now =
+                                u_core.u_iq1.sel_found[0] &&
+                                !u_core.u_iq1.issue_suppress[0] &&
+                                (u_core.u_iq1.sel_idx[0] == e[$clog2(IQ_INT_DEPTH)-1:0]);
+                            btl_wakeup_candidate_now++;
+                            if (!selected_now)
+                                btl_wakeup_missed_now++;
+                        end
+                    end
+
+                    if (u_core.u_iq2.entry_valid[e]) begin
+                        btl_iq_valid_now[BTL_IQ2]++;
+                        ready_now = u_core.u_iq2.next_src1_ready[e] &&
+                                    u_core.u_iq2.next_src2_ready[e];
+                        if (ready_now) begin
+                            btl_iq_ready_now[BTL_IQ2]++;
+                        end else begin
+                            if (int'(u_core.u_iq2.entry_age[e]) >
+                                btl_iq_oldest_wait_now[BTL_IQ2])
+                                btl_iq_oldest_wait_now[BTL_IQ2] =
+                                    int'(u_core.u_iq2.entry_age[e]);
+                        end
+                        if (!u_core.u_iq2.next_src1_ready[e]) begin
+                            btl_src1_wait_now++;
+                            case (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq2.next_src2_ready[e]) begin
+                            btl_src2_wait_now++;
+                            case (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq2.next_src1_ready[e] &&
+                            !u_core.u_iq2.next_src2_ready[e])
+                            btl_both_src_wait_now++;
+                        wakeup_now =
+                            (!u_core.u_iq2.src1_ready[e] ||
+                             !u_core.u_iq2.src2_ready[e]) &&
+                            u_core.u_iq2.eligible[e];
+                        if (wakeup_now) begin
+                            selected_now =
+                                u_core.u_iq2.sel_found[0] &&
+                                !u_core.u_iq2.issue_suppress[0] &&
+                                (u_core.u_iq2.sel_idx[0] == e[$clog2(IQ_INT_DEPTH)-1:0]);
+                            btl_wakeup_candidate_now++;
+                            if (!selected_now)
+                                btl_wakeup_missed_now++;
+                        end
+                    end
+                end
+
+                for (int e = 0; e < IQ_MEM_DEPTH; e++) begin
+                    if (u_core.u_iq_load.entry_valid[e]) begin
+                        btl_iq_valid_now[BTL_IQ_LOAD]++;
+                        ready_now = u_core.u_iq_load.next_src1_ready[e] &&
+                                    u_core.u_iq_load.next_src2_ready[e];
+                        if (ready_now) begin
+                            btl_iq_ready_now[BTL_IQ_LOAD]++;
+                        end else begin
+                            if (int'(u_core.u_iq_load.entry_age[e]) >
+                                btl_iq_oldest_wait_now[BTL_IQ_LOAD])
+                                btl_iq_oldest_wait_now[BTL_IQ_LOAD] =
+                                    int'(u_core.u_iq_load.entry_age[e]);
+                        end
+                        if (!u_core.u_iq_load.next_src1_ready[e]) begin
+                            btl_src1_wait_now++;
+                            case (btl_preg_class[u_core.u_iq_load.rs1_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq_load.next_src2_ready[e]) begin
+                            btl_src2_wait_now++;
+                            case (btl_preg_class[u_core.u_iq_load.rs2_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq_load.next_src1_ready[e] &&
+                            !u_core.u_iq_load.next_src2_ready[e])
+                            btl_both_src_wait_now++;
+                        wakeup_now =
+                            (!u_core.u_iq_load.src1_ready[e] ||
+                             !u_core.u_iq_load.src2_ready[e]) &&
+                            u_core.u_iq_load.eligible[e];
+                        if (wakeup_now) begin
+                            selected_now = 1'b0;
+                            for (int p = 0; p < 2; p++) begin
+                                if (u_core.u_iq_load.sel_found[p] &&
+                                    !u_core.u_iq_load.issue_suppress[p] &&
+                                    (u_core.u_iq_load.sel_idx[p] == e[$clog2(IQ_MEM_DEPTH)-1:0]))
+                                    selected_now = 1'b1;
+                            end
+                            btl_wakeup_candidate_now++;
+                            if (!selected_now)
+                                btl_wakeup_missed_now++;
+                        end
+                    end
+
+                    if (u_core.u_iq_store.entry_valid[e]) begin
+                        btl_iq_valid_now[BTL_IQ_STORE]++;
+                        ready_now = u_core.u_iq_store.next_src1_ready[e] &&
+                                    u_core.u_iq_store.next_src2_ready[e];
+                        if (ready_now) begin
+                            btl_iq_ready_now[BTL_IQ_STORE]++;
+                        end else begin
+                            if (int'(u_core.u_iq_store.entry_age[e]) >
+                                btl_iq_oldest_wait_now[BTL_IQ_STORE])
+                                btl_iq_oldest_wait_now[BTL_IQ_STORE] =
+                                    int'(u_core.u_iq_store.entry_age[e]);
+                        end
+                        if (!u_core.u_iq_store.next_src1_ready[e]) begin
+                            btl_src1_wait_now++;
+                            case (btl_preg_class[u_core.u_iq_store.rs1_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq_store.next_src2_ready[e]) begin
+                            btl_src2_wait_now++;
+                            case (btl_preg_class[u_core.u_iq_store.rs2_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq_store.next_src1_ready[e] &&
+                            !u_core.u_iq_store.next_src2_ready[e])
+                            btl_both_src_wait_now++;
+                        wakeup_now =
+                            (!u_core.u_iq_store.src1_ready[e] ||
+                             !u_core.u_iq_store.src2_ready[e]) &&
+                            u_core.u_iq_store.eligible[e];
+                        if (wakeup_now) begin
+                            selected_now =
+                                u_core.u_iq_store.sel_found[0] &&
+                                !u_core.u_iq_store.issue_suppress[0] &&
+                                (u_core.u_iq_store.sel_idx[0] == e[$clog2(IQ_MEM_DEPTH)-1:0]);
+                            btl_wakeup_candidate_now++;
+                            if (!selected_now)
+                                btl_wakeup_missed_now++;
+                        end
+                    end
+
+                    if (u_core.u_iq_store_data.entry_valid[e]) begin
+                        btl_iq_valid_now[BTL_IQ_STD]++;
+                        ready_now = u_core.u_iq_store_data.next_src1_ready[e] &&
+                                    u_core.u_iq_store_data.next_src2_ready[e];
+                        if (ready_now) begin
+                            btl_iq_ready_now[BTL_IQ_STD]++;
+                        end else begin
+                            if (int'(u_core.u_iq_store_data.entry_age[e]) >
+                                btl_iq_oldest_wait_now[BTL_IQ_STD])
+                                btl_iq_oldest_wait_now[BTL_IQ_STD] =
+                                    int'(u_core.u_iq_store_data.entry_age[e]);
+                        end
+                        if (!u_core.u_iq_store_data.next_src1_ready[e]) begin
+                            btl_src1_wait_now++;
+                            case (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq_store_data.next_src2_ready[e]) begin
+                            btl_src2_wait_now++;
+                            case (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]])
+                                BTL_PROD_ALU:    btl_wait_alu_now++;
+                                BTL_PROD_LOAD:   btl_wait_load_now++;
+                                BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                                BTL_PROD_DIV:    btl_wait_div_now++;
+                                BTL_PROD_STORE:  btl_wait_store_now++;
+                                BTL_PROD_CSR:    btl_wait_csr_now++;
+                                default:         btl_wait_unknown_now++;
+                            endcase
+                        end
+                        if (!u_core.u_iq_store_data.next_src1_ready[e] &&
+                            !u_core.u_iq_store_data.next_src2_ready[e])
+                            btl_both_src_wait_now++;
+                        wakeup_now =
+                            (!u_core.u_iq_store_data.src1_ready[e] ||
+                             !u_core.u_iq_store_data.src2_ready[e]) &&
+                            u_core.u_iq_store_data.eligible[e];
+                        if (wakeup_now) begin
+                            selected_now =
+                                u_core.u_iq_store_data.sel_found[0] &&
+                                !u_core.u_iq_store_data.issue_suppress[0] &&
+                                (u_core.u_iq_store_data.sel_idx[0] == e[$clog2(IQ_MEM_DEPTH)-1:0]);
+                            btl_wakeup_candidate_now++;
+                            if (!selected_now)
+                                btl_wakeup_missed_now++;
+                        end
+                    end
+                end
+
+                for (int i = 0; i < BTL_IQ_COUNT; i++) begin
+                    btl_iq_valid_entry_sum[i] <=
+                        btl_iq_valid_entry_sum[i] + btl_iq_valid_now[i];
+                    btl_iq_ready_entry_sum[i] <=
+                        btl_iq_ready_entry_sum[i] + btl_iq_ready_now[i];
+                    btl_iq_not_ready_entry_sum[i] <=
+                        btl_iq_not_ready_entry_sum[i] +
+                        (btl_iq_valid_now[i] - btl_iq_ready_now[i]);
+                    btl_iq_selected_uops[i] <=
+                        btl_iq_selected_uops[i] + btl_iq_selected_now[i];
+                    if (btl_iq_valid_now[i] != 0) begin
+                        if (btl_iq_eligible_now[i] == 0)
+                            btl_iq_eligible_zero_cycles[i] <=
+                                btl_iq_eligible_zero_cycles[i] + 1;
+                        else if (btl_iq_eligible_now[i] == 1)
+                            btl_iq_eligible_one_cycles[i] <=
+                                btl_iq_eligible_one_cycles[i] + 1;
+                        else
+                            btl_iq_eligible_multi_cycles[i] <=
+                                btl_iq_eligible_multi_cycles[i] + 1;
+                    end
+                    if (btl_iq_eligible_now[i] > btl_iq_selected_now[i])
+                        btl_iq_arb_loss[i] <= btl_iq_arb_loss[i] +
+                            (btl_iq_eligible_now[i] - btl_iq_selected_now[i]);
+                    if (btl_iq_oldest_wait_now[i] >
+                        btl_iq_oldest_not_ready_age_max[i])
+                        btl_iq_oldest_not_ready_age_max[i] <=
+                            btl_iq_oldest_wait_now[i];
+                end
+
+                btl_dep_src1_wait <= btl_dep_src1_wait + btl_src1_wait_now;
+                btl_dep_src2_wait <= btl_dep_src2_wait + btl_src2_wait_now;
+                btl_dep_both_src_wait <=
+                    btl_dep_both_src_wait + btl_both_src_wait_now;
+                btl_dep_wait_on_alu <= btl_dep_wait_on_alu + btl_wait_alu_now;
+                btl_dep_wait_on_load <= btl_dep_wait_on_load + btl_wait_load_now;
+                btl_dep_wait_on_branch <=
+                    btl_dep_wait_on_branch + btl_wait_branch_now;
+                btl_dep_wait_on_mul <= btl_dep_wait_on_mul + btl_wait_mul_now;
+                btl_dep_wait_on_div <= btl_dep_wait_on_div + btl_wait_div_now;
+                btl_dep_wait_on_store <=
+                    btl_dep_wait_on_store + btl_wait_store_now;
+                btl_dep_wait_on_csr <= btl_dep_wait_on_csr + btl_wait_csr_now;
+                btl_dep_wait_on_unknown <=
+                    btl_dep_wait_on_unknown + btl_wait_unknown_now;
+                btl_wakeup_same_cycle_candidate <=
+                    btl_wakeup_same_cycle_candidate + btl_wakeup_candidate_now;
+                btl_wakeup_same_cycle_missed <=
+                    btl_wakeup_same_cycle_missed + btl_wakeup_missed_now;
+
+                if (u_core.rename_dec_count > u_core.ren_count_w)
+                    btl_rename_slots_lost_total <=
+                        btl_rename_slots_lost_total +
+                        (u_core.rename_dec_count - u_core.ren_count_w);
+                if (int'(u_core.u_rename.fl_free_count) <
+                    btl_rename_free_preg_min)
+                    btl_rename_free_preg_min <=
+                        int'(u_core.u_rename.fl_free_count);
+                if (int'(u_core.u_rob.free_count) < btl_rename_rob_free_min)
+                    btl_rename_rob_free_min <= int'(u_core.u_rob.free_count);
+
+                if (u_core.rob_head_valid[0] && !u_core.rob_head_ready[0]) begin
+                    for (int i = 1; i < PIPE_WIDTH; i++) begin
+                        if (u_core.rob_head_valid[i] && u_core.rob_head_ready[i])
+                            btl_younger_ready_now++;
+                    end
+                    btl_rob_younger_ready_behind_head <=
+                        btl_rob_younger_ready_behind_head +
+                        btl_younger_ready_now;
+                    btl_rob_commit_slots_lost_head_block <=
+                        btl_rob_commit_slots_lost_head_block +
+                        btl_younger_ready_now;
+                end
+
+                if (u_core.flush_out.valid && u_core.flush_out.full_flush) begin
+                    for (int i = 0; i < INT_PRF_DEPTH; i++) begin
+                        btl_preg_class[i] <= BTL_PROD_UNKNOWN;
+                    end
+                end else begin
+                    for (int i = 0; i < PIPE_WIDTH; i++) begin
+                        if ((3'(i) < u_core.ren_count_w) &&
+                            u_core.ren_insn[i].base.valid &&
+                            u_core.ren_insn[i].base.rd_valid &&
+                            (u_core.ren_insn[i].pdst != '0) &&
+                            !u_core.ren_move_eliminated[i] &&
+                            !u_core.ren_zero_eliminated[i]) begin
+                            case (u_core.ren_insn[i].base.fu_type)
+                                FU_ALU:
+                                    btl_preg_class[u_core.ren_insn[i].pdst] <=
+                                        BTL_PROD_ALU;
+                                FU_LOAD:
+                                    btl_preg_class[u_core.ren_insn[i].pdst] <=
+                                        BTL_PROD_LOAD;
+                                FU_BRU:
+                                    btl_preg_class[u_core.ren_insn[i].pdst] <=
+                                        BTL_PROD_BRANCH;
+                                FU_MUL:
+                                    btl_preg_class[u_core.ren_insn[i].pdst] <=
+                                        BTL_PROD_MUL;
+                                FU_DIV:
+                                    btl_preg_class[u_core.ren_insn[i].pdst] <=
+                                        BTL_PROD_DIV;
+                                FU_STA, FU_STD:
+                                    btl_preg_class[u_core.ren_insn[i].pdst] <=
+                                        BTL_PROD_STORE;
+                                FU_CSR:
+                                    btl_preg_class[u_core.ren_insn[i].pdst] <=
+                                        BTL_PROD_CSR;
+                                default:
+                                    btl_preg_class[u_core.ren_insn[i].pdst] <=
+                                        BTL_PROD_UNKNOWN;
+                            endcase
+                        end
+                    end
+                end
             end
             if (u_core.backend_stall)   backend_stall_cyc <= backend_stall_cyc + 1;
             if (u_core.flush_out.valid) flush_cyc         <= flush_cyc + 1;
@@ -1952,6 +2554,128 @@ module tb_top
                      ghr_restore_cyc, ghr_restore_nonzero_cyc);
             $display("RAS restore summary:");
             $display("  total                       : %0d", ras_restore_cyc);
+            if (btl_en) begin
+                $display("");
+                $display("=== BOTTLENECK DSE COUNTERS ===");
+                $display("xs bottleneck_fe_zero_cycles : %0d", frontend_hist[0]);
+                $display("xs bottleneck_fe_redirect_recovery : %0d", fetch_zero_redirect_cyc);
+                $display("xs bottleneck_fe_packet_empty : %0d", fetch_zero_pkt_empty_cyc);
+                $display("xs bottleneck_fe_packet_empty_wait_icresp : %0d", fetch_zero_wait_icresp_cyc);
+                $display("xs bottleneck_fe_packet_empty_f2_data : %0d", fetch_zero_f2_data_cyc);
+                $display("xs bottleneck_fe_packet_empty_noemit_dup : %0d", fetch_zero_no_emit_dup_cyc);
+                $display("xs bottleneck_rename_stall_preg : %0d", stall_preg_cyc);
+                $display("xs bottleneck_rename_stall_rob : %0d", stall_rob_cyc);
+                $display("xs bottleneck_rename_stall_dq : %0d", stall_dq_cyc);
+                $display("xs bottleneck_rename_stall_ckpt : %0d", stall_ckpt_cyc);
+                $display("xs bottleneck_rename_stall_other : %0d", stall_other_cyc);
+                $display("xs bottleneck_rename_slots_lost_total : %0d", btl_rename_slots_lost_total);
+                $display("xs bottleneck_rename_free_preg_min : %0d", btl_rename_free_preg_min);
+                $display("xs bottleneck_rename_rob_free_min : %0d", btl_rename_rob_free_min);
+                $display("xs bottleneck_iq0_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ0]);
+                $display("xs bottleneck_iq0_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ0]);
+                $display("xs bottleneck_iq0_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ0]);
+                $display("xs bottleneck_iq0_eligible_zero_cycles : %0d", btl_iq_eligible_zero_cycles[BTL_IQ0]);
+                $display("xs bottleneck_iq0_eligible_one_cycles : %0d", btl_iq_eligible_one_cycles[BTL_IQ0]);
+                $display("xs bottleneck_iq0_eligible_multi_cycles : %0d", btl_iq_eligible_multi_cycles[BTL_IQ0]);
+                $display("xs bottleneck_iq0_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ0]);
+                $display("xs bottleneck_iq0_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ0]);
+                $display("xs bottleneck_iq0_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ0]);
+                $display("xs bottleneck_iq1_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ1]);
+                $display("xs bottleneck_iq1_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ1]);
+                $display("xs bottleneck_iq1_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ1]);
+                $display("xs bottleneck_iq1_eligible_zero_cycles : %0d", btl_iq_eligible_zero_cycles[BTL_IQ1]);
+                $display("xs bottleneck_iq1_eligible_one_cycles : %0d", btl_iq_eligible_one_cycles[BTL_IQ1]);
+                $display("xs bottleneck_iq1_eligible_multi_cycles : %0d", btl_iq_eligible_multi_cycles[BTL_IQ1]);
+                $display("xs bottleneck_iq1_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ1]);
+                $display("xs bottleneck_iq1_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ1]);
+                $display("xs bottleneck_iq1_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ1]);
+                $display("xs bottleneck_iq2_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ2]);
+                $display("xs bottleneck_iq2_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ2]);
+                $display("xs bottleneck_iq2_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ2]);
+                $display("xs bottleneck_iq2_eligible_zero_cycles : %0d", btl_iq_eligible_zero_cycles[BTL_IQ2]);
+                $display("xs bottleneck_iq2_eligible_one_cycles : %0d", btl_iq_eligible_one_cycles[BTL_IQ2]);
+                $display("xs bottleneck_iq2_eligible_multi_cycles : %0d", btl_iq_eligible_multi_cycles[BTL_IQ2]);
+                $display("xs bottleneck_iq2_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ2]);
+                $display("xs bottleneck_iq2_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ2]);
+                $display("xs bottleneck_iq2_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ2]);
+                $display("xs bottleneck_iq_load_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_eligible_zero_cycles : %0d", btl_iq_eligible_zero_cycles[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_eligible_one_cycles : %0d", btl_iq_eligible_one_cycles[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_eligible_multi_cycles : %0d", btl_iq_eligible_multi_cycles[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_load_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ_LOAD]);
+                $display("xs bottleneck_iq_store_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_eligible_zero_cycles : %0d", btl_iq_eligible_zero_cycles[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_eligible_one_cycles : %0d", btl_iq_eligible_one_cycles[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_eligible_multi_cycles : %0d", btl_iq_eligible_multi_cycles[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_store_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ_STORE]);
+                $display("xs bottleneck_iq_std_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_eligible_zero_cycles : %0d", btl_iq_eligible_zero_cycles[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_eligible_one_cycles : %0d", btl_iq_eligible_one_cycles[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_eligible_multi_cycles : %0d", btl_iq_eligible_multi_cycles[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_selected_uops : %0d", btl_iq_selected_uops[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_arb_loss : %0d", btl_iq_arb_loss[BTL_IQ_STD]);
+                $display("xs bottleneck_iq_std_oldest_not_ready_age_max : %0d", btl_iq_oldest_not_ready_age_max[BTL_IQ_STD]);
+                $display("xs bottleneck_dep_src1_wait : %0d", btl_dep_src1_wait);
+                $display("xs bottleneck_dep_src2_wait : %0d", btl_dep_src2_wait);
+                $display("xs bottleneck_dep_both_src_wait : %0d", btl_dep_both_src_wait);
+                $display("xs bottleneck_dep_wait_on_alu : %0d", btl_dep_wait_on_alu);
+                $display("xs bottleneck_dep_wait_on_load : %0d", btl_dep_wait_on_load);
+                $display("xs bottleneck_dep_wait_on_branch : %0d", btl_dep_wait_on_branch);
+                $display("xs bottleneck_dep_wait_on_mul : %0d", btl_dep_wait_on_mul);
+                $display("xs bottleneck_dep_wait_on_div : %0d", btl_dep_wait_on_div);
+                $display("xs bottleneck_dep_wait_on_store : %0d", btl_dep_wait_on_store);
+                $display("xs bottleneck_dep_wait_on_csr : %0d", btl_dep_wait_on_csr);
+                $display("xs bottleneck_dep_wait_on_unknown : %0d", btl_dep_wait_on_unknown);
+                $display("xs bottleneck_wakeup_same_cycle_candidate : %0d", btl_wakeup_same_cycle_candidate);
+                $display("xs bottleneck_wakeup_same_cycle_missed : %0d", btl_wakeup_same_cycle_missed);
+                $display("xs bottleneck_rob_commit_zero_cycles : %0d", commit_hist[0]);
+                $display("xs bottleneck_rob_younger_ready_behind_head : %0d", btl_rob_younger_ready_behind_head);
+                $display("xs bottleneck_rob_commit_slots_lost_head_block : %0d", btl_rob_commit_slots_lost_head_block);
+                $display("xs bottleneck_lsu_load_issue_total : %0d", load_lat_issue_total);
+                $display("xs bottleneck_lsu_load_reissue_total : %0d", load_lat_reissue_total);
+                $display("xs bottleneck_lsu_load_wb_total : %0d", load_lat_wb_total);
+                $display("xs bottleneck_lsu_load_wb_untracked : %0d", load_lat_wb_untracked_total);
+                $display("xs bottleneck_lsu_load_latency_0 : %0d", load_lat_hist[0]);
+                $display("xs bottleneck_lsu_load_latency_1 : %0d", load_lat_hist[1]);
+                $display("xs bottleneck_lsu_load_latency_2 : %0d", load_lat_hist[2]);
+                $display("xs bottleneck_lsu_load_latency_3 : %0d", load_lat_hist[3]);
+                $display("xs bottleneck_lsu_load_latency_4 : %0d", load_lat_hist[4]);
+                $display("xs bottleneck_lsu_load_latency_5 : %0d", load_lat_hist[5]);
+                $display("xs bottleneck_lsu_load_latency_6_7 : %0d", load_lat_hist[6]);
+                $display("xs bottleneck_lsu_load_latency_8_15 : %0d", load_lat_hist[7]);
+                $display("xs bottleneck_lsu_load_latency_16_31 : %0d", load_lat_hist[8]);
+                $display("xs bottleneck_lsu_load_latency_32plus : %0d", load_lat_hist[9]);
+                $display("xs bottleneck_lsu_load_src_dchit : %0d", load_lat_src_count[LOAD_SRC_DCHIT]);
+                $display("xs bottleneck_lsu_load_src_fwd : %0d", load_lat_src_count[LOAD_SRC_FWD]);
+                $display("xs bottleneck_lsu_load_src_lmb : %0d", load_lat_src_count[LOAD_SRC_LMB]);
+                $display("xs bottleneck_lsu_store_forward_wait : %0d", sq_fwd_wait_cyc);
+                $display("xs bottleneck_lsu_store_queue_wait : %0d", sq_wait_p1_cyc);
+                $display("xs bottleneck_lsu_store_commit_backlog : %0d", dc_store_req_cyc);
+                $display("xs bottleneck_lsu_dcache_port_wait : %0d", p1_dcache_conflict_cyc);
+                $display("xs bottleneck_lsu_dual_load_conflict : %0d", p1_dcache_conflict_cyc);
+                $display("xs bottleneck_lsu_p1_retry_live : %0d", p1_retry_valid_cyc);
+                $display("xs bottleneck_branch_mispredicts : %0d",
+                         ctl_misp_cond_cyc + ctl_misp_jal_cyc +
+                         ctl_misp_jalr_cyc + ctl_misp_call_cyc +
+                         ctl_misp_ret_cyc);
+                $display("xs bottleneck_branch_cond_mispredicts : %0d", ctl_misp_cond_cyc);
+                $display("xs bottleneck_branch_jal_mispredicts : %0d", ctl_misp_jal_cyc);
+                $display("xs bottleneck_branch_jalr_mispredicts : %0d", ctl_misp_jalr_cyc);
+                $display("xs bottleneck_branch_call_mispredicts : %0d", ctl_misp_call_cyc);
+                $display("xs bottleneck_branch_ret_mispredicts : %0d", ctl_misp_ret_cyc);
+                $display("xs bottleneck_branch_ghr_restore : %0d", ghr_restore_cyc);
+                $display("xs bottleneck_branch_ras_restore : %0d", ras_restore_cyc);
+            end
         end
     end
 

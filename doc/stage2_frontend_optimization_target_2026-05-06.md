@@ -978,6 +978,48 @@ Every accepted performance row must report:
 - Redirect recovery cycles.
 - Commit width histogram and timed IPC.
 - Golden PC scoreboard where available.
+- Full bottleneck DSE counters when choosing the next architectural slice:
+  `+BOTTLENECK_PROFILE` plus the normal
+  `+PERF_PROFILE +PERF_COUNTERS +STAT_DUMP` profile.
+
+## Full Bottleneck DSE Profiler
+
+Implemented on May 8, 2026 as simulation-only testbench profiling. The
+profiler is off by default and emits parser-compatible
+`xs bottleneck_* : value` counters only when `+BOTTLENECK_PROFILE` is present.
+The plusarg also enables the existing performance profile window so the new
+counts share the same timed context as the legacy frontend/backend counters.
+
+Smoke validation:
+
+- With `+BOTTLENECK_PROFILE`:
+  `benchmark_results/dse_bottleneck_profile_smoke_20260508`.
+- Without `+BOTTLENECK_PROFILE`:
+  `benchmark_results/dse_bottleneck_profile_off_smoke_20260508`.
+- Dhrystone 100 and CoreMark iteration 1 both pass strict owner/delivery checks
+  in both runs.
+- Timed cycles are identical with the profiler off and on:
+  Dhrystone 100 `18,577`, CoreMark iteration 1 `163,013`.
+- The on run emits 115 `xs_bottleneck_*` counters per row; the off run emits
+  none.
+
+Counter families now available for DSE ranking:
+
+- Frontend zero and packet-empty aliases.
+- Rename/window pressure and lost rename slots.
+- Per-IQ valid, ready, not-ready, eligible, selected, arb-loss, and oldest
+  not-ready-age counts for integer, load, store-address, and store-data IQs.
+- Producer-class dependency wait counts for ALU, load, branch, multiply, divide,
+  store, CSR, and unknown producers.
+- Same-cycle wakeup candidates and missed same-cycle wakeup opportunities.
+- ROB head-blocked younger-ready lost commit slots.
+- LSU load latency, forwarding, retry, D-cache conflict, and store backlog
+  counters.
+- Branch mispredict and restore counters.
+
+Use `tools/bottleneck_analysis.py` on the resulting `results.json` before
+selecting any new performance RTL. Some counters are entry-slot or event
+counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 
 ## Implementation Order
 
