@@ -484,7 +484,7 @@ module tage_sc_l
     assign loop_lkp_tag = pc[LOOP_TAG_BITS+1:2];
     assign aux_loop_lkp_idx = loop_idx_hash(aux_pc);
     assign aux_loop_lkp_tag = aux_pc[LOOP_TAG_BITS+1:2];
-    assign loop_bypass_enabled = loop_bypass_conf[spec_loop_idx] == 2'd3;
+    assign loop_bypass_enabled = loop_bypass_conf[spec_loop_idx] >= 2'd2;
 
     always_comb begin
         if (!sim_disable_loop_spec_count) begin
