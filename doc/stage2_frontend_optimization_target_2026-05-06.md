@@ -151,6 +151,8 @@ Rejected trials that should not be revived in their old form:
 | Standalone refcounted rename move elimination | Endpoint-clean and active, but not a performance win. Dhrystone 100 is effectively unchanged at `18,912`, CoreMark 1 regresses `164,550 -> 165,430`, CoreMark 10 regresses `1,528,608 -> 1,545,737`, and the branch hotspot regresses `141,408 -> 143,204`. A ready-source-only variant is worse on CoreMark 1 at `166,609`; a one-cycle delayed move-ready path matches the same regression. | Rejected in standalone form. It reduces backend pressure, but the saved work exposes more branch/redirect and operand-ready stalls. Reopen only with a predictor/recovery companion or a stronger pressure-aware policy that is proven on CoreMark 1, CoreMark 10, and the branch hotspot. |
 | BRU early fetch redirect isolation | The latest profiled current-RTL recheck regresses all smoke rows: Dhrystone 100 `18,913 -> 18,921`, CoreMark 1 `164,550 -> 165,800`, and branch hotspot `141,408 -> 146,756`. | Rejected as a global policy. Branch/recovery still has leverage, but raw early redirect injects too much quarantine and timing disturbance. |
 | BRU early redirect plus partial recovery | Endpoint-clean and improves the branch hotspot `141,408 -> 138,564`, but regresses Dhrystone 100 `18,913 -> 18,920` and CoreMark 1 `164,550 -> 166,483`. | Mixed evidence only. Partial recovery has a real branch-heavy signal, but the current policy is too broad for scoreable RTL. Reopen as a structurally selective recovery policy, not a global plusarg. |
+| Age-bounded BRU early recovery | Age 8 and age 12 gates are endpoint-clean but still regress the score rows. Age 8 gives Dhrystone 100 `18,920`, CoreMark 1 `165,342`, hotspot `143,982`; age 12 gives `18,926`, `165,421`, and `142,859`. | Rejected. ROB age alone is not the right selector. It reduces long CoreMark quarantine but also destroys the branch-hotspot predictor/recovery effect. |
+| Direct non-head partial recovery | Removing the head-only requirement lets the branch hotspot nearly match baseline at `141,469`, but Dhrystone 100 and CoreMark 1 time out. Dhrystone stalls at `9,010` retired instructions with free-list popcount drained to zero; CoreMark stalls at `5,458` retired instructions. | Rejected as a contract bug, not a performance candidate. The current checkpoint manager clears all checkpoints on restore, which is safe for head-only recovery but unsafe for non-head recovery with older unresolved checkpoints. |
 | Local PHT global override | Branch hotspot improves `141,408 -> 138,680`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 169,642` with mispredicts rising from `4,250` to `5,025`. | Rejected as a global policy. Local history has useful information, but it needs per-PC arbitration against TAGE/SC instead of overriding everywhere. |
 | Disable local predictor | Branch hotspot improves `141,408 -> 137,606`, Dhrystone 100 is unchanged, and CoreMark 1 regresses `164,550 -> 165,487`. | Rejected. Current local alternation support is useful on CoreMark but harmful on the branch probe, so the right direction is a chooser, not all-on or all-off. |
 | Local PHT-only chooser | Dhrystone 100 is unchanged, CoreMark 1 regresses `164,550 -> 167,144`, and branch hotspot regresses `141,408 -> 141,738`. | Rejected. Gating only the PHT path misses the larger mixed signal from the local alternation path. |
@@ -345,6 +347,17 @@ architectural recovery metadata, such as checkpoint-at-branch availability,
 ROB-age/quarantine bound, and branch/control type. It must not steer on fixed
 benchmark PCs.
 
+Follow-up, 2026-05-08: the first selective attempts are also rejected. A
+ROB-age gate keeps the runs endpoint-clean but does not improve performance.
+Direct non-head partial recovery exposes the missing contract: partial
+checkpoint restore currently clears all checkpoint slots. That is acceptable
+when the recovering branch is at the head because there are no older unresolved
+branch checkpoints to preserve. It is not acceptable for general non-head
+branch recovery. A real XiangShan/BOOM-style recovery path needs selective
+checkpoint invalidation, preserving checkpoints older than the recovered branch
+and squashing only the branch plus younger state. Do not retry non-head partial
+recovery until that checkpoint ownership rule exists.
+
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
@@ -378,7 +391,7 @@ counter-backed second domain instead.
 | Refcounted rename move elimination | Rejected standalone, keep as paired candidate | CoreMark 10 reports 258,574 dynamic move candidates, and the RTL trial proves backend pressure can drop. Net performance still regresses because redirect/mispredict and operand-ready stalls rise. | Reopen only after branch recovery/update timing is improved, or with pressure-aware enable evidence. Keep physical-register refcounting as the required correctness mechanism if this path returns. |
 | ROB/PRF capacity | Rejected in raw and combinational timing forms | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical, ROB-head bypass regresses CoreMark 1, and same-cycle free-list release forwarding trips a simulator iteration loop. | Reopen only with a registered allocation, free, or commit-drain mechanism, not raw depth or comb release-forwarding. |
 | BPU local-vs-SC chooser | Rejected in first form | Global local override improves the branch hotspot while regressing CoreMark; the first chooser variants remain endpoint-clean but still trade one row against the other. | Reopen only with dynamic hot-PC attribution and a stronger training contract. |
-| Selective branch recovery/update timing | Promote to next RTL slice | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. | Enable early/partial recovery only under structural safety and low-cost conditions. Required pass set is Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot with strict owner/delivery checks. |
+| Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. The direct non-head partial trial proves the current checkpoint manager cannot yet support general execute-time recovery. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Without that, keep partial recovery head-only and do not promote early recovery. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
 | Downstream packet drain / scheduling | Promote to next RTL slice | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. | Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without DS/CoreMark regression. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
@@ -421,9 +434,10 @@ Every accepted performance row must report:
 | 13 | Open the downstream drain or useful-work-per-packet slice. | Done by `dse_20260508_issue_fusion_move_attrib_coremark10`: macro-fusion is low-frequency, move candidates are high-frequency, and issue pressure is operand-ready dominated. |
 | 14 | Design and score alias-safe rename move elimination. | Done and rejected in standalone form: endpoint-clean and backend pressure drops, but CoreMark 1, CoreMark 10, and the branch hotspot regress. |
 | 15 | Record global branch recovery probes. | Done: early redirect is rejected broadly; early plus partial recovery is mixed and only improves the branch hotspot. |
-| 16 | Design selective branch recovery/update timing. | Recovery enable is gated by structural metadata, not benchmark PC, and reduces redirect cost without DS/CoreMark/hotspot regression. |
-| 17 | Reopen useful-work reduction only as a paired optimization. | Move elimination or another uop-reduction path is retried only after branch/recovery can absorb the timing change. |
-| 18 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 16 | Try first selective branch recovery filters. | Done and rejected: ROB-age early recovery is endpoint-clean but slower; direct non-head partial recovery times out from checkpoint/free-list contract breakage. |
+| 17 | Redesign checkpoint ownership before non-head recovery. | Checkpoint restore preserves older unresolved branch checkpoints and squashes only the recovered branch plus younger state, then direct partial recovery passes DS/CoreMark/hotspot. |
+| 18 | Reopen useful-work reduction only as a paired optimization. | Move elimination or another uop-reduction path is retried only after branch/recovery can absorb the timing change. |
+| 19 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -444,10 +458,10 @@ broad Stage 1 DSE rows, it beats the calibrated MegaBOOM smoke rows, and it
 cuts the dominant CoreMark 10 frontend-empty buckets while lifting CoreMark 10
 to 6.58 CM/MHz.
 
-Near-term objective: keep this as the Stage 2 frontend baseline, and move the
-next RTL work to selective branch recovery/update timing. Global early recovery
-is rejected; the viable direction is a structural gate that captures the short,
-safe branch-hotspot recovery benefit without paying the CoreMark quarantine
-cost. Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a
-required second-domain escalation if frontend-only work does not reach the Gate
-C ceiling.
+Near-term objective: keep this as the Stage 2 frontend baseline. The branch
+recovery direction still has evidence, but the next branch RTL work is not
+another early-redirect gate; it is checkpoint ownership cleanup for non-head
+recovery. Global early recovery, ROB-age early recovery, and direct non-head
+partial recovery are rejected in the current backend contract. Long-term
+objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a required second-domain
+escalation if frontend-only work does not reach the Gate C ceiling.
