@@ -35,6 +35,7 @@ module fetch_top
     // candidate, including the cycle that starts a replay window.
     input  logic        frontend_replay_blocking,
     input  logic        frontend_replay_start,
+    output logic        recovery_headroom_ok,
 
     // Redirect (from commit -- mispredict or exception)
     input  logic        redirect_valid,
@@ -95,6 +96,7 @@ module fetch_top
     localparam logic [2:0] BT_RET  = 3'd4;
     localparam int ICQ_DEPTH = 4;
     localparam int ICQ_COUNT_BITS = $clog2(ICQ_DEPTH + 1);
+    localparam logic [3:0] RECOVERY_IBUF_HEADROOM_MAX = 4'd2;
 
     // =========================================================================
     // F1 stage signals
@@ -568,6 +570,18 @@ module fetch_top
         .empty                           (packet_buf_empty),
         .count                           (packet_buf_count)
     );
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            recovery_headroom_ok <= 1'b0;
+        end else begin
+            recovery_headroom_ok <=
+                !backend_stall &&
+                !frontend_hold &&
+                !packet_buf_full &&
+                (packet_buf_count <= RECOVERY_IBUF_HEADROOM_MAX);
+        end
+    end
 
     // =========================================================================
     // BPU wrapper: BTB, TAGE, and RAS lookup/update

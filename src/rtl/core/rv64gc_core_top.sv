@@ -48,6 +48,14 @@ module rv64gc_core_top
     logic        bru0_early_redirect;
     logic        bru1_early_redirect;
     logic        bru_partial_recovery_valid;
+    logic        bru_partial_candidate_valid;
+    logic        bru_partial_cdb_mispredict_valid;
+    logic        bru_partial_candidate_from_cdb1;
+    logic [ROB_IDX_BITS-1:0] bru_partial_candidate_rob_idx;
+    logic        branch_recovery_burst_ready;
+    logic        selective_branch_recovery_resource_ok;
+    logic        frontend_recovery_headroom_ok;
+    logic        rename_recovery_headroom_ok;
     logic [63:0] bru_early_target;
     logic [63:0] bru_target;
     logic        frontend_backend_stall;
@@ -249,6 +257,7 @@ module rv64gc_core_top
 `ifndef SYNTHESIS
     bit sim_bpu_exec_misp_update;
     bit sim_exec_partial_branch_recovery;
+    bit sim_selective_branch_recovery;
     bit sim_tage_train_misp_cond_first;
     bit sim_bru0_early_redirect_en;
     bit sim_bru1_early_redirect_en;
@@ -257,6 +266,8 @@ module rv64gc_core_top
         $test$plusargs("BPU_EXEC_MISP_UPDATE");
     initial sim_exec_partial_branch_recovery =
         $test$plusargs("EXEC_PARTIAL_BRANCH_RECOVERY");
+    initial sim_selective_branch_recovery =
+        $test$plusargs("SELECTIVE_BRANCH_RECOVERY");
     initial sim_tage_train_misp_cond_first =
         $test$plusargs("TAGE_TRAIN_MISP_COND_FIRST");
     initial sim_bru0_early_redirect_en =
@@ -277,6 +288,7 @@ module rv64gc_core_top
 `else
     localparam logic sim_bpu_exec_misp_update = 1'b0;
     localparam logic sim_exec_partial_branch_recovery = 1'b0;
+    localparam logic sim_selective_branch_recovery = 1'b0;
     localparam logic sim_tage_train_misp_cond_first = 1'b0;
     localparam logic sim_bru0_early_redirect_en = 1'b0;
     localparam logic sim_bru1_early_redirect_en = 1'b0;
@@ -288,6 +300,11 @@ module rv64gc_core_top
     logic        bru_redirect_quarantine_r;
     logic        bru_redirect_quarantine;
     logic        keep_early_frontend;
+    localparam int SELECTIVE_RECOVERY_COOLDOWN_CYCLES = 32;
+    localparam int SELECTIVE_RECOVERY_COOLDOWN_BITS =
+        $clog2(SELECTIVE_RECOVERY_COOLDOWN_CYCLES + 1);
+    logic [SELECTIVE_RECOVERY_COOLDOWN_BITS-1:0]
+        selective_recovery_cooldown_r;
 
     // FENCE.I signal
     logic        fence_i_signal;
@@ -314,6 +331,7 @@ module rv64gc_core_top
         .frontend_hold          (uoc_active),
         .frontend_replay_blocking(1'b0),
         .frontend_replay_start   (1'b0),
+        .recovery_headroom_ok   (frontend_recovery_headroom_ok),
         // Redirect priority: commit/BRU flush > UOP-cache stream handoff.
         .redirect_valid         (frontend_flush_valid || uoc_handoff_valid),
         .redirect_pc            (frontend_flush_valid ? frontend_flush_pc :
@@ -649,6 +667,7 @@ module rv64gc_core_top
         .rob_alloc_idx    (rob_alloc_idx),
         .rob_alloc_ready  (rob_alloc_ready),
         .stall            (rename_stall),
+        .recovery_headroom_ok(rename_recovery_headroom_ok),
         .dq_full          (dq_full),
         .lq_alloc_idx     (lq_alloc_idx),
         .sq_alloc_idx     (sq_alloc_idx),
@@ -2242,67 +2261,183 @@ module rv64gc_core_top
         bru1_issue && bru1_mispredict;
     assign bru_early_redirect  = bru0_early_redirect || bru1_early_redirect;
     assign bru_early_target    = bru0_early_redirect ? bru_target : bru1_target;
+    assign branch_recovery_burst_ready =
+        (selective_recovery_cooldown_r == '0);
+    assign selective_branch_recovery_resource_ok =
+        rename_recovery_headroom_ok &&
+        frontend_recovery_headroom_ok &&
+        branch_recovery_burst_ready;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            selective_recovery_cooldown_r <= '0;
+        end else if (sim_selective_branch_recovery &&
+                     bru_partial_recovery_valid) begin
+            selective_recovery_cooldown_r <=
+                SELECTIVE_RECOVERY_COOLDOWN_BITS'(SELECTIVE_RECOVERY_COOLDOWN_CYCLES);
+        end else if (selective_recovery_cooldown_r != '0) begin
+            selective_recovery_cooldown_r <= selective_recovery_cooldown_r - 1'b1;
+        end
+    end
 
     always_comb begin
-        logic partial_from_cdb1;
-        logic [ROB_IDX_BITS-1:0] partial_rob_idx;
-
-        partial_from_cdb1 = 1'b0;
-        partial_rob_idx   = cdb_rob_idx_r[0];
+        bru_partial_candidate_from_cdb1 = 1'b0;
+        bru_partial_candidate_rob_idx   = cdb_rob_idx_r[0];
         if (cdb_valid_r[0] && cdb_is_branch_r[0] &&
             cdb_branch_mispredict_r[0]) begin
-            partial_rob_idx = cdb_rob_idx_r[0];
+            bru_partial_candidate_rob_idx = cdb_rob_idx_r[0];
         end else if (cdb_valid_r[1] && cdb_is_branch_r[1] &&
                      cdb_branch_mispredict_r[1]) begin
-            partial_from_cdb1 = 1'b1;
-            partial_rob_idx   = cdb_rob_idx_r[1];
+            bru_partial_candidate_from_cdb1 = 1'b1;
+            bru_partial_candidate_rob_idx   = cdb_rob_idx_r[1];
         end
 
-        bru_partial_recovery_valid =
-            sim_exec_partial_branch_recovery &&
+        bru_partial_cdb_mispredict_valid =
+            ((cdb_valid_r[0] && cdb_is_branch_r[0] &&
+              cdb_branch_mispredict_r[0]) ||
+             (cdb_valid_r[1] && cdb_is_branch_r[1] &&
+              cdb_branch_mispredict_r[1]));
+
+        bru_partial_candidate_valid =
             !commit_flush.valid &&
             !rename_stall &&
             // Partial recovery must not suppress the later commit flush while
             // UOP-cache replay is active; that full flush is the safety valve
             // that breaks stale speculative hot-loop paths.
             !uoc_active &&
-            ((cdb_valid_r[0] && cdb_is_branch_r[0] &&
-              cdb_branch_mispredict_r[0]) ||
-             (cdb_valid_r[1] && cdb_is_branch_r[1] &&
-              cdb_branch_mispredict_r[1])) &&
-            !rename_buf[partial_rob_idx].rd_valid &&
-            rob_uses_checkpoint[partial_rob_idx] &&
-            (rob_checkpoint_tail[partial_rob_idx] == partial_rob_idx);
+            bru_partial_cdb_mispredict_valid &&
+            !rename_buf[bru_partial_candidate_rob_idx].rd_valid &&
+            rob_uses_checkpoint[bru_partial_candidate_rob_idx] &&
+            (rob_checkpoint_tail[bru_partial_candidate_rob_idx] ==
+             bru_partial_candidate_rob_idx);
+
+        bru_partial_recovery_valid =
+            bru_partial_candidate_valid &&
+            (sim_exec_partial_branch_recovery ||
+             (sim_selective_branch_recovery &&
+              selective_branch_recovery_resource_ok));
 
         bru_flush = '0;
         if (bru_partial_recovery_valid) begin
             bru_flush.valid         = 1'b1;
             bru_flush.full_flush    = 1'b0;
-            bru_flush.redirect_pc   = partial_from_cdb1
+            bru_flush.redirect_pc   = bru_partial_candidate_from_cdb1
                                       ? cdb_branch_target_r[1]
                                       : cdb_branch_target_r[0];
-            bru_flush.checkpoint_id = rob_checkpoint_id[partial_rob_idx];
+            bru_flush.checkpoint_id =
+                rob_checkpoint_id[bru_partial_candidate_rob_idx];
             bru_flush.ras_tos       = ras_tos_after_redirect(
-                rename_buf[partial_rob_idx].bp_ras_tos,
-                rename_buf[partial_rob_idx].bp_ras_op
+                rename_buf[bru_partial_candidate_rob_idx].bp_ras_tos,
+                rename_buf[bru_partial_candidate_rob_idx].bp_ras_op
             );
-            if ((rename_buf[partial_rob_idx].bp_ras_op == RAS_NONE) &&
-                (rename_buf[partial_rob_idx].bp_ras_tos != 5'd0)) begin
+            if ((rename_buf[bru_partial_candidate_rob_idx].bp_ras_op == RAS_NONE) &&
+                (rename_buf[bru_partial_candidate_rob_idx].bp_ras_tos != 5'd0)) begin
                 bru_flush.ras_top_restore_valid = 1'b1;
                 bru_flush.ras_top_restore_addr  =
-                    rename_buf[partial_rob_idx].bp_ras_top;
+                    rename_buf[bru_partial_candidate_rob_idx].bp_ras_top;
             end
             bru_flush.ghr_restore_valid = 1'b1;
             bru_flush.ghr_restore_val =
-                {rename_buf[partial_rob_idx].bp_ghr[GHR_BITS-2:0],
-                 partial_from_cdb1 ? cdb_branch_taken_r[1]
-                                   : cdb_branch_taken_r[0]};
-            if (partial_rob_idx == ROB_IDX_BITS'(ROB_DEPTH - 1))
+                {rename_buf[bru_partial_candidate_rob_idx].bp_ghr[GHR_BITS-2:0],
+                 bru_partial_candidate_from_cdb1 ? cdb_branch_taken_r[1]
+                                                 : cdb_branch_taken_r[0]};
+            if (bru_partial_candidate_rob_idx == ROB_IDX_BITS'(ROB_DEPTH - 1))
                 bru_flush.rob_idx = '0;
             else
-                bru_flush.rob_idx = partial_rob_idx + 1'b1;
+                bru_flush.rob_idx = bru_partial_candidate_rob_idx + 1'b1;
         end
     end
+
+`ifdef SIMULATION
+    integer sim_sel_rec_cdb_mispredict;
+    integer sim_sel_rec_candidate;
+    integer sim_sel_rec_accepted;
+    integer sim_sel_rec_reject_commit;
+    integer sim_sel_rec_reject_rename;
+    integer sim_sel_rec_reject_uoc;
+    integer sim_sel_rec_reject_side_effect;
+    integer sim_sel_rec_reject_checkpoint;
+    integer sim_sel_rec_reject_rename_headroom;
+    integer sim_sel_rec_reject_frontend_headroom;
+    integer sim_sel_rec_reject_burst;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sim_sel_rec_cdb_mispredict       <= 0;
+            sim_sel_rec_candidate            <= 0;
+            sim_sel_rec_accepted             <= 0;
+            sim_sel_rec_reject_commit        <= 0;
+            sim_sel_rec_reject_rename        <= 0;
+            sim_sel_rec_reject_uoc           <= 0;
+            sim_sel_rec_reject_side_effect   <= 0;
+            sim_sel_rec_reject_checkpoint    <= 0;
+            sim_sel_rec_reject_rename_headroom <= 0;
+            sim_sel_rec_reject_frontend_headroom <= 0;
+            sim_sel_rec_reject_burst         <= 0;
+        end else if (sim_selective_branch_recovery) begin
+            if (bru_partial_cdb_mispredict_valid) begin
+                sim_sel_rec_cdb_mispredict <=
+                    sim_sel_rec_cdb_mispredict + 1;
+
+                if (bru_partial_candidate_valid) begin
+                    sim_sel_rec_candidate <= sim_sel_rec_candidate + 1;
+                end else if (commit_flush.valid) begin
+                    sim_sel_rec_reject_commit <=
+                        sim_sel_rec_reject_commit + 1;
+                end else if (rename_stall) begin
+                    sim_sel_rec_reject_rename <=
+                        sim_sel_rec_reject_rename + 1;
+                end else if (uoc_active) begin
+                    sim_sel_rec_reject_uoc <=
+                        sim_sel_rec_reject_uoc + 1;
+                end else if (rename_buf[bru_partial_candidate_rob_idx].rd_valid) begin
+                    sim_sel_rec_reject_side_effect <=
+                        sim_sel_rec_reject_side_effect + 1;
+                end else begin
+                    sim_sel_rec_reject_checkpoint <=
+                        sim_sel_rec_reject_checkpoint + 1;
+                end
+            end
+
+            if (bru_partial_candidate_valid) begin
+                if (bru_partial_recovery_valid) begin
+                    sim_sel_rec_accepted <= sim_sel_rec_accepted + 1;
+                end else if (!rename_recovery_headroom_ok) begin
+                    sim_sel_rec_reject_rename_headroom <=
+                        sim_sel_rec_reject_rename_headroom + 1;
+                end else if (!frontend_recovery_headroom_ok) begin
+                    sim_sel_rec_reject_frontend_headroom <=
+                        sim_sel_rec_reject_frontend_headroom + 1;
+                end else if (!branch_recovery_burst_ready) begin
+                    sim_sel_rec_reject_burst <=
+                        sim_sel_rec_reject_burst + 1;
+                end
+            end
+        end
+    end
+
+    final begin
+        if (sim_selective_branch_recovery) begin
+            $display("");
+            $display("=== SELECTIVE BRANCH RECOVERY SUMMARY ===");
+            $display("CDB mispredict cycles:           %0d",
+                     sim_sel_rec_cdb_mispredict);
+            $display("Recovery candidates / accepted:  %0d / %0d",
+                     sim_sel_rec_candidate,
+                     sim_sel_rec_accepted);
+            $display("Candidate rejects commit/rename/uoc/side/ckpt: %0d / %0d / %0d / %0d / %0d",
+                     sim_sel_rec_reject_commit,
+                     sim_sel_rec_reject_rename,
+                     sim_sel_rec_reject_uoc,
+                     sim_sel_rec_reject_side_effect,
+                     sim_sel_rec_reject_checkpoint);
+            $display("Headroom rejects rename/frontend/burst: %0d / %0d / %0d",
+                     sim_sel_rec_reject_rename_headroom,
+                     sim_sel_rec_reject_frontend_headroom,
+                     sim_sel_rec_reject_burst);
+        end
+    end
+`endif
 
     assign ghr_restore_valid_fe =
         bru_early_redirect ||

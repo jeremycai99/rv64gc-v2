@@ -14,6 +14,7 @@ module free_list
     input logic [2:0] alloc_req_count,
     output logic [PHYS_REG_BITS-1:0] alloc_preg [0:PIPE_WIDTH-1],
     output logic [2:0] alloc_avail_count,
+    output logic [PHYS_REG_BITS:0] free_count,
 
     // Release: up to 6 per cycle (from commit, old_pdst returns to free)
     input logic [2:0] release_count,
@@ -124,6 +125,15 @@ module free_list
             end
             if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
                 ckpt_save_bitmap_next[commit_pdst[i]] = 1'b0;
+            end
+        end
+    end
+
+    always_comb begin
+        free_count = '0;
+        for (int b = 0; b < INT_PRF_DEPTH; b++) begin
+            if (free_bitmap[b]) begin
+                free_count = free_count + {{PHYS_REG_BITS{1'b0}}, 1'b1};
             end
         end
     end

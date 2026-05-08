@@ -30,6 +30,7 @@ module rename
 
     // Stall output (backpressure to decode/fetch)
     output logic stall,
+    output logic recovery_headroom_ok,
 
     // Dispatch queue backpressure
     input  logic dq_full,
@@ -97,9 +98,13 @@ module rename
     // =========================================================================
     // Free list allocation tracking
     // =========================================================================
+    localparam logic [PHYS_REG_BITS:0] RECOVERY_FREE_HEADROOM =
+        (PHYS_REG_BITS+1)'(INT_FREE_LIST_DEPTH - (8 * PIPE_WIDTH));
+
     logic [2:0] fl_req_count;
     logic [PHYS_REG_BITS-1:0] fl_alloc_preg [0:PIPE_WIDTH-1];
     logic [2:0] fl_avail_count;
+    logic [PHYS_REG_BITS:0] fl_free_count;
 
     // Map each slot to its position in the free list allocation sequence
     logic [2:0] fl_slot_idx [0:PIPE_WIDTH-1];
@@ -211,6 +216,7 @@ module rename
     // Stall intermediates
     logic       any_work_advance_c;
     logic       capture_nonadvance_c;
+    logic       recovery_resources_ok_c;
 
     // Holding register next-state compaction
     logic [2:0] next_hold_dest [0:PIPE_WIDTH-1];
@@ -247,6 +253,7 @@ module rename
         .alloc_req_count  (fl_req_count),
         .alloc_preg       (fl_alloc_preg),
         .alloc_avail_count(fl_avail_count),
+        .free_count       (fl_free_count),
         .release_count    (fl_release_count),
         .release_preg     (fl_release_preg),
         .commit_wr_valid  (crat_wr_en),
@@ -716,6 +723,26 @@ module rename
     assign capture_nonadvance_c = hold_active_c || any_work_advance_c;
     assign stall = hold_active_c ||
                    ((|work_valid) && !any_work_advance_c);
+
+    always_comb begin
+        recovery_resources_ok_c =
+            (fl_free_count >= RECOVERY_FREE_HEADROOM) &&
+            rob_alloc_ready &&
+            !dq_full &&
+            !lq_full &&
+            !sq_full &&
+            !hold_active_c &&
+            !do_flush &&
+            !do_ckpt_restore;
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            recovery_headroom_ok <= 1'b0;
+        end else begin
+            recovery_headroom_ok <= recovery_resources_ok_c;
+        end
+    end
 
     // =========================================================================
     // Holding register next-state compaction indices

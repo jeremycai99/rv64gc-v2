@@ -618,7 +618,7 @@ simple sequence tag is insufficient by itself. The timeout signature remains
 identical, so the missing branch recovery contract likely also includes the
 RAT/free-list restore snapshot boundary and same-cycle commit release handling.
 Treat non-head branch recovery as a larger backend recovery redesign, not a
-small checkpoint-file patch.
+small checkpoint-file patch or local resource selector.
 
 Follow-up, 2026-05-08, third trial: the non-head recovery contract was extended
 with same-cycle RAT/free-list checkpoint save semantics, older-checkpoint
@@ -642,6 +642,31 @@ CoreMark remains worse than the accepted default (`164,364` cycles). Do not
 promote execute-time non-head partial recovery yet. Reopen only with a stronger
 branch-order checkpoint ownership design and a headroom signal that prevents
 PRF/ROB pressure before rename stalls are already visible.
+
+Follow-up, 2026-05-08, fourth trial: resource-aware selective branch recovery
+was implemented as `+SELECTIVE_BRANCH_RECOVERY`, separate from the older
+unfiltered `+EXEC_PARTIAL_BRANCH_RECOVERY` experiment. The selector adds
+registered frontend IBuffer headroom, registered rename/free-list headroom, a
+32-cycle burst guard, and recovery-candidate attribution counters. Default RTL
+is cycle-identical to the accepted baseline on the rebuilt strict smoke:
+
+| Row | Baseline | Selective recovery | Delta | Verdict |
+|---|---:|---:|---:|---|
+| Dhrystone 100 | 18,577 | 18,828 | +251 | Rejected. |
+| CoreMark 1 | 163,013 | 165,766 | +2,753 | Rejected. |
+| Branch hotspot | 141,326 | 144,753 | +3,427 | Rejected. |
+
+Attribution shows the selector is active but still harmful. Dhrystone accepts
+`99` recoveries, CoreMark 1 accepts `1,597`, and the branch hotspot accepts
+`1,236`. CoreMark 1 packet-empty rises `11,242 -> 12,539`, FTQ-empty rises
+`4,154 -> 4,478`, and checkpoint restore reports `3,103` discarded checkpoint
+slots. The branch hotspot does reduce `packet_empty_f2_data`
+`31,408 -> 30,216`, but total cycles still regress because FTQ-empty,
+backend-packet-ready, and redirect duplicate pressure rise. Verdict: resource
+headroom is not the missing architectural contract. Keep the selector
+DSE-only; the next real branch-recovery step must implement branch-order
+checkpoint ownership and selective squash before any further recovery timing
+tuning.
 
 Follow-up, 2026-05-08, IBuffer packet coalescing: simple useful-work-per-packet
 coalescing is rejected as a no-op. Two RTL variants were tested: head-only
@@ -838,7 +863,7 @@ counter-backed second domain instead.
 | ROB/PRF capacity | Rejected in raw, counted-admission, and combinational timing forms | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical, ROB-head bypass regresses CoreMark 1, same-cycle free-list release forwarding trips a simulator iteration loop, counted ROB admission regresses CoreMark 10 to `1,512,356`, and counted admission plus `ROB_DEPTH=256` / `INT_PRF_DEPTH=192` regresses to `1,525,077`. | Reopen only with a registered allocation, free, or commit-drain mechanism paired with control/owner scheduling, not raw depth, comb release-forwarding, or all-purpose partial ROB admission. |
 | BPU local-vs-SC chooser | Accepted in weak-TAGE gated form | Dynamic BPU attribution showed forward state-machine branches where local alternation fought stronger non-local predictions. The accepted form improves CoreMark 10 and the smoke set without fixed-PC steering. | Keep local alternation narrow: it may override only weak TAGE and only when the per-PC bias is not fully opposed. Do not broaden local override without full smoke plus CoreMark 10 evidence. |
 | Loop predictor speculative count policy | Accepted in threshold-2 chooser-gated form | The FTQ-owner sideband bypass improves Dhrystone 100, CoreMark 1, CoreMark 10, and Dhrystone 300 when gated by a per-loop exit-miss chooser with decay. The latest threshold-2 activation raises CoreMark 10 to `1,500,110` cycles and `6.705406` CM/MHz. | Keep the original sequential speculative-count update, FTQ-owner sideband, per-loop exit-miss chooser, decay, and threshold-2 baseline. Do not use direct current-cycle bypass, allocation-time update, always-on sideband bypass, threshold-1 activation, or sticky/no-decay chooser behavior without a general predictor mechanism and broader benchmark evidence. |
-| Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. The direct non-head partial trial proves the current checkpoint manager cannot yet support general execute-time recovery. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Without that, keep partial recovery head-only and do not promote early recovery. |
+| Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. Direct non-head partial recovery and the resource-aware selector both prove the current checkpoint manager cannot yet support general execute-time recovery profitably. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Resource/free-list/IBuffer headroom guards alone are insufficient; do not promote early or partial recovery until checkpoint ownership is fixed. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
 | Downstream packet drain / scheduling | First counted-admission forms rejected | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. Head-only and selected-owner IBuffer packet coalescing were strict-clean but cycle-identical no-ops. Blind decoded queues moved pressure but regressed CoreMark 10. Blind IBuffer depth 16 improved CoreMark 10 to `1,498,650`, but regressed CoreMark 1 to `163,991`; control-aware watermarks either became no-ops or preserved the short-row regression. New head-class profiling shows CoreMark 1 full-buffer and backend-packet-ready stalls are mostly multi-instruction heads. Count-based ROB prefix admission improves CoreMark 1 but regresses CoreMark 10, and a larger-window variant regresses further. | Reopen only with explicit owner/control scheduling, likely paired with branch recovery or useful-work reduction. Do not keep raw partial ROB admission, packet merge, generic queue, raw IBuffer depth increase, or loop-threshold tuning. Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without increasing `packet_empty`, redirect recovery, or DS/CoreMark cycles. |
 | Predicted-not-taken owner fall-through | Rejected local forms | Attribution shows many duplicate cycles are same-line sequential, so this looked tempting. The local owner relaxation regressed Dhrystone and broke CoreMark/hotspot. A live-snapshot repair still timed out with owner/stale mismatches. | Reopen only with explicit branch-owner and FTQ/IBuffer sequencing semantics, not by relaxing `same_owner_continue` alone. |
@@ -857,7 +882,7 @@ recovery is endpoint-clean and broadly non-regressing.
 | 1.2 | DSim smoke done | Dhrystone 100, CoreMark 1, and branch hotspot pass with `+BRANCH_RECOVERY_CHECK +BRANCH_RECOVERY_STRICT` added to the existing strict fetch owner/delivery/profile plusargs. XSim runtime smoke is still optional cross-check. |
 | 1.3 | In progress | Document the exact branch-order recovery contract across checkpoint, RAT, free-list, ROB, commit release, writeback, LSU side effects, and frontend redirect ownership. |
 | 1.4 | Pending | Harden checkpoint ownership behavior behind an opt-in path while preserving default behavior. |
-| 1.5 | Pending | Enable direct non-head partial recovery without early frontend redirect and prove Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot are endpoint-clean. |
+| 1.5 | Rejected in current form | Resource-aware direct recovery is endpoint-clean on Dhrystone 100, CoreMark 1, and branch hotspot, but regresses all three rows. Do not continue selector tuning until 1.4 exists. |
 | 1.6 | Pending | Only after 1.5, reintroduce selective early frontend redirect with a resource/headroom guard. |
 | 1.7 | Pending | Promote only if branch hotspot improves without Dhrystone/CoreMark regression and contract counters show active non-head recovery with no free-list leak, checkpoint orphan, stale owner, or endpoint drift. |
 
@@ -990,7 +1015,7 @@ Every accepted performance row must report:
 | 29 | Resume from a higher-leverage structural path. | Next candidate should be branch ownership/recovery or useful-work reduction with explicit checkpoint/resource contracts, not raw capacity, packet merge, generic queueing, or loop-threshold tuning. |
 | 30 | Add branch recovery contract checkers. | DSim and XSim compile the simulation-only checker, and baseline smoke passes with strict branch recovery checks enabled. |
 | 31 | Document and harden the non-head recovery contract. | Checkpoint, RAT, free-list, ROB, same-cycle commit release, writeback filtering, LSU side-effect filtering, and frontend redirect ownership have explicit invariants. |
-| 32 | Reopen direct non-head partial recovery without early redirect. | Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot are endpoint-clean before any performance claim. |
+| 32 | Reopen direct non-head partial recovery without early redirect. | Current resource-aware selector is endpoint-clean on smoke but regresses; checkpoint ownership must be fixed before another performance claim. |
 | 33 | Reopen selective early frontend redirect. | Branch hotspot improves without Dhrystone/CoreMark regression and without contract checker failures. |
 | 34 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
