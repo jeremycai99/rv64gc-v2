@@ -855,7 +855,7 @@ recovery is endpoint-clean and broadly non-regressing.
 |---|---|---|
 | 1.1 | Done | Added `branch_recovery_contract_checker.sv`; both DSim and XSim compile it. |
 | 1.2 | DSim smoke done | Dhrystone 100, CoreMark 1, and branch hotspot pass with `+BRANCH_RECOVERY_CHECK +BRANCH_RECOVERY_STRICT` added to the existing strict fetch owner/delivery/profile plusargs. XSim runtime smoke is still optional cross-check. |
-| 1.3 | Pending | Document the exact branch-order recovery contract across checkpoint, RAT, free-list, ROB, commit release, writeback, LSU side effects, and frontend redirect ownership. |
+| 1.3 | In progress | Document the exact branch-order recovery contract across checkpoint, RAT, free-list, ROB, commit release, writeback, LSU side effects, and frontend redirect ownership. |
 | 1.4 | Pending | Harden checkpoint ownership behavior behind an opt-in path while preserving default behavior. |
 | 1.5 | Pending | Enable direct non-head partial recovery without early frontend redirect and prove Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot are endpoint-clean. |
 | 1.6 | Pending | Only after 1.5, reintroduce selective early frontend redirect with a resource/headroom guard. |
@@ -883,6 +883,43 @@ Initial checker smoke:
   checker invalid/duplicate/restore-conflict counts all zero.
 - Branch hotspot: PASS, `mcycle=141,326`, `minstret=156,693`,
   branch-recovery checker invalid/duplicate/restore-conflict counts all zero.
+
+Branch-order recovery contract draft:
+
+- **Checkpoint owner.** A checkpoint belongs to exactly one unresolved branch
+  ROB entry. `uses_checkpoint`, `checkpoint_id`, and the checkpoint's ROB-tail
+  snapshot must identify the same branch boundary.
+- **Restore branch.** A non-head restore may target only a live checkpoint owned
+  by the recovering branch. Restoring a free checkpoint, or a checkpoint being
+  released in the same cycle, is illegal.
+- **Older checkpoints.** Checkpoints older than the recovering branch must
+  survive a partial restore so older unresolved branches remain recoverable.
+- **Recovered and younger checkpoints.** The recovering branch checkpoint and
+  all younger checkpoints must be invalidated by the partial restore.
+- **RAT image.** The restored RAT must be the speculative architectural map at
+  the recovery branch boundary. Same-cycle commit writes must not overwrite
+  that speculative image during checkpoint restore.
+- **Free-list image.** The restored free-list must return physical registers
+  allocated after the recovery branch while preserving allocations that were
+  already live at the branch boundary. Same-cycle commit release must not
+  double-free or hide a register still referenced by a surviving older entry.
+- **ROB image.** The ROB must clear the recovering branch and younger entries,
+  restore the tail to the checkpoint boundary, and preserve all older valid
+  entries and their metadata.
+- **Commit overlap.** Same-cycle commit and partial restore must have a single
+  ordering rule across commit release, checkpoint release, ROB clear, RAT
+  update, and free-list update. Any branch checkpoint released by commit must
+  be older than the restoring branch.
+- **Writeback survival.** Writebacks for surviving older ROB entries must remain
+  observable after recovery. Writebacks for the recovering branch and younger
+  entries must be filtered before they can update architectural or readiness
+  state.
+- **LSU side effects.** Stores younger than the recovery branch must not become
+  committed-visible. Loads younger than the recovery branch must not leave
+  stale wakeups, replay requests, or queue entries after the partial restore.
+- **Frontend handoff.** FTQ, IFU, IBuffer, BPU history, and RAS restoration must
+  be driven by the same recovery branch owner. Early frontend redirect remains
+  disabled until backend partial recovery is endpoint-clean without it.
 
 ## Evidence Required
 
