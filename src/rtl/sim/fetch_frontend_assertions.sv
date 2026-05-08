@@ -39,6 +39,8 @@ module fetch_frontend_assertions
     input logic                             ftq_ifu_wb_owner_valid,
     input logic [FTQ_IDX_BITS-1:0]          f2_work_ftq_idx_c,
     input logic [FTQ_ALLOC_TAG_BITS-1:0]    f2_work_ftq_alloc_tag_c,
+    input logic                             f2_owner_delivery_push_c,
+    input fetch_packet_t                    packet_buf_in,
     input logic                             f2_owner_completion_candidate_c,
     input logic                             f2_ftq_owner_live_c,
     input logic                             ftq_ifu_req_pop_valid,
@@ -47,6 +49,8 @@ module fetch_frontend_assertions
     input logic                             icq_full,
     input logic                             packet_buf_full,
     input logic                             ifu_work_take_ftq_next_owner_c,
+    input logic                             ifu_work_take_request_owner_c,
+    input logic                             ifu_work_take_remainder_request_owner_c,
     input logic [63:0]                      f2_seq_next_pc,
     input logic [FTQ_IDX_BITS-1:0]          ftq_next_ifu_owner_idx,
     input logic [FTQ_ALLOC_TAG_BITS-1:0]    ftq_next_ifu_owner_tag,
@@ -67,6 +71,12 @@ module fetch_frontend_assertions
     input logic                             ifu_runahead_duplicate_alloc_blocked_c,
     input logic                             ifu_runahead_depth_gt1_c
 );
+
+    logic [63:0] ftq_next_owner_start_pc_c;
+
+    assign ftq_next_owner_start_pc_c =
+        ftq_next_ifu_owner_entry.block_pc +
+        64'(ftq_next_ifu_owner_entry.start_offset);
 
     property p_f2_pc_matches_resp_source;
         @(posedge clk) disable iff (!rst_n || redirect_valid ||
@@ -197,15 +207,50 @@ module fetch_frontend_assertions
         ifu_work_take_ftq_next_owner_c |=>
         (f2_work_valid_c &&
          f2_work_ftq_valid_c &&
-         (f2_work_pc_c == $past(f2_seq_next_pc)) &&
+         (f2_work_pc_c == $past(ftq_next_owner_start_pc_c)) &&
          (f2_work_ftq_idx_c == $past(ftq_next_ifu_owner_idx)) &&
          (f2_work_ftq_epoch_c == $past(ftq_current_epoch)) &&
          (f2_work_ftq_alloc_tag_c == $past(ftq_next_ifu_owner_tag)));
     endproperty
     a_ifu_cursor_loads_ftq_next_owner:
         assert property (p_ifu_cursor_loads_ftq_next_owner)
-        else $error("[INVARIANT_G] IFU cursor failed FTQ next-owner load: pc=%016h idx=%h tag=%h",
+        else $error("[INVARIANT_G] IFU cursor failed FTQ next-owner load: pc=%016h expected_start=%016h idx=%h tag=%h",
                     f2_work_pc_c,
+                    $past(ftq_next_owner_start_pc_c),
+                    f2_work_ftq_idx_c,
+                    f2_work_ftq_alloc_tag_c);
+
+    property p_first_owner_packet_starts_at_owner_pc;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        f2_owner_delivery_push_c |->
+        (packet_buf_in.valid &&
+         (packet_buf_in.fetch_count != 3'd0) &&
+         (packet_buf_in.fetch_pc[0] ==
+          (packet_buf_in.ftq_block_pc +
+           64'(packet_buf_in.ftq_start_offset))));
+    endproperty
+    a_first_owner_packet_starts_at_owner_pc:
+        assert property (p_first_owner_packet_starts_at_owner_pc)
+        else $error("[INVARIANT_G1] first owner packet does not start at FTQ owner PC: pc0=%016h owner_start=%016h idx=%h tag=%h",
+                    packet_buf_in.fetch_pc[0],
+                    packet_buf_in.ftq_block_pc +
+                    64'(packet_buf_in.ftq_start_offset),
+                    packet_buf_in.ftq_idx,
+                    packet_buf_in.ftq_alloc_tag);
+
+    property p_first_owner_packet_matches_work_owner;
+        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        f2_owner_delivery_push_c |->
+        (packet_buf_in.valid &&
+         (packet_buf_in.ftq_idx == f2_work_ftq_idx_c) &&
+         (packet_buf_in.ftq_epoch == f2_work_ftq_epoch_c) &&
+         (packet_buf_in.ftq_alloc_tag == f2_work_ftq_alloc_tag_c));
+    endproperty
+    a_first_owner_packet_matches_work_owner:
+        assert property (p_first_owner_packet_matches_work_owner)
+        else $error("[INVARIANT_G2] first owner packet metadata does not match IFU work owner: pkt_idx=%h pkt_tag=%h work_idx=%h work_tag=%h",
+                    packet_buf_in.ftq_idx,
+                    packet_buf_in.ftq_alloc_tag,
                     f2_work_ftq_idx_c,
                     f2_work_ftq_alloc_tag_c);
 
@@ -229,19 +274,28 @@ module fetch_frontend_assertions
     property p_ifu_same_owner_advance_keeps_owner;
         @(posedge clk) disable iff (!rst_n || redirect_valid)
         ifu_work_same_owner_advance_c |=>
+        ((ftq_current_epoch != $past(ftq_current_epoch)) ||
         (f2_work_valid_c &&
          f2_work_ftq_valid_c &&
          (f2_work_pc_c == $past(f2_seq_next_pc)) &&
          (f2_work_ftq_idx_c == $past(f2_work_ftq_idx_c)) &&
          (f2_work_ftq_epoch_c == $past(f2_work_ftq_epoch_c)) &&
-         (f2_work_ftq_alloc_tag_c == $past(f2_work_ftq_alloc_tag_c)));
+         (f2_work_ftq_alloc_tag_c == $past(f2_work_ftq_alloc_tag_c))));
     endproperty
     a_ifu_same_owner_advance_keeps_owner:
         assert property (p_ifu_same_owner_advance_keeps_owner)
-        else $error("[INVARIANT_I] IFU same-owner advance lost owner: pc=%016h idx=%h tag=%h",
+        else $error("[INVARIANT_I] IFU same-owner advance lost owner: pc=%016h exp_pc=%016h idx=%h exp_idx=%h epoch=%h exp_epoch=%h tag=%h exp_tag=%h take_next=%b take_req=%b take_rem=%b",
                     f2_work_pc_c,
+                    $past(f2_seq_next_pc),
                     f2_work_ftq_idx_c,
-                    f2_work_ftq_alloc_tag_c);
+                    $past(f2_work_ftq_idx_c),
+                    f2_work_ftq_epoch_c,
+                    $past(f2_work_ftq_epoch_c),
+                    f2_work_ftq_alloc_tag_c,
+                    $past(f2_work_ftq_alloc_tag_c),
+                    $past(ifu_work_take_ftq_next_owner_c),
+                    $past(ifu_work_take_request_owner_c),
+                    $past(ifu_work_take_remainder_request_owner_c));
 
     property p_runahead_depth_is_bounded;
         @(posedge clk) disable iff (!rst_n || redirect_valid)
@@ -362,6 +416,8 @@ bind fetch_top fetch_frontend_assertions u_fetch_frontend_assertions (
     .ftq_ifu_wb_owner_valid               (ftq_ifu_wb_owner_valid),
     .f2_work_ftq_idx_c                    (f2_work_ftq_idx_c),
     .f2_work_ftq_alloc_tag_c              (f2_work_ftq_alloc_tag_c),
+    .f2_owner_delivery_push_c             (f2_owner_delivery_push_c),
+    .packet_buf_in                        (packet_buf_in),
     .f2_owner_completion_candidate_c      (f2_owner_completion_candidate_c),
     .f2_ftq_owner_live_c                  (f2_ftq_owner_live_c),
     .ftq_ifu_req_pop_valid                (ftq_ifu_req_pop_valid),
@@ -370,6 +426,8 @@ bind fetch_top fetch_frontend_assertions u_fetch_frontend_assertions (
     .icq_full                             (icq_full),
     .packet_buf_full                      (packet_buf_full),
     .ifu_work_take_ftq_next_owner_c       (ifu_work_take_ftq_next_owner_c),
+    .ifu_work_take_request_owner_c        (ifu_work_take_request_owner_c),
+    .ifu_work_take_remainder_request_owner_c(ifu_work_take_remainder_request_owner_c),
     .f2_seq_next_pc                       (f2_seq_next_pc),
     .ftq_next_ifu_owner_idx               (ftq_next_ifu_owner_idx),
     .ftq_next_ifu_owner_tag               (ftq_next_ifu_owner_tag),

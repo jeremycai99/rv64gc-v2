@@ -153,6 +153,7 @@ module ifu
     logic        work_same_owner_emit_advance_c;
     logic        work_same_owner_dup_advance_c;
     logic        work_same_owner_advance_c;
+    logic        work_same_owner_event_c;
     logic        pred_control_outside_next_packet_c;
     logic        ftq_next_owner_stable_c;
     logic [63:0] ftq_next_owner_start_pc_c;
@@ -196,7 +197,7 @@ module ifu
         redirect_without_owner_successor_c;
     assign owner_completion_candidate_o = owner_completion_candidate_c;
     assign owner_delivery_push_o        = owner_delivery_push_c;
-    assign work_same_owner_advance_o    = work_same_owner_advance_c;
+    assign work_same_owner_advance_o    = work_same_owner_event_c;
     assign runahead_req_valid_o =
         selected_req_is_runahead_c && f1_valid_r && !fe_stall_c;
     assign runahead_req_fire_o =
@@ -427,6 +428,14 @@ module ifu
           consumed_remainder_r) &&
         ftq_enq_valid_c &&
         !selected_req_is_runahead_c;
+    assign work_same_owner_event_c =
+        work_same_owner_advance_c &&
+        !redirect_i &&
+        !work_redirect_o &&
+        !work_take_ftq_next_owner_o &&
+        !work_take_request_owner_o &&
+        !work_take_remainder_request_owner_o &&
+        !fe_stall_c;
     assign runahead_pending_match_next_c =
         runahead_pending_r &&
         ftq_next_owner_valid_i &&

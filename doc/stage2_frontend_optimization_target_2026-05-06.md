@@ -112,6 +112,26 @@ PC, IBuffer owner, rename hold ownership, and retired golden PC. A successor
 trial is scoreable only after Dhrystone, CoreMark 1, CoreMark 10, and the branch
 hotspot probe all pass endpoint and golden-PC checks.
 
+Bug-isolation progress, 2026-05-07:
+
+- Added simulation assertions for owner-start delivery. `INVARIANT_G` now
+  checks next-owner cursor load against the FTQ owner-start PC, not a stale
+  sequential PC assumption. `INVARIANT_G1/G2` check that the first packet
+  delivered for any owner starts exactly at the FTQ owner-start PC and carries
+  the live IFU work owner metadata.
+- Cleaned the same-owner advance event used by assertions/profiling so it
+  reports actual same-owner cursor advancement, not a candidate cycle that is
+  overridden by redirect, next-owner load, or request-owner load.
+- CoreMark 10 exposed old `INVARIANT_I` hits that were assertion scope, not
+  endpoint corruption: all detailed hits crossed an FTQ epoch change during
+  redirect recovery. The invariant is now scoped to ignore epoch transitions.
+- Validation artifacts:
+  `benchmark_results/20260507_successor_owner_start_assert_epochfix_smoke`
+  and
+  `benchmark_results/20260507_successor_owner_start_assert_epochfix_coremark10`.
+  Dhrystone 100, CoreMark 1, and CoreMark 10 all pass with strict
+  owner/delivery checks, profiling, and no invariant/error signatures.
+
 ## Architecture State
 
 rv64gc-v2 is aligned in direction with the XiangShan/BOOM-style frontend split,
@@ -151,7 +171,7 @@ counter-backed second domain instead.
 | Option | Status | Expected benefit | Guardrail |
 |---|---|---|---|
 | Baseline counter pass | Required next | Prevents another stale methodology loop. | Use committed RTL and full strict plusargs. |
-| Successor runahead bug isolation | Primary next debug slice | Preserves the high-leverage smaller-row gain while finding the CoreMark 10 corruption mechanism. | Must start from clean RTL, add owner-start transition tracing/assertions, and pass golden PC before any perf claim. |
+| Successor runahead bug isolation | Active, instrumentation landed | Preserves the high-leverage smaller-row gain while finding the CoreMark 10 corruption mechanism. | Reintroduce the successor reproducer only after owner-start assertions stay clean on baseline; any perf claim still needs endpoint and golden-PC evidence. |
 | Owner request queue / IFU work queue | Primary structural frontend slice | Lets IFU request and F2 delivery decouple by FTQ owner. | Owner-start PC delivery exactly once; no stale ICQ response consumption. |
 | Capacity-bounded depth-2 runahead | Only after queue cleanup | More useful fetch overlap. | Do not promote if it increases redirect or ICQ head blocking enough to erase gains. |
 | Early fetch-line metadata | High value | Reduces conservative predicted-control and RVC boundary stalls. | Golden PC clean on mixed RVC/control windows. |
@@ -184,7 +204,7 @@ Every accepted performance row must report:
 | Phase | Task | Exit criterion |
 |---|---|---|
 | 0 | Rerun full baseline from commit `3e58a93`. | Gate A passes and becomes the new comparison anchor. |
-| 1 | Reproduce and isolate the successor transition bug from clean RTL. | First divergence is caught by owner-start assertions or golden PC, not by late checksum drift. |
+| 1 | Reproduce and isolate the successor transition bug from clean RTL. | Owner-start assertions are in place; next exit is first failing successor transition caught by assertion or golden PC, not by late checksum drift. |
 | 2 | Convert the successor fix into owner-tagged IFU request/work queue semantics. | Owner-start delivery is exact; strict checks and CoreMark 10 checksum pass. |
 | 3 | Re-score depth-1 successor/runahead with real upstream backlog. | Duplicate/no-emit falls without ICQ wait or redirect recovery replacing it. |
 | 4 | Try depth-2 only if Phase 3 is clean. | Heavy rows improve with no endpoint drift. |
