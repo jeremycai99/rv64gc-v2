@@ -207,16 +207,16 @@ module fetch_frontend_assertions
         ifu_work_take_ftq_next_owner_c |=>
         (f2_work_valid_c &&
          f2_work_ftq_valid_c &&
-         (f2_work_pc_c == $past(ftq_next_owner_start_pc_c)) &&
-         (f2_work_ftq_idx_c == $past(ftq_next_ifu_owner_idx)) &&
-         (f2_work_ftq_epoch_c == $past(ftq_current_epoch)) &&
-         (f2_work_ftq_alloc_tag_c == $past(ftq_next_ifu_owner_tag)));
+         (f2_work_pc_c == $past(ftq_next_owner_start_pc_c, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_idx_c == $past(ftq_next_ifu_owner_idx, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_epoch_c == $past(ftq_current_epoch, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_alloc_tag_c == $past(ftq_next_ifu_owner_tag, 1, 1'b1, @(posedge clk))));
     endproperty
     a_ifu_cursor_loads_ftq_next_owner:
         assert property (p_ifu_cursor_loads_ftq_next_owner)
         else $error("[INVARIANT_G] IFU cursor failed FTQ next-owner load: pc=%016h expected_start=%016h idx=%h tag=%h",
                     f2_work_pc_c,
-                    $past(ftq_next_owner_start_pc_c),
+                    $past(ftq_next_owner_start_pc_c, 1, 1'b1, @(posedge clk)),
                     f2_work_ftq_idx_c,
                     f2_work_ftq_alloc_tag_c);
 
@@ -259,10 +259,10 @@ module fetch_frontend_assertions
         ifu_work_redirect_next_owner_match_c |=>
         (f2_work_valid_c &&
          f2_work_ftq_valid_c &&
-         (f2_work_pc_c == $past(f2_bpu_target)) &&
-         (f2_work_ftq_idx_c == $past(ftq_next_ifu_owner_idx)) &&
-         (f2_work_ftq_epoch_c == $past(ftq_current_epoch)) &&
-         (f2_work_ftq_alloc_tag_c == $past(ftq_next_ifu_owner_tag)));
+         (f2_work_pc_c == $past(f2_bpu_target, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_idx_c == $past(ftq_next_ifu_owner_idx, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_epoch_c == $past(ftq_current_epoch, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_alloc_tag_c == $past(ftq_next_ifu_owner_tag, 1, 1'b1, @(posedge clk))));
     endproperty
     a_ifu_redirect_loads_matching_next_owner:
         assert property (p_ifu_redirect_loads_matching_next_owner)
@@ -274,28 +274,28 @@ module fetch_frontend_assertions
     property p_ifu_same_owner_advance_keeps_owner;
         @(posedge clk) disable iff (!rst_n || redirect_valid)
         ifu_work_same_owner_advance_c |=>
-        ((ftq_current_epoch != $past(ftq_current_epoch)) ||
+        ((ftq_current_epoch != $past(ftq_current_epoch, 1, 1'b1, @(posedge clk))) ||
         (f2_work_valid_c &&
          f2_work_ftq_valid_c &&
-         (f2_work_pc_c == $past(f2_seq_next_pc)) &&
-         (f2_work_ftq_idx_c == $past(f2_work_ftq_idx_c)) &&
-         (f2_work_ftq_epoch_c == $past(f2_work_ftq_epoch_c)) &&
-         (f2_work_ftq_alloc_tag_c == $past(f2_work_ftq_alloc_tag_c))));
+         (f2_work_pc_c == $past(f2_seq_next_pc, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_idx_c == $past(f2_work_ftq_idx_c, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_epoch_c == $past(f2_work_ftq_epoch_c, 1, 1'b1, @(posedge clk))) &&
+         (f2_work_ftq_alloc_tag_c == $past(f2_work_ftq_alloc_tag_c, 1, 1'b1, @(posedge clk)))));
     endproperty
     a_ifu_same_owner_advance_keeps_owner:
         assert property (p_ifu_same_owner_advance_keeps_owner)
         else $error("[INVARIANT_I] IFU same-owner advance lost owner: pc=%016h exp_pc=%016h idx=%h exp_idx=%h epoch=%h exp_epoch=%h tag=%h exp_tag=%h take_next=%b take_req=%b take_rem=%b",
                     f2_work_pc_c,
-                    $past(f2_seq_next_pc),
+                    $past(f2_seq_next_pc, 1, 1'b1, @(posedge clk)),
                     f2_work_ftq_idx_c,
-                    $past(f2_work_ftq_idx_c),
+                    $past(f2_work_ftq_idx_c, 1, 1'b1, @(posedge clk)),
                     f2_work_ftq_epoch_c,
-                    $past(f2_work_ftq_epoch_c),
+                    $past(f2_work_ftq_epoch_c, 1, 1'b1, @(posedge clk)),
                     f2_work_ftq_alloc_tag_c,
-                    $past(f2_work_ftq_alloc_tag_c),
-                    $past(ifu_work_take_ftq_next_owner_c),
-                    $past(ifu_work_take_request_owner_c),
-                    $past(ifu_work_take_remainder_request_owner_c));
+                    $past(f2_work_ftq_alloc_tag_c, 1, 1'b1, @(posedge clk)),
+                    $past(ifu_work_take_ftq_next_owner_c, 1, 1'b1, @(posedge clk)),
+                    $past(ifu_work_take_request_owner_c, 1, 1'b1, @(posedge clk)),
+                    $past(ifu_work_take_remainder_request_owner_c, 1, 1'b1, @(posedge clk)));
 
     property p_runahead_depth_is_bounded;
         @(posedge clk) disable iff (!rst_n || redirect_valid)

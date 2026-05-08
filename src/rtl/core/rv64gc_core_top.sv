@@ -98,6 +98,13 @@ module rv64gc_core_top
     logic [1:0]               load_wb_has_exception;
     logic [3:0]               load_wb_exc_code [0:1];
 
+    // Recovery-filtered writeback valids.  Full flush drops every in-flight
+    // result; partial flush keeps only results older than the restored tail.
+    logic [CDB_WIDTH-1:0]     cdb_valid_live;
+    logic [1:0]               load_wb_valid_live;
+    logic                     lsu_sta_wb_valid_live;
+    logic                     lsu_std_wb_valid_live;
+
     // =========================================================================
     // Registered CDB (1-cycle delayed) for wakeup / ROB writeback / preg_ready
     // The combinational CDB drives bypass (same-cycle forwarding) + PRF writes.
@@ -504,6 +511,32 @@ module rv64gc_core_top
     // execute-time partial recovery without losing older same-batch mappings
     // only when that snapshot tail equals the branch ROB.
     logic [ROB_IDX_BITS-1:0]    rob_checkpoint_tail [0:ROB_DEPTH-1];
+    logic [ROB_DEPTH-1:0]       rename_buf_partial_clear;
+    logic [ROB_IDX_BITS-1:0]    partial_recovered_rob_idx;
+
+    assign partial_recovered_rob_idx =
+        (flush_out.rob_idx == ROB_IDX_BITS'(0))
+            ? ROB_IDX_BITS'(ROB_DEPTH - 1)
+            : (flush_out.rob_idx - ROB_IDX_BITS'(1));
+
+    always_comb begin
+        rename_buf_partial_clear = '0;
+        if (flush_out.valid && !flush_out.full_flush) begin
+            for (int i = 0; i < ROB_DEPTH; i++) begin
+                if (flush_out.rob_idx == rob_tail_idx) begin
+                    rename_buf_partial_clear[i] = 1'b0;
+                end else if (flush_out.rob_idx < rob_tail_idx) begin
+                    rename_buf_partial_clear[i] =
+                        (ROB_IDX_BITS'(i) >= flush_out.rob_idx) &&
+                        (ROB_IDX_BITS'(i) < rob_tail_idx);
+                end else begin
+                    rename_buf_partial_clear[i] =
+                        (ROB_IDX_BITS'(i) >= flush_out.rob_idx) ||
+                        (ROB_IDX_BITS'(i) < rob_tail_idx);
+                end
+            end
+        end
+    end
 
 `ifdef SIMULATION
     // Zero-initialize these unpacked arrays at t=0.  The commit-read
@@ -1148,6 +1181,21 @@ module rv64gc_core_top
                 rob_checkpoint_tail[i] <= '0;
             end
         end else begin
+            if (flush_out.valid && !flush_out.full_flush) begin
+                for (int i = 0; i < ROB_DEPTH; i++) begin
+                    if (rename_buf_partial_clear[i]) begin
+                        rename_buf[i]          <= '0;
+                        rob_uses_checkpoint[i] <= 1'b0;
+                        rob_checkpoint_id[i]   <= '0;
+                        rob_checkpoint_tail[i] <= '0;
+                    end
+                end
+                if (bru_partial_recovery_valid) begin
+                    rob_uses_checkpoint[partial_recovered_rob_idx] <= 1'b0;
+                    rob_checkpoint_id[partial_recovered_rob_idx]   <= '0;
+                    rob_checkpoint_tail[partial_recovered_rob_idx] <= '0;
+                end
+            end
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (3'(i) < ren_count_w) begin
                     rename_buf[ren_insn[i].rob_idx].pdst     <= ren_insn[i].pdst;
@@ -1718,9 +1766,9 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
-        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_valid0(load_wb_valid_live[0] && (load_wb_pdst[0] != '0)),
         .load_wb_wk_tag0  (load_wb_pdst[0]),
-        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_valid1(load_wb_valid_live[1] && (load_wb_pdst[1] != '0)),
         .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
@@ -1758,9 +1806,9 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
-        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_valid0(load_wb_valid_live[0] && (load_wb_pdst[0] != '0)),
         .load_wb_wk_tag0  (load_wb_pdst[0]),
-        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_valid1(load_wb_valid_live[1] && (load_wb_pdst[1] != '0)),
         .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
@@ -1798,9 +1846,9 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
-        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_valid0(load_wb_valid_live[0] && (load_wb_pdst[0] != '0)),
         .load_wb_wk_tag0  (load_wb_pdst[0]),
-        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_valid1(load_wb_valid_live[1] && (load_wb_pdst[1] != '0)),
         .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
@@ -1839,9 +1887,9 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
-        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_valid0(load_wb_valid_live[0] && (load_wb_pdst[0] != '0)),
         .load_wb_wk_tag0  (load_wb_pdst[0]),
-        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_valid1(load_wb_valid_live[1] && (load_wb_pdst[1] != '0)),
         .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(iq_load_issue_candidate_valid),
@@ -1876,9 +1924,9 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
-        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_valid0(load_wb_valid_live[0] && (load_wb_pdst[0] != '0)),
         .load_wb_wk_tag0  (load_wb_pdst[0]),
-        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_valid1(load_wb_valid_live[1] && (load_wb_pdst[1] != '0)),
         .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
@@ -1918,9 +1966,9 @@ module rv64gc_core_top
         .spec_cancel_tag (lsu_spec_cancel_tag[0]),
         .spec_cancel_valid1(lsu_spec_cancel_valid[1]),
         .spec_cancel_tag1(lsu_spec_cancel_tag[1]),
-        .load_wb_wk_valid0(load_wb_valid[0] && (load_wb_pdst[0] != '0)),
+        .load_wb_wk_valid0(load_wb_valid_live[0] && (load_wb_pdst[0] != '0)),
         .load_wb_wk_tag0  (load_wb_pdst[0]),
-        .load_wb_wk_valid1(load_wb_valid[1] && (load_wb_pdst[1] != '0)),
+        .load_wb_wk_valid1(load_wb_valid_live[1] && (load_wb_pdst[1] != '0)),
         .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
         .issue_candidate_valid(),
@@ -2213,7 +2261,7 @@ module rv64gc_core_top
         bru_partial_recovery_valid =
             sim_exec_partial_branch_recovery &&
             !commit_flush.valid &&
-            bru_redirect_quarantine_r &&
+            !rename_stall &&
             // Partial recovery must not suppress the later commit flush while
             // UOP-cache replay is active; that full flush is the safety valve
             // that breaks stale speculative hot-loop paths.
@@ -2222,7 +2270,6 @@ module rv64gc_core_top
               cdb_branch_mispredict_r[0]) ||
              (cdb_valid_r[1] && cdb_is_branch_r[1] &&
               cdb_branch_mispredict_r[1])) &&
-            (partial_rob_idx == rob_head_idx) &&
             !rename_buf[partial_rob_idx].rd_valid &&
             rob_uses_checkpoint[partial_rob_idx] &&
             (rob_checkpoint_tail[partial_rob_idx] == partial_rob_idx);
@@ -2402,7 +2449,14 @@ module rv64gc_core_top
     logic        mul_valid_out;
     logic [63:0] mul_result;
     logic        mul_issue;
+    logic        mul_issue_live;
+    logic        mul_result_flushed;
+    logic        mul_valid_live;
     assign mul_issue = iq1_issue_valid[0] && (iq1_issue_data[0].fu_type == FU_MUL);
+    assign mul_issue_live =
+        mul_issue &&
+        !(flush_out.valid && !flush_out.full_flush &&
+          rename_buf_partial_clear[iq1_issue_data[0].rob_idx]);
 
     // Track ROB idx and pdst through multiplier pipeline stages.
     // Multiplier is now 2-stage (s3 removed); s2 holds the rob_idx/pdst
@@ -2412,7 +2466,7 @@ module rv64gc_core_top
     logic [PHYS_REG_BITS-1:0] mul_pdst_s1, mul_pdst_s2, mul_pdst_s3;
 
     always_ff @(posedge clk) begin
-        if (!rst_n || flush_out.valid) begin
+        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
             mul_rob_idx_s1 <= '0;
             mul_pdst_s1    <= '0;
             mul_rob_idx_s2 <= '0;
@@ -2434,15 +2488,19 @@ module rv64gc_core_top
     multiplier u_multiplier (
         .clk       (clk),
         .rst_n     (rst_n),
-        .valid_in  (mul_issue),
+        .valid_in  (mul_issue_live),
         .operand_a (bypassed_data[4]),
         .operand_b (bypassed_data[5]),
         .op        (iq1_issue_data[0].mul_op),
         .is_w_op   (iq1_issue_data[0].is_w_op),
-        .flush     (flush_out.valid),
+        .flush     (flush_out.valid && flush_out.full_flush),
         .valid_out (mul_valid_out),
         .result    (mul_result)
     );
+    assign mul_result_flushed =
+        flush_out.valid && !flush_out.full_flush &&
+        rename_buf_partial_clear[mul_rob_idx_s3];
+    assign mul_valid_live = mul_valid_out && !mul_result_flushed;
 
     // =========================================================================
     // 13. DIVIDER (shared with ALU3 on IQ2 port 0)
@@ -2607,8 +2665,8 @@ module rv64gc_core_top
     logic                    mul_hold_overflow;
 
     assign mul_take_hold    = !alu2_issue && mul_hold_valid_r;
-    assign mul_take_fresh   = !alu2_issue && !mul_hold_valid_r && mul_valid_out;
-    assign mul_enqueue_fresh = mul_valid_out && !mul_take_fresh;
+    assign mul_take_fresh   = !alu2_issue && !mul_hold_valid_r && mul_valid_live;
+    assign mul_enqueue_fresh = mul_valid_live && !mul_take_fresh;
 
     always_comb begin
         mul_hold_valid_n    = mul_hold_valid_r;
@@ -2663,7 +2721,7 @@ module rv64gc_core_top
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || flush_out.valid) begin
+        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
             mul_hold_valid_r  <= 1'b0;
             mul_hold_rob_idx_r <= '0;
             mul_hold_pdst_r   <= '0;
@@ -2820,6 +2878,45 @@ module rv64gc_core_top
         load_wb_exc_code[1]      = lsu_load_wb_exc_code[1];
     end
 
+    always_comb begin
+        cdb_valid_live        = cdb_valid;
+        load_wb_valid_live    = load_wb_valid;
+        lsu_sta_wb_valid_live = lsu_sta_wb_valid;
+        lsu_std_wb_valid_live = lsu_std_wb_valid;
+
+        if (flush_out.valid && flush_out.full_flush) begin
+            cdb_valid_live        = '0;
+            load_wb_valid_live    = '0;
+            lsu_sta_wb_valid_live = 1'b0;
+            lsu_std_wb_valid_live = 1'b0;
+        end else if (flush_out.valid) begin
+            for (int i = 0; i < CDB_WIDTH; i++) begin
+                if (cdb_valid_live[i]) begin
+                    if (rename_buf_partial_clear[cdb_rob_idx[i]]) begin
+                        cdb_valid_live[i] = 1'b0;
+                    end
+                end
+            end
+            for (int i = 0; i < 2; i++) begin
+                if (load_wb_valid_live[i]) begin
+                    if (rename_buf_partial_clear[load_wb_rob_idx[i]]) begin
+                        load_wb_valid_live[i] = 1'b0;
+                    end
+                end
+            end
+            if (lsu_sta_wb_valid_live) begin
+                if (rename_buf_partial_clear[lsu_sta_wb_rob_idx]) begin
+                    lsu_sta_wb_valid_live = 1'b0;
+                end
+            end
+            if (lsu_std_wb_valid_live) begin
+                if (rename_buf_partial_clear[lsu_std_wb_rob_idx]) begin
+                    lsu_std_wb_valid_live = 1'b0;
+                end
+            end
+        end
+    end
+
     // =========================================================================
     // CDB Pipeline Register — break the combinational loop
     //   IQ issue -> PRF read -> ALU -> CDB -> IQ wakeup -> IQ re-select
@@ -2827,7 +2924,7 @@ module rv64gc_core_top
     // Combinational version feeds: bypass network, PRF writes.
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || flush_out.valid) begin
+        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
             cdb_valid_r            <= '0;
             cdb_has_exception_r    <= '0;
             cdb_is_branch_r        <= '0;
@@ -2846,7 +2943,7 @@ module rv64gc_core_top
                 cdb_csr_op_r[i]         <= '0;
             end
         end else begin
-            cdb_valid_r            <= cdb_valid;
+            cdb_valid_r            <= cdb_valid_live;
             cdb_has_exception_r    <= cdb_has_exception;
             cdb_is_branch_r        <= cdb_is_branch;
             cdb_branch_taken_r     <= cdb_branch_taken;
@@ -2875,13 +2972,13 @@ module rv64gc_core_top
             lsu_sta_wb_rob_idx_r <= '0;
             lsu_std_wb_valid_r   <= 1'b0;
             lsu_std_wb_rob_idx_r <= '0;
-        end else if (flush_out.valid) begin
+        end else if (flush_out.valid && flush_out.full_flush) begin
             lsu_sta_wb_valid_r   <= 1'b0;
             lsu_std_wb_valid_r   <= 1'b0;
         end else begin
-            lsu_sta_wb_valid_r   <= lsu_sta_wb_valid;
+            lsu_sta_wb_valid_r   <= lsu_sta_wb_valid_live;
             lsu_sta_wb_rob_idx_r <= lsu_sta_wb_rob_idx;
-            lsu_std_wb_valid_r   <= lsu_std_wb_valid;
+            lsu_std_wb_valid_r   <= lsu_std_wb_valid_live;
             lsu_std_wb_rob_idx_r <= lsu_std_wb_rob_idx;
         end
     end
@@ -2893,16 +2990,16 @@ module rv64gc_core_top
     // Registered load_wb_r feeds: ROB ready-bit updates.
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || flush_out.valid) begin
+        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
             load_wb_valid_r         <= 2'b00;
             load_wb_has_exception_r <= 2'b00;
         end else begin
-            load_wb_valid_r[0]         <= load_wb_valid[0];
+            load_wb_valid_r[0]         <= load_wb_valid_live[0];
             load_wb_pdst_r[0]          <= load_wb_pdst[0];
             load_wb_rob_idx_r[0]       <= load_wb_rob_idx[0];
             load_wb_has_exception_r[0] <= load_wb_has_exception[0];
             load_wb_exc_code_r[0]      <= load_wb_exc_code[0];
-            load_wb_valid_r[1]         <= load_wb_valid[1];
+            load_wb_valid_r[1]         <= load_wb_valid_live[1];
             load_wb_pdst_r[1]          <= load_wb_pdst[1];
             load_wb_rob_idx_r[1]       <= load_wb_rob_idx[1];
             load_wb_has_exception_r[1] <= load_wb_has_exception[1];
@@ -2919,27 +3016,27 @@ module rv64gc_core_top
     //   Write[4]: Load 0           (load_wb[0] — separate from CDB broadcast)
     //   Write[5]: Load 1           (load_wb[1] — separate from CDB broadcast)
     // =========================================================================
-    assign prf_wen[0]   = cdb_valid[0] && (cdb_tag[0] != '0);
+    assign prf_wen[0]   = cdb_valid_live[0] && (cdb_tag[0] != '0);
     assign prf_waddr[0] = cdb_tag[0];
     assign prf_wdata[0] = cdb_data[0];
 
-    assign prf_wen[1]   = cdb_valid[1] && (cdb_tag[1] != '0);
+    assign prf_wen[1]   = cdb_valid_live[1] && (cdb_tag[1] != '0);
     assign prf_waddr[1] = cdb_tag[1];
     assign prf_wdata[1] = cdb_data[1];
 
-    assign prf_wen[2]   = cdb_valid[2] && (cdb_tag[2] != '0);
+    assign prf_wen[2]   = cdb_valid_live[2] && (cdb_tag[2] != '0);
     assign prf_waddr[2] = cdb_tag[2];
     assign prf_wdata[2] = cdb_data[2];
 
-    assign prf_wen[3]   = cdb_valid[3] && (cdb_tag[3] != '0);
+    assign prf_wen[3]   = cdb_valid_live[3] && (cdb_tag[3] != '0);
     assign prf_waddr[3] = cdb_tag[3];
     assign prf_wdata[3] = cdb_data[3];
 
-    assign prf_wen[4]   = load_wb_valid[0] && (load_wb_pdst[0] != '0);
+    assign prf_wen[4]   = load_wb_valid_live[0] && (load_wb_pdst[0] != '0);
     assign prf_waddr[4] = load_wb_pdst[0];
     assign prf_wdata[4] = load_wb_data[0];
 
-    assign prf_wen[5]   = load_wb_valid[1] && (load_wb_pdst[1] != '0);
+    assign prf_wen[5]   = load_wb_valid_live[1] && (load_wb_pdst[1] != '0);
     assign prf_waddr[5] = load_wb_pdst[1];
     assign prf_wdata[5] = load_wb_data[1];
 
@@ -2973,8 +3070,8 @@ module rv64gc_core_top
     //
     // Suppress bypass for p0 (hardwired zero register) — CDB may carry
     // non-zero data for instructions with pdst=p0 (e.g., JAL x0).
-    assign bypass_valid = {load_wb_valid[1] && (load_wb_pdst[1]  != '0),  // [4] Load1
-                           load_wb_valid[0] && (load_wb_pdst[0]  != '0),  // [3] Load0
+    assign bypass_valid = {load_wb_valid_live[1] && (load_wb_pdst[1]  != '0),  // [4] Load1
+                           load_wb_valid_live[0] && (load_wb_pdst[0]  != '0),  // [3] Load0
                            cdb_valid_r[2]   && (cdb_tag_r[2]    != '0),  // [2] ALU2/MUL
                            cdb_valid_r[1]   && (cdb_tag_r[1]    != '0),  // [1] ALU1/BRU1
                            cdb_valid_r[0]   && (cdb_tag_r[0]    != '0)}; // [0] ALU0/BRU
@@ -3032,13 +3129,13 @@ module rv64gc_core_top
             // (ready_table -> rename -> IQ) is one-way, not part of
             // the IQ -> ALU -> CDB -> IQ wakeup loop.
             for (int i = 0; i < CDB_WIDTH; i++) begin
-                if (cdb_valid[i] && cdb_tag[i] != '0) begin
+                if (cdb_valid_live[i] && cdb_tag[i] != '0) begin
                     preg_ready_table[cdb_tag[i]] <= 1'b1;
                 end
             end
             // Set on load writeback (Stage 2: loads removed from CDB broadcast).
             for (int lw = 0; lw < 2; lw++) begin
-                if (load_wb_valid[lw] && load_wb_pdst[lw] != '0) begin
+                if (load_wb_valid_live[lw] && load_wb_pdst[lw] != '0) begin
                     preg_ready_table[load_wb_pdst[lw]] <= 1'b1;
                 end
             end

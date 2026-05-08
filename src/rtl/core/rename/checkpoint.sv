@@ -43,6 +43,9 @@ module checkpoint
     logic [PHYS_REG_BITS-1:0] slot_rat      [0:NUM_CHECKPOINTS-1][0:31];
     logic [INT_PRF_DEPTH-1:0] slot_fl_bitmap [0:NUM_CHECKPOINTS-1];
     logic [ROB_IDX_BITS-1:0]  slot_rob_tail  [0:NUM_CHECKPOINTS-1];
+    localparam int CKPT_SEQ_BITS = CHECKPOINT_BITS + 1;
+    logic [CKPT_SEQ_BITS-1:0] slot_seq [0:NUM_CHECKPOINTS-1];
+    logic [CKPT_SEQ_BITS-1:0] next_seq_r;
 
     // -------------------------------------------------------------------------
     // Occupancy tracking: bit i = 1 means slot i is in use
@@ -56,6 +59,8 @@ module checkpoint
     // -------------------------------------------------------------------------
     logic [NUM_CHECKPOINTS-1:0] release_mask;
     logic [NUM_CHECKPOINTS-1:0] occupied_after_release;
+    logic [NUM_CHECKPOINTS-1:0] restore_keep_mask;
+    logic [CKPT_SEQ_BITS-1:0] restore_seq_delta [0:NUM_CHECKPOINTS-1];
 
     always_comb begin
         release_mask = '0;
@@ -68,6 +73,17 @@ module checkpoint
 
     assign occupied_after_release = occupied & ~release_mask;
     assign save_avail = (occupied_after_release != {NUM_CHECKPOINTS{1'b1}});
+
+    always_comb begin
+        restore_keep_mask = '0;
+        for (int i = 0; i < NUM_CHECKPOINTS; i++) begin
+            restore_seq_delta[i] = slot_seq[restore_id] - slot_seq[i];
+            restore_keep_mask[i] =
+                occupied_after_release[i] &&
+                (restore_seq_delta[i] != '0) &&
+                (restore_seq_delta[i] < CKPT_SEQ_BITS'(NUM_CHECKPOINTS));
+        end
+    end
 
     // -------------------------------------------------------------------------
     // save_id: lowest-numbered slot free after same-cycle releases.
@@ -98,8 +114,15 @@ module checkpoint
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             occupied <= '0;
+            next_seq_r <= '0;
         end else if (flush) begin
             occupied <= '0;
+            next_seq_r <= '0;
+        end else if (restore_valid) begin
+            // Partial branch recovery restores to one branch checkpoint.  Keep
+            // checkpoints older than that branch and discard the branch plus
+            // younger checkpoints so older unresolved branches remain recoverable.
+            occupied <= restore_keep_mask;
         end else begin
             // Release: clear slots for committed branches (no mispredict)
             for (int i = 0; i < PIPE_WIDTH; i++) begin
@@ -112,6 +135,7 @@ module checkpoint
             // be immediately reallocated (save_id picks from pre-save state).
             if (save_valid && save_avail) begin
                 occupied[save_id] <= 1'b1;
+                next_seq_r <= next_seq_r + CKPT_SEQ_BITS'(1);
             end
         end
     end
@@ -127,6 +151,7 @@ module checkpoint
                 end
                 slot_fl_bitmap[c] <= '0;
                 slot_rob_tail[c]  <= '0;
+                slot_seq[c]       <= '0;
             end
         end else if (save_valid && save_avail) begin
             for (int i = 0; i < 32; i++) begin
@@ -134,6 +159,7 @@ module checkpoint
             end
             slot_fl_bitmap[save_id] <= fl_bitmap_snapshot;
             slot_rob_tail[save_id]  <= rob_tail_snapshot;
+            slot_seq[save_id]       <= next_seq_r;
         end
     end
 

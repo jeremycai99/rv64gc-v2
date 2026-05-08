@@ -235,6 +235,7 @@ module rename
         .commit_phys  (commit_pdst),
         .ckpt_save    (ckpt_save_valid),
         .ckpt_save_id (ckpt_save_id),
+        .ckpt_save_slot(ckpt_branch_slot),
         .ckpt_restore (do_ckpt_restore),
         .ckpt_restore_id (flush_in.checkpoint_id),
         .flush        (do_flush)
@@ -252,6 +253,7 @@ module rename
         .commit_pdst      (commit_pdst),
         .ckpt_save        (ckpt_save_valid),
         .ckpt_save_id     (ckpt_save_id),
+        .ckpt_save_alloc_count(preg_consumed_before[ckpt_branch_slot]),
         .ckpt_restore     (do_ckpt_restore),
         .ckpt_restore_id  (flush_in.checkpoint_id),
         .flush            (do_flush)
@@ -273,7 +275,7 @@ module rename
         .restored_rob_tail  (restored_rob_tail),
         .release_valid      (commit_release_cp),
         .release_id         (commit_cp_id),
-        .flush              (do_flush || do_ckpt_restore)
+        .flush              (do_flush)
     );
 
     // =========================================================================
@@ -521,7 +523,7 @@ module rename
     // =========================================================================
     // Checkpoint save: triggered when a branch slot advances
     // =========================================================================
-    assign ckpt_save_valid = found_ckpt_branch;
+    assign ckpt_save_valid = found_ckpt_branch && !do_flush && !do_ckpt_restore;
 
     // Snapshot data for checkpoint module.
     // The RAT and free_list each save their own internal state via ckpt_save.

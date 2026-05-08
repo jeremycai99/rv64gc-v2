@@ -32,6 +32,7 @@ module rat
     // Checkpoint save
     input logic ckpt_save,
     input logic [CHECKPOINT_BITS-1:0] ckpt_save_id,
+    input logic [2:0] ckpt_save_slot,
     // Checkpoint restore
     input logic ckpt_restore,
     input logic [CHECKPOINT_BITS-1:0] ckpt_restore_id,
@@ -106,7 +107,9 @@ module rat
                 end
             end
         end else if (ckpt_restore) begin
-            // Checkpoint restore overrides normal writes
+            // Checkpoint restore returns to the speculative map that existed
+            // before the recovering branch. Older in-flight mappings are
+            // already part of that image, so commit writes must not override it.
             for (int i = 0; i < 32; i++) begin
                 rat_table[i] <= ckpt_table[ckpt_restore_id][i];
             end
@@ -151,6 +154,12 @@ module rat
         end else if (ckpt_save) begin
             for (int i = 0; i < 32; i++) begin
                 ckpt_table[ckpt_save_id][i] <= rat_table[i];
+            end
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if ((3'(i) < ckpt_save_slot) &&
+                    wr_en[i] && (wr_arch[i] != '0)) begin
+                    ckpt_table[ckpt_save_id][wr_arch[i]] <= wr_phys[i];
+                end
             end
         end
     end

@@ -432,6 +432,29 @@ RAT/free-list restore snapshot boundary and same-cycle commit release handling.
 Treat non-head branch recovery as a larger backend recovery redesign, not a
 small checkpoint-file patch.
 
+Follow-up, 2026-05-08, third trial: the non-head recovery contract was extended
+with same-cycle RAT/free-list checkpoint save semantics, older-checkpoint
+preservation, recovery-filtered writeback survival, consumed-checkpoint
+metadata clearing for the recovered branch, and a rename-resource gate. This
+turns the previous timeout into endpoint-clean execution, but it is still not
+scoreable performance:
+
+| Trial | Evidence | Dhrystone 100 | CoreMark 1 | Branch hotspot | Verdict |
+|---|---|---:|---:|---:|---|
+| Default resmoke with opt-in code disabled | `benchmark_results/dse_dse_20260508_partial_recovery_dirty_default_resmoke` | 18,913 | 164,364 | 141,326 | Accepted baseline is unchanged. |
+| Non-head partial recovery, resource gated | `benchmark_results/dse_dse_20260508_partial_recovery_resource_gate_smoke` | 21,730 | 168,444 | 142,321 | Rejected. Endpoint-clean, but still regresses every score row. |
+| Early redirect plus resource-gated partial recovery | `benchmark_results/dse_dse_20260508_early_partial_resource_gate_smoke` | 21,767 | TOHOST_3 | 139,612 | Rejected. Hotspot improves, but CoreMark endpoint breaks. |
+
+The resource gate is useful evidence: it reduces the pathological Dhrystone
+free-list stall signature from the earlier direct non-head trial
+(`30,229 -> 21,730` cycles, `has_preg=0` stalls `11,778 -> 2,977`), proving
+that branch recovery can overrun rename/PRF resources when it is too eager.
+However, it remains worse than the accepted default (`18,913` cycles), and
+CoreMark remains worse than the accepted default (`164,364` cycles). Do not
+promote execute-time non-head partial recovery yet. Reopen only with a stronger
+branch-order checkpoint ownership design and a headroom signal that prevents
+PRF/ROB pressure before rename stalls are already visible.
+
 Follow-up, 2026-05-08, IBuffer packet coalescing: simple useful-work-per-packet
 coalescing is rejected as a no-op. Two RTL variants were tested: head-only
 same-owner adjacent packet merge and selected-owner-anywhere adjacent packet

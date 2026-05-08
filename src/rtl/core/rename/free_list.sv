@@ -26,6 +26,7 @@ module free_list
     // Checkpoint save
     input logic ckpt_save,
     input logic [CHECKPOINT_BITS-1:0] ckpt_save_id,
+    input logic [2:0] ckpt_save_alloc_count,
     // Checkpoint restore
     input logic ckpt_restore,
     input logic [CHECKPOINT_BITS-1:0] ckpt_restore_id,
@@ -52,6 +53,7 @@ module free_list
     // Checkpoint storage
     // -------------------------------------------------------------------------
     logic [INT_PRF_DEPTH-1:0] ckpt_bitmap [0:NUM_CHECKPOINTS-1];
+    logic [INT_PRF_DEPTH-1:0] ckpt_committed_bitmap [0:NUM_CHECKPOINTS-1];
 
     // -------------------------------------------------------------------------
     // Cascading priority encoder for allocation
@@ -90,6 +92,38 @@ module free_list
                 work_bitmap[i+1] = work_bitmap[i] & ~(INT_PRF_DEPTH'(1) << found_idx[i]);
             end else begin
                 work_bitmap[i+1] = work_bitmap[i];
+            end
+        end
+    end
+
+    logic [INT_PRF_DEPTH-1:0] committed_bitmap_next;
+    logic [INT_PRF_DEPTH-1:0] ckpt_save_bitmap_next;
+
+    always_comb begin
+        committed_bitmap_next = committed_bitmap;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
+                committed_bitmap_next[release_preg[i]] = 1'b1;
+            end
+            if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
+                committed_bitmap_next[commit_pdst[i]] = 1'b0;
+            end
+        end
+    end
+
+    always_comb begin
+        ckpt_save_bitmap_next = free_bitmap;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if (found_valid[i] && (3'(i) < ckpt_save_alloc_count)) begin
+                ckpt_save_bitmap_next[found_idx[i]] = 1'b0;
+            end
+        end
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
+                ckpt_save_bitmap_next[release_preg[i]] = 1'b1;
+            end
+            if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
+                ckpt_save_bitmap_next[commit_pdst[i]] = 1'b0;
             end
         end
     end
@@ -196,36 +230,16 @@ module free_list
         if (!rst_n) begin
             free_bitmap <= INIT_BITMAP;
         end else if (flush) begin
-            // Restore from committed bitmap, then apply same-cycle commit
-            // updates so the mispredicting instruction's mapping is captured.
-            free_bitmap <= committed_bitmap;
+            // Restore from committed state including same-cycle commits.
+            free_bitmap <= committed_bitmap_next;
 `ifdef SIMULATION
             if (trace_leak_en)
                 $display("[FL_FREE_FLUSH] cyc=%0d restore<=committed_bitmap  rel_cnt=%0d  +same_cycle_apply",
                     leak_cyc, release_count);
 `endif
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
-                    free_bitmap[release_preg[i]] <= 1'b1;
-`ifdef SIMULATION
-                    if (trace_leak_en)
-                        $display("[FL_FREE_REL] cyc=%0d slot=%0d pdst=%0d was=%0b flush=1 cmt_wr=%0b cmt_pdst=%0d",
-                            leak_cyc, i, release_preg[i], free_bitmap[release_preg[i]],
-                            commit_wr_valid[i], commit_pdst[i]);
-`endif
-                end
-                if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
-                    free_bitmap[commit_pdst[i]] <= 1'b0;
-`ifdef SIMULATION
-                    if (trace_leak_en)
-                        $display("[FL_FREE_CMT] cyc=%0d slot=%0d pdst=%0d was=%0b flush=1 rel=%0d",
-                            leak_cyc, i, commit_pdst[i], free_bitmap[commit_pdst[i]],
-                            release_preg[i]);
-`endif
-                end
-            end
         end else if (ckpt_restore) begin
-            free_bitmap <= ckpt_bitmap[ckpt_restore_id];
+            free_bitmap <= ckpt_bitmap[ckpt_restore_id] |
+                           (committed_bitmap_next & ~ckpt_committed_bitmap[ckpt_restore_id]);
 `ifdef SIMULATION
             if (trace_leak_en)
                 $display("[FL_FREE_CKPT] cyc=%0d restore_id=%0d", leak_cyc, ckpt_restore_id);
@@ -262,28 +276,23 @@ module free_list
         if (!rst_n) begin
             committed_bitmap <= INIT_BITMAP;
         end else begin
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                // Release old_pdst (becomes free in committed state)
-                if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
-                    committed_bitmap[release_preg[i]] <= 1'b1;
+            committed_bitmap <= committed_bitmap_next;
 `ifdef SIMULATION
-                    if (trace_leak_en)
+            if (trace_leak_en) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
                         $display("[CB_REL] cyc=%0d slot=%0d pdst=%0d was=%0b cmt_wr=%0b cmt_pdst=%0d rel_cnt=%0d",
                             leak_cyc, i, release_preg[i], committed_bitmap[release_preg[i]],
                             commit_wr_valid[i], commit_pdst[i], release_count);
-`endif
-                end
-                // Mark pdst as in-use (committed destination)
-                if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
-                    committed_bitmap[commit_pdst[i]] <= 1'b0;
-`ifdef SIMULATION
-                    if (trace_leak_en)
+                    end
+                    if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
                         $display("[CB_CMT] cyc=%0d slot=%0d pdst=%0d was=%0b rel=%0d rel_cnt=%0d",
                             leak_cyc, i, commit_pdst[i], committed_bitmap[commit_pdst[i]],
                             release_preg[i], release_count);
-`endif
+                    end
                 end
             end
+`endif
         end
     end
 
@@ -294,9 +303,11 @@ module free_list
         if (!rst_n) begin
             for (int c = 0; c < NUM_CHECKPOINTS; c++) begin
                 ckpt_bitmap[c] <= INIT_BITMAP;
+                ckpt_committed_bitmap[c] <= INIT_BITMAP;
             end
         end else if (ckpt_save) begin
-            ckpt_bitmap[ckpt_save_id] <= free_bitmap;
+            ckpt_bitmap[ckpt_save_id] <= ckpt_save_bitmap_next;
+            ckpt_committed_bitmap[ckpt_save_id] <= committed_bitmap_next;
         end
     end
 
