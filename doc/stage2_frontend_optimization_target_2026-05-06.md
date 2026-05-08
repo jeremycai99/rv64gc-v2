@@ -407,6 +407,46 @@ cycles rose to `55,074`. Verdict: the bottleneck is not solved by adding a
 generic queue. Any future drain mechanism needs branch/control awareness or a
 joint frontend/backend scheduling policy, not blind decoupling.
 
+Follow-up, 2026-05-08, duplicate/remainder attribution: a profiler-only slice
+in `benchmark_results/dse_dse_20260508_dup_rem_attrib_coremark10` keeps
+CoreMark 10 cycle-identical at `1,528,608` cycles and `6.579328` CoreMark/MHz,
+while splitting the duplicate and remainder residuals more precisely:
+
+| Counter | Value | Interpretation |
+|---|---:|---|
+| `xs_dup_last_emit` | 41,442 | Every duplicate suppression is from the last-emitted packet guard, not the replay guard. |
+| `xs_dup_next_is_seq` | 41,377 | Nearly every duplicate would advance to the sequential next PC. |
+| `xs_dup_next_same_line` | 41,442 | The duplicate tax is fully same-line in this row. |
+| `xs_dup_next_branch_target` | 0 | This is not a taken-target duplicate problem. |
+| `xs_dup_with_control` | 9,177 | Some duplicates sit on packets containing a control instruction. |
+| `xs_dup_with_taken_control` | 37 | Almost none are taken-control redirects. |
+| `xs_same_owner_block_rem_backend` | 3,699 | Only a minority of remainder blocking directly overlaps backend stall. |
+| `xs_same_owner_block_rem_packet_full` | 0 | The local remainder block itself is not packet-buffer-full, but prior bypass trials show it creates future packet-buffer pressure. |
+
+This confirms that the largest remaining duplicate bucket is a same-line
+sequential replay caused by conservative owner/cursor policy, not I-cache
+latency or branch-target replay. The architectural opportunity is real, but it
+must preserve the FTQ owner and prediction-snapshot contract.
+
+Follow-up, 2026-05-08, predicted-not-taken same-owner trial: a narrow RTL trial
+allowed same-owner fall-through past predicted-not-taken conditionals when
+there was no subgroup split and the next PC stayed in the same line. It is
+rejected and removed. Smoke evidence from
+`benchmark_results/dse_dse_20260508_nt_cond_same_owner_smoke`:
+
+| Workload | Baseline | Trial | Verdict |
+|---|---:|---:|---|
+| Dhrystone 100 | 18,913 | 21,419 | Regresses badly. |
+| CoreMark 1 | 164,550 | did not finish cleanly | Unsafe. |
+| Branch hotspot | 141,408 | iteration limit | Unsafe. |
+
+Verdict: not-taken control fall-through cannot simply stay in the same FTQ
+owner in the current contract. The likely missing piece is branch-owner
+snapshot/repair ownership for packets after a not-taken conditional. Do not
+retry this as a local `same_owner_continue` relaxation; reopen only with an
+explicit branch-control owner contract that handles GHR/RAS snapshots and FTQ
+completion/training for later packets.
+
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
@@ -443,6 +483,7 @@ counter-backed second domain instead.
 | Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. The direct non-head partial trial proves the current checkpoint manager cannot yet support general execute-time recovery. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Without that, keep partial recovery head-only and do not promote early recovery. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
 | Downstream packet drain / scheduling | Still open, simple packet coalescing and blind decode queues rejected | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. Head-only and selected-owner IBuffer packet coalescing were strict-clean but cycle-identical no-ops. Blind decoded queues moved pressure but regressed CoreMark 10. | Next attempt needs branch/control-aware scheduling or a paired backend policy, not another packet merge or generic queue. Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without increasing `packet_empty`, redirect recovery, or DS/CoreMark cycles. |
+| Predicted-not-taken owner fall-through | Rejected local form | Attribution shows many duplicate cycles are same-line sequential, so this looked tempting. The local owner relaxation regressed Dhrystone and broke CoreMark/hotspot. | Reopen only with explicit branch-owner snapshot/repair semantics, not by relaxing `same_owner_continue` alone. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
 ## Evidence Required
@@ -489,7 +530,9 @@ Every accepted performance row must report:
 | 19 | Record simple IBuffer packet coalescing as rejected. | Done: head-only and selected-owner adjacent coalescing are strict-clean but cycle-identical no-ops, so RTL was not kept. |
 | 20 | Try real decode or rename decoupling before more packet production shortcuts. | Done and rejected in blind form: decoded queues are strict-clean but CoreMark 10 regresses. |
 | 21 | Reopen downstream drain only with branch/control-aware policy. | Candidate lowers packet-full or backend-packet-ready stalls without increasing packet-empty, redirect recovery, or CoreMark 10 cycles. |
-| 22 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 22 | Split duplicate/remainder residuals by owner/control context. | Done by `dse_dse_20260508_dup_rem_attrib_coremark10`: duplicates are same-line sequential last-emit replays, not branch-target replays. |
+| 23 | Try predicted-not-taken same-owner fall-through only if ownership evidence supports it. | Done and rejected in local form: Dhrystone regresses, CoreMark 1 does not finish cleanly, and branch hotspot hits the iteration limit. |
+| 24 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -515,6 +558,9 @@ recovery direction still has evidence, but the next branch RTL work is not
 another early-redirect gate; it is a full backend checkpoint recovery contract
 for non-head recovery. Global early recovery, ROB-age early recovery, direct
 non-head partial recovery, and the simple checkpoint sequence-preserve trial
-are rejected in the current backend contract. Long-term objective remains
-7.5 CM/MHz and 4.0 DMIPS/MHz, with a required second-domain escalation if
-frontend-only work does not reach the Gate C ceiling.
+are rejected in the current backend contract. The latest duplicate attribution
+also rejects a local predicted-not-taken owner relaxation, so any next frontend
+owner change must carry an explicit prediction-snapshot and branch-owner repair
+contract. Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a
+required second-domain escalation if frontend-only work does not reach the
+Gate C ceiling.
