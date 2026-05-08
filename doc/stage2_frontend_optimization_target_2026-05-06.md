@@ -229,6 +229,28 @@ This moves the next viable frontend work away from local remainder cursor
 removal and toward coordinated owner work scheduling, packet-buffer credit
 policy, or a second-domain backend drain limiter.
 
+Additional top-PC attribution from
+`benchmark_results/dse_20260508_remainder_noemit_top_pc_coremark10` keeps the
+accepted RTL cycle-identical at CoreMark 10 `1,528,608` cycles and
+`6.579328` CoreMark/MHz, but names the remaining hot paths:
+
+| Bucket | Dominant PCs | Interpretation |
+|---|---|---|
+| Same-owner remainder | `0x80003b00` inside `crc16`, plus `0x80002140/0x8000214e` inside `cmp_idx` | The largest entry is the next-line consume point for a 32-bit instruction starting at `0x80003afe`, byte offset 62. The consume cycle emits a real packet, so only the post-consume hold is clearly lost time. |
+| Data-present no-emit duplicate | `0x80003af4` in the `crc16` byte loop, `0x80003676/0x80003738` in `core_state_transition`, `0x80003176` in `matrix_mul_matrix` | Duplicate suppression is still protecting endpoint identity, but it is now concentrated in real loop/control hot paths rather than random owner drift. |
+| Data-present no-emit redirect | `0x800023ac` in `core_list_mergesort`, `0x8000315c` in `matrix_mul_matrix`, `0x8000242c` in list handling | Redirect recovery remains the second large packet-empty cause after duplicate suppression. |
+| Data-present no-emit stall | `0x800039f8/0x800039ee` in `crcu16`, plus list and CRC tail PCs | Some residual packet-empty time overlaps backend or packet-ready stalls, consistent with the rejected post-remainder bypass backpressure result. |
+
+Verdict from this attribution: do not count all `same_owner_block_rem_consume`
+cycles as waste. The next frontend trial should first remove the redundant
+line-end straddle handoff before the consume point, not the post-consume hold
+that already proved backpressure-sensitive on CoreMark 10. A useful structural
+trial is to let `instr_boundary` move directly from a packet ending before a
+detected line-end straddled 32-bit instruction to the next cache line, carrying
+the saved low halfword, instead of spending a separate no-emit cycle at the
+straddle PC. This is a general RVC/32-bit boundary policy, not benchmark-PC
+steering.
+
 The `20260507_packet_pressure_attrib_coremark10` row resolves the next
 bottleneck selection:
 

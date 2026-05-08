@@ -218,6 +218,16 @@ module fetch_frontend_profiler
     integer xs_catchup_top_count [0:XS_CATCHUP_TOPN-1];
     logic [63:0] xs_dup_top_pc [0:XS_CATCHUP_TOPN-1];
     integer xs_dup_top_count [0:XS_CATCHUP_TOPN-1];
+    logic [63:0] xs_rem_top_pc [0:XS_CATCHUP_TOPN-1];
+    integer xs_rem_top_count [0:XS_CATCHUP_TOPN-1];
+    logic [63:0] xs_data_no_emit_top_pc [0:XS_CATCHUP_TOPN-1];
+    integer xs_data_no_emit_top_count [0:XS_CATCHUP_TOPN-1];
+    logic [63:0] xs_data_no_emit_dup_top_pc [0:XS_CATCHUP_TOPN-1];
+    integer xs_data_no_emit_dup_top_count [0:XS_CATCHUP_TOPN-1];
+    logic [63:0] xs_data_no_emit_redirect_top_pc [0:XS_CATCHUP_TOPN-1];
+    integer xs_data_no_emit_redirect_top_count [0:XS_CATCHUP_TOPN-1];
+    logic [63:0] xs_data_no_emit_stall_top_pc [0:XS_CATCHUP_TOPN-1];
+    integer xs_data_no_emit_stall_top_count [0:XS_CATCHUP_TOPN-1];
 
     logic xs_dup_last_emit_c;
     logic xs_dup_replay_guard_c;
@@ -737,6 +747,16 @@ module fetch_frontend_profiler
                 xs_catchup_top_count[i] <= 0;
                 xs_dup_top_pc[i]        <= 64'd0;
                 xs_dup_top_count[i]     <= 0;
+                xs_rem_top_pc[i]        <= 64'd0;
+                xs_rem_top_count[i]     <= 0;
+                xs_data_no_emit_top_pc[i] <= 64'd0;
+                xs_data_no_emit_top_count[i] <= 0;
+                xs_data_no_emit_dup_top_pc[i] <= 64'd0;
+                xs_data_no_emit_dup_top_count[i] <= 0;
+                xs_data_no_emit_redirect_top_pc[i] <= 64'd0;
+                xs_data_no_emit_redirect_top_count[i] <= 0;
+                xs_data_no_emit_stall_top_pc[i] <= 64'd0;
+                xs_data_no_emit_stall_top_count[i] <= 0;
             end
             for (int i = 0; i < 6; i++) begin
                 xs_ftq_occ_hist[i] <= 0;
@@ -832,6 +852,171 @@ module fetch_frontend_profiler
             if (xs_data_no_emit_other_c)
                 xs_data_no_emit_other_cycles <=
                     xs_data_no_emit_other_cycles + 1;
+            if (xs_data_present_no_emit_c) begin : xs_data_no_emit_top_update
+                int hit_idx;
+                int empty_idx;
+                int min_idx;
+                int use_idx;
+                int min_count;
+
+                hit_idx = -1;
+                empty_idx = -1;
+                min_idx = 0;
+                use_idx = -1;
+                min_count = xs_data_no_emit_top_count[0];
+                for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                    if ((xs_data_no_emit_top_count[i] != 0) &&
+                        (xs_data_no_emit_top_pc[i] == f2_work_pc_c) &&
+                        (hit_idx < 0)) begin
+                        hit_idx = i;
+                    end
+                    if ((xs_data_no_emit_top_count[i] == 0) &&
+                        (empty_idx < 0)) begin
+                        empty_idx = i;
+                    end
+                    if (xs_data_no_emit_top_count[i] < min_count) begin
+                        min_count = xs_data_no_emit_top_count[i];
+                        min_idx = i;
+                    end
+                end
+                if (hit_idx >= 0)
+                    use_idx = hit_idx;
+                else if (empty_idx >= 0)
+                    use_idx = empty_idx;
+                else
+                    use_idx = min_idx;
+
+                xs_data_no_emit_top_pc[use_idx] <= f2_work_pc_c;
+                if (hit_idx >= 0)
+                    xs_data_no_emit_top_count[use_idx] <=
+                        xs_data_no_emit_top_count[use_idx] + 1;
+                else
+                    xs_data_no_emit_top_count[use_idx] <= 1;
+            end
+            if (xs_data_no_emit_dup_c) begin : xs_data_no_emit_dup_top_update
+                int hit_idx;
+                int empty_idx;
+                int min_idx;
+                int use_idx;
+                int min_count;
+
+                hit_idx = -1;
+                empty_idx = -1;
+                min_idx = 0;
+                use_idx = -1;
+                min_count = xs_data_no_emit_dup_top_count[0];
+                for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                    if ((xs_data_no_emit_dup_top_count[i] != 0) &&
+                        (xs_data_no_emit_dup_top_pc[i] == f2_work_pc_c) &&
+                        (hit_idx < 0)) begin
+                        hit_idx = i;
+                    end
+                    if ((xs_data_no_emit_dup_top_count[i] == 0) &&
+                        (empty_idx < 0)) begin
+                        empty_idx = i;
+                    end
+                    if (xs_data_no_emit_dup_top_count[i] < min_count) begin
+                        min_count = xs_data_no_emit_dup_top_count[i];
+                        min_idx = i;
+                    end
+                end
+                if (hit_idx >= 0)
+                    use_idx = hit_idx;
+                else if (empty_idx >= 0)
+                    use_idx = empty_idx;
+                else
+                    use_idx = min_idx;
+
+                xs_data_no_emit_dup_top_pc[use_idx] <= f2_work_pc_c;
+                if (hit_idx >= 0)
+                    xs_data_no_emit_dup_top_count[use_idx] <=
+                        xs_data_no_emit_dup_top_count[use_idx] + 1;
+                else
+                    xs_data_no_emit_dup_top_count[use_idx] <= 1;
+            end
+            if (xs_data_no_emit_redirect_c) begin : xs_data_no_emit_redirect_top_update
+                int hit_idx;
+                int empty_idx;
+                int min_idx;
+                int use_idx;
+                int min_count;
+
+                hit_idx = -1;
+                empty_idx = -1;
+                min_idx = 0;
+                use_idx = -1;
+                min_count = xs_data_no_emit_redirect_top_count[0];
+                for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                    if ((xs_data_no_emit_redirect_top_count[i] != 0) &&
+                        (xs_data_no_emit_redirect_top_pc[i] == f2_work_pc_c) &&
+                        (hit_idx < 0)) begin
+                        hit_idx = i;
+                    end
+                    if ((xs_data_no_emit_redirect_top_count[i] == 0) &&
+                        (empty_idx < 0)) begin
+                        empty_idx = i;
+                    end
+                    if (xs_data_no_emit_redirect_top_count[i] < min_count) begin
+                        min_count = xs_data_no_emit_redirect_top_count[i];
+                        min_idx = i;
+                    end
+                end
+                if (hit_idx >= 0)
+                    use_idx = hit_idx;
+                else if (empty_idx >= 0)
+                    use_idx = empty_idx;
+                else
+                    use_idx = min_idx;
+
+                xs_data_no_emit_redirect_top_pc[use_idx] <= f2_work_pc_c;
+                if (hit_idx >= 0)
+                    xs_data_no_emit_redirect_top_count[use_idx] <=
+                        xs_data_no_emit_redirect_top_count[use_idx] + 1;
+                else
+                    xs_data_no_emit_redirect_top_count[use_idx] <= 1;
+            end
+            if (xs_data_no_emit_fe_stall_c ||
+                xs_data_no_emit_pkt_not_ready_c) begin : xs_data_no_emit_stall_top_update
+                int hit_idx;
+                int empty_idx;
+                int min_idx;
+                int use_idx;
+                int min_count;
+
+                hit_idx = -1;
+                empty_idx = -1;
+                min_idx = 0;
+                use_idx = -1;
+                min_count = xs_data_no_emit_stall_top_count[0];
+                for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                    if ((xs_data_no_emit_stall_top_count[i] != 0) &&
+                        (xs_data_no_emit_stall_top_pc[i] == f2_work_pc_c) &&
+                        (hit_idx < 0)) begin
+                        hit_idx = i;
+                    end
+                    if ((xs_data_no_emit_stall_top_count[i] == 0) &&
+                        (empty_idx < 0)) begin
+                        empty_idx = i;
+                    end
+                    if (xs_data_no_emit_stall_top_count[i] < min_count) begin
+                        min_count = xs_data_no_emit_stall_top_count[i];
+                        min_idx = i;
+                    end
+                end
+                if (hit_idx >= 0)
+                    use_idx = hit_idx;
+                else if (empty_idx >= 0)
+                    use_idx = empty_idx;
+                else
+                    use_idx = min_idx;
+
+                xs_data_no_emit_stall_top_pc[use_idx] <= f2_work_pc_c;
+                if (hit_idx >= 0)
+                    xs_data_no_emit_stall_top_count[use_idx] <=
+                        xs_data_no_emit_stall_top_count[use_idx] + 1;
+                else
+                    xs_data_no_emit_stall_top_count[use_idx] <= 1;
+            end
             if (f2_duplicate_suppressed_c)
                 xs_dup_suppressed_cycles <= xs_dup_suppressed_cycles + 1;
             if (xs_dup_same_owner_c)
@@ -994,6 +1179,47 @@ module fetch_frontend_profiler
             if (xs_same_owner_block_remainder_c)
                 xs_same_owner_block_remainder_cycles <=
                     xs_same_owner_block_remainder_cycles + 1;
+            if (xs_same_owner_block_remainder_c) begin : xs_rem_top_update
+                int hit_idx;
+                int empty_idx;
+                int min_idx;
+                int use_idx;
+                int min_count;
+
+                hit_idx = -1;
+                empty_idx = -1;
+                min_idx = 0;
+                use_idx = -1;
+                min_count = xs_rem_top_count[0];
+                for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                    if ((xs_rem_top_count[i] != 0) &&
+                        (xs_rem_top_pc[i] == f2_work_pc_c) &&
+                        (hit_idx < 0)) begin
+                        hit_idx = i;
+                    end
+                    if ((xs_rem_top_count[i] == 0) &&
+                        (empty_idx < 0)) begin
+                        empty_idx = i;
+                    end
+                    if (xs_rem_top_count[i] < min_count) begin
+                        min_count = xs_rem_top_count[i];
+                        min_idx = i;
+                    end
+                end
+                if (hit_idx >= 0)
+                    use_idx = hit_idx;
+                else if (empty_idx >= 0)
+                    use_idx = empty_idx;
+                else
+                    use_idx = min_idx;
+
+                xs_rem_top_pc[use_idx] <= f2_work_pc_c;
+                if (hit_idx >= 0)
+                    xs_rem_top_count[use_idx] <=
+                        xs_rem_top_count[use_idx] + 1;
+                else
+                    xs_rem_top_count[use_idx] <= 1;
+            end
             if (xs_same_owner_block_rem_straddle_c)
                 xs_same_owner_block_rem_straddle_cycles <=
                     xs_same_owner_block_rem_straddle_cycles + 1;
@@ -1414,6 +1640,46 @@ module fetch_frontend_profiler
                     $display("  %016h %0d",
                              xs_dup_top_pc[i],
                              xs_dup_top_count[i]);
+                end
+            end
+            $display("same-owner remainder top F2 PCs:");
+            for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                if (xs_rem_top_count[i] != 0) begin
+                    $display("  %016h %0d",
+                             xs_rem_top_pc[i],
+                             xs_rem_top_count[i]);
+                end
+            end
+            $display("data-present no-emit top F2 PCs:");
+            for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                if (xs_data_no_emit_top_count[i] != 0) begin
+                    $display("  %016h %0d",
+                             xs_data_no_emit_top_pc[i],
+                             xs_data_no_emit_top_count[i]);
+                end
+            end
+            $display("data no-emit duplicate top F2 PCs:");
+            for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                if (xs_data_no_emit_dup_top_count[i] != 0) begin
+                    $display("  %016h %0d",
+                             xs_data_no_emit_dup_top_pc[i],
+                             xs_data_no_emit_dup_top_count[i]);
+                end
+            end
+            $display("data no-emit redirect top F2 PCs:");
+            for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                if (xs_data_no_emit_redirect_top_count[i] != 0) begin
+                    $display("  %016h %0d",
+                             xs_data_no_emit_redirect_top_pc[i],
+                             xs_data_no_emit_redirect_top_count[i]);
+                end
+            end
+            $display("data no-emit stall top F2 PCs:");
+            for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
+                if (xs_data_no_emit_stall_top_count[i] != 0) begin
+                    $display("  %016h %0d",
+                             xs_data_no_emit_stall_top_pc[i],
+                             xs_data_no_emit_stall_top_count[i]);
                 end
             end
         end
