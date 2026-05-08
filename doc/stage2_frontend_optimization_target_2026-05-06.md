@@ -366,6 +366,47 @@ RAT/free-list restore snapshot boundary and same-cycle commit release handling.
 Treat non-head branch recovery as a larger backend recovery redesign, not a
 small checkpoint-file patch.
 
+Follow-up, 2026-05-08, IBuffer packet coalescing: simple useful-work-per-packet
+coalescing is rejected as a no-op. Two RTL variants were tested: head-only
+same-owner adjacent packet merge and selected-owner-anywhere adjacent packet
+merge. Both were strict-clean, but both were cycle-identical to the accepted
+baseline:
+
+| Trial | Evidence | Dhrystone 100 | CoreMark 1 | Branch hotspot | CoreMark 10 | Verdict |
+|---|---|---:|---:|---:|---:|---|
+| Head-only adjacent packet coalescing | `benchmark_results/dse_dse_20260508_ibuf_coalesce_smoke`, `benchmark_results/dse_dse_20260508_ibuf_coalesce_coremark10` | 18,913 | 164,550 | 141,408 | 1,528,608 | Rejected no-op. |
+| Selected-owner-anywhere adjacent packet coalescing | `benchmark_results/dse_dse_20260508_ibuf_coalesce_anywhere_smoke`, `benchmark_results/dse_dse_20260508_ibuf_coalesce_anywhere_coremark10` | 18,913 | 164,550 | 141,408 | 1,528,608 | Rejected no-op. |
+
+The CoreMark 10 profile remained exactly at the accepted counter shape:
+`packet_empty_f2_data=60,689`, `packet_empty_noemit_dup=32,112`,
+`xs_packet_buf_full_cycles=14,753`, and
+`xs_backend_stall_pkt_ready=35,109`. Do not carry this packet merge logic in
+RTL. The downstream-drain direction remains open, but the next version should
+decouple decode or rename acceptance from frontend packet production rather
+than merging already formed IBuffer packets.
+
+Follow-up, 2026-05-08, decode-to-rename queue: a blind decoded-packet queue is
+also rejected as a standalone optimization. The queue was inserted after
+fusion with empty flow-through, so it did not add latency when rename was
+ready. It was endpoint-clean, and depth 2 showed a tiny CoreMark 1 improvement
+(`164,550 -> 164,408`), but all CoreMark 10 variants regressed:
+
+| Trial | Evidence | Dhrystone 100 | CoreMark 1 | Branch hotspot | CoreMark 10 | Verdict |
+|---|---|---:|---:|---:|---:|---|
+| Depth 4 decoded queue | `benchmark_results/dse_dse_20260508_decode_queue_smoke`, `benchmark_results/dse_dse_20260508_decode_queue_coremark10` | 18,913 | 164,550 | 141,408 | 1,542,513 | Rejected, heavy-row regression. |
+| Depth 2 decoded queue | `benchmark_results/dse_dse_20260508_decode_queue_depth2_smoke`, `benchmark_results/dse_dse_20260508_decode_queue_depth2_coremark10` | 18,913 | 164,408 | 141,408 | 1,535,323 | Rejected, small CoreMark 1 win does not hold on CoreMark 10. |
+| One-entry decoded skid | `benchmark_results/dse_dse_20260508_decode_skid1_smoke`, `benchmark_results/dse_dse_20260508_decode_skid1_coremark10` | 18,913 | 164,550 | 141,408 | 1,542,513 | Rejected, heavy-row regression. |
+
+The queue trials are still useful evidence. Depth 4 reduced
+`xs_packet_buf_full_cycles 14,753 -> 11,613` and
+`xs_backend_stall_pkt_ready 35,109 -> 26,952`, but increased
+`packet_empty 95,219 -> 101,030` and `redirect_recovery 33,006 -> 34,743`.
+Depth 2 changed the pressure shape differently: packet-empty improved to
+`86,337`, but packet-buffer full rose to `26,789` and rename stall asserted
+cycles rose to `55,074`. Verdict: the bottleneck is not solved by adding a
+generic queue. Any future drain mechanism needs branch/control awareness or a
+joint frontend/backend scheduling policy, not blind decoupling.
+
 Promotion conditions:
 
 | Gate | Objective | Required evidence |
@@ -401,7 +442,7 @@ counter-backed second domain instead.
 | BPU local-vs-SC chooser | Rejected in first form | Global local override improves the branch hotspot while regressing CoreMark; the first chooser variants remain endpoint-clean but still trade one row against the other. | Reopen only with dynamic hot-PC attribution and a stronger training contract. |
 | Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. The direct non-head partial trial proves the current checkpoint manager cannot yet support general execute-time recovery. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Without that, keep partial recovery head-only and do not promote early recovery. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |
-| Downstream packet drain / scheduling | Promote to next RTL slice | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. | Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without DS/CoreMark regression. |
+| Downstream packet drain / scheduling | Still open, simple packet coalescing and blind decode queues rejected | Accepted frontend work and rejected remainder/straddle trials all show that denser packet supply can exceed backend drain. Head-only and selected-owner IBuffer packet coalescing were strict-clean but cycle-identical no-ops. Blind decoded queues moved pressure but regressed CoreMark 10. | Next attempt needs branch/control-aware scheduling or a paired backend policy, not another packet merge or generic queue. Must reduce `xs_backend_stall_pkt_ready` or packet-buffer-full cycles without increasing `packet_empty`, redirect recovery, or DS/CoreMark cycles. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
 ## Evidence Required
@@ -445,7 +486,10 @@ Every accepted performance row must report:
 | 16 | Try first selective branch recovery filters. | Done and rejected: ROB-age early recovery is endpoint-clean but slower; direct non-head partial recovery times out from checkpoint/free-list contract breakage. |
 | 17 | Redesign backend checkpoint recovery before non-head recovery. | Checkpoint, RAT, free-list, ROB, and same-cycle commit release semantics are branch-ordered; direct partial recovery passes DS/CoreMark/hotspot before any performance claim. |
 | 18 | Reopen useful-work reduction only as a paired optimization. | Move elimination or another uop-reduction path is retried only after branch/recovery can absorb the timing change. |
-| 19 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 19 | Record simple IBuffer packet coalescing as rejected. | Done: head-only and selected-owner adjacent coalescing are strict-clean but cycle-identical no-ops, so RTL was not kept. |
+| 20 | Try real decode or rename decoupling before more packet production shortcuts. | Done and rejected in blind form: decoded queues are strict-clean but CoreMark 10 regresses. |
+| 21 | Reopen downstream drain only with branch/control-aware policy. | Candidate lowers packet-full or backend-packet-ready stalls without increasing packet-empty, redirect recovery, or CoreMark 10 cycles. |
+| 22 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
