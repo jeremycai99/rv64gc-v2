@@ -299,6 +299,33 @@ contract and dynamic hot-PC attribution that covers the branch probe PCs, not
 only the fixed CoreMark hot-PC list. The next architectural slice should move
 to a non-BPU limiter with direct CoreMark 10 evidence.
 
+Update, 2026-05-08: dynamic hot-PC BPU attribution is now available from
+`benchmark_results/dse_dse_20260508_bpu_dynamic_profile128_smoke` and
+`benchmark_results/dse_dse_20260508_bpu_dynamic_profile_coremark10`. The
+profiler is simulation-only and cycle-identical on the strict smoke and
+CoreMark 10: Dhrystone 100 remains `18,913`, CoreMark 1 remains `164,550`,
+the branch hotspot remains `141,408`, and CoreMark 10 remains `1,528,608`.
+CoreMark 10 reports `458,389` branch-predictor updates and `19,882` BPU-update
+mispredicts in the dynamic profiler. The largest dynamic BPU miss PCs are:
+
+| PC | Function | Updates | BPU-update mispredicts | Direction shape | Component evidence |
+|---|---|---:|---:|---|---|
+| `0x800036b4` | `core_state_transition` | 10,823 | 2,542 | Forward, strongly not-taken biased | Local override is active in the fixed hot-PC probe while the update stream is `2,879` taken, `7,944` not-taken. |
+| `0x800023ae` | `core_list_mergesort` | 3,294 | 1,409 | Backward, mixed outcome | Loop table hits almost every update, but the branch is data-dependent rather than a simple counted loop. |
+| `0x80002380` | `core_list_mergesort` | 4,640 | 1,328 | Backward, mixed outcome | Loop table hits almost every update and the loop override is frequently active. |
+| `0x800031ec` | `matrix_mul_matrix_bitextract` | 29,160 | 1,264 | Backward counted loop | Loop table hits almost every update, but exit/iteration phasing still leaves residual misses. |
+| `0x80003704` | `core_state_transition` | 13,116 | 1,250 | Forward, strongly not-taken biased | State-machine delimiter branch, similar class to `0x800036b4`. |
+| `0x800036bc` | `core_state_transition` | 10,238 | 1,054 | Forward, strongly not-taken biased | TAGE/SC/local interaction is still weak on state-machine delimiter branches. |
+
+This reopens BPU arbitration, but with a narrower contract than the rejected
+global local chooser. The next local-predictor trial should suppress local
+alternation only when a per-branch bias table says the branch is strongly
+biased in the opposite direction. That is a general predictor arbitration
+mechanism, not a CoreMark-PC special case. Guardrails: no regression on
+Dhrystone 100, CoreMark 1, CoreMark 10, or the branch hotspot; the dynamic BPU
+profile must show lower miss pressure on `core_state_transition` without
+raising the loop-heavy merge/matrix rows.
+
 Update, 2026-05-08: raw load speculation past unresolved store-address entries
 using `+ALLOW_LOAD_SPEC_PAST_STA` is endpoint-clean but performance-identical
 on Dhrystone 100 and CoreMark 1. It is not a useful next slice in its current
@@ -527,7 +554,7 @@ counter-backed second domain instead.
 | Macro-fusion expansion | Deprioritized by evidence | Existing macro-fusion commits only 71 fused uops on CoreMark 10, so expanding this path is unlikely to close the stretch gap. | Reopen only if a broader benchmark suite shows high dynamic fused-pattern frequency. |
 | Refcounted rename move elimination | Rejected standalone, keep as paired candidate | CoreMark 10 reports 258,574 dynamic move candidates, and the RTL trial proves backend pressure can drop. Net performance still regresses because redirect/mispredict and operand-ready stalls rise. | Reopen only after branch recovery/update timing is improved, or with pressure-aware enable evidence. Keep physical-register refcounting as the required correctness mechanism if this path returns. |
 | ROB/PRF capacity | Rejected in raw and combinational timing forms | CoreMark 10 has `rob_full=34,217` and slot-0 `stall_preg=33,177`, but PRF192 is cycle-identical, ROB-head bypass regresses CoreMark 1, and same-cycle free-list release forwarding trips a simulator iteration loop. | Reopen only with a registered allocation, free, or commit-drain mechanism, not raw depth or comb release-forwarding. |
-| BPU local-vs-SC chooser | Rejected in first form | Global local override improves the branch hotspot while regressing CoreMark; the first chooser variants remain endpoint-clean but still trade one row against the other. | Reopen only with dynamic hot-PC attribution and a stronger training contract. |
+| BPU local-vs-SC chooser | Reopen as bias-gated local override | Dynamic BPU attribution now shows forward state-machine branches where local alternation is active despite strong not-taken bias. | Suppress only local predictions that oppose a strong per-PC bias; no fixed PC steering; must improve or match Dhrystone 100, CoreMark 1, CoreMark 10, and branch hotspot. |
 | Loop predictor speculative count policy | Rejected | `+NO_LOOP_SPEC_COUNT` is endpoint-clean but regresses CoreMark 1 and the branch hotspot. | Keep the speculative loop-count policy. Reopen loop prediction only with a new predictor contract, not by disabling speculative count. |
 | Selective branch recovery/update timing | Blocked on checkpoint ownership | Global early recovery is rejected, but early plus partial recovery improves the branch hotspot by 2.0 percent and exposes useful recovery metadata. The direct non-head partial trial proves the current checkpoint manager cannot yet support general execute-time recovery. | First add selective checkpoint squash or an equivalent branch-order checkpoint ownership scheme. Without that, keep partial recovery head-only and do not promote early recovery. |
 | Uop-count and fusion accounting | Evidence slice complete | The profiler separates macro-fusion from move elimination: macro-fusion is low-frequency, move candidates are high-frequency. | Continue with refcounted move elimination, not a broad fusion sweep. |

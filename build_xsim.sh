@@ -80,6 +80,7 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/sim/fetch_delivery_checker.sv" \
       "$P/src/rtl/sim/fetch_owner_checker.sv" \
       "$P/src/rtl/sim/fetch_frontend_profiler.sv" \
+      "$P/src/rtl/sim/bpu_dynamic_profiler.sv" \
       "$P/src/rtl/sim/fetch_trace_probe.sv" \
       "$P/src/rtl/sim/fetch_frontend_assertions.sv" \
       "$P/src/rtl/core/decode/decode_slice.sv" \

@@ -146,6 +146,7 @@ RTL_FILES = \
 	$(RTL_DIR)/sim/fetch_delivery_checker.sv \
 	$(RTL_DIR)/sim/fetch_owner_checker.sv \
 	$(RTL_DIR)/sim/fetch_frontend_profiler.sv \
+	$(RTL_DIR)/sim/bpu_dynamic_profiler.sv \
 	$(RTL_DIR)/sim/fetch_trace_probe.sv \
 	$(RTL_DIR)/sim/fetch_frontend_assertions.sv \
     $(RTL_DIR)/core/decode/decode_slice.sv \
