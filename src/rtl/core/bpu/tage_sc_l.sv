@@ -34,6 +34,8 @@ module tage_sc_l
     input  logic        spec_taken,
     input  logic [63:0] spec_pc,
     input  logic [63:0] spec_target,
+    input  logic        loop_spec_update_valid,
+    input  logic        loop_spec_taken,
     input  logic        ghr_restore_valid,  // restore GHR on mispredict
     input  logic [GHR_BITS-1:0] ghr_restore_val,
     output logic [GHR_BITS-1:0] ghr_out,   // current GHR for checkpoint save
@@ -436,6 +438,8 @@ module tage_sc_l
     logic [LOOP_CNT_BITS-1:0]  loop_spec_count [LOOP_PRED_ENTRIES];
     logic [LOOP_CNT_BITS-1:0]  loop_limit [LOOP_PRED_ENTRIES];
     logic [LOOP_CONF_BITS-1:0] loop_conf  [LOOP_PRED_ENTRIES];
+    // Per entry confidence for same cycle speculative-count bypass.
+    logic [1:0]                loop_bypass_conf [LOOP_PRED_ENTRIES];
     logic                      loop_dir   [LOOP_PRED_ENTRIES];
     logic                      loop_valid [LOOP_PRED_ENTRIES];
 
@@ -453,6 +457,11 @@ module tage_sc_l
     logic                      aux_loop_override;
     logic [LOOP_CNT_BITS-1:0]  loop_lookup_count;
     logic [LOOP_CNT_BITS-1:0]  aux_loop_lookup_count;
+    logic [LOOP_IDX_BITS-1:0]  spec_loop_idx;
+    logic [LOOP_TAG_BITS-1:0]  spec_loop_tag;
+    logic                      spec_loop_hit;
+    logic                      spec_loop_backward;
+    logic                      loop_bypass_enabled;
 
     function automatic logic [LOOP_IDX_BITS-1:0] loop_idx_hash(input logic [63:0] pc_i);
         loop_idx_hash = pc_i[LOOP_IDX_BITS+1:2] ^
@@ -475,11 +484,28 @@ module tage_sc_l
     assign loop_lkp_tag = pc[LOOP_TAG_BITS+1:2];
     assign aux_loop_lkp_idx = loop_idx_hash(aux_pc);
     assign aux_loop_lkp_tag = aux_pc[LOOP_TAG_BITS+1:2];
+    assign loop_bypass_enabled = loop_bypass_conf[spec_loop_idx] == 2'd3;
 
     always_comb begin
         if (!sim_disable_loop_spec_count) begin
             loop_lookup_count = loop_spec_count[loop_lkp_idx];
             aux_loop_lookup_count = loop_spec_count[aux_loop_lkp_idx];
+
+            if (loop_spec_update_valid &&
+                spec_loop_hit &&
+                spec_loop_backward &&
+                loop_bypass_enabled) begin
+                if (spec_loop_idx == loop_lkp_idx) begin
+                    loop_lookup_count = loop_spec_taken
+                        ? loop_spec_count[loop_lkp_idx] + 14'd1
+                        : '0;
+                end
+                if (spec_loop_idx == aux_loop_lkp_idx) begin
+                    aux_loop_lookup_count = loop_spec_taken
+                        ? loop_spec_count[aux_loop_lkp_idx] + 14'd1
+                        : '0;
+                end
+            end
         end else begin
             loop_lookup_count = loop_count[loop_lkp_idx];
             aux_loop_lookup_count = loop_count[aux_loop_lkp_idx];
@@ -568,11 +594,6 @@ module tage_sc_l
     logic [LOOP_TAG_BITS-1:0] upd_loop_tag;
     logic                     upd_loop_hit;
     logic                     upd_loop_backward;
-    logic [LOOP_IDX_BITS-1:0] spec_loop_idx;
-    logic [LOOP_TAG_BITS-1:0] spec_loop_tag;
-    logic                     spec_loop_hit;
-    logic                     spec_loop_backward;
-
 `ifdef SIMULATION
     // Hot-PC loop-predictor diagnostics. These are observational only and are
     // enabled by +TRACE_LOOPPRED, +PERF_PROFILE, or +STAT_DUMP.
@@ -1348,6 +1369,7 @@ module tage_sc_l
                 loop_spec_count[i] <= '0;
                 loop_limit[i] <= '0;
                 loop_conf[i]  <= '0;
+                loop_bypass_conf[i] <= 2'd0;
                 loop_dir[i]   <= 1'b0;
             end
             branch_count_r <= '0;
@@ -1513,10 +1535,24 @@ module tage_sc_l
                             loop_conf[upd_loop_idx] <= loop_conf[upd_loop_idx] +
                                                        {{(LOOP_CONF_BITS-1){1'b0}}, 1'b1};
                         end
+                        if (loop_conf[upd_loop_idx] == {LOOP_CONF_BITS{1'b1}}) begin
+                            if (update_mispredict) begin
+                                loop_bypass_conf[upd_loop_idx] <=
+                                    (loop_bypass_conf[upd_loop_idx] == 2'd3)
+                                        ? loop_bypass_conf[upd_loop_idx]
+                                        : loop_bypass_conf[upd_loop_idx] + 2'd1;
+                            end else begin
+                                loop_bypass_conf[upd_loop_idx] <=
+                                    (loop_bypass_conf[upd_loop_idx] == 2'd0)
+                                        ? loop_bypass_conf[upd_loop_idx]
+                                        : loop_bypass_conf[upd_loop_idx] - 2'd1;
+                            end
+                        end
                     end else begin
                         // Wrong limit — update limit, reset confidence
                         loop_limit[upd_loop_idx] <= loop_count[upd_loop_idx];
                         loop_conf[upd_loop_idx]  <= '0;
+                        loop_bypass_conf[upd_loop_idx] <= 2'd0;
                     end
                     loop_count[upd_loop_idx] <= '0;
                     loop_spec_count[upd_loop_idx] <= '0;
@@ -1531,6 +1567,7 @@ module tage_sc_l
                     loop_spec_count[upd_loop_idx] <= 14'd1;
                     loop_limit[upd_loop_idx] <= '0;
                     loop_conf[upd_loop_idx]  <= '0;
+                    loop_bypass_conf[upd_loop_idx] <= 2'd0;
                     loop_dir[upd_loop_idx]   <= 1'b1;
                 end
             end

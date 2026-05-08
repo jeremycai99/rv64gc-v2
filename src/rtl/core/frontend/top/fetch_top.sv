@@ -611,6 +611,8 @@ module fetch_top
     logic [4:0]  ras_tos;
     logic        tage_spec_update_valid;
     logic        tage_spec_taken;
+    logic        tage_loop_spec_update_valid;
+    logic        tage_loop_spec_taken;
     logic        f1_aux_pred_ctl_valid_c;
     logic        f1_aux_pred_ctl_taken_c;
     logic [5:0]  f1_aux_pred_ctl_offset_c;
@@ -661,6 +663,8 @@ module fetch_top
         .tage_spec_taken_i           (tage_spec_taken),
         .tage_spec_pc_i              (predecode_ctl_pc),
         .tage_spec_target_i          (predecode_ctl_target),
+        .tage_loop_spec_update_valid_i (tage_loop_spec_update_valid),
+        .tage_loop_spec_taken_i        (tage_loop_spec_taken),
         .ghr_restore_valid_i         (ghr_restore_valid),
         .ghr_restore_val_i           (ghr_restore_val),
         .ghr_o                       (ghr_out),
@@ -951,7 +955,9 @@ module fetch_top
         .ras_push_addr_o                          (ras_push_addr),
         .ras_pop_valid_o                          (ras_pop_valid),
         .tage_spec_update_valid_o                 (tage_spec_update_valid),
-        .tage_spec_taken_o                        (tage_spec_taken)
+        .tage_spec_taken_o                        (tage_spec_taken),
+        .tage_loop_spec_update_valid_o            (tage_loop_spec_update_valid),
+        .tage_loop_spec_taken_o                   (tage_loop_spec_taken)
     );
 
     // =========================================================================

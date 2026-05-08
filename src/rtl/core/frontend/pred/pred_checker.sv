@@ -105,7 +105,9 @@ module pred_checker
     output logic [63:0]                  ras_push_addr_o,
     output logic                         ras_pop_valid_o,
     output logic                         tage_spec_update_valid_o,
-    output logic                         tage_spec_taken_o
+    output logic                         tage_spec_taken_o,
+    output logic                         tage_loop_spec_update_valid_o,
+    output logic                         tage_loop_spec_taken_o
 );
 
     localparam logic [2:0] BT_COND = 3'd0;
@@ -627,8 +629,10 @@ module pred_checker
     end
 
     always_comb begin
-        tage_spec_update_valid_o = 1'b0;
-        tage_spec_taken_o        = 1'b0;
+        tage_spec_update_valid_o      = 1'b0;
+        tage_spec_taken_o             = 1'b0;
+        tage_loop_spec_update_valid_o = 1'b0;
+        tage_loop_spec_taken_o        = 1'b0;
 
         if (valid_i &&
             will_emit_i &&
@@ -637,10 +641,23 @@ module pred_checker
             (pd_ctl_slot_i < final_count_o) &&
             !stall_i && !redirect_i) begin
             tage_spec_update_valid_o = 1'b1;
-            tage_spec_taken_o =
+            tage_spec_taken_o        =
                 bp_branch_found_o && bp_taken_o &&
                 (bp_type_o == BT_COND) &&
                 (bp_branch_slot_o == pd_ctl_slot_i);
+        end
+
+        if (valid_i &&
+            will_emit_i &&
+            pd_ctl_found_i &&
+            (pd_ctl_type_i == BT_COND) &&
+            ftq_pred_ctl_valid_o &&
+            ftq_pred_ctl_slot_match_o &&
+            (ftq_pred_ctl_type_o == BT_COND) &&
+            (ftq_pred_ctl_slot_o == pd_ctl_slot_i) &&
+            !stall_i && !redirect_i) begin
+            tage_loop_spec_update_valid_o = 1'b1;
+            tage_loop_spec_taken_o        = ftq_pred_ctl_taken_o;
         end
     end
 
