@@ -74,6 +74,12 @@ BOTTLENECK_COUNTERS = [
     ("xs_bottleneck_rename_stall_preg", "rename/window", "rename stalls caused by physical register pressure"),
     ("xs_bottleneck_rename_stall_rob", "rename/window", "rename stalls caused by ROB pressure"),
     ("xs_bottleneck_rename_stall_dq", "rename/window", "rename stalls caused by dispatch queue pressure"),
+    ("xs_bottleneck_rename_stall_backend_throttle", "rename/window", "rename stalls caused by the opt-in backend admission governor"),
+    ("xs_bottleneck_backend_throttle_active_cycles", "backend admission", "cycles where the opt-in backend admission governor limited rename width"),
+    ("xs_bottleneck_backend_throttle_limited_slots", "backend admission", "rename slots intentionally deferred by the backend admission governor"),
+    ("xs_bottleneck_backend_throttle_enter_cycles", "backend admission", "cycles where backend pressure entered throttle state"),
+    ("xs_bottleneck_backend_throttle_pressure_cycles", "backend admission", "cycles where ROB or physical-register headroom was below throttle threshold"),
+    ("xs_bottleneck_backend_throttle_head_block_cycles", "backend admission", "cycles where the ROB head was valid but not ready"),
     # Empty-packet attribution (frontend supply gap)
     ("packet_empty",                 "frontend supply",         "F2 emitted no packet this cycle"),
     ("packet_empty_f2_data",         "frontend supply",         "F2 had no fresh icache data"),

@@ -28,6 +28,9 @@ module rv64gc_core_top
     // Timer
     input  logic [63:0] time_val,
 
+    // Optional DSE controls
+    input  logic        backend_admission_throttle_enable,
+
     // Performance counters (for IPC measurement / benchmarking)
     output logic [63:0] perf_mcycle,
     output logic [63:0] perf_minstret
@@ -475,6 +478,7 @@ module rv64gc_core_top
     // =========================================================================
     logic [ROB_IDX_BITS-1:0] rob_alloc_idx [0:PIPE_WIDTH-1];
     logic                    rob_alloc_ready;
+    logic [ROB_IDX_BITS:0]   rob_free_count;
     logic [ROB_IDX_BITS-1:0] rob_head_idx;
     logic [ROB_IDX_BITS-1:0] rob_tail_idx;
     logic                    rob_empty;
@@ -585,6 +589,7 @@ module rv64gc_core_top
     // instructions cannot enter the ROB, DQ, or ready table.
     logic [2:0] ren_count_w;
     assign ren_count_w = flush_out.valid ? 3'd0 : ren_count_raw;
+    logic [PHYS_REG_BITS:0] rename_free_preg_count;
 
     // Read rename buffer at head for commit
     logic [PHYS_REG_BITS-1:0] rb_head_pdst      [0:PIPE_WIDTH-1];
@@ -655,6 +660,53 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0] ren_eliminated;
     assign ren_eliminated = ren_move_eliminated | ren_zero_eliminated;
 
+    localparam logic [ROB_IDX_BITS:0] BACKEND_THROTTLE_ROB_ENTER =
+        (ROB_IDX_BITS+1)'(16);
+    localparam logic [ROB_IDX_BITS:0] BACKEND_THROTTLE_ROB_EXIT =
+        (ROB_IDX_BITS+1)'(32);
+    localparam logic [PHYS_REG_BITS:0] BACKEND_THROTTLE_PREG_ENTER =
+        (PHYS_REG_BITS+1)'(24);
+    localparam logic [PHYS_REG_BITS:0] BACKEND_THROTTLE_PREG_EXIT =
+        (PHYS_REG_BITS+1)'(48);
+
+    logic backend_admission_throttle_r;
+    logic backend_admission_pressure;
+    logic backend_admission_recovered;
+    logic backend_admission_head_block;
+    logic backend_admission_throttle_enter;
+    logic backend_admission_throttle_exit;
+    logic backend_admission_throttle_active;
+
+    assign backend_admission_pressure =
+        (rob_free_count <= BACKEND_THROTTLE_ROB_ENTER) ||
+        (rename_free_preg_count <= BACKEND_THROTTLE_PREG_ENTER);
+    assign backend_admission_recovered =
+        (rob_free_count >= BACKEND_THROTTLE_ROB_EXIT) &&
+        (rename_free_preg_count >= BACKEND_THROTTLE_PREG_EXIT);
+    assign backend_admission_head_block =
+        rob_head_valid[0] && !rob_head_ready[0];
+    assign backend_admission_throttle_enter =
+        backend_admission_throttle_enable &&
+        !flush_out.valid &&
+        !rob_empty &&
+        backend_admission_pressure;
+    assign backend_admission_throttle_exit =
+        !backend_admission_throttle_enable ||
+        flush_out.valid ||
+        rob_empty ||
+        backend_admission_recovered;
+    assign backend_admission_throttle_active = backend_admission_throttle_r;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            backend_admission_throttle_r <= 1'b0;
+        end else if (backend_admission_throttle_exit) begin
+            backend_admission_throttle_r <= 1'b0;
+        end else if (backend_admission_throttle_enter) begin
+            backend_admission_throttle_r <= 1'b1;
+        end
+    end
+
     rename u_rename (
         .clk              (clk),
         .rst_n            (rst_n),
@@ -666,6 +718,8 @@ module rv64gc_core_top
         .ren_zero_eliminated (ren_zero_eliminated),
         .rob_alloc_idx    (rob_alloc_idx),
         .rob_alloc_ready  (rob_alloc_ready),
+        .free_preg_count  (rename_free_preg_count),
+        .backend_admission_throttle(backend_admission_throttle_active),
         .stall            (rename_stall),
         .recovery_headroom_ok(rename_recovery_headroom_ok),
         .dq_full          (dq_full),
@@ -1440,6 +1494,7 @@ module rv64gc_core_top
         .flush_full             (flush_out.full_flush),
         .flush_clear_branch_mispredict(bru_partial_recovery_valid),
         .tail_idx               (rob_tail_idx),
+        .free_count_o           (rob_free_count),
         .empty                  (rob_empty),
         .full                   (rob_full)
     );

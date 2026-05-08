@@ -46,11 +46,17 @@ module tb_top
     // Core instantiation
     // =========================================================================
     logic [63:0] sim_tohost_addr;
+    logic        backend_admission_throttle_enable;
 
     initial begin
         sim_tohost_addr = TOHOST_ADDR;
+        backend_admission_throttle_enable =
+            $test$plusargs("BACKEND_ADMISSION_THROTTLE");
         if ($value$plusargs("TOHOST_ADDR=%h", sim_tohost_addr)) begin
             $display("[SIM_PLATFORM] TOHOST_ADDR=%016h", sim_tohost_addr);
+        end
+        if (backend_admission_throttle_enable) begin
+            $display("[SIM_PLATFORM] BACKEND_ADMISSION_THROTTLE=1");
         end
     end
 
@@ -77,6 +83,9 @@ module tb_top
 
         // Timer
         .time_val        (cycle_count),
+
+        // Optional DSE controls
+        .backend_admission_throttle_enable(backend_admission_throttle_enable),
 
         // Performance counters
         .perf_mcycle     (perf_mcycle),
@@ -569,6 +578,11 @@ module tb_top
     integer btl_rename_slots_lost_total;
     integer btl_rename_free_preg_min;
     integer btl_rename_rob_free_min;
+    integer btl_backend_throttle_active_cycles;
+    integer btl_backend_throttle_enter_cycles;
+    integer btl_backend_throttle_pressure_cycles;
+    integer btl_backend_throttle_head_block_cycles;
+    integer btl_backend_throttle_limited_slots;
     integer btl_rob_younger_ready_behind_head;
     integer btl_rob_commit_slots_lost_head_block;
     integer btl_preg_class [0:INT_PRF_DEPTH-1];
@@ -685,7 +699,8 @@ module tb_top
 `endif
     // Rename stall source breakdown: fires when rename stalls, tags the
     // first missing resource on slot 0 (other slots typically cascade).
-    integer stall_preg_cyc, stall_ckpt_cyc, stall_rob_cyc, stall_dq_cyc, stall_other_cyc;
+    integer stall_preg_cyc, stall_ckpt_cyc, stall_rob_cyc, stall_dq_cyc;
+    integer stall_backend_throttle_cyc, stall_other_cyc;
     logic   prev_p1_retry_valid;
     logic   dbg_p0_sq_ready_full;
     logic   dbg_p0_sq_ready_partial;
@@ -981,6 +996,7 @@ module tb_top
             stall_ckpt_cyc     <= 0;
             stall_rob_cyc      <= 0;
             stall_dq_cyc       <= 0;
+            stall_backend_throttle_cyc <= 0;
             stall_other_cyc    <= 0;
             issue_stall_operand_cyc <= 0;
             issue_stall_fu_cyc      <= 0;
@@ -1024,6 +1040,11 @@ module tb_top
             btl_rename_slots_lost_total <= 0;
             btl_rename_free_preg_min <= INT_PRF_DEPTH;
             btl_rename_rob_free_min <= ROB_DEPTH;
+            btl_backend_throttle_active_cycles <= 0;
+            btl_backend_throttle_enter_cycles <= 0;
+            btl_backend_throttle_pressure_cycles <= 0;
+            btl_backend_throttle_head_block_cycles <= 0;
+            btl_backend_throttle_limited_slots <= 0;
             btl_rob_younger_ready_behind_head <= 0;
             btl_rob_commit_slots_lost_head_block <= 0;
             for (int i = 0; i < INT_PRF_DEPTH; i++) begin
@@ -1711,6 +1732,24 @@ module tb_top
                         int'(u_core.u_rename.fl_free_count);
                 if (int'(u_core.u_rob.free_count) < btl_rename_rob_free_min)
                     btl_rename_rob_free_min <= int'(u_core.u_rob.free_count);
+                if (u_core.backend_admission_pressure)
+                    btl_backend_throttle_pressure_cycles <=
+                        btl_backend_throttle_pressure_cycles + 1;
+                if (u_core.backend_admission_head_block)
+                    btl_backend_throttle_head_block_cycles <=
+                        btl_backend_throttle_head_block_cycles + 1;
+                if (u_core.backend_admission_throttle_enter)
+                    btl_backend_throttle_enter_cycles <=
+                        btl_backend_throttle_enter_cycles + 1;
+                if (u_core.backend_admission_throttle_active) begin
+                    btl_backend_throttle_active_cycles <=
+                        btl_backend_throttle_active_cycles + 1;
+                    if (u_core.rename_dec_count > u_core.ren_count_w) begin
+                        btl_backend_throttle_limited_slots <=
+                            btl_backend_throttle_limited_slots +
+                            (u_core.rename_dec_count - u_core.ren_count_w);
+                    end
+                end
 
                 if (u_core.rob_head_valid[0] && !u_core.rob_head_ready[0]) begin
                     for (int i = 1; i < PIPE_WIDTH; i++) begin
@@ -2278,6 +2317,8 @@ module tb_top
                 else if (!u_core.u_rename.has_ckpt[0])  stall_ckpt_cyc  <= stall_ckpt_cyc + 1;
                 else if (!u_core.u_rename.has_rob[0])   stall_rob_cyc   <= stall_rob_cyc + 1;
                 else if (!u_core.u_rename.has_dq[0])    stall_dq_cyc    <= stall_dq_cyc + 1;
+                else if (u_core.backend_admission_throttle_active)
+                    stall_backend_throttle_cyc <= stall_backend_throttle_cyc + 1;
                 else                                     stall_other_cyc <= stall_other_cyc + 1;
             end
             if (pc_div_window_cyc == (PC_DIV_WINDOW_CYC - 1)) begin
@@ -2415,6 +2456,7 @@ module tb_top
             $display("  stall_ckpt   : %0d", stall_ckpt_cyc);
             $display("  stall_rob    : %0d", stall_rob_cyc);
             $display("  stall_dq     : %0d", stall_dq_cyc);
+            $display("  stall_backend_throttle: %0d", stall_backend_throttle_cyc);
             $display("  stall_other  : %0d", stall_other_cyc);
             $display("Issue-stall classification (cycle-based, OR across all IQs):");
             $display("  operand_not_ready: %0d", issue_stall_operand_cyc);
@@ -2567,10 +2609,16 @@ module tb_top
                 $display("xs bottleneck_rename_stall_rob : %0d", stall_rob_cyc);
                 $display("xs bottleneck_rename_stall_dq : %0d", stall_dq_cyc);
                 $display("xs bottleneck_rename_stall_ckpt : %0d", stall_ckpt_cyc);
+                $display("xs bottleneck_rename_stall_backend_throttle : %0d", stall_backend_throttle_cyc);
                 $display("xs bottleneck_rename_stall_other : %0d", stall_other_cyc);
                 $display("xs bottleneck_rename_slots_lost_total : %0d", btl_rename_slots_lost_total);
                 $display("xs bottleneck_rename_free_preg_min : %0d", btl_rename_free_preg_min);
                 $display("xs bottleneck_rename_rob_free_min : %0d", btl_rename_rob_free_min);
+                $display("xs bottleneck_backend_throttle_active_cycles : %0d", btl_backend_throttle_active_cycles);
+                $display("xs bottleneck_backend_throttle_enter_cycles : %0d", btl_backend_throttle_enter_cycles);
+                $display("xs bottleneck_backend_throttle_pressure_cycles : %0d", btl_backend_throttle_pressure_cycles);
+                $display("xs bottleneck_backend_throttle_head_block_cycles : %0d", btl_backend_throttle_head_block_cycles);
+                $display("xs bottleneck_backend_throttle_limited_slots : %0d", btl_backend_throttle_limited_slots);
                 $display("xs bottleneck_iq0_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ0]);
                 $display("xs bottleneck_iq0_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ0]);
                 $display("xs bottleneck_iq0_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ0]);

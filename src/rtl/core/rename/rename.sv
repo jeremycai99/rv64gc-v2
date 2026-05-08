@@ -27,6 +27,11 @@ module rename
     // ROB allocation interface
     input  logic [ROB_IDX_BITS-1:0] rob_alloc_idx [0:PIPE_WIDTH-1],
     input  logic                    rob_alloc_ready,  // ROB can accept
+    output logic [PHYS_REG_BITS:0]  free_preg_count,
+
+    // Optional backend admission governor. When asserted, rename admits only
+    // the oldest slots and holds the younger tail for a later cycle.
+    input  logic                    backend_admission_throttle,
 
     // Stall output (backpressure to decode/fetch)
     output logic stall,
@@ -100,11 +105,13 @@ module rename
     // =========================================================================
     localparam logic [PHYS_REG_BITS:0] RECOVERY_FREE_HEADROOM =
         (PHYS_REG_BITS+1)'(INT_FREE_LIST_DEPTH - (8 * PIPE_WIDTH));
+    localparam int BACKEND_THROTTLE_WIDTH = 2;
 
     logic [2:0] fl_req_count;
     logic [PHYS_REG_BITS-1:0] fl_alloc_preg [0:PIPE_WIDTH-1];
     logic [2:0] fl_avail_count;
     logic [PHYS_REG_BITS:0] fl_free_count;
+    assign free_preg_count = fl_free_count;
 
     // Map each slot to its position in the free list allocation sequence
     logic [2:0] fl_slot_idx [0:PIPE_WIDTH-1];
@@ -187,6 +194,7 @@ module rename
     logic [PIPE_WIDTH-1:0] has_ckpt;
     logic [PIPE_WIDTH-1:0] has_rob;
     logic [PIPE_WIDTH-1:0] has_dq;
+    logic [PIPE_WIDTH-1:0] has_admission;
 
     // slot_can_advance_sp: "sans preg" — all non-preg resources available.
     // Breaks the preg/has_preg/fl_avail circular dependency so fl_req_count
@@ -418,6 +426,7 @@ module rename
             has_ckpt[i] = 1'b1;
             has_rob[i]  = 1'b1;
             has_dq[i]   = 1'b1;
+            has_admission[i] = 1'b1;
 
             if (work_valid[i]) begin
                 if (slot_needs_lq[i])   has_lq[i]   = !lq_full;
@@ -427,9 +436,13 @@ module rename
                 end
                 has_rob[i] = rob_alloc_ready;
                 has_dq[i]  = !dq_full;
+                has_admission[i] =
+                    !backend_admission_throttle ||
+                    (i < BACKEND_THROTTLE_WIDTH);
                 slot_can_advance_sp[i] = in_order_open_sp[i] &&
                                          has_lq[i] && has_sq[i] &&
-                                         has_ckpt[i] && has_rob[i] && has_dq[i];
+                                         has_ckpt[i] && has_rob[i] &&
+                                         has_dq[i] && has_admission[i];
             end
 
             sp_ckpt_consumed_before[i+1] = sp_ckpt_consumed_before[i];
@@ -732,6 +745,7 @@ module rename
             !lq_full &&
             !sq_full &&
             !hold_active_c &&
+            !backend_admission_throttle &&
             !do_flush &&
             !do_ckpt_restore;
     end
@@ -810,6 +824,7 @@ module rename
     logic   rn_stat_en;
     integer stall_preg_cnt, stall_rob_cnt, stall_ckpt_cnt;
     integer stall_lq_cnt,   stall_sq_cnt,  stall_dq_cnt;
+    integer stall_backend_throttle_cnt;
     integer total_work_slot_cycles;
     integer total_advanced_slot_cycles;
     integer cycle_any_stall;
@@ -830,6 +845,7 @@ module rename
             stall_lq_cnt               <= 0;
             stall_sq_cnt               <= 0;
             stall_dq_cnt               <= 0;
+            stall_backend_throttle_cnt <= 0;
             total_work_slot_cycles     <= 0;
             total_advanced_slot_cycles <= 0;
             cycle_any_stall            <= 0;
@@ -855,6 +871,7 @@ module rename
                         if (slot_needs_lq[i] && !has_lq[i])     stall_lq_cnt   <= stall_lq_cnt + 1;
                         if (slot_needs_sq[i] && !has_sq[i])     stall_sq_cnt   <= stall_sq_cnt + 1;
                         if (!has_dq[i])                         stall_dq_cnt   <= stall_dq_cnt + 1;
+                        if (!has_admission[i])                  stall_backend_throttle_cnt <= stall_backend_throttle_cnt + 1;
                     end
                 end
             end
@@ -886,6 +903,7 @@ module rename
         $display("  has_lq=0:   %0d", stall_lq_cnt);
         $display("  has_sq=0:   %0d", stall_sq_cnt);
         $display("  has_dq=0:   %0d", stall_dq_cnt);
+        $display("  throttle=1: %0d", stall_backend_throttle_cnt);
         $display("Eliminated at rename:");
         $display("  zero:       %0d", zero_elim_cnt);
         $display("  move:       %0d", move_elim_cnt);

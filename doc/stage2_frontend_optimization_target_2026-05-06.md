@@ -361,6 +361,54 @@ of reducing total cycles. This path should resume only with a scheduler that
 has an explicit control/owner policy and proves CoreMark 10 improvement, not
 with raw capacity or all-purpose partial admission.
 
+Follow-up, 2026-05-08: pressure-aware backend admission throttle.
+
+The implemented DSE knob `+BACKEND_ADMISSION_THROTTLE` is a default-off
+backend admission governor. It does not use benchmark PCs. When enabled, it
+monitors registered ROB free count and rename free physical-register count.
+If ROB headroom drops to `<=16` entries or integer physical-register headroom
+drops to `<=24`, rename switches to half-width admission, two oldest slots per
+cycle, and holds the younger tail. It exits after recovery to `>=32` ROB free
+entries and `>=48` free physical registers. This keeps the mechanism in the
+backend window-pressure domain instead of reviving loop replay or frontend
+benchmark steering.
+
+Full strict profiled DSE:
+`benchmark_results/dse_backend_admission_throttle_v2_full_20260508`.
+
+| Row | Baseline cycles | Throttle cycles | Delta | Verdict |
+|---|---:|---:|---:|---|
+| Dhrystone 100 | 18,577 | 18,577 | 0 | No regression |
+| Dhrystone 300 | 53,890 | 53,890 | 0 | No regression |
+| CoreMark 1 | 163,013 | 162,979 | -34 | Small gain |
+| CoreMark 10 | 1,500,110 | 1,498,206 | -1,904 | Small gain |
+| Other 12 stage-1 rows | unchanged | unchanged | 0 | No regression |
+
+CoreMark 10 counter movement against
+`benchmark_results/dse_bottleneck_profile_full_20260508`:
+
+| Counter | Baseline | Throttle | Delta |
+|---|---:|---:|---:|
+| `xs_bottleneck_rename_stall_preg` | 33,444 | 52 | -33,392 |
+| `xs_bottleneck_rename_free_preg_min` | 11 | 21 | +10 |
+| `xs_bottleneck_rename_rob_free_min` | 0 | 2 | +2 |
+| `xs_bottleneck_dep_wait_on_alu` | 13,495,221 | 13,426,224 | -68,997 |
+| `xs_bottleneck_dep_wait_on_load` | 705,820 | 702,895 | -2,925 |
+| `xs_bottleneck_fe_zero_cycles` | 122,514 | 120,716 | -1,798 |
+| `xs_bottleneck_branch_mispredicts` | 30,607 | 30,412 | -195 |
+| `xs_bottleneck_rename_slots_lost_total` | 197,914 | 211,806 | +13,892 |
+| `xs_bottleneck_rob_commit_slots_lost_head_block` | 88,308 | 88,361 | +53 |
+| `xs_bottleneck_backend_throttle_active_cycles` | 0 | 89,493 | +89,493 |
+| `xs_bottleneck_backend_throttle_limited_slots` | 0 | 137,825 | +137,825 |
+
+Verdict: keep this as a measurable default-off DSE mechanism and counter hook,
+not as the main Stage 2 performance direction. It proves that pressure-aware
+admission can remove physical-register starvation without hurting the broader
+16-row set, but the gain is only about `0.13%` on CoreMark 10 and intentionally
+adds rename deferral. The larger remaining limiter is still ALU producer
+dependency and issue readiness; next work should target wakeup/issue latency
+or a control-aware packet/drain scheduler with CoreMark 10 counter movement.
+
 Additional top-PC attribution from
 `benchmark_results/dse_20260508_remainder_noemit_top_pc_coremark10` keeps the
 accepted RTL cycle-identical at CoreMark 10 `1,528,608` cycles and

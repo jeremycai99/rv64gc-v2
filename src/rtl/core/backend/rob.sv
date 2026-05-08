@@ -126,6 +126,7 @@ module rob
 
     // Status
     output logic [ROB_IDX_BITS-1:0] tail_idx,
+    output logic [ROB_IDX_BITS:0]   free_count_o,
     output logic                    empty,
     output logic                    full
 );
@@ -161,6 +162,7 @@ module rob
     // free_count is one bit wider to hold ROB_DEPTH_U8 without truncation.
     wire [ROB_IDX_BITS:0] free_count = ROB_DEPTH_U8 - count_r;
     assign alloc_ready = (free_count >= (ROB_IDX_BITS+1)'(PIPE_WIDTH));
+    assign free_count_o = free_count;
 
     // =========================================================================
     // Allocation indices: combinational output (inline wrap-add)
