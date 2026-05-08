@@ -63,6 +63,7 @@ module issue_queue
     // corresponding entry for re-issue on a later cycle.
     input  logic [NUM_SELECT-1:0]  issue_suppress,
     input  logic                   enq_issue_bypass_enable,
+    input  logic                   enq_issue_bypass_alu_only,
     input  logic [1:0]             older_probe_valid,
     input  logic [ROB_IDX_BITS-1:0] older_probe_rob_idx [0:1],
     output logic [1:0]             has_older_entry,
@@ -108,6 +109,9 @@ module issue_queue
     logic [NUM_ENQUEUE-1:0]       enq_ready_issued_bypass;
     logic [NUM_ENQUEUE-1:0]       enq_wakeup_hit;
     logic [NUM_ENQUEUE-1:0]       enq_bypass_suppressed;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_allowed;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_is_alu;
 
     // =====================================================================
     // Entry count and full flag
@@ -597,9 +601,23 @@ module issue_queue
 
     always_comb begin
         for (int q = 0; q < NUM_ENQUEUE; q++) begin
+            enq_bypass_is_alu[q] =
+                (enq_data[q].fu_type == FU_ALU);
+            enq_bypass_fu_allowed[q] =
+                !enq_issue_bypass_alu_only ||
+                enq_bypass_is_alu[q];
             enq_ready_candidate[q] =
                 (SUPPORT_ENQ_ISSUE_BYPASS != 0) &&
                 enq_issue_bypass_enable &&
+                enq_bypass_fu_allowed[q] &&
+                enq_valid[q] &&
+                enq_s1_rdy[q] &&
+                enq_s2_rdy[q] &&
+                !flush_valid;
+            enq_bypass_fu_blocked[q] =
+                (SUPPORT_ENQ_ISSUE_BYPASS != 0) &&
+                enq_issue_bypass_enable &&
+                !enq_bypass_fu_allowed[q] &&
                 enq_valid[q] &&
                 enq_s1_rdy[q] &&
                 enq_s2_rdy[q] &&

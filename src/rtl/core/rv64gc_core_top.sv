@@ -31,6 +31,7 @@ module rv64gc_core_top
     // Optional DSE controls
     input  logic        backend_admission_throttle_enable,
     input  logic        iq_ready_enq_bypass_enable,
+    input  logic        iq_ready_enq_bypass_alu_only,
 
     // Performance counters (for IPC measurement / benchmarking)
     output logic [63:0] perf_mcycle,
@@ -1859,6 +1860,7 @@ module rv64gc_core_top
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
         .enq_issue_bypass_enable(iq_ready_enq_bypass_enable),
+        .enq_issue_bypass_alu_only(iq_ready_enq_bypass_alu_only),
         .occupancy       (iq0_occ)
     );
 
@@ -1901,6 +1903,7 @@ module rv64gc_core_top
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
         .enq_issue_bypass_enable(iq_ready_enq_bypass_enable),
+        .enq_issue_bypass_alu_only(iq_ready_enq_bypass_alu_only),
         .occupancy       (iq1_occ)
     );
     assign iq1_issue_valid[0] = iq1_issue_valid_s[0];
@@ -1943,6 +1946,7 @@ module rv64gc_core_top
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
         .enq_issue_bypass_enable(iq_ready_enq_bypass_enable),
+        .enq_issue_bypass_alu_only(iq_ready_enq_bypass_alu_only),
         .occupancy       (iq2_occ)
     );
     assign iq2_issue_valid[0] = iq2_issue_valid_s[0];
@@ -1985,6 +1989,7 @@ module rv64gc_core_top
         .flush_full      (flush_out.full_flush),
         .issue_suppress  (lsu_load_issue_suppress),
         .enq_issue_bypass_enable(1'b0),
+        .enq_issue_bypass_alu_only(1'b0),
         .occupancy       (iq_load_occ)
     );
 
@@ -2023,6 +2028,7 @@ module rv64gc_core_top
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
         .enq_issue_bypass_enable(1'b0),
+        .enq_issue_bypass_alu_only(1'b0),
         .occupancy       (iq_store_occ)
     );
     assign iq_store_issue_valid[0] = iq_store_issue_valid_s[0];
@@ -2066,6 +2072,7 @@ module rv64gc_core_top
         .flush_full      (flush_out.full_flush),
         .issue_suppress  ('0),
         .enq_issue_bypass_enable(1'b0),
+        .enq_issue_bypass_alu_only(1'b0),
         .occupancy       (iq_std_occ)
     );
 

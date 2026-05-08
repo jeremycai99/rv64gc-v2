@@ -130,45 +130,65 @@ Interpretation:
 Backend follow-up DSE, 2026-05-08:
 
 - Counter analysis showed many integer-IQ enqueue lanes were already ready but
-  invisible to issue until the next cycle. The trialed mechanism is an
+  invisible to issue until the next cycle. The mechanism under test is an
   opt-in idle-port ready-enqueue bypass: resident issue queue entries keep the
   baseline oldest-ready priority, while a ready enqueue may issue only through
   an otherwise unused integer issue port and then skips allocation.
 - This is not a loop-buffer or benchmark-shaped frontend shortcut. It is a
   backend wakeup/issue timing repair driven by the `xs_bottleneck_iq*_enq_*`
   and ALU dependency counters.
-- Current evidence is DSE smoke only, not signoff. The run
-  `benchmark_results/dse_iq_ready_enq_bypass_on_mech_smoke_20260508` is
-  endpoint-clean with strict owner/delivery checks and `IQ_READY_ENQ_BYPASS`
-  enabled. The default-off support-present baseline is
-  `benchmark_results/dse_iq_ready_enq_bypass_off_support1_profiled_20260508`,
-  with extra default-off probes in
-  `benchmark_results/dse_iq_ready_enq_bypass_off_extra_profiled_20260508`.
+- Raw same-cycle bypass is too broad. It looked acceptable on the initial
+  four-row smoke, but the broader probe showed large regressions:
+  `coremark_iter10_checkedin 1,500,110 -> 1,539,634`,
+  `hotspot_string_retire 107,379 -> 209,336`, and
+  `memory_array_c 94 -> 116`.
+- The cleaned RTL keeps only the raw bypass primitive plus an ALU-only FU-class
+  filter. The rejected drain/head/pressure gating probes were removed from the
+  harness and RTL after evidence review.
 
-| Workload | Default-off mcycle | Enabled mcycle | Cycle delta | Verdict |
-|---|---:|---:|---:|---|
-| Dhrystone 100 | 18,577 | 18,563 | -14, -0.08% | Small positive smoke. |
-| CoreMark 1 | 163,013 | 162,433 | -580, -0.36% | Small positive smoke with strong counter movement. |
-| Backend ALU chain 8 | 3,039 | 3,037 | -2, -0.07% | Small positive probe. |
-| Matrix store hotspot | 84,437 | 84,437 | 0, 0.00% | No cycle regression, but counter mix shifts. |
+ALU-only full DSE candidate:
 
-| Workload | Integer IQ hidden-ready enqueues | Integer IQ bypass fires | ALU dependency wait | Interpretation |
+| Workload | Baseline mcycle | ALU-only mcycle | Cycle delta | Verdict |
 |---|---:|---:|---:|---|
-| Dhrystone 100 | 17,055 -> 551 | 0 -> 16,850 | 11,462 -> 3,341 | Mechanism converts nearly all hidden ready enqueues into issue fires. |
-| CoreMark 1 | 109,361 -> 17,836 | 0 -> 119,352 | 1,370,358 -> 891,652 | Intended bottleneck moves materially, but cycle gain remains modest. |
-| Backend ALU chain 8 | 1,743 -> 1,743 | 0 -> 274 | 36,962 -> 35,133 | Some issue timing benefit, limited by other chain structure. |
-| Matrix store hotspot | 68,529 -> 9,629 | 0 -> 59,165 | 368,618 -> 440,992 | Hidden enqueue pressure drops, but the schedule shifts pressure toward later backend/commit buckets. |
+| Dhrystone 100 | 18,577 | 18,569 | -8, -0.04% | Small positive. |
+| Dhrystone 300 | 53,890 | 53,885 | -5, -0.01% | Small positive. |
+| CoreMark 1 | 163,013 | 160,354 | -2,659, -1.63% | Strong positive. |
+| CoreMark 10 | 1,500,110 | 1,486,459 | -13,651, -0.91% | Strong positive on the heavier row. |
+| Frontend mixed branch dense | 7,220 | 6,671 | -549, -7.60% | Positive, though less aggressive than raw bypass. |
+| Hotspot state CRC branch | 141,326 | 135,779 | -5,547, -3.93% | Strong positive. |
+| Hotspot string retire | 107,379 | 107,378 | -1, neutral | Regression from raw bypass is fixed. |
+| Memory array | 94 | 92 | -2, -2.13% | Regression from raw bypass is fixed. |
+| Hotspot matrix store | 84,437 | 84,443 | +6, +0.01% | Remaining blocker. |
+
+Key artifacts:
+
+- Baseline full profile:
+  `benchmark_results/dse_bottleneck_profile_full_20260508`.
+- ALU-only full DSE:
+  `benchmark_results/dse_iq_ready_enq_bypass_alu_only_full_20260508`.
+- Clean-tree ALU-only smoke after removing rejected knobs:
+  `benchmark_results/dse_iq_ready_enq_bypass_alu_only_clean_smoke_20260508`.
+- Rejected raw-bypass regression probe:
+  `benchmark_results/dse_iq_ready_enq_bypass_raw_regression_probe_20260508`.
+- Rejected non-ALU pressure probe:
+  `benchmark_results/dse_iq_ready_enq_bypass_nonalu_pressure_full_20260508`.
 
 Verdict:
 
-- Keep as a DSE candidate and a useful backend timing primitive.
-- Do not promote to signoff yet. The performance gain is real but marginal,
-  and the matrix-store counter shift says the backend is trading one bottleneck
-  for another even when total cycles are unchanged.
-- Next work should use this as evidence for a broader issue/drain scheduler:
-  prioritize reducing ALU dependency wait without increasing commit head-block
-  or branch/redirect pressure, and include the store hotspot in every follow-up
-  smoke.
+- Keep `IQ_READY_ENQ_BYPASS_ALU_ONLY` as a default-off DSE candidate and
+  continue from it, not from raw bypass. The FU-class filter is an
+  architectural selector: it targets same-cycle ALU dependency repair while
+  avoiding branch and serializing-operation timing shifts.
+- Do not promote to signoff yet. The remaining `hotspot_matrix_store`
+  regression is only 6 cycles, but the rule for this stage is no unexplained
+  benchmark regression.
+- Next work should explain and remove the matrix-store regression without
+  fixed PCs or benchmark-shaped policy. The specific counter lead is IQ0
+  non-ALU filtering: ALU-only blocks 834 ready IQ0 non-ALU enqueue bypasses on
+  the matrix row, while raw bypass keeps the row cycle-neutral but causes broad
+  regressions elsewhere. The next candidate should distinguish harmless loop
+  branch bypass from harmful broad branch/serial bypass using general pipeline
+  state, not scalar threshold chasing.
 
 ## Accepted Evidence
 
