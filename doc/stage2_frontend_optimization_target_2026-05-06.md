@@ -290,6 +290,48 @@ missing operand by producer class, such as ALU, load, multiply, branch, CSR, or
 unknown. Only after that split should we choose between an ALU-chain timing
 repair, a load-to-use path, or a useful-work reduction mechanism.
 
+Blocked-producer source-class profiling, 2026-05-09:
+
+- Added simulation-only counters that split the operand-blocked ALU producers by
+  the producer's own missing source class. The exclusive split has single-source
+  class buckets plus a multi-source bucket and conserves the
+  `producer_blocked` total. The overlapping `any_*` counters show every missing
+  source class seen on those blocked producers.
+- Artifacts:
+  `benchmark_results/dse_dse_alu_blocked_producer_srcclass_smoke_20260509` and
+  `benchmark_results/dse_dse_alu_blocked_producer_srcclass_coremark10_20260509`.
+- Timed performance remains unchanged and endpoint-clean:
+  Dhrystone 100 `18,577`, CoreMark 1 `163,013`, CoreMark 10 `1,500,110`
+  / `6.705406` CM/MHz.
+
+Exclusive blocked-producer split:
+
+| Workload | Producer blocked | Single ALU | Single load | Single mul | Multi source | Other |
+|---|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | 2,043 | 1,235 | 800 | 0 | 8 | 0 |
+| CoreMark 1 | 1,240,649 | 1,047,373 | 11,042 | 33,436 | 148,780 | 18 |
+| CoreMark 10 | 12,234,377 | 10,393,558 | 103,189 | 312,329 | 1,425,283 | 18 |
+
+Overlapping source-class view on CoreMark 10:
+
+| Counter | Count | Share of blocked producers |
+|---|---:|---:|
+| `producer_blocked_any_alu` | 11,818,841 | 96.6% |
+| `producer_blocked_any_mul` | 354,469 | 2.9% |
+| `producer_blocked_any_load` | 108,253 | 0.9% |
+| `producer_blocked_any_div` | 18 | ~0.0% |
+
+Verdict: the current limiter is primarily true ALU dependency-chain depth, not
+load-use timing, CDB writeback latency, or issue selection. The issue queue
+already wakes consumers from the registered CDB so ALU-to-ALU dependent issue is
+one cycle after producer issue; trying to make dependent ALU chains issue in the
+same cycle would create an unrealistic IQ-to-ALU-to-IQ combinational path. The
+next RTL candidate should therefore be a useful-work reduction or op-pattern
+mechanism backed by another counter slice, such as identifying whether the ALU
+chains are dominated by address-generation adds, word sign-extension/addw
+chains, CRC/shift/xor chains, or removable moves/constants. Do not spend more
+time on raw wakeup propagation or scalar issue threshold tuning for this bucket.
+
 ## Accepted Evidence
 
 The accepted frontend path so far:
@@ -1225,7 +1267,7 @@ Smoke validation:
   in both runs.
 - Timed cycles are identical with the profiler off and on:
   Dhrystone 100 `18,577`, CoreMark iteration 1 `163,013`.
-- The on run emits 190 `xs_bottleneck_*` counters per row; the off run emits
+- The on run emits 207 `xs_bottleneck_*` counters per row; the off run emits
   none.
 
 Counter families now available for DSE ranking:
@@ -1239,6 +1281,8 @@ Counter families now available for DSE ranking:
 - ALU dependency lifecycle and producer-location counts that distinguish
   same-cycle issue, producer not issued, producer blocked in IQ, producer ready
   but not selected, missing producer entry, and stale lifecycle states.
+- Blocked ALU producer source-class counts, with both exclusive single-source
+  versus multi-source attribution and overlapping missing-source class counts.
 - Same-cycle wakeup candidates and missed same-cycle wakeup opportunities.
 - ROB head-blocked younger-ready lost commit slots.
 - LSU load latency, forwarding, retry, D-cache conflict, and store backlog
@@ -1289,8 +1333,9 @@ counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 | 33 | Reopen selective early frontend redirect. | Branch hotspot improves without Dhrystone/CoreMark regression and without contract checker failures. |
 | 34 | Add ALU producer lifecycle profiling. | Done by `dse_dse_alu_dep_lifecycle_profile_*`: CoreMark 10 shows 91.2% of ALU dependency waits are producers not yet issued, while post-issue and stale-ready buckets are zero. |
 | 35 | Split not-issued ALU waits by producer IQ location. | Done by `dse_dse_alu_dep_producer_location_*`: CoreMark 10 shows 99.38% of not-issued ALU waits have the producer present but operand-blocked in an integer IQ. |
-| 36 | Split operand-blocked ALU producers by their missing operand class. | Next: determine whether the blocker is another ALU chain, a load-use path, multiply/divide/CSR latency, or unknown scoreboard drift before selecting RTL. |
-| 37 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 36 | Split operand-blocked ALU producers by their missing operand class. | Done by `dse_dse_alu_blocked_producer_srcclass_*`: CoreMark 10 shows 96.6% overlapping ALU-source blocking and 85.0% exclusive single-ALU blocking, so this is mostly true ALU dependency-chain depth. |
+| 37 | Attribute ALU-chain op patterns before RTL. | Next: classify hot blocked ALU-chain producers by ALU op, immediate/source shape, and dynamic PC/function so any useful-work reduction is general and not benchmark-PC steering. |
+| 38 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 

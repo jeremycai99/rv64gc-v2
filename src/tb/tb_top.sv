@@ -610,6 +610,23 @@ module tb_top
     integer btl_dep_alu_wait_not_issued_producer_blocked;
     integer btl_dep_alu_wait_not_issued_producer_ready_not_selected;
     integer btl_dep_alu_wait_not_issued_producer_selected;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_single_alu;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_single_load;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_single_branch;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_single_mul;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_single_div;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_single_store;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_single_csr;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_single_unknown;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_multi_src;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_any_alu;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_any_load;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_any_branch;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_any_mul;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_any_div;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_any_store;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_any_csr;
+    integer btl_dep_alu_wait_not_issued_producer_blocked_any_unknown;
     integer btl_dep_alu_wait_issued_not_wb;
     integer btl_dep_alu_wait_done_stale;
     integer btl_dep_alu_wait_state_unknown;
@@ -1097,6 +1114,23 @@ module tb_top
             btl_dep_alu_wait_not_issued_producer_blocked <= 0;
             btl_dep_alu_wait_not_issued_producer_ready_not_selected <= 0;
             btl_dep_alu_wait_not_issued_producer_selected <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_single_alu <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_single_load <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_single_branch <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_single_mul <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_single_div <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_single_store <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_single_csr <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_single_unknown <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_multi_src <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_any_alu <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_any_load <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_any_branch <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_any_mul <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_any_div <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_any_store <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_any_csr <= 0;
+            btl_dep_alu_wait_not_issued_producer_blocked_any_unknown <= 0;
             btl_dep_alu_wait_issued_not_wb <= 0;
             btl_dep_alu_wait_done_stale <= 0;
             btl_dep_alu_wait_state_unknown <= 0;
@@ -1185,6 +1219,23 @@ module tb_top
             automatic int btl_wait_alu_not_issued_producer_blocked_now;
             automatic int btl_wait_alu_not_issued_producer_ready_not_selected_now;
             automatic int btl_wait_alu_not_issued_producer_selected_now;
+            automatic int btl_wait_alu_blocked_single_alu_now;
+            automatic int btl_wait_alu_blocked_single_load_now;
+            automatic int btl_wait_alu_blocked_single_branch_now;
+            automatic int btl_wait_alu_blocked_single_mul_now;
+            automatic int btl_wait_alu_blocked_single_div_now;
+            automatic int btl_wait_alu_blocked_single_store_now;
+            automatic int btl_wait_alu_blocked_single_csr_now;
+            automatic int btl_wait_alu_blocked_single_unknown_now;
+            automatic int btl_wait_alu_blocked_multi_src_now;
+            automatic int btl_wait_alu_blocked_any_alu_now;
+            automatic int btl_wait_alu_blocked_any_load_now;
+            automatic int btl_wait_alu_blocked_any_branch_now;
+            automatic int btl_wait_alu_blocked_any_mul_now;
+            automatic int btl_wait_alu_blocked_any_div_now;
+            automatic int btl_wait_alu_blocked_any_store_now;
+            automatic int btl_wait_alu_blocked_any_csr_now;
+            automatic int btl_wait_alu_blocked_any_unknown_now;
             automatic int btl_wait_alu_not_issued_by_preg_now [0:INT_PRF_DEPTH-1];
             automatic int btl_wait_alu_issued_not_wb_now;
             automatic int btl_wait_alu_done_stale_now;
@@ -1199,6 +1250,15 @@ module tb_top
             automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_now;
             automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_ready_not_selected_now;
             automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_selected_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_multi_src_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_by_alu_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_by_load_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_by_branch_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_by_mul_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_by_div_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_by_store_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_by_csr_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_by_unknown_now;
 
             perf_total_cyc    <= perf_total_cyc + 1;
             frontend_bin = int'(u_core.rename_dec_count);
@@ -1262,6 +1322,23 @@ module tb_top
             btl_wait_alu_not_issued_producer_blocked_now = 0;
             btl_wait_alu_not_issued_producer_ready_not_selected_now = 0;
             btl_wait_alu_not_issued_producer_selected_now = 0;
+            btl_wait_alu_blocked_single_alu_now = 0;
+            btl_wait_alu_blocked_single_load_now = 0;
+            btl_wait_alu_blocked_single_branch_now = 0;
+            btl_wait_alu_blocked_single_mul_now = 0;
+            btl_wait_alu_blocked_single_div_now = 0;
+            btl_wait_alu_blocked_single_store_now = 0;
+            btl_wait_alu_blocked_single_csr_now = 0;
+            btl_wait_alu_blocked_single_unknown_now = 0;
+            btl_wait_alu_blocked_multi_src_now = 0;
+            btl_wait_alu_blocked_any_alu_now = 0;
+            btl_wait_alu_blocked_any_load_now = 0;
+            btl_wait_alu_blocked_any_branch_now = 0;
+            btl_wait_alu_blocked_any_mul_now = 0;
+            btl_wait_alu_blocked_any_div_now = 0;
+            btl_wait_alu_blocked_any_store_now = 0;
+            btl_wait_alu_blocked_any_csr_now = 0;
+            btl_wait_alu_blocked_any_unknown_now = 0;
             btl_wait_alu_issued_not_wb_now = 0;
             btl_wait_alu_done_stale_now = 0;
             btl_wait_alu_state_unknown_now = 0;
@@ -1275,6 +1352,15 @@ module tb_top
             btl_prod_iq_blocked_now = '0;
             btl_prod_iq_ready_not_selected_now = '0;
             btl_prod_iq_selected_now = '0;
+            btl_prod_iq_blocked_multi_src_now = '0;
+            btl_prod_iq_blocked_by_alu_now = '0;
+            btl_prod_iq_blocked_by_load_now = '0;
+            btl_prod_iq_blocked_by_branch_now = '0;
+            btl_prod_iq_blocked_by_mul_now = '0;
+            btl_prod_iq_blocked_by_div_now = '0;
+            btl_prod_iq_blocked_by_store_now = '0;
+            btl_prod_iq_blocked_by_csr_now = '0;
+            btl_prod_iq_blocked_by_unknown_now = '0;
             for (int i = 0; i < INT_PRF_DEPTH; i++) begin
                 btl_wait_alu_not_issued_by_preg_now[i] = 0;
             end
@@ -1428,6 +1514,66 @@ module tb_top
                                     1'b1;
                             end else begin
                                 btl_prod_iq_blocked_now[btl_iq_payload_now.pdst] = 1'b1;
+                                if (!u_core.u_iq0.next_src1_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]])
+                                        BTL_PROD_ALU:
+                                            btl_prod_iq_blocked_by_alu_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_LOAD:
+                                            btl_prod_iq_blocked_by_load_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_BRANCH:
+                                            btl_prod_iq_blocked_by_branch_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_MUL:
+                                            btl_prod_iq_blocked_by_mul_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_DIV:
+                                            btl_prod_iq_blocked_by_div_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_STORE:
+                                            btl_prod_iq_blocked_by_store_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_CSR:
+                                            btl_prod_iq_blocked_by_csr_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        default:
+                                            btl_prod_iq_blocked_by_unknown_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                    endcase
+                                end
+                                if (!u_core.u_iq0.next_src2_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]])
+                                        BTL_PROD_ALU:
+                                            btl_prod_iq_blocked_by_alu_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_LOAD:
+                                            btl_prod_iq_blocked_by_load_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_BRANCH:
+                                            btl_prod_iq_blocked_by_branch_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_MUL:
+                                            btl_prod_iq_blocked_by_mul_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_DIV:
+                                            btl_prod_iq_blocked_by_div_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_STORE:
+                                            btl_prod_iq_blocked_by_store_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_CSR:
+                                            btl_prod_iq_blocked_by_csr_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        default:
+                                            btl_prod_iq_blocked_by_unknown_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                    endcase
+                                end
+                                if (!u_core.u_iq0.next_src1_ready[e] &&
+                                    !u_core.u_iq0.next_src2_ready[e])
+                                    btl_prod_iq_blocked_multi_src_now[
+                                        btl_iq_payload_now.pdst] = 1'b1;
                             end
                         end
                     end
@@ -1448,6 +1594,66 @@ module tb_top
                                     1'b1;
                             end else begin
                                 btl_prod_iq_blocked_now[btl_iq_payload_now.pdst] = 1'b1;
+                                if (!u_core.u_iq1.next_src1_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]])
+                                        BTL_PROD_ALU:
+                                            btl_prod_iq_blocked_by_alu_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_LOAD:
+                                            btl_prod_iq_blocked_by_load_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_BRANCH:
+                                            btl_prod_iq_blocked_by_branch_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_MUL:
+                                            btl_prod_iq_blocked_by_mul_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_DIV:
+                                            btl_prod_iq_blocked_by_div_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_STORE:
+                                            btl_prod_iq_blocked_by_store_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_CSR:
+                                            btl_prod_iq_blocked_by_csr_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        default:
+                                            btl_prod_iq_blocked_by_unknown_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                    endcase
+                                end
+                                if (!u_core.u_iq1.next_src2_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]])
+                                        BTL_PROD_ALU:
+                                            btl_prod_iq_blocked_by_alu_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_LOAD:
+                                            btl_prod_iq_blocked_by_load_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_BRANCH:
+                                            btl_prod_iq_blocked_by_branch_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_MUL:
+                                            btl_prod_iq_blocked_by_mul_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_DIV:
+                                            btl_prod_iq_blocked_by_div_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_STORE:
+                                            btl_prod_iq_blocked_by_store_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_CSR:
+                                            btl_prod_iq_blocked_by_csr_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        default:
+                                            btl_prod_iq_blocked_by_unknown_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                    endcase
+                                end
+                                if (!u_core.u_iq1.next_src1_ready[e] &&
+                                    !u_core.u_iq1.next_src2_ready[e])
+                                    btl_prod_iq_blocked_multi_src_now[
+                                        btl_iq_payload_now.pdst] = 1'b1;
                             end
                         end
                     end
@@ -1468,6 +1674,66 @@ module tb_top
                                     1'b1;
                             end else begin
                                 btl_prod_iq_blocked_now[btl_iq_payload_now.pdst] = 1'b1;
+                                if (!u_core.u_iq2.next_src1_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]])
+                                        BTL_PROD_ALU:
+                                            btl_prod_iq_blocked_by_alu_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_LOAD:
+                                            btl_prod_iq_blocked_by_load_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_BRANCH:
+                                            btl_prod_iq_blocked_by_branch_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_MUL:
+                                            btl_prod_iq_blocked_by_mul_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_DIV:
+                                            btl_prod_iq_blocked_by_div_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_STORE:
+                                            btl_prod_iq_blocked_by_store_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_CSR:
+                                            btl_prod_iq_blocked_by_csr_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        default:
+                                            btl_prod_iq_blocked_by_unknown_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                    endcase
+                                end
+                                if (!u_core.u_iq2.next_src2_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]])
+                                        BTL_PROD_ALU:
+                                            btl_prod_iq_blocked_by_alu_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_LOAD:
+                                            btl_prod_iq_blocked_by_load_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_BRANCH:
+                                            btl_prod_iq_blocked_by_branch_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_MUL:
+                                            btl_prod_iq_blocked_by_mul_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_DIV:
+                                            btl_prod_iq_blocked_by_div_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_STORE:
+                                            btl_prod_iq_blocked_by_store_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        BTL_PROD_CSR:
+                                            btl_prod_iq_blocked_by_csr_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                        default:
+                                            btl_prod_iq_blocked_by_unknown_now[
+                                                btl_iq_payload_now.pdst] = 1'b1;
+                                    endcase
+                                end
+                                if (!u_core.u_iq2.next_src1_ready[e] &&
+                                    !u_core.u_iq2.next_src2_ready[e])
+                                    btl_prod_iq_blocked_multi_src_now[
+                                        btl_iq_payload_now.pdst] = 1'b1;
                             end
                         end
                     end
@@ -2316,6 +2582,59 @@ module tb_top
                         end else if (btl_prod_iq_blocked_now[i]) begin
                             btl_wait_alu_not_issued_producer_blocked_now +=
                                 btl_wait_alu_not_issued_by_preg_now[i];
+                            if (btl_prod_iq_blocked_by_alu_now[i])
+                                btl_wait_alu_blocked_any_alu_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            if (btl_prod_iq_blocked_by_load_now[i])
+                                btl_wait_alu_blocked_any_load_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            if (btl_prod_iq_blocked_by_branch_now[i])
+                                btl_wait_alu_blocked_any_branch_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            if (btl_prod_iq_blocked_by_mul_now[i])
+                                btl_wait_alu_blocked_any_mul_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            if (btl_prod_iq_blocked_by_div_now[i])
+                                btl_wait_alu_blocked_any_div_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            if (btl_prod_iq_blocked_by_store_now[i])
+                                btl_wait_alu_blocked_any_store_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            if (btl_prod_iq_blocked_by_csr_now[i])
+                                btl_wait_alu_blocked_any_csr_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            if (btl_prod_iq_blocked_by_unknown_now[i])
+                                btl_wait_alu_blocked_any_unknown_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+
+                            if (btl_prod_iq_blocked_multi_src_now[i]) begin
+                                btl_wait_alu_blocked_multi_src_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end else if (btl_prod_iq_blocked_by_alu_now[i]) begin
+                                btl_wait_alu_blocked_single_alu_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end else if (btl_prod_iq_blocked_by_load_now[i]) begin
+                                btl_wait_alu_blocked_single_load_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end else if (btl_prod_iq_blocked_by_branch_now[i]) begin
+                                btl_wait_alu_blocked_single_branch_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end else if (btl_prod_iq_blocked_by_mul_now[i]) begin
+                                btl_wait_alu_blocked_single_mul_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end else if (btl_prod_iq_blocked_by_div_now[i]) begin
+                                btl_wait_alu_blocked_single_div_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end else if (btl_prod_iq_blocked_by_store_now[i]) begin
+                                btl_wait_alu_blocked_single_store_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end else if (btl_prod_iq_blocked_by_csr_now[i]) begin
+                                btl_wait_alu_blocked_single_csr_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end else begin
+                                btl_wait_alu_blocked_single_unknown_now +=
+                                    btl_wait_alu_not_issued_by_preg_now[i];
+                            end
                         end else begin
                             btl_wait_alu_not_issued_absent_now +=
                                 btl_wait_alu_not_issued_by_preg_now[i];
@@ -2411,6 +2730,57 @@ module tb_top
                 btl_dep_alu_wait_not_issued_producer_selected <=
                     btl_dep_alu_wait_not_issued_producer_selected +
                     btl_wait_alu_not_issued_producer_selected_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_single_alu <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_single_alu +
+                    btl_wait_alu_blocked_single_alu_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_single_load <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_single_load +
+                    btl_wait_alu_blocked_single_load_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_single_branch <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_single_branch +
+                    btl_wait_alu_blocked_single_branch_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_single_mul <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_single_mul +
+                    btl_wait_alu_blocked_single_mul_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_single_div <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_single_div +
+                    btl_wait_alu_blocked_single_div_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_single_store <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_single_store +
+                    btl_wait_alu_blocked_single_store_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_single_csr <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_single_csr +
+                    btl_wait_alu_blocked_single_csr_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_single_unknown <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_single_unknown +
+                    btl_wait_alu_blocked_single_unknown_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_multi_src <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_multi_src +
+                    btl_wait_alu_blocked_multi_src_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_any_alu <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_any_alu +
+                    btl_wait_alu_blocked_any_alu_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_any_load <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_any_load +
+                    btl_wait_alu_blocked_any_load_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_any_branch <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_any_branch +
+                    btl_wait_alu_blocked_any_branch_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_any_mul <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_any_mul +
+                    btl_wait_alu_blocked_any_mul_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_any_div <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_any_div +
+                    btl_wait_alu_blocked_any_div_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_any_store <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_any_store +
+                    btl_wait_alu_blocked_any_store_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_any_csr <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_any_csr +
+                    btl_wait_alu_blocked_any_csr_now;
+                btl_dep_alu_wait_not_issued_producer_blocked_any_unknown <=
+                    btl_dep_alu_wait_not_issued_producer_blocked_any_unknown +
+                    btl_wait_alu_blocked_any_unknown_now;
                 btl_dep_alu_wait_issued_not_wb <=
                     btl_dep_alu_wait_issued_not_wb +
                     btl_wait_alu_issued_not_wb_now;
@@ -3478,6 +3848,23 @@ module tb_top
                 $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked : %0d", btl_dep_alu_wait_not_issued_producer_blocked);
                 $display("xs bottleneck_dep_alu_wait_not_issued_producer_ready_not_selected : %0d", btl_dep_alu_wait_not_issued_producer_ready_not_selected);
                 $display("xs bottleneck_dep_alu_wait_not_issued_producer_selected : %0d", btl_dep_alu_wait_not_issued_producer_selected);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_single_alu : %0d", btl_dep_alu_wait_not_issued_producer_blocked_single_alu);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_single_load : %0d", btl_dep_alu_wait_not_issued_producer_blocked_single_load);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_single_branch : %0d", btl_dep_alu_wait_not_issued_producer_blocked_single_branch);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_single_mul : %0d", btl_dep_alu_wait_not_issued_producer_blocked_single_mul);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_single_div : %0d", btl_dep_alu_wait_not_issued_producer_blocked_single_div);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_single_store : %0d", btl_dep_alu_wait_not_issued_producer_blocked_single_store);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_single_csr : %0d", btl_dep_alu_wait_not_issued_producer_blocked_single_csr);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_single_unknown : %0d", btl_dep_alu_wait_not_issued_producer_blocked_single_unknown);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_multi_src : %0d", btl_dep_alu_wait_not_issued_producer_blocked_multi_src);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_any_alu : %0d", btl_dep_alu_wait_not_issued_producer_blocked_any_alu);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_any_load : %0d", btl_dep_alu_wait_not_issued_producer_blocked_any_load);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_any_branch : %0d", btl_dep_alu_wait_not_issued_producer_blocked_any_branch);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_any_mul : %0d", btl_dep_alu_wait_not_issued_producer_blocked_any_mul);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_any_div : %0d", btl_dep_alu_wait_not_issued_producer_blocked_any_div);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_any_store : %0d", btl_dep_alu_wait_not_issued_producer_blocked_any_store);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_any_csr : %0d", btl_dep_alu_wait_not_issued_producer_blocked_any_csr);
+                $display("xs bottleneck_dep_alu_wait_not_issued_producer_blocked_any_unknown : %0d", btl_dep_alu_wait_not_issued_producer_blocked_any_unknown);
                 $display("xs bottleneck_dep_alu_wait_issued_not_wb : %0d", btl_dep_alu_wait_issued_not_wb);
                 $display("xs bottleneck_dep_alu_wait_done_stale : %0d", btl_dep_alu_wait_done_stale);
                 $display("xs bottleneck_dep_alu_wait_state_unknown : %0d", btl_dep_alu_wait_state_unknown);
