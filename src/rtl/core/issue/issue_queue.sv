@@ -108,6 +108,8 @@ module issue_queue
     logic [NUM_ENQUEUE-1:0]       enq_ready_hidden;
     logic [NUM_ENQUEUE-1:0]       enq_ready_issued_bypass;
     logic [NUM_ENQUEUE-1:0]       enq_wakeup_hit;
+    logic [NUM_ENQUEUE-1:0]       enq_spec_wakeup;
+    logic [NUM_ENQUEUE-1:0]       enq_spec_cancelled;
     logic [NUM_ENQUEUE-1:0]       enq_bypass_suppressed;
     logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked;
     logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked_bru_cond;
@@ -178,6 +180,14 @@ module issue_queue
     logic [NUM_ENQUEUE-1:0] enq_s2_rdy;
     logic [NUM_ENQUEUE-1:0] enq_s1_wakeup_hit;
     logic [NUM_ENQUEUE-1:0] enq_s2_wakeup_hit;
+    logic [NUM_ENQUEUE-1:0] enq_s1_spec_match;
+    logic [NUM_ENQUEUE-1:0] enq_s2_spec_match;
+    logic [NUM_ENQUEUE-1:0] enq_s1_spec_cancel;
+    logic [NUM_ENQUEUE-1:0] enq_s2_spec_cancel;
+    logic [NUM_ENQUEUE-1:0] enq_s1_spec_wakeup;
+    logic [NUM_ENQUEUE-1:0] enq_s2_spec_wakeup;
+    logic [NUM_ENQUEUE-1:0] enq_s1_spec_cancelled;
+    logic [NUM_ENQUEUE-1:0] enq_s2_spec_cancelled;
 
     always_comb begin
         next_src1_ready = src1_ready;
@@ -567,6 +577,22 @@ module issue_queue
             enq_s2_rdy[q] = enq_data[q].rs2_ready;
             enq_s1_wakeup_hit[q] = 1'b0;
             enq_s2_wakeup_hit[q] = 1'b0;
+            enq_s1_spec_match[q] =
+                (spec_wk_valid && (spec_wk_tag == enq_data[q].rs1_phys)) ||
+                (spec_wk_valid1 && (spec_wk_tag1 == enq_data[q].rs1_phys));
+            enq_s2_spec_match[q] =
+                (spec_wk_valid && (spec_wk_tag == enq_data[q].rs2_phys)) ||
+                (spec_wk_valid1 && (spec_wk_tag1 == enq_data[q].rs2_phys));
+            enq_s1_spec_cancel[q] =
+                (spec_cancel_valid && (spec_cancel_tag == enq_data[q].rs1_phys)) ||
+                (spec_cancel_valid1 && (spec_cancel_tag1 == enq_data[q].rs1_phys));
+            enq_s2_spec_cancel[q] =
+                (spec_cancel_valid && (spec_cancel_tag == enq_data[q].rs2_phys)) ||
+                (spec_cancel_valid1 && (spec_cancel_tag1 == enq_data[q].rs2_phys));
+            enq_s1_spec_wakeup[q] = 1'b0;
+            enq_s2_spec_wakeup[q] = 1'b0;
+            enq_s1_spec_cancelled[q] = 1'b0;
+            enq_s2_spec_cancelled[q] = 1'b0;
             // preg_ready_table snoop (covers older broadcasts)
             if (preg_ready_table[enq_data[q].rs1_phys])
                 enq_s1_rdy[q] = 1'b1;
@@ -607,6 +633,21 @@ module issue_queue
                     enq_s2_rdy[q] = 1'b1;
                     enq_s2_wakeup_hit[q] = 1'b1;
                 end
+            end
+            // Speculative load wakeup for a newly allocated entry.  This does
+            // not feed same-cycle enqueue issue bypass; it only writes the
+            // registered ready/spec bits below so the uop can wake next cycle.
+            if (enq_s1_spec_match[q] && !enq_s1_rdy[q]) begin
+                if (enq_s1_spec_cancel[q])
+                    enq_s1_spec_cancelled[q] = 1'b1;
+                else
+                    enq_s1_spec_wakeup[q] = 1'b1;
+            end
+            if (enq_s2_spec_match[q] && !enq_s2_rdy[q]) begin
+                if (enq_s2_spec_cancel[q])
+                    enq_s2_spec_cancelled[q] = 1'b1;
+                else
+                    enq_s2_spec_wakeup[q] = 1'b1;
             end
         end
     end
@@ -670,6 +711,12 @@ module issue_queue
                 enq_valid[q] &&
                 ((enq_s1_wakeup_hit[q] && !enq_data[q].rs1_ready) ||
                  (enq_s2_wakeup_hit[q] && !enq_data[q].rs2_ready));
+            enq_spec_wakeup[q] =
+                enq_valid[q] &&
+                (enq_s1_spec_wakeup[q] || enq_s2_spec_wakeup[q]);
+            enq_spec_cancelled[q] =
+                enq_valid[q] &&
+                (enq_s1_spec_cancelled[q] || enq_s2_spec_cancelled[q]);
         end
     end
 
@@ -759,10 +806,10 @@ module issue_queue
                     rs2_phys_r[free_idx[q]]  <= enq_data[q].rs2_phys;
                     rob_idx_r[free_idx[q]]   <= enq_data[q].rob_idx;
                     fu_type_r[free_idx[q]]   <= enq_data[q].fu_type;
-                    src1_ready[free_idx[q]]  <= enq_s1_rdy[q];
-                    src2_ready[free_idx[q]]  <= enq_s2_rdy[q];
-                    src1_spec[free_idx[q]]   <= 1'b0;
-                    src2_spec[free_idx[q]]   <= 1'b0;
+                    src1_ready[free_idx[q]]  <= enq_s1_rdy[q] | enq_s1_spec_wakeup[q];
+                    src2_ready[free_idx[q]]  <= enq_s2_rdy[q] | enq_s2_spec_wakeup[q];
+                    src1_spec[free_idx[q]]   <= enq_s1_spec_wakeup[q];
+                    src2_spec[free_idx[q]]   <= enq_s2_spec_wakeup[q];
                 end
             end
 
