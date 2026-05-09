@@ -1358,6 +1358,64 @@ Use `tools/bottleneck_analysis.py` on the resulting `results.json` before
 selecting any new performance RTL. Some counters are entry-slot or event
 counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 
+Short ALU forwarding candidate, 2026-05-09:
+
+- Counter evidence from `dse_alu_chain_shape_profile_*` showed the dominant
+  residual CoreMark dependency path is not post-issue CDB latency. It is
+  chains of ALU producers that are still operand-blocked inside the integer
+  issue queues. The strongest shape buckets are boolean logic, W-suffix ALU
+  work, and shifts.
+- Implemented a local IQ0 short-chain path: if IQ0 port 0 selects a boolean or
+  shift ALU producer, IQ0 port 1 may treat a younger boolean or shift ALU
+  consumer of that physical destination as ready in the same cycle. Core top
+  forwards the ALU0 result directly into ALU1 for that selected consumer.
+- This is not raw combinational CDB wakeup. The global CDB remains registered,
+  and the cascade is local to the dual-issue integer queue select plus the
+  explicit ALU0-to-ALU1 operand bypass.
+- Rejected variants:
+  - Full simple-ALU chaining including ADD/SUB improved CoreMark more, but
+    regressed `frontend_mixed_branch_dense 7,220 -> 7,326` by accelerating
+    loop/control arithmetic such as add-to-parity chains.
+  - Idle-slot-only chaining avoided priority override but regressed CoreMark 1
+    and the branch probe.
+  - Typed arithmetic-plus-logic chaining recovered the add-chain micro row but
+    still regressed the branch probe (`7,337` cycles).
+- Kept RTL candidate: boolean and shift chains only. This matches the CRC-style
+  CoreMark dependency shape while avoiding broad loop-control arithmetic timing
+  shifts.
+
+Final DSim validation artifact:
+`benchmark_results/20260509_iq0_logic_shift_chain_validation`.
+
+| Workload | Baseline source | Baseline mcycle | Candidate mcycle | Delta | Verdict |
+|---|---|---:|---:|---:|---|
+| Dhrystone 100 | `dse_alu_chain_shape_profile_smoke_r2_20260509` | 18,577 | 18,577 | 0 | Neutral. |
+| CoreMark 1 | `dse_alu_chain_shape_profile_smoke_r2_20260509` | 163,013 | 161,582 | -1,431, -0.88% | Positive. |
+| CoreMark 10 | `dse_alu_chain_shape_profile_coremark10_20260509` | 1,500,110 | 1,483,858 | -16,252, -1.08% | Positive heavy-row movement. |
+| Frontend mixed branch dense | `dse_dse_branch_recovery_checker_hardening_smoke_20260509` | 7,220 | 7,128 | -92, -1.27% | Positive guard movement. |
+| Backend ALU chain 8 | `signoff_signoff_20260508_loop_bypass_threshold2_goal` | 3,039 | 3,039 | 0 | Neutral. |
+| Hotspot state CRC branch | `dse_dse_branch_recovery_checker_hardening_smoke_20260509` | 141,326 | 141,326 | 0 | Neutral. |
+
+Key counter movement:
+
+- CoreMark 10 fires `xs_bottleneck_iq0_short_alu_chain_issue=28,109`.
+- CoreMark 10 reduces `xs_bottleneck_dep_wait_on_alu` by `1,428,581`,
+  `xs_bottleneck_dep_alu_wait_not_issued` by `1,454,870`, and
+  `xs_bottleneck_dep_alu_wait_not_issued_producer_blocked` by `1,468,750`.
+- CoreMark 1 fires `2,913` short-chain issues and reduces ALU dependency waits
+  by `141,191`.
+- The branch-dense guard fires only `68` short-chain issues, while branch
+  mispredicts drop `426 -> 414` and redirect recovery drops `426 -> 414`.
+
+Verdict:
+
+- Keep the boolean/shift short-ALU chain RTL as the next architectural
+  candidate. It is a general issue/wakeup bypass path, not a benchmark PC
+  special case, and it is backed by explicit counter movement.
+- Do not update the scoreable Stage 2 scoreboard until the full 16-row
+  signoff run is completed. The current evidence is DSE-grade but broad enough
+  to justify committing the candidate and moving to full signoff.
+
 ## Implementation Order
 
 | Phase | Task | Exit criterion |
@@ -1400,8 +1458,9 @@ counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 | 35 | Split not-issued ALU waits by producer IQ location. | Done by `dse_dse_alu_dep_producer_location_*`: CoreMark 10 shows 99.38% of not-issued ALU waits have the producer present but operand-blocked in an integer IQ. |
 | 36 | Split operand-blocked ALU producers by their missing operand class. | Done by `dse_dse_alu_blocked_producer_srcclass_*`: CoreMark 10 shows 96.6% overlapping ALU-source blocking and 85.0% exclusive single-ALU blocking, so this is mostly true ALU dependency-chain depth. |
 | 37 | Attribute ALU-chain op patterns before RTL. | Done by `dse_alu_chain_shape_profile_*`: CoreMark 10 shows boolean/W-op ALU chains dominate the blocked-producer wait path, while move candidates are a small subset. |
-| 38 | Design C910-style short-ALU or wakeup/forwarding slice. | Next: target simple logic, W-suffix, and shift ALU chains with a general mechanism, then gate on the new shape counters plus DS/CoreMark/hotspot cycles. |
-| 39 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 38 | Design C910-style short-ALU or wakeup/forwarding slice. | Done by `20260509_iq0_logic_shift_chain_validation`: boolean/shift IQ0 short-chain forwarding improves CoreMark 1, CoreMark 10, and the branch-dense guard, while DS, backend add-chain, and branch hotspot stay neutral. |
+| 39 | Run full 16-row signoff for boolean/shift short-ALU chain. | Candidate remains endpoint-clean, loop-buffer zero, decoded-op replay zero, and no benchmark row regresses versus the accepted baseline. |
+| 40 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 

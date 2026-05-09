@@ -12,6 +12,7 @@ module issue_queue
     parameter int NUM_ENQUEUE = 2,
     parameter int NUM_SELECT  = 2,
     parameter int SUPPORT_ENQ_ISSUE_BYPASS = 0,
+    parameter int SUPPORT_SHORT_ALU_CHAIN = 0,
     // When non-zero, entries whose fu_type matches PORT0_ONLY_FU are
     // excluded from port 1 selection (they can only issue on port 0).
     // Set to a fu_type_e value (e.g., 3'd1 for FU_BRU) or 0 to disable.
@@ -289,6 +290,16 @@ module issue_queue
     logic [DEPTH-1:0] eligible;
     // Port 1 eligibility: exclude entries with PORT0_ONLY_FU
     logic [DEPTH-1:0] eligible_port1;
+    logic [DEPTH-1:0] short_alu_port1_src1_ready;
+    logic [DEPTH-1:0] short_alu_port1_src2_ready;
+    logic [DEPTH-1:0] short_alu_port1_src1_hit;
+    logic [DEPTH-1:0] short_alu_port1_src2_hit;
+    logic [DEPTH-1:0] short_alu_port1_consumer_ok;
+    logic [DEPTH-1:0] short_alu_port1_eligible;
+    logic             port0_short_alu_valid;
+    logic [PHYS_REG_BITS-1:0] port0_short_alu_tag;
+    iq_entry_t        port0_short_alu_entry;
+    logic             short_alu_port1_issue;
 
     always_comb begin
         for (int e = 0; e < DEPTH; e++) begin
@@ -362,6 +373,96 @@ module issue_queue
         end
     end
 
+    // Local boolean/shift ALU chaining for dual-issue integer queues.
+    //
+    // This is intentionally narrower than a global combinational CDB wakeup:
+    // port 1 may treat a boolean or shift ALU result selected on port 0 as ready in
+    // the same cycle, and the core top must forward ALU0 data into ALU1.
+    // Selection still starts from registered IQ state and only cascades from
+    // the older port 0 winner to a younger ALU consumer.
+    always_comb begin
+        port0_short_alu_entry = '0;
+        port0_short_alu_tag   = '0;
+        port0_short_alu_valid = 1'b0;
+
+        if ((SUPPORT_SHORT_ALU_CHAIN != 0) &&
+            (NUM_SELECT >= 2) &&
+            sel_found[0] &&
+            !issue_suppress[0]) begin
+            port0_short_alu_entry = iq_entry_t'(payload_r[sel_idx[0]]);
+            port0_short_alu_tag   = port0_short_alu_entry.pdst;
+
+            if ((port0_short_alu_entry.fu_type == FU_ALU) &&
+                (port0_short_alu_entry.pdst != '0)) begin
+                case (port0_short_alu_entry.alu_op)
+                    ALU_AND,
+                    ALU_OR,
+                    ALU_XOR,
+                    ALU_SLL,
+                    ALU_SRL,
+                    ALU_SRA: begin
+                        port0_short_alu_valid = 1'b1;
+                    end
+
+                    default: begin
+                        port0_short_alu_valid = 1'b0;
+                    end
+                endcase
+            end
+        end
+    end
+
+    always_comb begin
+        for (int e = 0; e < DEPTH; e++) begin
+            iq_entry_t entry_payload;
+
+            entry_payload = iq_entry_t'(payload_r[e]);
+            short_alu_port1_src1_hit[e] = 1'b0;
+            short_alu_port1_src2_hit[e] = 1'b0;
+            short_alu_port1_consumer_ok[e] = 1'b0;
+            short_alu_port1_src1_ready[e] = next_src1_ready[e];
+            short_alu_port1_src2_ready[e] = next_src2_ready[e];
+            short_alu_port1_eligible[e] = 1'b0;
+
+            case (entry_payload.alu_op)
+                ALU_AND,
+                ALU_OR,
+                ALU_XOR,
+                ALU_SLL,
+                ALU_SRL,
+                ALU_SRA: begin
+                    short_alu_port1_consumer_ok[e] = 1'b1;
+                end
+
+                default: begin
+                    short_alu_port1_consumer_ok[e] = 1'b0;
+                end
+            endcase
+
+            if (port0_short_alu_valid &&
+                entry_valid[e] &&
+                (entry_payload.fu_type == FU_ALU) &&
+                short_alu_port1_consumer_ok[e] &&
+                (entry_age[sel_idx[0]] < entry_age[e])) begin
+                short_alu_port1_src1_hit[e] =
+                    !next_src1_ready[e] &&
+                    (rs1_phys_r[e] == port0_short_alu_tag);
+                short_alu_port1_src2_hit[e] =
+                    !next_src2_ready[e] &&
+                    (rs2_phys_r[e] == port0_short_alu_tag);
+                short_alu_port1_src1_ready[e] =
+                    next_src1_ready[e] || short_alu_port1_src1_hit[e];
+                short_alu_port1_src2_ready[e] =
+                    next_src2_ready[e] || short_alu_port1_src2_hit[e];
+                short_alu_port1_eligible[e] =
+                    short_alu_port1_src1_ready[e] &&
+                    short_alu_port1_src2_ready[e] &&
+                    (short_alu_port1_src1_hit[e] ||
+                     short_alu_port1_src2_hit[e]);
+            end
+        end
+    end
+
     // Port 1 selection: only synthesised when the IQ is dual-issue.
     // Single-issue variants (NUM_SELECT=1) skip this logic entirely so that
     // no instruction is silently retired without a functional unit consuming it.
@@ -371,7 +472,8 @@ module issue_queue
                 sel_found[1] = 1'b0;
                 sel_idx[1]   = '0;
                 for (int e = 0; e < DEPTH; e++) begin
-                    if (eligible_port1[e] && !(sel_found[0] && (e[IDX_BITS-1:0] == sel_idx[0]))) begin
+                    if ((eligible_port1[e] || short_alu_port1_eligible[e]) &&
+                        !(sel_found[0] && (e[IDX_BITS-1:0] == sel_idx[0]))) begin
                         if (!sel_found[1]) begin
                             sel_found[1] = 1'b1;
                             sel_idx[1]   = e[IDX_BITS-1:0];
@@ -381,6 +483,21 @@ module issue_queue
                     end
                 end
             end
+        end
+    endgenerate
+
+    generate
+        if (NUM_SELECT >= 2) begin : gen_short_alu_port1_issue
+            always_comb begin
+                short_alu_port1_issue = 1'b0;
+                if (sel_found[1] &&
+                    !issue_suppress[1] &&
+                    short_alu_port1_eligible[sel_idx[1]]) begin
+                    short_alu_port1_issue = 1'b1;
+                end
+            end
+        end else begin : gen_no_short_alu_port1_issue
+            assign short_alu_port1_issue = 1'b0;
         end
     endgenerate
 
@@ -432,8 +549,17 @@ module issue_queue
                 issue_data[p]  = iq_entry_t'(payload_r[sel_idx[p]]);
                 // Override ready flags with wakeup results so downstream sees
                 // correct readiness even on the issue cycle.
-                issue_data[p].rs1_ready = next_src1_ready[sel_idx[p]];
-                issue_data[p].rs2_ready = next_src2_ready[sel_idx[p]];
+                if ((p == 1) &&
+                    (NUM_SELECT >= 2) &&
+                    short_alu_port1_eligible[sel_idx[p]]) begin
+                    issue_data[p].rs1_ready =
+                        short_alu_port1_src1_ready[sel_idx[p]];
+                    issue_data[p].rs2_ready =
+                        short_alu_port1_src2_ready[sel_idx[p]];
+                end else begin
+                    issue_data[p].rs1_ready = next_src1_ready[sel_idx[p]];
+                    issue_data[p].rs2_ready = next_src2_ready[sel_idx[p]];
+                end
             end
         end
     end

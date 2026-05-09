@@ -1826,6 +1826,7 @@ module rv64gc_core_top
     // =========================================================================
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2),
                   .SUPPORT_ENQ_ISSUE_BYPASS(1),
+                  .SUPPORT_SHORT_ALU_CHAIN(1),
                   .PORT0_ONLY_FU(3'd0))  // BRU can issue from either port
     u_iq0 (
         .clk             (clk),
@@ -2177,9 +2178,74 @@ module rv64gc_core_top
     // =========================================================================
     // 10. ALUs x4
     // =========================================================================
-    // ALU0 (IQ0 port 0)
     logic [63:0] alu0_result;
     logic [63:0] alu0_op_a, alu0_op_b;
+    logic [63:0] alu1_result;
+    logic [63:0] alu1_op_a, alu1_op_b;
+    logic iq0_alu0_short_forward_valid;
+    logic iq0_alu1_short_forward_consumer;
+    logic iq0_alu1_rs1_from_alu0;
+    logic iq0_alu1_rs2_from_alu0;
+    logic [63:0] alu1_rs1_data;
+    logic [63:0] alu1_rs2_data;
+
+    always_comb begin
+        iq0_alu0_short_forward_valid = 1'b0;
+        if (iq0_issue_valid[0] &&
+            (iq0_issue_data[0].fu_type == FU_ALU) &&
+            (iq0_issue_data[0].pdst != '0)) begin
+            case (iq0_issue_data[0].alu_op)
+                ALU_AND,
+                ALU_OR,
+                ALU_XOR,
+                ALU_SLL,
+                ALU_SRL,
+                ALU_SRA: begin
+                    iq0_alu0_short_forward_valid = 1'b1;
+                end
+
+                default: begin
+                    iq0_alu0_short_forward_valid = 1'b0;
+                end
+            endcase
+        end
+    end
+
+    always_comb begin
+        iq0_alu1_short_forward_consumer = 1'b0;
+        if (iq0_issue_valid[1] &&
+            (iq0_issue_data[1].fu_type == FU_ALU)) begin
+            case (iq0_issue_data[1].alu_op)
+                ALU_AND,
+                ALU_OR,
+                ALU_XOR,
+                ALU_SLL,
+                ALU_SRL,
+                ALU_SRA: begin
+                    iq0_alu1_short_forward_consumer = 1'b1;
+                end
+
+                default: begin
+                    iq0_alu1_short_forward_consumer = 1'b0;
+                end
+            endcase
+        end
+    end
+
+    assign iq0_alu1_rs1_from_alu0 =
+        iq0_alu0_short_forward_valid &&
+        iq0_alu1_short_forward_consumer &&
+        (iq0_issue_data[1].rs1_phys == iq0_issue_data[0].pdst);
+    assign iq0_alu1_rs2_from_alu0 =
+        iq0_alu0_short_forward_valid &&
+        iq0_alu1_short_forward_consumer &&
+        (iq0_issue_data[1].rs2_phys == iq0_issue_data[0].pdst);
+    assign alu1_rs1_data =
+        iq0_alu1_rs1_from_alu0 ? alu0_result : bypassed_data[2];
+    assign alu1_rs2_data =
+        iq0_alu1_rs2_from_alu0 ? alu0_result : bypassed_data[3];
+
+    // ALU0 (IQ0 port 0)
     assign alu0_op_a = (iq0_issue_data[0].use_imm && (iq0_issue_data[0].alu_op == ALU_PASS2))
                        ? iq0_issue_data[0].pc : bypassed_data[0];
     assign alu0_op_b = iq0_issue_data[0].use_imm ? iq0_issue_data[0].imm : bypassed_data[1];
@@ -2194,11 +2260,9 @@ module rv64gc_core_top
     );
 
     // ALU1 (IQ0 port 1)
-    logic [63:0] alu1_result;
-    logic [63:0] alu1_op_a, alu1_op_b;
     assign alu1_op_a = (iq0_issue_data[1].use_imm && (iq0_issue_data[1].alu_op == ALU_PASS2))
-                       ? iq0_issue_data[1].pc : bypassed_data[2];
-    assign alu1_op_b = iq0_issue_data[1].use_imm ? iq0_issue_data[1].imm : bypassed_data[3];
+                       ? iq0_issue_data[1].pc : alu1_rs1_data;
+    assign alu1_op_b = iq0_issue_data[1].use_imm ? iq0_issue_data[1].imm : alu1_rs2_data;
 
     alu u_alu1 (
         .operand_a (alu1_op_a),

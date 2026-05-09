@@ -648,6 +648,10 @@ module tb_top
     integer btl_dep_alu_blocked_prod_zero_candidate;
     integer btl_dep_alu_blocked_prod_wop;
     integer btl_dep_alu_blocked_prod_fused;
+    integer btl_iq0_short_alu_chain_issue;
+    integer btl_iq0_short_alu_chain_src1;
+    integer btl_iq0_short_alu_chain_src2;
+    integer btl_iq0_short_alu_chain_both;
     integer btl_wakeup_same_cycle_candidate;
     integer btl_wakeup_same_cycle_missed;
     integer btl_rename_slots_lost_total;
@@ -1180,6 +1184,10 @@ module tb_top
             btl_dep_alu_blocked_prod_zero_candidate <= 0;
             btl_dep_alu_blocked_prod_wop <= 0;
             btl_dep_alu_blocked_prod_fused <= 0;
+            btl_iq0_short_alu_chain_issue <= 0;
+            btl_iq0_short_alu_chain_src1 <= 0;
+            btl_iq0_short_alu_chain_src2 <= 0;
+            btl_iq0_short_alu_chain_both <= 0;
             btl_wakeup_same_cycle_candidate <= 0;
             btl_wakeup_same_cycle_missed <= 0;
             btl_rename_slots_lost_total <= 0;
@@ -3054,6 +3062,20 @@ module tb_top
                     btl_rename_slots_lost_total <=
                         btl_rename_slots_lost_total +
                         (u_core.rename_dec_count - u_core.ren_count_w);
+                if (u_core.u_iq0.short_alu_port1_issue) begin
+                    btl_iq0_short_alu_chain_issue <=
+                        btl_iq0_short_alu_chain_issue + 1;
+                    if (u_core.iq0_alu1_rs1_from_alu0)
+                        btl_iq0_short_alu_chain_src1 <=
+                            btl_iq0_short_alu_chain_src1 + 1;
+                    if (u_core.iq0_alu1_rs2_from_alu0)
+                        btl_iq0_short_alu_chain_src2 <=
+                            btl_iq0_short_alu_chain_src2 + 1;
+                    if (u_core.iq0_alu1_rs1_from_alu0 &&
+                        u_core.iq0_alu1_rs2_from_alu0)
+                        btl_iq0_short_alu_chain_both <=
+                            btl_iq0_short_alu_chain_both + 1;
+                end
                 if (int'(u_core.u_rename.fl_free_count) <
                     btl_rename_free_preg_min)
                     btl_rename_free_preg_min <=
@@ -4161,6 +4183,10 @@ module tb_top
                 $display("xs bottleneck_dep_alu_blocked_prod_zero_candidate : %0d", btl_dep_alu_blocked_prod_zero_candidate);
                 $display("xs bottleneck_dep_alu_blocked_prod_wop : %0d", btl_dep_alu_blocked_prod_wop);
                 $display("xs bottleneck_dep_alu_blocked_prod_fused : %0d", btl_dep_alu_blocked_prod_fused);
+                $display("xs bottleneck_iq0_short_alu_chain_issue : %0d", btl_iq0_short_alu_chain_issue);
+                $display("xs bottleneck_iq0_short_alu_chain_src1 : %0d", btl_iq0_short_alu_chain_src1);
+                $display("xs bottleneck_iq0_short_alu_chain_src2 : %0d", btl_iq0_short_alu_chain_src2);
+                $display("xs bottleneck_iq0_short_alu_chain_both : %0d", btl_iq0_short_alu_chain_both);
                 $display("xs bottleneck_dep_alu_wakeup_same_cycle_candidate : %0d", btl_dep_alu_wakeup_same_cycle_candidate);
                 $display("xs bottleneck_dep_alu_wakeup_same_cycle_missed : %0d", btl_dep_alu_wakeup_same_cycle_missed);
                 $display("xs bottleneck_dep_alu_ready_not_selected : %0d", btl_dep_alu_ready_not_selected);
