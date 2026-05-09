@@ -1177,11 +1177,12 @@ Architectural verdict:
   only about 2 percent of blocked not-yet-issued ALU-producer wait slots are
   move-candidate producers, and the earlier refcounted move-elimination trial
   already reduced pressure while regressing net cycles.
-- The next behavior-changing RTL should be a C910-style short-ALU or
-  wakeup/forwarding slice for simple integer ALU chains, especially logic,
-  W-suffix, and shift producers. This is consistent with the reference-core
-  audit: C910 has explicit short-ALU forwarding, and XiangShan relies on
-  structured bypass/wakeup rather than PC-shaped benchmark steering.
+- A C910-style short-ALU or wakeup/forwarding slice was the correct next probe
+  from the counter evidence, but the first local IQ0 variants are not promoted
+  architecture. The only clean subvariant, boolean/shift-only same-cycle IQ0
+  chaining, is useful DSE evidence but does not clear the current bar for
+  Stage 2 promotion because its measured upside is below 3 percent, coverage is
+  not full signoff, and nearby variants regress branch-heavy rows.
 - Any trial must target `xs_bottleneck_dep_wait_on_alu`,
   `xs_bottleneck_dep_alu_wait_not_issued_producer_blocked`, and the new
   operation-shape counters. It must not claim success from DS/CoreMark cycle
@@ -1358,6 +1359,68 @@ Use `tools/bottleneck_analysis.py` on the resulting `results.json` before
 selecting any new performance RTL. Some counters are entry-slot or event
 counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 
+## Short-ALU/IQ0 Chaining Audit, 2026-05-09
+
+Current run and repo state:
+
+- No active DSim, XSim, `run_benchmarks.py`, or simulator rebuild process was
+  present when this audit started.
+- Commit `ccf213b` made the boolean/shift IQ0 short-chain RTL default-on.
+  That was reverted by `57bfa58` so the working baseline is trackable again.
+- The accepted baseline for comparison remains
+  `signoff_signoff_20260508_loop_bypass_threshold2_goal` plus the later
+  profiler-only commits. Baseline rows used here are Dhrystone 100 `18,577`,
+  CoreMark 1 `163,013`, CoreMark 10 `1,500,110`,
+  `frontend_mixed_branch_dense=7,220`,
+  `backend_alu_chain_8=3,039`, and
+  `hotspot_state_crc_branch=141,326`.
+
+Latest short-chain evidence:
+
+| Variant | Evidence artifact | Dhrystone 100 | CoreMark 1 | CoreMark 10 | Branch dense | ALU chain | Branch hotspot | Classification |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| Full simple-ALU chain | `20260509_iq0_short_alu_chain_smoke2`, `20260509_iq0_short_alu_chain_validation` | `18,575` | `160,429` | `1,485,336` | `7,326` | `3,035` | `141,237` | DSE-only evidence, rejected for branch-dense regression. |
+| Idle-slot-only chain | `20260509_iq0_short_alu_chain_idle_smoke` | `18,576` | `163,297` | Not run | `7,385` | `3,038` | `141,237` | Rejected due CoreMark 1 and branch-dense regression. |
+| Typed arithmetic plus logic chain | `20260509_iq0_typed_short_alu_chain_smoke` | `18,576` | `161,577` | Not run | `7,337` | `3,036` | `141,237` | Rejected due branch-dense regression. |
+| Boolean/shift-only chain | `20260509_iq0_logic_shift_chain_smoke`, `20260509_iq0_logic_shift_chain_validation` | `18,577` | `161,582` | `1,483,858` | `7,128` | `3,039` | `141,326` | DSE-only evidence, quarantined, not promoted. |
+
+Counter evidence for the best boolean/shift-only subvariant:
+
+| Row | Baseline cycles | Trial cycles | Cycle delta | Relevant movement |
+|---|---:|---:|---:|---|
+| CoreMark 1 | `163,013` | `161,582` | `-1,431` | `xs_bottleneck_dep_wait_on_alu` drops from `1,370,358` to `1,229,167`; short-chain fires `2,913` times. |
+| CoreMark 10 | `1,500,110` | `1,483,858` | `-16,252` | `xs_bottleneck_dep_wait_on_alu` drops from `13,495,221` to `12,066,640`; short-chain fires `28,109` times. |
+| Frontend mixed branch dense | `7,220` | `7,128` | `-92` | Branch mispredicts drop from `426` to `414`; short-chain fires `68` times. |
+| Dhrystone 100 | `18,577` | `18,577` | `0` | No active short-chain fires. |
+| Backend ALU chain 8 | `3,039` | `3,039` | `0` | No active short-chain fires. |
+| Branch hotspot | `141,326` | `141,326` | `0` | No active short-chain fires. |
+
+Architectural audit verdict:
+
+- There is no accepted architectural candidate from the local IQ0/short-ALU
+  family today.
+- The full simple-ALU, idle-slot-only, and typed variants are rejected because
+  they introduce benchmark regressions. The regressions are most visible on
+  branch-dense rows, so the mechanism is changing control timing rather than
+  simply removing a backend bottleneck.
+- The boolean/shift-only variant is endpoint-clean on the checked rows and
+  gives useful counter evidence, but it is quarantined as DSE-only. It does not
+  meet the new promotion bar: broad regression-free evidence, full signoff
+  coverage, and a realistic multi-percent impact.
+- Do not continue scalar short-chain threshold, op-list, or IQ0 priority
+  tuning. A future scheduler/wakeup direction must be a broader structural
+  redesign across issue queues, producer classes, and select policy, not a
+  local IQ0 shortcut.
+
+Next high-leverage architectural directions:
+
+| Direction | Why it is still credible | Required proof before promotion |
+|---|---|---|
+| Branch recovery and checkpoint contract | CoreMark 10 still has `redirect_recovery=29,575`; the branch hotspot has high redirect and commit-zero pressure. A correct non-head recovery contract can remove useful-work loss across branchy code instead of shifting local ALU timing. | Backend checkpoint, RAT, free-list, ROB, writeback, LSU, and frontend-owner recovery invariants stay zero on strict rows; branch hotspot improves without Dhrystone/CoreMark regression. |
+| True FTQ/IBuffer runahead | The frontend still reports `packet_empty_f2_data`, duplicate/no-emit, and frontend-zero buckets. XiangShan-style split ownership can let prediction and fetch run ahead without duplicate suppression. | Split FTQ allocation, IFU, commit, and optional prefetch ownership; owner-aware IBuffer absorbs F2 hold; delivery scoreboard proves each PC reaches decode exactly once. |
+| Broader scheduler/wakeup/select redesign | ALU dependency counters show true producer-chain depth, but local IQ0 chaining is too small. A real redesign should address producer blocking, wakeup fanout, select fairness, and cluster steering across integer IQs. | Multi-row reduction in `xs_bottleneck_dep_wait_on_alu`, producer-blocked counts, and IQ not-ready pressure with no branch/control regression and at least 3-5 percent broad upside. |
+| Memory and load-use pipeline | Current Stage 2 work has mostly targeted frontend and integer ALU chains. A broader workload set will expose load-use, forwarding, retry, D-cache conflict, and store-backlog limits. | Full bottleneck run shows LSU or load-use counters dominate multiple rows; any load speculation or forwarding change includes replay correctness and no stale wakeup side effects. |
+
 ## Implementation Order
 
 | Phase | Task | Exit criterion |
@@ -1400,8 +1463,9 @@ counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 | 35 | Split not-issued ALU waits by producer IQ location. | Done by `dse_dse_alu_dep_producer_location_*`: CoreMark 10 shows 99.38% of not-issued ALU waits have the producer present but operand-blocked in an integer IQ. |
 | 36 | Split operand-blocked ALU producers by their missing operand class. | Done by `dse_dse_alu_blocked_producer_srcclass_*`: CoreMark 10 shows 96.6% overlapping ALU-source blocking and 85.0% exclusive single-ALU blocking, so this is mostly true ALU dependency-chain depth. |
 | 37 | Attribute ALU-chain op patterns before RTL. | Done by `dse_alu_chain_shape_profile_*`: CoreMark 10 shows boolean/W-op ALU chains dominate the blocked-producer wait path, while move candidates are a small subset. |
-| 38 | Design C910-style short-ALU or wakeup/forwarding slice. | Next: target simple logic, W-suffix, and shift ALU chains with a general mechanism, then gate on the new shape counters plus DS/CoreMark/hotspot cycles. |
-| 39 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 38 | Audit local IQ0 short-ALU chaining. | Done: full simple-ALU, idle-slot-only, and typed variants are rejected due regressions. Boolean/shift-only is DSE-only evidence and has been reverted from default RTL by `57bfa58`. |
+| 39 | Select the next high-leverage structural direction from bottleneck evidence. | Candidate must have a plausible 3-5 percent broad upside, no unexplained benchmark regression, and a structural mechanism rather than scalar tuning. |
+| 40 | Re-score against MegaBOOM and stretch targets only after the structural slice passes broad evidence. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -1413,6 +1477,8 @@ counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 - No active XiangShan-style `pfPtr` until demand ownership is working.
 - No raw load-speculation plusarg promotion without LSU dependency prediction
   and replay evidence.
+- No local IQ0/short-ALU scalar tuning as the next promoted direction unless
+  broader evidence shows regression-free, multi-percent impact.
 
 ## Verdict
 
@@ -1438,6 +1504,13 @@ branch-owner sequencing contract, not only the prediction-snapshot fields.
 Scalar loop-bypass threshold and sticky/no-decay tuning is now quarantined as
 overfit risk; the accepted loop-predictor line is the threshold-2 per-loop
 exit-miss chooser with decay.
+Local IQ0/short-ALU chaining is also not the next promoted direction. The
+boolean/shift-only subvariant is useful DSE evidence, but the family is
+currently too marginal and too close to benchmark-shaped policy tuning. The
+next implementation should target a structural mechanism with realistic
+multi-percent upside: branch recovery/checkpoint repair, true FTQ/IBuffer
+runahead, broader scheduler/wakeup/select redesign, or memory/load-use
+pipeline work selected by the full bottleneck counters.
 Long-term objective remains 7.5 CM/MHz and 4.0 DMIPS/MHz, with a required
 second-domain escalation if frontend-only work does not reach the Gate C
 ceiling.
