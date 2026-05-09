@@ -263,14 +263,32 @@ ALU dependency lifecycle profiling, 2026-05-09:
 | `xs_bottleneck_dep_alu_wakeup_same_cycle_missed` | 69,681 | 0.5% of ALU wait | Same-cycle ALU wakeup select miss exists but is too small to explain the gap. |
 | `xs_bottleneck_dep_alu_ready_not_selected` | 186,804 | 1.4% of ALU wait | Ready ALU issue arbitration is secondary. |
 
-Verdict: do not pursue another wakeup-propagation or enqueue-bypass-only fix as
-the main Stage 2 optimization. The data points to producer scheduling and
-dependency-chain depth: most consumers wait because the producer itself has not
-issued yet. The next profiling slice, if we stay on this direction, should split
-`dep_alu_wait_not_issued` by producer location: producer absent from IQ,
-producer in IQ but operand-blocked, producer ready but not selected, and producer
-selected same cycle. That determines whether the real RTL target is dispatch/IQ
-routing, producer operand readiness, or issue arbitration.
+Producer-location profiling, 2026-05-09:
+
+- Commit-under-test instrumentation adds simulation-only counters that split
+  `xs_bottleneck_dep_alu_wait_not_issued` by where the not-yet-issued ALU
+  producer is in the integer issue queues.
+- Artifacts:
+  `benchmark_results/dse_dse_alu_dep_producer_location_smoke_20260509` and
+  `benchmark_results/dse_dse_alu_dep_producer_location_coremark10_20260509`.
+- Timed performance is unchanged and endpoint-clean:
+  Dhrystone 100 `18,577`, CoreMark 1 `163,013`, CoreMark 10 `1,500,110`
+  / `6.705406` CM/MHz.
+
+| Workload | Not-issued ALU waits | Producer absent | Producer blocked | Producer ready not selected | Producer selected |
+|---|---:|---:|---:|---:|---:|
+| Dhrystone 100 | 2,043 | 0 | 2,043 | 0 | 0 |
+| CoreMark 1 | 1,248,238 | 10 | 1,240,649 | 7,579 | 0 |
+| CoreMark 10 | 12,310,501 | 208 | 12,234,377 | 75,916 | 0 |
+
+Verdict: do not pursue another wakeup-propagation, raw issue arbitration, or
+enqueue-bypass-only fix as the main Stage 2 optimization. On CoreMark 10,
+99.38% of not-issued ALU waits are for producers that are present in an integer
+IQ but operand-blocked. Ready-not-selected producer pressure is only 0.62% of
+the same bucket. The next data slice should classify the blocked producer's own
+missing operand by producer class, such as ALU, load, multiply, branch, CSR, or
+unknown. Only after that split should we choose between an ALU-chain timing
+repair, a load-to-use path, or a useful-work reduction mechanism.
 
 ## Accepted Evidence
 
@@ -1207,7 +1225,7 @@ Smoke validation:
   in both runs.
 - Timed cycles are identical with the profiler off and on:
   Dhrystone 100 `18,577`, CoreMark iteration 1 `163,013`.
-- The on run emits 115 `xs_bottleneck_*` counters per row; the off run emits
+- The on run emits 190 `xs_bottleneck_*` counters per row; the off run emits
   none.
 
 Counter families now available for DSE ranking:
@@ -1218,6 +1236,9 @@ Counter families now available for DSE ranking:
   not-ready-age counts for integer, load, store-address, and store-data IQs.
 - Producer-class dependency wait counts for ALU, load, branch, multiply, divide,
   store, CSR, and unknown producers.
+- ALU dependency lifecycle and producer-location counts that distinguish
+  same-cycle issue, producer not issued, producer blocked in IQ, producer ready
+  but not selected, missing producer entry, and stale lifecycle states.
 - Same-cycle wakeup candidates and missed same-cycle wakeup opportunities.
 - ROB head-blocked younger-ready lost commit slots.
 - LSU load latency, forwarding, retry, D-cache conflict, and store backlog
@@ -1266,7 +1287,10 @@ counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 | 31 | Document and harden the non-head recovery contract. | Contract documented; checkpoint allocation invariants are checked. Behavior hardening is still pending before any non-head recovery performance claim. |
 | 32 | Reopen direct non-head partial recovery without early redirect. | Current resource-aware selector is endpoint-clean on smoke but regresses; checkpoint ownership must be fixed before another performance claim. |
 | 33 | Reopen selective early frontend redirect. | Branch hotspot improves without Dhrystone/CoreMark regression and without contract checker failures. |
-| 34 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 34 | Add ALU producer lifecycle profiling. | Done by `dse_dse_alu_dep_lifecycle_profile_*`: CoreMark 10 shows 91.2% of ALU dependency waits are producers not yet issued, while post-issue and stale-ready buckets are zero. |
+| 35 | Split not-issued ALU waits by producer IQ location. | Done by `dse_dse_alu_dep_producer_location_*`: CoreMark 10 shows 99.38% of not-issued ALU waits have the producer present but operand-blocked in an integer IQ. |
+| 36 | Split operand-blocked ALU producers by their missing operand class. | Next: determine whether the blocker is another ALU chain, a load-use path, multiply/divide/CSR latency, or unknown scoreboard drift before selecting RTL. |
+| 37 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
