@@ -568,6 +568,10 @@ module tb_top
     localparam int BTL_PROD_DIV = 5;
     localparam int BTL_PROD_STORE = 6;
     localparam int BTL_PROD_CSR = 7;
+    localparam int BTL_PREG_STATE_UNKNOWN = 0;
+    localparam int BTL_PREG_STATE_WAIT_ISSUE = 1;
+    localparam int BTL_PREG_STATE_ISSUED_WAIT_WB = 2;
+    localparam int BTL_PREG_STATE_DONE = 3;
     integer btl_iq_valid_entry_sum [0:BTL_IQ_COUNT-1];
     integer btl_iq_ready_entry_sum [0:BTL_IQ_COUNT-1];
     integer btl_iq_not_ready_entry_sum [0:BTL_IQ_COUNT-1];
@@ -600,6 +604,14 @@ module tb_top
     integer btl_dep_wait_on_store;
     integer btl_dep_wait_on_csr;
     integer btl_dep_wait_on_unknown;
+    integer btl_dep_alu_wait_issue_same_cycle;
+    integer btl_dep_alu_wait_not_issued;
+    integer btl_dep_alu_wait_issued_not_wb;
+    integer btl_dep_alu_wait_done_stale;
+    integer btl_dep_alu_wait_state_unknown;
+    integer btl_dep_alu_wakeup_same_cycle_candidate;
+    integer btl_dep_alu_wakeup_same_cycle_missed;
+    integer btl_dep_alu_ready_not_selected;
     integer btl_wakeup_same_cycle_candidate;
     integer btl_wakeup_same_cycle_missed;
     integer btl_rename_slots_lost_total;
@@ -613,6 +625,7 @@ module tb_top
     integer btl_rob_younger_ready_behind_head;
     integer btl_rob_commit_slots_lost_head_block;
     integer btl_preg_class [0:INT_PRF_DEPTH-1];
+    integer btl_preg_state [0:INT_PRF_DEPTH-1];
     integer macro_fused_rename_total;
     integer macro_fused_commit_total;
     integer macro_fused_commit_alu;
@@ -1074,6 +1087,14 @@ module tb_top
             btl_dep_wait_on_store <= 0;
             btl_dep_wait_on_csr <= 0;
             btl_dep_wait_on_unknown <= 0;
+            btl_dep_alu_wait_issue_same_cycle <= 0;
+            btl_dep_alu_wait_not_issued <= 0;
+            btl_dep_alu_wait_issued_not_wb <= 0;
+            btl_dep_alu_wait_done_stale <= 0;
+            btl_dep_alu_wait_state_unknown <= 0;
+            btl_dep_alu_wakeup_same_cycle_candidate <= 0;
+            btl_dep_alu_wakeup_same_cycle_missed <= 0;
+            btl_dep_alu_ready_not_selected <= 0;
             btl_wakeup_same_cycle_candidate <= 0;
             btl_wakeup_same_cycle_missed <= 0;
             btl_rename_slots_lost_total <= 0;
@@ -1088,6 +1109,7 @@ module tb_top
             btl_rob_commit_slots_lost_head_block <= 0;
             for (int i = 0; i < INT_PRF_DEPTH; i++) begin
                 btl_preg_class[i] <= BTL_PROD_UNKNOWN;
+                btl_preg_state[i] <= BTL_PREG_STATE_UNKNOWN;
             end
             macro_fused_rename_total <= 0;
             macro_fused_commit_total <= 0;
@@ -1149,9 +1171,18 @@ module tb_top
             automatic int btl_wait_store_now;
             automatic int btl_wait_csr_now;
             automatic int btl_wait_unknown_now;
+            automatic int btl_wait_alu_issue_same_cycle_now;
+            automatic int btl_wait_alu_not_issued_now;
+            automatic int btl_wait_alu_issued_not_wb_now;
+            automatic int btl_wait_alu_done_stale_now;
+            automatic int btl_wait_alu_state_unknown_now;
+            automatic int btl_alu_wakeup_candidate_now;
+            automatic int btl_alu_wakeup_missed_now;
+            automatic int btl_alu_ready_not_selected_now;
             automatic int btl_wakeup_candidate_now;
             automatic int btl_wakeup_missed_now;
             automatic int btl_younger_ready_now;
+            automatic logic [INT_PRF_DEPTH-1:0] btl_issue_pdst_now;
 
             perf_total_cyc    <= perf_total_cyc + 1;
             frontend_bin = int'(u_core.rename_dec_count);
@@ -1209,9 +1240,18 @@ module tb_top
             btl_wait_store_now = 0;
             btl_wait_csr_now = 0;
             btl_wait_unknown_now = 0;
+            btl_wait_alu_issue_same_cycle_now = 0;
+            btl_wait_alu_not_issued_now = 0;
+            btl_wait_alu_issued_not_wb_now = 0;
+            btl_wait_alu_done_stale_now = 0;
+            btl_wait_alu_state_unknown_now = 0;
+            btl_alu_wakeup_candidate_now = 0;
+            btl_alu_wakeup_missed_now = 0;
+            btl_alu_ready_not_selected_now = 0;
             btl_wakeup_candidate_now = 0;
             btl_wakeup_missed_now = 0;
             btl_younger_ready_now = 0;
+            btl_issue_pdst_now = '0;
 
             fetch_hist[u_core.fetch_count]        <= fetch_hist[u_core.fetch_count] + 1;
             frontend_hist[frontend_bin]           <= frontend_hist[frontend_bin] + 1;
@@ -1318,6 +1358,26 @@ module tb_top
             iq0_issue_uops <= iq0_issue_uops + iq0_issue_cnt;
             iq1_issue_uops <= iq1_issue_uops + iq1_issue_cnt;
             iq2_issue_uops <= iq2_issue_uops + iq2_issue_cnt;
+            for (int p = 0; p < 2; p++) begin
+                if (u_core.iq0_issue_valid[p] &&
+                    (u_core.iq0_issue_data[p].pdst != '0))
+                    btl_issue_pdst_now[u_core.iq0_issue_data[p].pdst] = 1'b1;
+                if (u_core.iq_load_issue_valid[p] &&
+                    (u_core.iq_load_issue_data[p].pdst != '0))
+                    btl_issue_pdst_now[u_core.iq_load_issue_data[p].pdst] = 1'b1;
+            end
+            if (u_core.iq1_issue_valid[0] &&
+                (u_core.iq1_issue_data[0].pdst != '0))
+                btl_issue_pdst_now[u_core.iq1_issue_data[0].pdst] = 1'b1;
+            if (u_core.iq2_issue_valid[0] &&
+                (u_core.iq2_issue_data[0].pdst != '0))
+                btl_issue_pdst_now[u_core.iq2_issue_data[0].pdst] = 1'b1;
+            if (u_core.iq_store_issue_valid[0] &&
+                (u_core.iq_store_issue_data[0].pdst != '0))
+                btl_issue_pdst_now[u_core.iq_store_issue_data[0].pdst] = 1'b1;
+            if (u_core.iq_std_issue_valid_s[0] &&
+                (u_core.iq_std_issue_data_s[0].pdst != '0))
+                btl_issue_pdst_now[u_core.iq_std_issue_data_s[0].pdst] = 1'b1;
             // Per-IQ issue-stall classification (Phase A.2). Cycle-OR semantics:
             // a cycle counts toward a bucket if ANY IQ matches that bucket.
             // NUM_SELECT: u_iq0=2, u_iq1=1, u_iq2=1.
@@ -1375,6 +1435,7 @@ module tb_top
                 automatic logic selected_now;
                 automatic logic ready_now;
                 automatic logic wakeup_now;
+                automatic logic wakeup_alu_now;
 
                 btl_iq_eligible_now[BTL_IQ0] = $countones(u_core.u_iq0.eligible);
                 btl_iq_eligible_now[BTL_IQ1] = $countones(u_core.u_iq1.eligible);
@@ -1510,32 +1571,75 @@ module tb_top
                                     u_core.u_iq0.next_src2_ready[e];
                         if (ready_now) begin
                             btl_iq_ready_now[BTL_IQ0]++;
-                        end else begin
-                            if (int'(u_core.u_iq0.entry_age[e]) >
-                                btl_iq_oldest_wait_now[BTL_IQ0])
-                                btl_iq_oldest_wait_now[BTL_IQ0] =
-                                    int'(u_core.u_iq0.entry_age[e]);
-                        end
-                        if (!u_core.u_iq0.next_src1_ready[e]) begin
-                            btl_src1_wait_now++;
-                            case (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            end else begin
+                                if (int'(u_core.u_iq0.entry_age[e]) >
+                                    btl_iq_oldest_wait_now[BTL_IQ0])
+                                    btl_iq_oldest_wait_now[BTL_IQ0] =
+                                        int'(u_core.u_iq0.entry_age[e]);
+                            end
+                            selected_now = 1'b0;
+                            for (int p = 0; p < 2; p++) begin
+                                if (u_core.u_iq0.sel_found[p] &&
+                                    !u_core.u_iq0.issue_suppress[p] &&
+                                    (u_core.u_iq0.sel_idx[p] == e[$clog2(IQ_INT_DEPTH)-1:0]))
+                                    selected_now = 1'b1;
+                            end
+                            if (u_core.u_iq0.eligible[e] &&
+                                (u_core.u_iq0.fu_type_r[e] == FU_ALU) &&
+                                !selected_now)
+                                btl_alu_ready_not_selected_now++;
+                            if (!u_core.u_iq0.next_src1_ready[e]) begin
+                                btl_src1_wait_now++;
+                                case (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq0.rs1_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq0.rs1_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
                                 default:         btl_wait_unknown_now++;
                             endcase
                         end
-                        if (!u_core.u_iq0.next_src2_ready[e]) begin
-                            btl_src2_wait_now++;
-                            case (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq0.next_src2_ready[e]) begin
+                                btl_src2_wait_now++;
+                                case (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq0.rs2_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq0.rs2_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
@@ -1545,22 +1649,25 @@ module tb_top
                         if (!u_core.u_iq0.next_src1_ready[e] &&
                             !u_core.u_iq0.next_src2_ready[e])
                             btl_both_src_wait_now++;
-                        wakeup_now =
-                            (!u_core.u_iq0.src1_ready[e] ||
-                             !u_core.u_iq0.src2_ready[e]) &&
-                            u_core.u_iq0.eligible[e];
-                        if (wakeup_now) begin
-                            selected_now = 1'b0;
-                            for (int p = 0; p < 2; p++) begin
-                                if (u_core.u_iq0.sel_found[p] &&
-                                    !u_core.u_iq0.issue_suppress[p] &&
-                                    (u_core.u_iq0.sel_idx[p] == e[$clog2(IQ_INT_DEPTH)-1:0]))
-                                    selected_now = 1'b1;
+                            wakeup_now =
+                                (!u_core.u_iq0.src1_ready[e] ||
+                                 !u_core.u_iq0.src2_ready[e]) &&
+                                u_core.u_iq0.eligible[e];
+                            wakeup_alu_now =
+                                (!u_core.u_iq0.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
+                                (!u_core.u_iq0.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            if (wakeup_now) begin
+                                btl_wakeup_candidate_now++;
+                                if (!selected_now)
+                                    btl_wakeup_missed_now++;
+                                if (wakeup_alu_now) begin
+                                    btl_alu_wakeup_candidate_now++;
+                                    if (!selected_now)
+                                        btl_alu_wakeup_missed_now++;
+                                end
                             end
-                            btl_wakeup_candidate_now++;
-                            if (!selected_now)
-                                btl_wakeup_missed_now++;
-                        end
                     end
 
                     if (u_core.u_iq1.entry_valid[e]) begin
@@ -1569,32 +1676,72 @@ module tb_top
                                     u_core.u_iq1.next_src2_ready[e];
                         if (ready_now) begin
                             btl_iq_ready_now[BTL_IQ1]++;
-                        end else begin
-                            if (int'(u_core.u_iq1.entry_age[e]) >
-                                btl_iq_oldest_wait_now[BTL_IQ1])
-                                btl_iq_oldest_wait_now[BTL_IQ1] =
-                                    int'(u_core.u_iq1.entry_age[e]);
-                        end
-                        if (!u_core.u_iq1.next_src1_ready[e]) begin
-                            btl_src1_wait_now++;
-                            case (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            end else begin
+                                if (int'(u_core.u_iq1.entry_age[e]) >
+                                    btl_iq_oldest_wait_now[BTL_IQ1])
+                                    btl_iq_oldest_wait_now[BTL_IQ1] =
+                                        int'(u_core.u_iq1.entry_age[e]);
+                            end
+                            selected_now =
+                                u_core.u_iq1.sel_found[0] &&
+                                !u_core.u_iq1.issue_suppress[0] &&
+                                (u_core.u_iq1.sel_idx[0] == e[$clog2(IQ_INT_DEPTH)-1:0]);
+                            if (u_core.u_iq1.eligible[e] &&
+                                (u_core.u_iq1.fu_type_r[e] == FU_ALU) &&
+                                !selected_now)
+                                btl_alu_ready_not_selected_now++;
+                            if (!u_core.u_iq1.next_src1_ready[e]) begin
+                                btl_src1_wait_now++;
+                                case (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq1.rs1_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq1.rs1_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
                                 default:         btl_wait_unknown_now++;
                             endcase
                         end
-                        if (!u_core.u_iq1.next_src2_ready[e]) begin
-                            btl_src2_wait_now++;
-                            case (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq1.next_src2_ready[e]) begin
+                                btl_src2_wait_now++;
+                                case (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq1.rs2_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq1.rs2_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
@@ -1604,19 +1751,25 @@ module tb_top
                         if (!u_core.u_iq1.next_src1_ready[e] &&
                             !u_core.u_iq1.next_src2_ready[e])
                             btl_both_src_wait_now++;
-                        wakeup_now =
-                            (!u_core.u_iq1.src1_ready[e] ||
-                             !u_core.u_iq1.src2_ready[e]) &&
-                            u_core.u_iq1.eligible[e];
-                        if (wakeup_now) begin
-                            selected_now =
-                                u_core.u_iq1.sel_found[0] &&
-                                !u_core.u_iq1.issue_suppress[0] &&
-                                (u_core.u_iq1.sel_idx[0] == e[$clog2(IQ_INT_DEPTH)-1:0]);
-                            btl_wakeup_candidate_now++;
-                            if (!selected_now)
-                                btl_wakeup_missed_now++;
-                        end
+                            wakeup_now =
+                                (!u_core.u_iq1.src1_ready[e] ||
+                                 !u_core.u_iq1.src2_ready[e]) &&
+                                u_core.u_iq1.eligible[e];
+                            wakeup_alu_now =
+                                (!u_core.u_iq1.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
+                                (!u_core.u_iq1.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            if (wakeup_now) begin
+                                btl_wakeup_candidate_now++;
+                                if (!selected_now)
+                                    btl_wakeup_missed_now++;
+                                if (wakeup_alu_now) begin
+                                    btl_alu_wakeup_candidate_now++;
+                                    if (!selected_now)
+                                        btl_alu_wakeup_missed_now++;
+                                end
+                            end
                     end
 
                     if (u_core.u_iq2.entry_valid[e]) begin
@@ -1625,32 +1778,72 @@ module tb_top
                                     u_core.u_iq2.next_src2_ready[e];
                         if (ready_now) begin
                             btl_iq_ready_now[BTL_IQ2]++;
-                        end else begin
-                            if (int'(u_core.u_iq2.entry_age[e]) >
-                                btl_iq_oldest_wait_now[BTL_IQ2])
-                                btl_iq_oldest_wait_now[BTL_IQ2] =
-                                    int'(u_core.u_iq2.entry_age[e]);
-                        end
-                        if (!u_core.u_iq2.next_src1_ready[e]) begin
-                            btl_src1_wait_now++;
-                            case (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            end else begin
+                                if (int'(u_core.u_iq2.entry_age[e]) >
+                                    btl_iq_oldest_wait_now[BTL_IQ2])
+                                    btl_iq_oldest_wait_now[BTL_IQ2] =
+                                        int'(u_core.u_iq2.entry_age[e]);
+                            end
+                            selected_now =
+                                u_core.u_iq2.sel_found[0] &&
+                                !u_core.u_iq2.issue_suppress[0] &&
+                                (u_core.u_iq2.sel_idx[0] == e[$clog2(IQ_INT_DEPTH)-1:0]);
+                            if (u_core.u_iq2.eligible[e] &&
+                                (u_core.u_iq2.fu_type_r[e] == FU_ALU) &&
+                                !selected_now)
+                                btl_alu_ready_not_selected_now++;
+                            if (!u_core.u_iq2.next_src1_ready[e]) begin
+                                btl_src1_wait_now++;
+                                case (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq2.rs1_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq2.rs1_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
                                 default:         btl_wait_unknown_now++;
                             endcase
                         end
-                        if (!u_core.u_iq2.next_src2_ready[e]) begin
-                            btl_src2_wait_now++;
-                            case (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq2.next_src2_ready[e]) begin
+                                btl_src2_wait_now++;
+                                case (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq2.rs2_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq2.rs2_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
@@ -1660,19 +1853,25 @@ module tb_top
                         if (!u_core.u_iq2.next_src1_ready[e] &&
                             !u_core.u_iq2.next_src2_ready[e])
                             btl_both_src_wait_now++;
-                        wakeup_now =
-                            (!u_core.u_iq2.src1_ready[e] ||
-                             !u_core.u_iq2.src2_ready[e]) &&
-                            u_core.u_iq2.eligible[e];
-                        if (wakeup_now) begin
-                            selected_now =
-                                u_core.u_iq2.sel_found[0] &&
-                                !u_core.u_iq2.issue_suppress[0] &&
-                                (u_core.u_iq2.sel_idx[0] == e[$clog2(IQ_INT_DEPTH)-1:0]);
-                            btl_wakeup_candidate_now++;
-                            if (!selected_now)
-                                btl_wakeup_missed_now++;
-                        end
+                            wakeup_now =
+                                (!u_core.u_iq2.src1_ready[e] ||
+                                 !u_core.u_iq2.src2_ready[e]) &&
+                                u_core.u_iq2.eligible[e];
+                            wakeup_alu_now =
+                                (!u_core.u_iq2.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
+                                (!u_core.u_iq2.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            if (wakeup_now) begin
+                                btl_wakeup_candidate_now++;
+                                if (!selected_now)
+                                    btl_wakeup_missed_now++;
+                                if (wakeup_alu_now) begin
+                                    btl_alu_wakeup_candidate_now++;
+                                    if (!selected_now)
+                                        btl_alu_wakeup_missed_now++;
+                                end
+                            end
                     end
                 end
 
@@ -1689,26 +1888,58 @@ module tb_top
                                 btl_iq_oldest_wait_now[BTL_IQ_LOAD] =
                                     int'(u_core.u_iq_load.entry_age[e]);
                         end
-                        if (!u_core.u_iq_load.next_src1_ready[e]) begin
-                            btl_src1_wait_now++;
-                            case (btl_preg_class[u_core.u_iq_load.rs1_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq_load.next_src1_ready[e]) begin
+                                btl_src1_wait_now++;
+                                case (btl_preg_class[u_core.u_iq_load.rs1_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq_load.rs1_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq_load.rs1_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
                                 default:         btl_wait_unknown_now++;
                             endcase
                         end
-                        if (!u_core.u_iq_load.next_src2_ready[e]) begin
-                            btl_src2_wait_now++;
-                            case (btl_preg_class[u_core.u_iq_load.rs2_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq_load.next_src2_ready[e]) begin
+                                btl_src2_wait_now++;
+                                case (btl_preg_class[u_core.u_iq_load.rs2_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq_load.rs2_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq_load.rs2_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
@@ -1718,22 +1949,32 @@ module tb_top
                         if (!u_core.u_iq_load.next_src1_ready[e] &&
                             !u_core.u_iq_load.next_src2_ready[e])
                             btl_both_src_wait_now++;
-                        wakeup_now =
-                            (!u_core.u_iq_load.src1_ready[e] ||
-                             !u_core.u_iq_load.src2_ready[e]) &&
-                            u_core.u_iq_load.eligible[e];
-                        if (wakeup_now) begin
-                            selected_now = 1'b0;
-                            for (int p = 0; p < 2; p++) begin
+                            wakeup_now =
+                                (!u_core.u_iq_load.src1_ready[e] ||
+                                 !u_core.u_iq_load.src2_ready[e]) &&
+                                u_core.u_iq_load.eligible[e];
+                            wakeup_alu_now =
+                                (!u_core.u_iq_load.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_load.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
+                                (!u_core.u_iq_load.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_load.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            if (wakeup_now) begin
+                                selected_now = 1'b0;
+                                for (int p = 0; p < 2; p++) begin
                                 if (u_core.u_iq_load.sel_found[p] &&
                                     !u_core.u_iq_load.issue_suppress[p] &&
                                     (u_core.u_iq_load.sel_idx[p] == e[$clog2(IQ_MEM_DEPTH)-1:0]))
                                     selected_now = 1'b1;
                             end
-                            btl_wakeup_candidate_now++;
-                            if (!selected_now)
-                                btl_wakeup_missed_now++;
-                        end
+                                btl_wakeup_candidate_now++;
+                                if (!selected_now)
+                                    btl_wakeup_missed_now++;
+                                if (wakeup_alu_now) begin
+                                    btl_alu_wakeup_candidate_now++;
+                                    if (!selected_now)
+                                        btl_alu_wakeup_missed_now++;
+                                end
+                            end
                     end
 
                     if (u_core.u_iq_store.entry_valid[e]) begin
@@ -1748,26 +1989,58 @@ module tb_top
                                 btl_iq_oldest_wait_now[BTL_IQ_STORE] =
                                     int'(u_core.u_iq_store.entry_age[e]);
                         end
-                        if (!u_core.u_iq_store.next_src1_ready[e]) begin
-                            btl_src1_wait_now++;
-                            case (btl_preg_class[u_core.u_iq_store.rs1_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq_store.next_src1_ready[e]) begin
+                                btl_src1_wait_now++;
+                                case (btl_preg_class[u_core.u_iq_store.rs1_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq_store.rs1_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq_store.rs1_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
                                 default:         btl_wait_unknown_now++;
                             endcase
                         end
-                        if (!u_core.u_iq_store.next_src2_ready[e]) begin
-                            btl_src2_wait_now++;
-                            case (btl_preg_class[u_core.u_iq_store.rs2_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq_store.next_src2_ready[e]) begin
+                                btl_src2_wait_now++;
+                                case (btl_preg_class[u_core.u_iq_store.rs2_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq_store.rs2_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq_store.rs2_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
@@ -1777,19 +2050,29 @@ module tb_top
                         if (!u_core.u_iq_store.next_src1_ready[e] &&
                             !u_core.u_iq_store.next_src2_ready[e])
                             btl_both_src_wait_now++;
-                        wakeup_now =
-                            (!u_core.u_iq_store.src1_ready[e] ||
-                             !u_core.u_iq_store.src2_ready[e]) &&
-                            u_core.u_iq_store.eligible[e];
-                        if (wakeup_now) begin
-                            selected_now =
-                                u_core.u_iq_store.sel_found[0] &&
+                            wakeup_now =
+                                (!u_core.u_iq_store.src1_ready[e] ||
+                                 !u_core.u_iq_store.src2_ready[e]) &&
+                                u_core.u_iq_store.eligible[e];
+                            wakeup_alu_now =
+                                (!u_core.u_iq_store.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_store.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
+                                (!u_core.u_iq_store.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_store.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            if (wakeup_now) begin
+                                selected_now =
+                                    u_core.u_iq_store.sel_found[0] &&
                                 !u_core.u_iq_store.issue_suppress[0] &&
                                 (u_core.u_iq_store.sel_idx[0] == e[$clog2(IQ_MEM_DEPTH)-1:0]);
-                            btl_wakeup_candidate_now++;
-                            if (!selected_now)
-                                btl_wakeup_missed_now++;
-                        end
+                                btl_wakeup_candidate_now++;
+                                if (!selected_now)
+                                    btl_wakeup_missed_now++;
+                                if (wakeup_alu_now) begin
+                                    btl_alu_wakeup_candidate_now++;
+                                    if (!selected_now)
+                                        btl_alu_wakeup_missed_now++;
+                                end
+                            end
                     end
 
                     if (u_core.u_iq_store_data.entry_valid[e]) begin
@@ -1804,26 +2087,58 @@ module tb_top
                                 btl_iq_oldest_wait_now[BTL_IQ_STD] =
                                     int'(u_core.u_iq_store_data.entry_age[e]);
                         end
-                        if (!u_core.u_iq_store_data.next_src1_ready[e]) begin
-                            btl_src1_wait_now++;
-                            case (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq_store_data.next_src1_ready[e]) begin
+                                btl_src1_wait_now++;
+                                case (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq_store_data.rs1_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq_store_data.rs1_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
                                 default:         btl_wait_unknown_now++;
                             endcase
                         end
-                        if (!u_core.u_iq_store_data.next_src2_ready[e]) begin
-                            btl_src2_wait_now++;
-                            case (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]])
-                                BTL_PROD_ALU:    btl_wait_alu_now++;
-                                BTL_PROD_LOAD:   btl_wait_load_now++;
-                                BTL_PROD_BRANCH: btl_wait_branch_now++;
-                                BTL_PROD_MUL:    btl_wait_mul_now++;
+                            if (!u_core.u_iq_store_data.next_src2_ready[e]) begin
+                                btl_src2_wait_now++;
+                                case (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]])
+                                    BTL_PROD_ALU: begin
+                                        btl_wait_alu_now++;
+                                        if (btl_issue_pdst_now[u_core.u_iq_store_data.rs2_phys_r[e]]) begin
+                                            btl_wait_alu_issue_same_cycle_now++;
+                                        end else begin
+                                            case (btl_preg_state[u_core.u_iq_store_data.rs2_phys_r[e]])
+                                                BTL_PREG_STATE_WAIT_ISSUE:
+                                                    btl_wait_alu_not_issued_now++;
+                                                BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                                    btl_wait_alu_issued_not_wb_now++;
+                                                BTL_PREG_STATE_DONE:
+                                                    btl_wait_alu_done_stale_now++;
+                                                default:
+                                                    btl_wait_alu_state_unknown_now++;
+                                            endcase
+                                        end
+                                    end
+                                    BTL_PROD_LOAD:   btl_wait_load_now++;
+                                    BTL_PROD_BRANCH: btl_wait_branch_now++;
+                                    BTL_PROD_MUL:    btl_wait_mul_now++;
                                 BTL_PROD_DIV:    btl_wait_div_now++;
                                 BTL_PROD_STORE:  btl_wait_store_now++;
                                 BTL_PROD_CSR:    btl_wait_csr_now++;
@@ -1833,19 +2148,29 @@ module tb_top
                         if (!u_core.u_iq_store_data.next_src1_ready[e] &&
                             !u_core.u_iq_store_data.next_src2_ready[e])
                             btl_both_src_wait_now++;
-                        wakeup_now =
-                            (!u_core.u_iq_store_data.src1_ready[e] ||
-                             !u_core.u_iq_store_data.src2_ready[e]) &&
-                            u_core.u_iq_store_data.eligible[e];
-                        if (wakeup_now) begin
-                            selected_now =
-                                u_core.u_iq_store_data.sel_found[0] &&
+                            wakeup_now =
+                                (!u_core.u_iq_store_data.src1_ready[e] ||
+                                 !u_core.u_iq_store_data.src2_ready[e]) &&
+                                u_core.u_iq_store_data.eligible[e];
+                            wakeup_alu_now =
+                                (!u_core.u_iq_store_data.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
+                                (!u_core.u_iq_store_data.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            if (wakeup_now) begin
+                                selected_now =
+                                    u_core.u_iq_store_data.sel_found[0] &&
                                 !u_core.u_iq_store_data.issue_suppress[0] &&
                                 (u_core.u_iq_store_data.sel_idx[0] == e[$clog2(IQ_MEM_DEPTH)-1:0]);
-                            btl_wakeup_candidate_now++;
-                            if (!selected_now)
-                                btl_wakeup_missed_now++;
-                        end
+                                btl_wakeup_candidate_now++;
+                                if (!selected_now)
+                                    btl_wakeup_missed_now++;
+                                if (wakeup_alu_now) begin
+                                    btl_alu_wakeup_candidate_now++;
+                                    if (!selected_now)
+                                        btl_alu_wakeup_missed_now++;
+                                end
+                            end
                     end
                 end
 
@@ -1920,6 +2245,19 @@ module tb_top
                 btl_dep_both_src_wait <=
                     btl_dep_both_src_wait + btl_both_src_wait_now;
                 btl_dep_wait_on_alu <= btl_dep_wait_on_alu + btl_wait_alu_now;
+                btl_dep_alu_wait_issue_same_cycle <=
+                    btl_dep_alu_wait_issue_same_cycle +
+                    btl_wait_alu_issue_same_cycle_now;
+                btl_dep_alu_wait_not_issued <=
+                    btl_dep_alu_wait_not_issued + btl_wait_alu_not_issued_now;
+                btl_dep_alu_wait_issued_not_wb <=
+                    btl_dep_alu_wait_issued_not_wb +
+                    btl_wait_alu_issued_not_wb_now;
+                btl_dep_alu_wait_done_stale <=
+                    btl_dep_alu_wait_done_stale + btl_wait_alu_done_stale_now;
+                btl_dep_alu_wait_state_unknown <=
+                    btl_dep_alu_wait_state_unknown +
+                    btl_wait_alu_state_unknown_now;
                 btl_dep_wait_on_load <= btl_dep_wait_on_load + btl_wait_load_now;
                 btl_dep_wait_on_branch <=
                     btl_dep_wait_on_branch + btl_wait_branch_now;
@@ -1930,6 +2268,15 @@ module tb_top
                 btl_dep_wait_on_csr <= btl_dep_wait_on_csr + btl_wait_csr_now;
                 btl_dep_wait_on_unknown <=
                     btl_dep_wait_on_unknown + btl_wait_unknown_now;
+                btl_dep_alu_wakeup_same_cycle_candidate <=
+                    btl_dep_alu_wakeup_same_cycle_candidate +
+                    btl_alu_wakeup_candidate_now;
+                btl_dep_alu_wakeup_same_cycle_missed <=
+                    btl_dep_alu_wakeup_same_cycle_missed +
+                    btl_alu_wakeup_missed_now;
+                btl_dep_alu_ready_not_selected <=
+                    btl_dep_alu_ready_not_selected +
+                    btl_alu_ready_not_selected_now;
                 btl_wakeup_same_cycle_candidate <=
                     btl_wakeup_same_cycle_candidate + btl_wakeup_candidate_now;
                 btl_wakeup_same_cycle_missed <=
@@ -1980,8 +2327,23 @@ module tb_top
                 if (u_core.flush_out.valid && u_core.flush_out.full_flush) begin
                     for (int i = 0; i < INT_PRF_DEPTH; i++) begin
                         btl_preg_class[i] <= BTL_PROD_UNKNOWN;
+                        btl_preg_state[i] <= BTL_PREG_STATE_UNKNOWN;
                     end
                 end else begin
+                    for (int i = 0; i < INT_PRF_DEPTH; i++) begin
+                        if (btl_issue_pdst_now[i])
+                            btl_preg_state[i] <= BTL_PREG_STATE_ISSUED_WAIT_WB;
+                    end
+                    for (int i = 0; i < CDB_WIDTH; i++) begin
+                        if (u_core.cdb_valid_live[i] && (u_core.cdb_tag[i] != '0))
+                            btl_preg_state[u_core.cdb_tag[i]] <= BTL_PREG_STATE_DONE;
+                    end
+                    for (int i = 0; i < 2; i++) begin
+                        if (u_core.load_wb_valid_live[i] &&
+                            (u_core.load_wb_pdst[i] != '0))
+                            btl_preg_state[u_core.load_wb_pdst[i]] <=
+                                BTL_PREG_STATE_DONE;
+                    end
                     for (int i = 0; i < PIPE_WIDTH; i++) begin
                         if ((3'(i) < u_core.ren_count_w) &&
                             u_core.ren_insn[i].base.valid &&
@@ -2015,6 +2377,8 @@ module tb_top
                                     btl_preg_class[u_core.ren_insn[i].pdst] <=
                                         BTL_PROD_UNKNOWN;
                             endcase
+                            btl_preg_state[u_core.ren_insn[i].pdst] <=
+                                BTL_PREG_STATE_WAIT_ISSUE;
                         end
                     end
                 end
@@ -2947,6 +3311,14 @@ module tb_top
                 $display("xs bottleneck_dep_src2_wait : %0d", btl_dep_src2_wait);
                 $display("xs bottleneck_dep_both_src_wait : %0d", btl_dep_both_src_wait);
                 $display("xs bottleneck_dep_wait_on_alu : %0d", btl_dep_wait_on_alu);
+                $display("xs bottleneck_dep_alu_wait_issue_same_cycle : %0d", btl_dep_alu_wait_issue_same_cycle);
+                $display("xs bottleneck_dep_alu_wait_not_issued : %0d", btl_dep_alu_wait_not_issued);
+                $display("xs bottleneck_dep_alu_wait_issued_not_wb : %0d", btl_dep_alu_wait_issued_not_wb);
+                $display("xs bottleneck_dep_alu_wait_done_stale : %0d", btl_dep_alu_wait_done_stale);
+                $display("xs bottleneck_dep_alu_wait_state_unknown : %0d", btl_dep_alu_wait_state_unknown);
+                $display("xs bottleneck_dep_alu_wakeup_same_cycle_candidate : %0d", btl_dep_alu_wakeup_same_cycle_candidate);
+                $display("xs bottleneck_dep_alu_wakeup_same_cycle_missed : %0d", btl_dep_alu_wakeup_same_cycle_missed);
+                $display("xs bottleneck_dep_alu_ready_not_selected : %0d", btl_dep_alu_ready_not_selected);
                 $display("xs bottleneck_dep_wait_on_load : %0d", btl_dep_wait_on_load);
                 $display("xs bottleneck_dep_wait_on_branch : %0d", btl_dep_wait_on_branch);
                 $display("xs bottleneck_dep_wait_on_mul : %0d", btl_dep_wait_on_mul);
@@ -3295,12 +3667,12 @@ module tb_top
                     if (u_core.fused_insn[i].valid &&
                         (((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2000) &&
                           (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_202a)) ||
-	                         ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2290) &&
-	                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_2320)) ||
-	                         ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2150) &&
-	                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_21a0)) ||
-	                         ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2440) &&
-	                          (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_24d0)))) begin
+                             ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2290) &&
+                              (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_2320)) ||
+                             ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2150) &&
+                              (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_21a0)) ||
+                             ((u_core.fused_insn[i].pc >= 64'h0000_0000_8000_2440) &&
+                              (u_core.fused_insn[i].pc <= 64'h0000_0000_8000_24d0)))) begin
                         hot_uoc_window = 1'b1;
                     end
                 end
@@ -3480,7 +3852,7 @@ module tb_top
                     (rat_ra_data != trace_prev_rat_ra_data) ||
                     (crat_ra_data != trace_prev_crat_ra_data) ||
                     u_core.flush_out.valid) begin
-	                        $display("[RAMAP] cyc=%0d rat1=%0d rat1_data=%016h crat1=%0d crat1_data=%016h ren_count=%0d commit_count=%0d flush=%b full=%b redir=%016h",
+                            $display("[RAMAP] cyc=%0d rat1=%0d rat1_data=%016h crat1=%0d crat1_data=%016h ren_count=%0d commit_count=%0d flush=%b full=%b redir=%016h",
                         trace_cycle,
                         rat_ra_phys,
                         rat_ra_data,
@@ -3490,40 +3862,40 @@ module tb_top
                         u_core.commit_count,
                         u_core.flush_out.valid,
                         u_core.flush_out.full_flush,
-	                            u_core.flush_out.redirect_pc);
-	                end
-	                if ((rat_s10_phys != trace_prev_rat_s10) ||
-	                    (crat_s10_phys != trace_prev_crat_s10) ||
-	                    (rat_s10_data != trace_prev_rat_s10_data) ||
-	                    (crat_s10_data != trace_prev_crat_s10_data) ||
-	                    u_core.flush_out.valid) begin
-	                    $display("[S10MAP] cyc=%0d rat26=%0d rat26_data=%016h crat26=%0d crat26_data=%016h ren_count=%0d commit_count=%0d flush=%b full=%b redir=%016h",
-	                        trace_cycle,
-	                        rat_s10_phys,
-	                        rat_s10_data,
-	                        crat_s10_phys,
-	                        crat_s10_data,
-	                        u_core.ren_count_w,
-	                        u_core.commit_count,
-	                        u_core.flush_out.valid,
-	                        u_core.flush_out.full_flush,
-	                        u_core.flush_out.redirect_pc);
-	                end
-	                for (int w = 0; w < PIPE_WIDTH; w++) begin
-	                    if (u_core.u_rename.rat_wr_en[w] &&
-	                        ((u_core.u_rename.rat_wr_arch[w] == 5'd26) ||
-	                         (u_core.u_rename.rat_wr_phys[w] == 8'd10))) begin
-	                        $display("[RATWR] cyc=%0d slot=%0d arch=%0d phys=%0d pc=%016h ren_count=%0d flush=%b full=%b",
-	                            trace_cycle,
-	                            w,
-	                            u_core.u_rename.rat_wr_arch[w],
-	                            u_core.u_rename.rat_wr_phys[w],
-	                            u_core.u_rename.work_insn[w].pc,
-	                            u_core.ren_count_w,
-	                            u_core.flush_out.valid,
-	                            u_core.flush_out.full_flush);
-	                    end
-	                end
+                                u_core.flush_out.redirect_pc);
+                    end
+                    if ((rat_s10_phys != trace_prev_rat_s10) ||
+                        (crat_s10_phys != trace_prev_crat_s10) ||
+                        (rat_s10_data != trace_prev_rat_s10_data) ||
+                        (crat_s10_data != trace_prev_crat_s10_data) ||
+                        u_core.flush_out.valid) begin
+                        $display("[S10MAP] cyc=%0d rat26=%0d rat26_data=%016h crat26=%0d crat26_data=%016h ren_count=%0d commit_count=%0d flush=%b full=%b redir=%016h",
+                            trace_cycle,
+                            rat_s10_phys,
+                            rat_s10_data,
+                            crat_s10_phys,
+                            crat_s10_data,
+                            u_core.ren_count_w,
+                            u_core.commit_count,
+                            u_core.flush_out.valid,
+                            u_core.flush_out.full_flush,
+                            u_core.flush_out.redirect_pc);
+                    end
+                    for (int w = 0; w < PIPE_WIDTH; w++) begin
+                        if (u_core.u_rename.rat_wr_en[w] &&
+                            ((u_core.u_rename.rat_wr_arch[w] == 5'd26) ||
+                             (u_core.u_rename.rat_wr_phys[w] == 8'd10))) begin
+                            $display("[RATWR] cyc=%0d slot=%0d arch=%0d phys=%0d pc=%016h ren_count=%0d flush=%b full=%b",
+                                trace_cycle,
+                                w,
+                                u_core.u_rename.rat_wr_arch[w],
+                                u_core.u_rename.rat_wr_phys[w],
+                                u_core.u_rename.work_insn[w].pc,
+                                u_core.ren_count_w,
+                                u_core.flush_out.valid,
+                                u_core.flush_out.full_flush);
+                        end
+                    end
 
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if ((i < int'(u_core.ren_count_w)) &&

@@ -237,6 +237,41 @@ Follow-up implementation, 2026-05-09:
   but not signoff-safe because the regression rule is zero unexplained benchmark
   regressions.
 
+ALU dependency lifecycle profiling, 2026-05-09:
+
+- Added simulation-only producer lifecycle counters for ALU dependency wait.
+  The old `xs_bottleneck_dep_wait_on_alu` counter is now split into:
+  producer issued this cycle, producer not yet issued, producer issued but not
+  written back, producer already done but source still stale, and unknown state.
+  Additional counters split ALU-woken same-cycle select misses and ready ALU
+  uops that lost selection.
+- Artifacts:
+  `benchmark_results/dse_dse_alu_dep_lifecycle_profile_smoke_20260509` and
+  `benchmark_results/dse_dse_alu_dep_lifecycle_profile_coremark10_20260509`.
+- Smoke rows remain cycle-identical and endpoint-clean:
+  Dhrystone 100 `18,577`, CoreMark 1 `163,013`.
+- CoreMark 10 remains `1,500,110` cycles and `6.705406` CM/MHz. The split is:
+
+| Counter | Count | Share of ALU wait | Interpretation |
+|---|---:|---:|---|
+| `xs_bottleneck_dep_wait_on_alu` | 13,495,221 | 100.0% | Original broad ALU dependency wait. |
+| `xs_bottleneck_dep_alu_wait_not_issued` | 12,310,501 | 91.2% | Dominant bucket; consumer waits because the ALU producer has not issued yet. |
+| `xs_bottleneck_dep_alu_wait_issue_same_cycle` | 1,184,720 | 8.8% | Producer is issuing this cycle; registered CDB wakeup arrives next cycle. |
+| `xs_bottleneck_dep_alu_wait_issued_not_wb` | 0 | 0.0% | No evidence of ALU producers stuck after issue before writeback. |
+| `xs_bottleneck_dep_alu_wait_done_stale` | 0 | 0.0% | No stale source-ready bug after ALU writeback. |
+| `xs_bottleneck_dep_alu_wait_state_unknown` | 0 | 0.0% | Producer lifecycle tracking is complete for this row. |
+| `xs_bottleneck_dep_alu_wakeup_same_cycle_missed` | 69,681 | 0.5% of ALU wait | Same-cycle ALU wakeup select miss exists but is too small to explain the gap. |
+| `xs_bottleneck_dep_alu_ready_not_selected` | 186,804 | 1.4% of ALU wait | Ready ALU issue arbitration is secondary. |
+
+Verdict: do not pursue another wakeup-propagation or enqueue-bypass-only fix as
+the main Stage 2 optimization. The data points to producer scheduling and
+dependency-chain depth: most consumers wait because the producer itself has not
+issued yet. The next profiling slice, if we stay on this direction, should split
+`dep_alu_wait_not_issued` by producer location: producer absent from IQ,
+producer in IQ but operand-blocked, producer ready but not selected, and producer
+selected same cycle. That determines whether the real RTL target is dispatch/IQ
+routing, producer operand readiness, or issue arbitration.
+
 ## Accepted Evidence
 
 The accepted frontend path so far:
