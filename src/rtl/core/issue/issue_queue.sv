@@ -110,8 +110,20 @@ module issue_queue
     logic [NUM_ENQUEUE-1:0]       enq_wakeup_hit;
     logic [NUM_ENQUEUE-1:0]       enq_bypass_suppressed;
     logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked_bru_cond;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked_bru_backedge;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked_bru_jal;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked_bru_jalr;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_blocked_serial;
     logic [NUM_ENQUEUE-1:0]       enq_bypass_fu_allowed;
     logic [NUM_ENQUEUE-1:0]       enq_bypass_is_alu;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_is_bru;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_is_bru_cond;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_is_bru_backedge;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_is_bru_jal;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_is_bru_jalr;
+    logic [NUM_ENQUEUE-1:0]       enq_bypass_is_serial;
+    logic [NUM_ENQUEUE-1:0]       enq_ready_for_bypass;
 
     // =====================================================================
     // Entry count and full flag
@@ -603,25 +615,57 @@ module issue_queue
         for (int q = 0; q < NUM_ENQUEUE; q++) begin
             enq_bypass_is_alu[q] =
                 (enq_data[q].fu_type == FU_ALU);
+            enq_bypass_is_bru[q] =
+                (enq_data[q].fu_type == FU_BRU);
+            enq_bypass_is_bru_jal[q] =
+                enq_bypass_is_bru[q] &&
+                (enq_data[q].br_op == BR_JAL);
+            enq_bypass_is_bru_jalr[q] =
+                enq_bypass_is_bru[q] &&
+                (enq_data[q].br_op == BR_JALR);
+            enq_bypass_is_bru_cond[q] =
+                enq_bypass_is_bru[q] &&
+                !enq_bypass_is_bru_jal[q] &&
+                !enq_bypass_is_bru_jalr[q];
+            enq_bypass_is_bru_backedge[q] =
+                enq_bypass_is_bru_cond[q] &&
+                enq_data[q].bp_taken &&
+                (enq_data[q].bp_target < enq_data[q].pc);
+            enq_bypass_is_serial[q] =
+                (enq_data[q].fu_type == FU_MUL) ||
+                (enq_data[q].fu_type == FU_DIV) ||
+                (enq_data[q].fu_type == FU_CSR);
             enq_bypass_fu_allowed[q] =
                 !enq_issue_bypass_alu_only ||
                 enq_bypass_is_alu[q];
+            enq_ready_for_bypass[q] =
+                (SUPPORT_ENQ_ISSUE_BYPASS != 0) &&
+                enq_issue_bypass_enable &&
+                enq_valid[q] &&
+                enq_s1_rdy[q] &&
+                enq_s2_rdy[q] &&
+                !flush_valid;
             enq_ready_candidate[q] =
-                (SUPPORT_ENQ_ISSUE_BYPASS != 0) &&
-                enq_issue_bypass_enable &&
-                enq_bypass_fu_allowed[q] &&
-                enq_valid[q] &&
-                enq_s1_rdy[q] &&
-                enq_s2_rdy[q] &&
-                !flush_valid;
+                enq_ready_for_bypass[q] &&
+                enq_bypass_fu_allowed[q];
             enq_bypass_fu_blocked[q] =
-                (SUPPORT_ENQ_ISSUE_BYPASS != 0) &&
-                enq_issue_bypass_enable &&
-                !enq_bypass_fu_allowed[q] &&
-                enq_valid[q] &&
-                enq_s1_rdy[q] &&
-                enq_s2_rdy[q] &&
-                !flush_valid;
+                enq_ready_for_bypass[q] &&
+                !enq_bypass_fu_allowed[q];
+            enq_bypass_fu_blocked_bru_cond[q] =
+                enq_bypass_fu_blocked[q] &&
+                enq_bypass_is_bru_cond[q];
+            enq_bypass_fu_blocked_bru_backedge[q] =
+                enq_bypass_fu_blocked[q] &&
+                enq_bypass_is_bru_backedge[q];
+            enq_bypass_fu_blocked_bru_jal[q] =
+                enq_bypass_fu_blocked[q] &&
+                enq_bypass_is_bru_jal[q];
+            enq_bypass_fu_blocked_bru_jalr[q] =
+                enq_bypass_fu_blocked[q] &&
+                enq_bypass_is_bru_jalr[q];
+            enq_bypass_fu_blocked_serial[q] =
+                enq_bypass_fu_blocked[q] &&
+                enq_bypass_is_serial[q];
             enq_wakeup_hit[q] =
                 enq_valid[q] &&
                 ((enq_s1_wakeup_hit[q] && !enq_data[q].rs1_ready) ||

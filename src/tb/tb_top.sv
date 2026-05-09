@@ -582,6 +582,11 @@ module tb_top
     integer btl_iq_enq_wakeup_hit [0:BTL_IQ_COUNT-1];
     integer btl_iq_enq_bypass_suppressed [0:BTL_IQ_COUNT-1];
     integer btl_iq_enq_bypass_fu_blocked [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_bypass_fu_blocked_bru_cond [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_bypass_fu_blocked_bru_backedge [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_bypass_fu_blocked_bru_jal [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_bypass_fu_blocked_bru_jalr [0:BTL_IQ_COUNT-1];
+    integer btl_iq_enq_bypass_fu_blocked_serial [0:BTL_IQ_COUNT-1];
     integer btl_dep_src1_wait;
     integer btl_dep_src2_wait;
     integer btl_dep_both_src_wait;
@@ -1048,6 +1053,11 @@ module tb_top
                 btl_iq_enq_wakeup_hit[i] <= 0;
                 btl_iq_enq_bypass_suppressed[i] <= 0;
                 btl_iq_enq_bypass_fu_blocked[i] <= 0;
+                btl_iq_enq_bypass_fu_blocked_bru_cond[i] <= 0;
+                btl_iq_enq_bypass_fu_blocked_bru_backedge[i] <= 0;
+                btl_iq_enq_bypass_fu_blocked_bru_jal[i] <= 0;
+                btl_iq_enq_bypass_fu_blocked_bru_jalr[i] <= 0;
+                btl_iq_enq_bypass_fu_blocked_serial[i] <= 0;
             end
             btl_dep_src1_wait <= 0;
             btl_dep_src2_wait <= 0;
@@ -1117,6 +1127,11 @@ module tb_top
             automatic int btl_iq_enq_wakeup_hit_now [0:BTL_IQ_COUNT-1];
             automatic int btl_iq_enq_bypass_suppressed_now [0:BTL_IQ_COUNT-1];
             automatic int btl_iq_enq_bypass_fu_blocked_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_bypass_fu_blocked_bru_cond_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_bypass_fu_blocked_bru_backedge_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_bypass_fu_blocked_bru_jal_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_bypass_fu_blocked_bru_jalr_now [0:BTL_IQ_COUNT-1];
+            automatic int btl_iq_enq_bypass_fu_blocked_serial_now [0:BTL_IQ_COUNT-1];
             automatic int btl_src1_wait_now;
             automatic int btl_src2_wait_now;
             automatic int btl_both_src_wait_now;
@@ -1169,6 +1184,11 @@ module tb_top
                 btl_iq_enq_wakeup_hit_now[i] = 0;
                 btl_iq_enq_bypass_suppressed_now[i] = 0;
                 btl_iq_enq_bypass_fu_blocked_now[i] = 0;
+                btl_iq_enq_bypass_fu_blocked_bru_cond_now[i] = 0;
+                btl_iq_enq_bypass_fu_blocked_bru_backedge_now[i] = 0;
+                btl_iq_enq_bypass_fu_blocked_bru_jal_now[i] = 0;
+                btl_iq_enq_bypass_fu_blocked_bru_jalr_now[i] = 0;
+                btl_iq_enq_bypass_fu_blocked_serial_now[i] = 0;
             end
             btl_src1_wait_now = 0;
             btl_src2_wait_now = 0;
@@ -1420,6 +1440,36 @@ module tb_top
                     $countones(u_core.u_iq_store.enq_bypass_fu_blocked);
                 btl_iq_enq_bypass_fu_blocked_now[BTL_IQ_STD] =
                     $countones(u_core.u_iq_store_data.enq_bypass_fu_blocked);
+                btl_iq_enq_bypass_fu_blocked_bru_cond_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_bypass_fu_blocked_bru_cond);
+                btl_iq_enq_bypass_fu_blocked_bru_cond_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_bypass_fu_blocked_bru_cond);
+                btl_iq_enq_bypass_fu_blocked_bru_cond_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_bypass_fu_blocked_bru_cond);
+                btl_iq_enq_bypass_fu_blocked_bru_backedge_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_bypass_fu_blocked_bru_backedge);
+                btl_iq_enq_bypass_fu_blocked_bru_backedge_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_bypass_fu_blocked_bru_backedge);
+                btl_iq_enq_bypass_fu_blocked_bru_backedge_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_bypass_fu_blocked_bru_backedge);
+                btl_iq_enq_bypass_fu_blocked_bru_jal_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_bypass_fu_blocked_bru_jal);
+                btl_iq_enq_bypass_fu_blocked_bru_jal_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_bypass_fu_blocked_bru_jal);
+                btl_iq_enq_bypass_fu_blocked_bru_jal_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_bypass_fu_blocked_bru_jal);
+                btl_iq_enq_bypass_fu_blocked_bru_jalr_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_bypass_fu_blocked_bru_jalr);
+                btl_iq_enq_bypass_fu_blocked_bru_jalr_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_bypass_fu_blocked_bru_jalr);
+                btl_iq_enq_bypass_fu_blocked_bru_jalr_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_bypass_fu_blocked_bru_jalr);
+                btl_iq_enq_bypass_fu_blocked_serial_now[BTL_IQ0] =
+                    $countones(u_core.u_iq0.enq_bypass_fu_blocked_serial);
+                btl_iq_enq_bypass_fu_blocked_serial_now[BTL_IQ1] =
+                    $countones(u_core.u_iq1.enq_bypass_fu_blocked_serial);
+                btl_iq_enq_bypass_fu_blocked_serial_now[BTL_IQ2] =
+                    $countones(u_core.u_iq2.enq_bypass_fu_blocked_serial);
 
                 for (int e = 0; e < IQ_INT_DEPTH; e++) begin
                     if (u_core.u_iq0.entry_valid[e]) begin
@@ -1810,6 +1860,21 @@ module tb_top
                     btl_iq_enq_bypass_fu_blocked[i] <=
                         btl_iq_enq_bypass_fu_blocked[i] +
                         btl_iq_enq_bypass_fu_blocked_now[i];
+                    btl_iq_enq_bypass_fu_blocked_bru_cond[i] <=
+                        btl_iq_enq_bypass_fu_blocked_bru_cond[i] +
+                        btl_iq_enq_bypass_fu_blocked_bru_cond_now[i];
+                    btl_iq_enq_bypass_fu_blocked_bru_backedge[i] <=
+                        btl_iq_enq_bypass_fu_blocked_bru_backedge[i] +
+                        btl_iq_enq_bypass_fu_blocked_bru_backedge_now[i];
+                    btl_iq_enq_bypass_fu_blocked_bru_jal[i] <=
+                        btl_iq_enq_bypass_fu_blocked_bru_jal[i] +
+                        btl_iq_enq_bypass_fu_blocked_bru_jal_now[i];
+                    btl_iq_enq_bypass_fu_blocked_bru_jalr[i] <=
+                        btl_iq_enq_bypass_fu_blocked_bru_jalr[i] +
+                        btl_iq_enq_bypass_fu_blocked_bru_jalr_now[i];
+                    btl_iq_enq_bypass_fu_blocked_serial[i] <=
+                        btl_iq_enq_bypass_fu_blocked_serial[i] +
+                        btl_iq_enq_bypass_fu_blocked_serial_now[i];
                 end
 
                 btl_dep_src1_wait <= btl_dep_src1_wait + btl_src1_wait_now;
@@ -2743,6 +2808,11 @@ module tb_top
                 $display("xs bottleneck_iq0_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ0]);
                 $display("xs bottleneck_iq0_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ0]);
                 $display("xs bottleneck_iq0_enq_bypass_fu_blocked : %0d", btl_iq_enq_bypass_fu_blocked[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_bypass_fu_blocked_bru_cond : %0d", btl_iq_enq_bypass_fu_blocked_bru_cond[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_bypass_fu_blocked_bru_backedge : %0d", btl_iq_enq_bypass_fu_blocked_bru_backedge[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_bypass_fu_blocked_bru_jal : %0d", btl_iq_enq_bypass_fu_blocked_bru_jal[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_bypass_fu_blocked_bru_jalr : %0d", btl_iq_enq_bypass_fu_blocked_bru_jalr[BTL_IQ0]);
+                $display("xs bottleneck_iq0_enq_bypass_fu_blocked_serial : %0d", btl_iq_enq_bypass_fu_blocked_serial[BTL_IQ0]);
                 $display("xs bottleneck_iq1_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ1]);
                 $display("xs bottleneck_iq1_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ1]);
                 $display("xs bottleneck_iq1_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ1]);
@@ -2757,6 +2827,11 @@ module tb_top
                 $display("xs bottleneck_iq1_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ1]);
                 $display("xs bottleneck_iq1_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ1]);
                 $display("xs bottleneck_iq1_enq_bypass_fu_blocked : %0d", btl_iq_enq_bypass_fu_blocked[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_bypass_fu_blocked_bru_cond : %0d", btl_iq_enq_bypass_fu_blocked_bru_cond[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_bypass_fu_blocked_bru_backedge : %0d", btl_iq_enq_bypass_fu_blocked_bru_backedge[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_bypass_fu_blocked_bru_jal : %0d", btl_iq_enq_bypass_fu_blocked_bru_jal[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_bypass_fu_blocked_bru_jalr : %0d", btl_iq_enq_bypass_fu_blocked_bru_jalr[BTL_IQ1]);
+                $display("xs bottleneck_iq1_enq_bypass_fu_blocked_serial : %0d", btl_iq_enq_bypass_fu_blocked_serial[BTL_IQ1]);
                 $display("xs bottleneck_iq2_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ2]);
                 $display("xs bottleneck_iq2_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ2]);
                 $display("xs bottleneck_iq2_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ2]);
@@ -2771,6 +2846,11 @@ module tb_top
                 $display("xs bottleneck_iq2_enq_wakeup_hit : %0d", btl_iq_enq_wakeup_hit[BTL_IQ2]);
                 $display("xs bottleneck_iq2_enq_bypass_suppressed : %0d", btl_iq_enq_bypass_suppressed[BTL_IQ2]);
                 $display("xs bottleneck_iq2_enq_bypass_fu_blocked : %0d", btl_iq_enq_bypass_fu_blocked[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_bypass_fu_blocked_bru_cond : %0d", btl_iq_enq_bypass_fu_blocked_bru_cond[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_bypass_fu_blocked_bru_backedge : %0d", btl_iq_enq_bypass_fu_blocked_bru_backedge[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_bypass_fu_blocked_bru_jal : %0d", btl_iq_enq_bypass_fu_blocked_bru_jal[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_bypass_fu_blocked_bru_jalr : %0d", btl_iq_enq_bypass_fu_blocked_bru_jalr[BTL_IQ2]);
+                $display("xs bottleneck_iq2_enq_bypass_fu_blocked_serial : %0d", btl_iq_enq_bypass_fu_blocked_serial[BTL_IQ2]);
                 $display("xs bottleneck_iq_load_valid_entry_sum : %0d", btl_iq_valid_entry_sum[BTL_IQ_LOAD]);
                 $display("xs bottleneck_iq_load_ready_entry_sum : %0d", btl_iq_ready_entry_sum[BTL_IQ_LOAD]);
                 $display("xs bottleneck_iq_load_not_ready_entry_sum : %0d", btl_iq_not_ready_entry_sum[BTL_IQ_LOAD]);

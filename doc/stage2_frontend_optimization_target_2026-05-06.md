@@ -190,6 +190,30 @@ Verdict:
   branch bypass from harmful broad branch/serial bypass using general pipeline
   state, not scalar threshold chasing.
 
+Follow-up implementation, 2026-05-08:
+
+- Added FU-class attribution counters for blocked ready-enqueue bypass
+  candidates: conditional BRU, backward predicted-taken conditional BRU, JAL,
+  JALR, and serial MUL/DIV/CSR classes.
+- Tried an `ALU + backward conditional BRU` selector in
+  `benchmark_results/dse_iq_ready_enq_bypass_alu_backedge_bru_smoke_20260508`.
+  It is endpoint-clean and improves CoreMark 10 to `1,453,244` cycles, but it
+  regresses `memory_array_c 92 -> 119` versus ALU-only, regresses
+  `hotspot_string_retire 107,378 -> 109,142`, and leaves
+  `hotspot_matrix_store` at `84,443`.
+- Counter verdict: the matrix row has no blocked backward conditional BRU to
+  recover. Its remaining blocked IQ0 candidates are conditional non-backedge,
+  JAL, and JALR. The backedge-BRU selector improves CoreMark by changing branch
+  timing, but that same timing shift increases head-block and mispredict
+  pressure on broader rows. The selector was removed from RTL and should not be
+  revived in this form.
+- Tried `IQ_READY_ENQ_BYPASS_ALU_ONLY + BACKEND_ADMISSION_THROTTLE` in
+  `benchmark_results/dse_iq_ready_enq_bypass_alu_only_backend_throttle_smoke_20260508`.
+  The pair is endpoint-clean but effectively matches ALU-only: CoreMark 10
+  `1,486,431`, CoreMark 1 `160,334`, and `hotspot_matrix_store` still
+  `84,443`. Do not tune the admission throttle around this 6-cycle matrix
+  regression.
+
 ## Accepted Evidence
 
 The accepted frontend path so far:
