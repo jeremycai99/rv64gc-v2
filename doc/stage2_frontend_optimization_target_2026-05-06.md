@@ -214,6 +214,29 @@ Follow-up implementation, 2026-05-08:
   `84,443`. Do not tune the admission throttle around this 6-cycle matrix
   regression.
 
+Follow-up implementation, 2026-05-09:
+
+- Commit `0814869` adds enqueue-time speculative load wakeup accounting in the
+  issue queues. The mechanism writes same-cycle speculative load wakeups into
+  newly allocated IQ entries for next-cycle issue, and adds parsed
+  `xs_bottleneck_iq*_enq_spec_wakeup` / `*_cancelled` counters. It does not feed
+  same-cycle enqueue issue bypass.
+- `benchmark_results/dse_dse_enq_spec_load_wakeup_full_20260509` passes all 16
+  Stage 1 rows with strict owner/delivery checks and is cycle-identical to the
+  locked threshold-2 loop-exit baseline. CoreMark 10 reports about `163,239`
+  enqueue speculative wakeups and zero cancels, proving the counter path is
+  active but cycle-neutral in this form.
+- Pressure-aware ALU enqueue-bypass routing was tried after that. The best
+  store-head guard candidate preserved most of the Dhrystone/CoreMark gain
+  (`Dhrystone 100 18,577 -> 18,569`, CoreMark 1 `163,013 -> 160,016`) but
+  still regressed `hotspot_matrix_store 84,437 -> 84,438`. DSim hit a license
+  lease conflict on the last long-run row, and an XSim rerun confirmed the
+  one-cycle matrix regression.
+- Verdict: keep commit `0814869` as a correctness/accounting repair. Reject and
+  revert the pressure-aware ALU bypass candidates for now; they are promising
+  but not signoff-safe because the regression rule is zero unexplained benchmark
+  regressions.
+
 ## Accepted Evidence
 
 The accepted frontend path so far:
@@ -1006,17 +1029,19 @@ counter-backed second domain instead.
 
 ## Direction 1 Todo: Branch Ownership and Recovery Contract
 
-Status on May 8, 2026: Direction 1 is open. The first objective is
-correctness observability, not a performance claim. The accepted loop-exit
-threshold-2 baseline remains the scoreable baseline until non-head branch
-recovery is endpoint-clean and broadly non-regressing.
+Status on May 9, 2026: Direction 1 is still a correctness-observability and
+contract-hardening path, not a performance claim. Commit `0d0b5ff` hardens the
+simulation-only checkpoint recovery checker and exposes parser-compatible
+branch-recovery counters. The accepted loop-exit threshold-2 baseline remains
+the scoreable baseline until non-head branch recovery is endpoint-clean and
+broadly non-regressing.
 
 | Step | Status | Exit criterion |
 |---|---|---|
 | 1.1 | Done | Added `branch_recovery_contract_checker.sv`; both DSim and XSim compile it. |
-| 1.2 | DSim smoke done | Dhrystone 100, CoreMark 1, and branch hotspot pass with `+BRANCH_RECOVERY_CHECK +BRANCH_RECOVERY_STRICT` added to the existing strict fetch owner/delivery/profile plusargs. XSim runtime smoke is still optional cross-check. |
-| 1.3 | In progress | Document the exact branch-order recovery contract across checkpoint, RAT, free-list, ROB, commit release, writeback, LSU side effects, and frontend redirect ownership. |
-| 1.4 | Pending | Harden checkpoint ownership behavior behind an opt-in path while preserving default behavior. |
+| 1.2 | Done | Dhrystone 100, CoreMark 1, frontend mixed branch dense, and branch hotspot pass with `+BRANCH_RECOVERY_CHECK +BRANCH_RECOVERY_STRICT` added to the existing strict fetch owner/delivery/profile plusargs. |
+| 1.3 | Done | Documented the branch-order recovery contract across checkpoint, RAT, free-list, ROB, commit release, writeback, LSU side effects, and frontend redirect ownership. |
+| 1.4 | Checker hardening done, behavior pending | Commit `0d0b5ff` adds strict save-overwrite and save-blocked-with-free checkpoint allocation invariants plus parsed counters. It does not change checkpoint restore behavior. |
 | 1.5 | Rejected in current form | Resource-aware direct recovery is endpoint-clean on Dhrystone 100, CoreMark 1, and branch hotspot, but regresses all three rows. Do not continue selector tuning until 1.4 exists. |
 | 1.6 | Pending | Only after 1.5, reintroduce selective early frontend redirect with a resource/headroom guard. |
 | 1.7 | Pending | Promote only if branch hotspot improves without Dhrystone/CoreMark regression and contract counters show active non-head recovery with no free-list leak, checkpoint orphan, stale owner, or endpoint drift. |
@@ -1030,6 +1055,8 @@ Stop conditions:
 
 - Invalid checkpoint restore or release.
 - Duplicate checkpoint release in one commit group.
+- Checkpoint save overwrites a post-release occupied slot.
+- Checkpoint save is blocked while a post-release slot is free.
 - Restore of a checkpoint that is also released in the same cycle.
 - Free-list popcount drain or leak.
 - Checkpoint orphan or wrong branch-order preservation.
@@ -1038,11 +1065,21 @@ Stop conditions:
 Initial checker smoke:
 
 - Dhrystone 100: PASS, `mcycle=18,577`, `minstret=49,088`, branch-recovery
-  checker invalid/duplicate/restore-conflict counts all zero.
+  checker invalid/duplicate/restore-conflict/save-overwrite counts all zero.
+  Accepted checkpoint saves: `8,917`.
 - CoreMark 1: PASS, `mcycle=163,013`, `minstret=332,154`, branch-recovery
-  checker invalid/duplicate/restore-conflict counts all zero.
+  checker invalid/duplicate/restore-conflict/save-overwrite counts all zero.
+  Accepted checkpoint saves: `70,671`.
+- Frontend mixed branch dense: PASS, `mcycle=7,220`, `minstret=11,514`,
+  all branch-recovery violation counters zero. Accepted checkpoint saves:
+  `3,595`.
 - Branch hotspot: PASS, `mcycle=141,326`, `minstret=156,693`,
-  branch-recovery checker invalid/duplicate/restore-conflict counts all zero.
+  all branch-recovery violation counters zero. Accepted checkpoint saves:
+  `74,634`.
+- Artifacts:
+  `benchmark_results/dse_dse_branch_recovery_checker_standard_smoke_20260509`
+  and
+  `benchmark_results/dse_dse_branch_recovery_checker_hardening_smoke_20260509`.
 
 Fresh `+EXEC_PARTIAL_BRANCH_RECOVERY` probe with the checker:
 
@@ -1190,8 +1227,8 @@ counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 | 27 | Add packet head-class attribution for downstream drain scheduling. | Done by `dse_20260508_packet_head_class_prof_smoke`: CoreMark 1 packet-full and backend-packet-ready stalls are mostly multi-instruction heads, often control-bearing, predicted-taken, or owner-complete. |
 | 28 | Try first downstream-drain structural candidates. | Done and rejected: counted ROB admission improves CoreMark 1 but regresses CoreMark 10; counted admission plus larger ROB/PRF capacity also regresses CoreMark 10. RTL was restored to the committed threshold-2 baseline. |
 | 29 | Resume from a higher-leverage structural path. | Next candidate should be branch ownership/recovery or useful-work reduction with explicit checkpoint/resource contracts, not raw capacity, packet merge, generic queueing, or loop-threshold tuning. |
-| 30 | Add branch recovery contract checkers. | DSim and XSim compile the simulation-only checker, and baseline smoke passes with strict branch recovery checks enabled. |
-| 31 | Document and harden the non-head recovery contract. | Checkpoint, RAT, free-list, ROB, same-cycle commit release, writeback filtering, LSU side-effect filtering, and frontend redirect ownership have explicit invariants. |
+| 30 | Add branch recovery contract checkers. | Done by `0d0b5ff`: DSim compiles the simulation-only checker, strict DS/CoreMark/branch smoke passes, and parser-compatible `xs_branch_recovery_*` counters are active. |
+| 31 | Document and harden the non-head recovery contract. | Contract documented; checkpoint allocation invariants are checked. Behavior hardening is still pending before any non-head recovery performance claim. |
 | 32 | Reopen direct non-head partial recovery without early redirect. | Current resource-aware selector is endpoint-clean on smoke but regresses; checkpoint ownership must be fixed before another performance claim. |
 | 33 | Reopen selective early frontend redirect. | Branch hotspot improves without Dhrystone/CoreMark regression and without contract checker failures. |
 | 34 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
