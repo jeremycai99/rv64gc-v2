@@ -1122,6 +1122,71 @@ counter-backed second domain instead.
 | Predicted-not-taken owner fall-through | Rejected local forms | Attribution shows many duplicate cycles are same-line sequential, so this looked tempting. The local owner relaxation regressed Dhrystone and broke CoreMark/hotspot. A live-snapshot repair still timed out with owner/stale mismatches. | Reopen only with explicit branch-owner and FTQ/IBuffer sequencing semantics, not by relaxing `same_owner_continue` alone. |
 | LSU/load-use or backend balance | Later candidate | Addresses non-frontend residuals. | Open after ROB/PRF capacity if backend stalls persist. |
 
+## Update, 2026-05-09: ALU-Chain Shape Attribution
+
+Profiler-only implementation:
+`src/tb/tb_top.sv` now tracks the operation shape of physical registers that
+are ALU-produced and still not issued because their own producer is blocked.
+The parser ranks these as `xs_bottleneck_dep_alu_blocked_prod_*` counters.
+This is simulation-only attribution; no core RTL behavior changed.
+
+Validation artifacts:
+
+- Smoke:
+  `benchmark_results/dse_alu_chain_shape_profile_smoke_r2_20260509`
+- Heavy row:
+  `benchmark_results/dse_alu_chain_shape_profile_coremark10_20260509`
+- DSim rebuilt from the current tree. Dhrystone 100, CoreMark 1, and CoreMark
+  10 are endpoint-clean with strict fetch owner/delivery and branch recovery
+  checks.
+
+Cycle results are identical to the accepted baseline:
+
+| Row | Cycles | Metric |
+|---|---:|---:|
+| Dhrystone 100 | 18,577 | 3.133924 DMIPS/MHz |
+| CoreMark 1 | 163,013 | 6.483697 CM/MHz |
+| CoreMark 10 | 1,500,110 | 6.705406 CM/MHz |
+
+CoreMark 10 residual ALU dependency shape:
+
+| Counter | Value | Interpretation |
+|---|---:|---|
+| `xs_bottleneck_dep_wait_on_alu` | 13,495,221 | Dominant residual source-wait class. |
+| `xs_bottleneck_dep_alu_wait_not_issued` | 12,310,501 | Most ALU waits are before producer issue, not post-issue writeback. |
+| `xs_bottleneck_dep_alu_wait_not_issued_producer_blocked` | 12,234,377 | The producer is present in an integer IQ but blocked on its own operands. |
+| `xs_bottleneck_dep_alu_wait_not_issued_producer_blocked_single_alu` | 10,393,558 | The dominant shape is a single ALU-produced source chain. |
+| `xs_bottleneck_dep_alu_blocked_prod_logic` | 8,682,202 | Boolean logic producers dominate the blocked-producer shape. |
+| `xs_bottleneck_dep_alu_blocked_prod_wop` | 5,853,515 | RV64 W-suffix ops are a large overlapping subset. |
+| `xs_bottleneck_dep_alu_blocked_prod_imm` | 6,289,578 | Immediate-form ALU producers are slightly more common than register-register producers. |
+| `xs_bottleneck_dep_alu_blocked_prod_reg` | 5,944,799 | Register-register ALU chains are also material. |
+| `xs_bottleneck_dep_alu_blocked_prod_shift` | 1,598,881 | Shift/rotate chains are secondary but non-trivial. |
+| `xs_bottleneck_dep_alu_blocked_prod_sub` | 1,425,437 | SUB/NEG-style work is secondary. |
+| `xs_bottleneck_dep_alu_blocked_prod_move_candidate` | 239,271 | Move candidates are real but too small to be the next standalone lever. |
+| `xs_bottleneck_rename_move_candidates` | 256,478 | Dynamic move frequency is high, but only a small fraction is on the dominant blocked-producer wait path. |
+| `xs_bottleneck_rename_move_candidates_rs1_wait` | 201,088 | Most move candidates are source-waiting at rename, which explains why standalone elimination changed timing rather than simply deleting easy work. |
+
+The top blocked producer PCs cluster in CoreMark `crc16`, especially the
+bit-serial update loop around `0x80003ab8..0x80003b14`. The instructions are
+general ALU shapes (`xor`, `andi`, `negw`, `srliw`, `and`, `zext.h`) rather
+than a fixed benchmark PC special case.
+
+Architectural verdict:
+
+- Reopening standalone move elimination is not the next step. The data shows
+  only about 2 percent of blocked not-yet-issued ALU-producer wait slots are
+  move-candidate producers, and the earlier refcounted move-elimination trial
+  already reduced pressure while regressing net cycles.
+- The next behavior-changing RTL should be a C910-style short-ALU or
+  wakeup/forwarding slice for simple integer ALU chains, especially logic,
+  W-suffix, and shift producers. This is consistent with the reference-core
+  audit: C910 has explicit short-ALU forwarding, and XiangShan relies on
+  structured bypass/wakeup rather than PC-shaped benchmark steering.
+- Any trial must target `xs_bottleneck_dep_wait_on_alu`,
+  `xs_bottleneck_dep_alu_wait_not_issued_producer_blocked`, and the new
+  operation-shape counters. It must not claim success from DS/CoreMark cycle
+  movement alone.
+
 ## Direction 1 Todo: Branch Ownership and Recovery Contract
 
 Status on May 9, 2026: Direction 1 is still a correctness-observability and
@@ -1334,8 +1399,9 @@ counts, not single-cycle buckets, so values can exceed 100% of timed cycles.
 | 34 | Add ALU producer lifecycle profiling. | Done by `dse_dse_alu_dep_lifecycle_profile_*`: CoreMark 10 shows 91.2% of ALU dependency waits are producers not yet issued, while post-issue and stale-ready buckets are zero. |
 | 35 | Split not-issued ALU waits by producer IQ location. | Done by `dse_dse_alu_dep_producer_location_*`: CoreMark 10 shows 99.38% of not-issued ALU waits have the producer present but operand-blocked in an integer IQ. |
 | 36 | Split operand-blocked ALU producers by their missing operand class. | Done by `dse_dse_alu_blocked_producer_srcclass_*`: CoreMark 10 shows 96.6% overlapping ALU-source blocking and 85.0% exclusive single-ALU blocking, so this is mostly true ALU dependency-chain depth. |
-| 37 | Attribute ALU-chain op patterns before RTL. | Next: classify hot blocked ALU-chain producers by ALU op, immediate/source shape, and dynamic PC/function so any useful-work reduction is general and not benchmark-PC steering. |
-| 38 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
+| 37 | Attribute ALU-chain op patterns before RTL. | Done by `dse_alu_chain_shape_profile_*`: CoreMark 10 shows boolean/W-op ALU chains dominate the blocked-producer wait path, while move candidates are a small subset. |
+| 38 | Design C910-style short-ALU or wakeup/forwarding slice. | Next: target simple logic, W-suffix, and shift ALU chains with a general mechanism, then gate on the new shape counters plus DS/CoreMark/hotspot cycles. |
+| 39 | Re-score against MegaBOOM and stretch targets. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 

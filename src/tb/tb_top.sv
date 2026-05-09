@@ -572,6 +572,7 @@ module tb_top
     localparam int BTL_PREG_STATE_WAIT_ISSUE = 1;
     localparam int BTL_PREG_STATE_ISSUED_WAIT_WB = 2;
     localparam int BTL_PREG_STATE_DONE = 3;
+    localparam int BTL_ALU_CHAIN_PC_HIST_SLOTS = 16;
     integer btl_iq_valid_entry_sum [0:BTL_IQ_COUNT-1];
     integer btl_iq_ready_entry_sum [0:BTL_IQ_COUNT-1];
     integer btl_iq_not_ready_entry_sum [0:BTL_IQ_COUNT-1];
@@ -633,6 +634,20 @@ module tb_top
     integer btl_dep_alu_wakeup_same_cycle_candidate;
     integer btl_dep_alu_wakeup_same_cycle_missed;
     integer btl_dep_alu_ready_not_selected;
+    integer btl_dep_alu_blocked_prod_add;
+    integer btl_dep_alu_blocked_prod_sub;
+    integer btl_dep_alu_blocked_prod_logic;
+    integer btl_dep_alu_blocked_prod_shift;
+    integer btl_dep_alu_blocked_prod_compare;
+    integer btl_dep_alu_blocked_prod_zba;
+    integer btl_dep_alu_blocked_prod_zbb_zbs;
+    integer btl_dep_alu_blocked_prod_other;
+    integer btl_dep_alu_blocked_prod_imm;
+    integer btl_dep_alu_blocked_prod_reg;
+    integer btl_dep_alu_blocked_prod_move_candidate;
+    integer btl_dep_alu_blocked_prod_zero_candidate;
+    integer btl_dep_alu_blocked_prod_wop;
+    integer btl_dep_alu_blocked_prod_fused;
     integer btl_wakeup_same_cycle_candidate;
     integer btl_wakeup_same_cycle_missed;
     integer btl_rename_slots_lost_total;
@@ -647,6 +662,18 @@ module tb_top
     integer btl_rob_commit_slots_lost_head_block;
     integer btl_preg_class [0:INT_PRF_DEPTH-1];
     integer btl_preg_state [0:INT_PRF_DEPTH-1];
+    logic [63:0] btl_preg_pc [0:INT_PRF_DEPTH-1];
+    alu_op_e btl_preg_alu_op [0:INT_PRF_DEPTH-1];
+    logic btl_preg_alu_use_imm [0:INT_PRF_DEPTH-1];
+    logic btl_preg_alu_imm_zero [0:INT_PRF_DEPTH-1];
+    logic btl_preg_alu_move_candidate [0:INT_PRF_DEPTH-1];
+    logic btl_preg_alu_zero_candidate [0:INT_PRF_DEPTH-1];
+    logic btl_preg_alu_wop [0:INT_PRF_DEPTH-1];
+    logic btl_preg_alu_fused [0:INT_PRF_DEPTH-1];
+    logic [63:0] btl_alu_chain_pc_hist_pc [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
+    integer btl_alu_chain_pc_hist_count [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
+    integer btl_alu_chain_pc_hist_move [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
+    integer btl_alu_chain_pc_hist_imm [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
     integer macro_fused_rename_total;
     integer macro_fused_commit_total;
     integer macro_fused_commit_alu;
@@ -654,6 +681,8 @@ module tb_top
     integer macro_fused_commit_load;
     integer macro_fused_commit_store;
     integer rename_move_candidate_total;
+    integer rename_move_candidate_ready_total;
+    integer rename_move_candidate_wait_total;
     integer rename_zero_elim_total;
     integer backend_stall_cyc;
     integer flush_cyc;
@@ -1137,6 +1166,20 @@ module tb_top
             btl_dep_alu_wakeup_same_cycle_candidate <= 0;
             btl_dep_alu_wakeup_same_cycle_missed <= 0;
             btl_dep_alu_ready_not_selected <= 0;
+            btl_dep_alu_blocked_prod_add <= 0;
+            btl_dep_alu_blocked_prod_sub <= 0;
+            btl_dep_alu_blocked_prod_logic <= 0;
+            btl_dep_alu_blocked_prod_shift <= 0;
+            btl_dep_alu_blocked_prod_compare <= 0;
+            btl_dep_alu_blocked_prod_zba <= 0;
+            btl_dep_alu_blocked_prod_zbb_zbs <= 0;
+            btl_dep_alu_blocked_prod_other <= 0;
+            btl_dep_alu_blocked_prod_imm <= 0;
+            btl_dep_alu_blocked_prod_reg <= 0;
+            btl_dep_alu_blocked_prod_move_candidate <= 0;
+            btl_dep_alu_blocked_prod_zero_candidate <= 0;
+            btl_dep_alu_blocked_prod_wop <= 0;
+            btl_dep_alu_blocked_prod_fused <= 0;
             btl_wakeup_same_cycle_candidate <= 0;
             btl_wakeup_same_cycle_missed <= 0;
             btl_rename_slots_lost_total <= 0;
@@ -1152,6 +1195,20 @@ module tb_top
             for (int i = 0; i < INT_PRF_DEPTH; i++) begin
                 btl_preg_class[i] <= BTL_PROD_UNKNOWN;
                 btl_preg_state[i] <= BTL_PREG_STATE_UNKNOWN;
+                btl_preg_pc[i] <= 64'd0;
+                btl_preg_alu_op[i] <= ALU_ADD;
+                btl_preg_alu_use_imm[i] <= 1'b0;
+                btl_preg_alu_imm_zero[i] <= 1'b0;
+                btl_preg_alu_move_candidate[i] <= 1'b0;
+                btl_preg_alu_zero_candidate[i] <= 1'b0;
+                btl_preg_alu_wop[i] <= 1'b0;
+                btl_preg_alu_fused[i] <= 1'b0;
+            end
+            for (int i = 0; i < BTL_ALU_CHAIN_PC_HIST_SLOTS; i++) begin
+                btl_alu_chain_pc_hist_pc[i] <= 64'd0;
+                btl_alu_chain_pc_hist_count[i] <= 0;
+                btl_alu_chain_pc_hist_move[i] <= 0;
+                btl_alu_chain_pc_hist_imm[i] <= 0;
             end
             macro_fused_rename_total <= 0;
             macro_fused_commit_total <= 0;
@@ -1160,6 +1217,8 @@ module tb_top
             macro_fused_commit_load <= 0;
             macro_fused_commit_store <= 0;
             rename_move_candidate_total <= 0;
+            rename_move_candidate_ready_total <= 0;
+            rename_move_candidate_wait_total <= 0;
             rename_zero_elim_total <= 0;
             prev_p1_retry_valid <= 1'b0;
         end else if (pp_en) begin
@@ -1179,6 +1238,8 @@ module tb_top
             automatic int fused_commit_load_cyc;
             automatic int fused_commit_store_cyc;
             automatic int move_candidate_cyc;
+            automatic int move_candidate_ready_cyc;
+            automatic int move_candidate_wait_cyc;
             automatic int zero_elim_cyc;
             automatic int misp_hit_idx;
             automatic int misp_free_idx;
@@ -1240,6 +1301,20 @@ module tb_top
             automatic int btl_wait_alu_issued_not_wb_now;
             automatic int btl_wait_alu_done_stale_now;
             automatic int btl_wait_alu_state_unknown_now;
+            automatic int btl_alu_blocked_prod_add_now;
+            automatic int btl_alu_blocked_prod_sub_now;
+            automatic int btl_alu_blocked_prod_logic_now;
+            automatic int btl_alu_blocked_prod_shift_now;
+            automatic int btl_alu_blocked_prod_compare_now;
+            automatic int btl_alu_blocked_prod_zba_now;
+            automatic int btl_alu_blocked_prod_zbb_zbs_now;
+            automatic int btl_alu_blocked_prod_other_now;
+            automatic int btl_alu_blocked_prod_imm_now;
+            automatic int btl_alu_blocked_prod_reg_now;
+            automatic int btl_alu_blocked_prod_move_now;
+            automatic int btl_alu_blocked_prod_zero_now;
+            automatic int btl_alu_blocked_prod_wop_now;
+            automatic int btl_alu_blocked_prod_fused_now;
             automatic int btl_alu_wakeup_candidate_now;
             automatic int btl_alu_wakeup_missed_now;
             automatic int btl_alu_ready_not_selected_now;
@@ -1285,6 +1360,8 @@ module tb_top
             fused_commit_load_cyc = 0;
             fused_commit_store_cyc = 0;
             move_candidate_cyc = 0;
+            move_candidate_ready_cyc = 0;
+            move_candidate_wait_cyc = 0;
             zero_elim_cyc = 0;
             for (int i = 0; i < BTL_IQ_COUNT; i++) begin
                 btl_iq_valid_now[i] = 0;
@@ -1342,6 +1419,20 @@ module tb_top
             btl_wait_alu_issued_not_wb_now = 0;
             btl_wait_alu_done_stale_now = 0;
             btl_wait_alu_state_unknown_now = 0;
+            btl_alu_blocked_prod_add_now = 0;
+            btl_alu_blocked_prod_sub_now = 0;
+            btl_alu_blocked_prod_logic_now = 0;
+            btl_alu_blocked_prod_shift_now = 0;
+            btl_alu_blocked_prod_compare_now = 0;
+            btl_alu_blocked_prod_zba_now = 0;
+            btl_alu_blocked_prod_zbb_zbs_now = 0;
+            btl_alu_blocked_prod_other_now = 0;
+            btl_alu_blocked_prod_imm_now = 0;
+            btl_alu_blocked_prod_reg_now = 0;
+            btl_alu_blocked_prod_move_now = 0;
+            btl_alu_blocked_prod_zero_now = 0;
+            btl_alu_blocked_prod_wop_now = 0;
+            btl_alu_blocked_prod_fused_now = 0;
             btl_alu_wakeup_candidate_now = 0;
             btl_alu_wakeup_missed_now = 0;
             btl_alu_ready_not_selected_now = 0;
@@ -1381,8 +1472,13 @@ module tb_top
                     (u_core.ren_insn[i].base.alu_op == ALU_ADD) &&
                     u_core.ren_insn[i].base.use_imm &&
                     (u_core.ren_insn[i].base.imm == 64'd0) &&
-                    (u_core.ren_insn[i].base.rs1_arch != 5'd0))
+                    (u_core.ren_insn[i].base.rs1_arch != 5'd0)) begin
                     move_candidate_cyc++;
+                    if (u_core.ren_insn[i].rs1_ready)
+                        move_candidate_ready_cyc++;
+                    else
+                        move_candidate_wait_cyc++;
+                end
                 if (u_core.ren_zero_eliminated[i])
                     zero_elim_cyc++;
                 if (u_core.commit_out[i].valid && u_core.rob_head_is_fused[i]) begin
@@ -1412,6 +1508,10 @@ module tb_top
                 macro_fused_commit_store + fused_commit_store_cyc;
             rename_move_candidate_total <=
                 rename_move_candidate_total + move_candidate_cyc;
+            rename_move_candidate_ready_total <=
+                rename_move_candidate_ready_total + move_candidate_ready_cyc;
+            rename_move_candidate_wait_total <=
+                rename_move_candidate_wait_total + move_candidate_wait_cyc;
             rename_zero_elim_total <=
                 rename_zero_elim_total + zero_elim_cyc;
             if (u_core.uoc_active)
@@ -2582,6 +2682,101 @@ module tb_top
                         end else if (btl_prod_iq_blocked_now[i]) begin
                             btl_wait_alu_not_issued_producer_blocked_now +=
                                 btl_wait_alu_not_issued_by_preg_now[i];
+
+                            begin : btl_alu_blocked_producer_shape
+                                automatic int wait_count;
+                                automatic int hit_idx;
+                                automatic int free_idx;
+                                automatic int min_idx;
+                                automatic int min_count;
+                                automatic int use_idx;
+
+                                wait_count = btl_wait_alu_not_issued_by_preg_now[i];
+                                if (btl_preg_class[i] == BTL_PROD_ALU) begin
+                                    case (btl_preg_alu_op[i])
+                                        ALU_ADD:
+                                            btl_alu_blocked_prod_add_now += wait_count;
+                                        ALU_SUB:
+                                            btl_alu_blocked_prod_sub_now += wait_count;
+                                        ALU_AND, ALU_OR, ALU_XOR,
+                                        ALU_ANDN, ALU_ORN, ALU_XNOR:
+                                            btl_alu_blocked_prod_logic_now += wait_count;
+                                        ALU_SLL, ALU_SRL, ALU_SRA, ALU_ROL, ALU_ROR:
+                                            btl_alu_blocked_prod_shift_now += wait_count;
+                                        ALU_SLT, ALU_SLTU, ALU_MIN, ALU_MAX,
+                                        ALU_MINU, ALU_MAXU, ALU_CZERO_EQZ,
+                                        ALU_CZERO_NEZ:
+                                            btl_alu_blocked_prod_compare_now += wait_count;
+                                        ALU_SH1ADD, ALU_SH2ADD, ALU_SH3ADD:
+                                            btl_alu_blocked_prod_zba_now += wait_count;
+                                        ALU_CLZ, ALU_CTZ, ALU_CPOP, ALU_SEXTB,
+                                        ALU_SEXTH, ALU_REV8, ALU_ORCB,
+                                        ALU_BSET, ALU_BCLR, ALU_BINV, ALU_BEXT:
+                                            btl_alu_blocked_prod_zbb_zbs_now += wait_count;
+                                        default:
+                                            btl_alu_blocked_prod_other_now += wait_count;
+                                    endcase
+
+                                    if (btl_preg_alu_use_imm[i])
+                                        btl_alu_blocked_prod_imm_now += wait_count;
+                                    else
+                                        btl_alu_blocked_prod_reg_now += wait_count;
+                                    if (btl_preg_alu_move_candidate[i])
+                                        btl_alu_blocked_prod_move_now += wait_count;
+                                    if (btl_preg_alu_zero_candidate[i])
+                                        btl_alu_blocked_prod_zero_now += wait_count;
+                                    if (btl_preg_alu_wop[i])
+                                        btl_alu_blocked_prod_wop_now += wait_count;
+                                    if (btl_preg_alu_fused[i])
+                                        btl_alu_blocked_prod_fused_now += wait_count;
+
+                                    hit_idx = -1;
+                                    free_idx = -1;
+                                    min_idx = 0;
+                                    min_count = btl_alu_chain_pc_hist_count[0];
+                                    for (int h = 0; h < BTL_ALU_CHAIN_PC_HIST_SLOTS; h++) begin
+                                        if ((btl_alu_chain_pc_hist_count[h] != 0) &&
+                                            (btl_alu_chain_pc_hist_pc[h] == btl_preg_pc[i]) &&
+                                            (hit_idx < 0))
+                                            hit_idx = h;
+                                        if ((btl_alu_chain_pc_hist_count[h] == 0) &&
+                                            (free_idx < 0))
+                                            free_idx = h;
+                                        if (btl_alu_chain_pc_hist_count[h] < min_count) begin
+                                            min_idx = h;
+                                            min_count = btl_alu_chain_pc_hist_count[h];
+                                        end
+                                    end
+
+                                    if (hit_idx >= 0)
+                                        use_idx = hit_idx;
+                                    else if (free_idx >= 0)
+                                        use_idx = free_idx;
+                                    else
+                                        use_idx = min_idx;
+
+                                    if ((btl_alu_chain_pc_hist_count[use_idx] == 0) ||
+                                        (btl_alu_chain_pc_hist_pc[use_idx] != btl_preg_pc[i])) begin
+                                        btl_alu_chain_pc_hist_pc[use_idx] <= btl_preg_pc[i];
+                                        btl_alu_chain_pc_hist_count[use_idx] <=
+                                            btl_alu_chain_pc_hist_count[use_idx] + wait_count;
+                                        btl_alu_chain_pc_hist_move[use_idx] <=
+                                            btl_preg_alu_move_candidate[i] ? wait_count : 0;
+                                        btl_alu_chain_pc_hist_imm[use_idx] <=
+                                            btl_preg_alu_use_imm[i] ? wait_count : 0;
+                                    end else begin
+                                        btl_alu_chain_pc_hist_count[use_idx] <=
+                                            btl_alu_chain_pc_hist_count[use_idx] + wait_count;
+                                        if (btl_preg_alu_move_candidate[i])
+                                            btl_alu_chain_pc_hist_move[use_idx] <=
+                                                btl_alu_chain_pc_hist_move[use_idx] + wait_count;
+                                        if (btl_preg_alu_use_imm[i])
+                                            btl_alu_chain_pc_hist_imm[use_idx] <=
+                                                btl_alu_chain_pc_hist_imm[use_idx] + wait_count;
+                                    end
+                                end
+                            end
+
                             if (btl_prod_iq_blocked_by_alu_now[i])
                                 btl_wait_alu_blocked_any_alu_now +=
                                     btl_wait_alu_not_issued_by_preg_now[i];
@@ -2789,6 +2984,48 @@ module tb_top
                 btl_dep_alu_wait_state_unknown <=
                     btl_dep_alu_wait_state_unknown +
                     btl_wait_alu_state_unknown_now;
+                btl_dep_alu_blocked_prod_add <=
+                    btl_dep_alu_blocked_prod_add +
+                    btl_alu_blocked_prod_add_now;
+                btl_dep_alu_blocked_prod_sub <=
+                    btl_dep_alu_blocked_prod_sub +
+                    btl_alu_blocked_prod_sub_now;
+                btl_dep_alu_blocked_prod_logic <=
+                    btl_dep_alu_blocked_prod_logic +
+                    btl_alu_blocked_prod_logic_now;
+                btl_dep_alu_blocked_prod_shift <=
+                    btl_dep_alu_blocked_prod_shift +
+                    btl_alu_blocked_prod_shift_now;
+                btl_dep_alu_blocked_prod_compare <=
+                    btl_dep_alu_blocked_prod_compare +
+                    btl_alu_blocked_prod_compare_now;
+                btl_dep_alu_blocked_prod_zba <=
+                    btl_dep_alu_blocked_prod_zba +
+                    btl_alu_blocked_prod_zba_now;
+                btl_dep_alu_blocked_prod_zbb_zbs <=
+                    btl_dep_alu_blocked_prod_zbb_zbs +
+                    btl_alu_blocked_prod_zbb_zbs_now;
+                btl_dep_alu_blocked_prod_other <=
+                    btl_dep_alu_blocked_prod_other +
+                    btl_alu_blocked_prod_other_now;
+                btl_dep_alu_blocked_prod_imm <=
+                    btl_dep_alu_blocked_prod_imm +
+                    btl_alu_blocked_prod_imm_now;
+                btl_dep_alu_blocked_prod_reg <=
+                    btl_dep_alu_blocked_prod_reg +
+                    btl_alu_blocked_prod_reg_now;
+                btl_dep_alu_blocked_prod_move_candidate <=
+                    btl_dep_alu_blocked_prod_move_candidate +
+                    btl_alu_blocked_prod_move_now;
+                btl_dep_alu_blocked_prod_zero_candidate <=
+                    btl_dep_alu_blocked_prod_zero_candidate +
+                    btl_alu_blocked_prod_zero_now;
+                btl_dep_alu_blocked_prod_wop <=
+                    btl_dep_alu_blocked_prod_wop +
+                    btl_alu_blocked_prod_wop_now;
+                btl_dep_alu_blocked_prod_fused <=
+                    btl_dep_alu_blocked_prod_fused +
+                    btl_alu_blocked_prod_fused_now;
                 btl_dep_wait_on_load <= btl_dep_wait_on_load + btl_wait_load_now;
                 btl_dep_wait_on_branch <=
                     btl_dep_wait_on_branch + btl_wait_branch_now;
@@ -2859,6 +3096,14 @@ module tb_top
                     for (int i = 0; i < INT_PRF_DEPTH; i++) begin
                         btl_preg_class[i] <= BTL_PROD_UNKNOWN;
                         btl_preg_state[i] <= BTL_PREG_STATE_UNKNOWN;
+                        btl_preg_pc[i] <= 64'd0;
+                        btl_preg_alu_op[i] <= ALU_ADD;
+                        btl_preg_alu_use_imm[i] <= 1'b0;
+                        btl_preg_alu_imm_zero[i] <= 1'b0;
+                        btl_preg_alu_move_candidate[i] <= 1'b0;
+                        btl_preg_alu_zero_candidate[i] <= 1'b0;
+                        btl_preg_alu_wop[i] <= 1'b0;
+                        btl_preg_alu_fused[i] <= 1'b0;
                     end
                 end else begin
                     for (int i = 0; i < INT_PRF_DEPTH; i++) begin
@@ -2908,6 +3153,37 @@ module tb_top
                                     btl_preg_class[u_core.ren_insn[i].pdst] <=
                                         BTL_PROD_UNKNOWN;
                             endcase
+                            btl_preg_pc[u_core.ren_insn[i].pdst] <=
+                                u_core.ren_insn[i].base.pc;
+                            btl_preg_alu_op[u_core.ren_insn[i].pdst] <=
+                                u_core.ren_insn[i].base.alu_op;
+                            btl_preg_alu_use_imm[u_core.ren_insn[i].pdst] <=
+                                u_core.ren_insn[i].base.use_imm;
+                            btl_preg_alu_imm_zero[u_core.ren_insn[i].pdst] <=
+                                u_core.ren_insn[i].base.imm == 64'd0;
+                            btl_preg_alu_move_candidate[u_core.ren_insn[i].pdst] <=
+                                (u_core.ren_insn[i].base.fu_type == FU_ALU) &&
+                                (u_core.ren_insn[i].base.alu_op == ALU_ADD) &&
+                                u_core.ren_insn[i].base.use_imm &&
+                                (u_core.ren_insn[i].base.imm == 64'd0) &&
+                                (u_core.ren_insn[i].base.rs1_arch != 5'd0);
+                            btl_preg_alu_zero_candidate[u_core.ren_insn[i].pdst] <=
+                                ((u_core.ren_insn[i].base.fu_type == FU_ALU) &&
+                                 (u_core.ren_insn[i].base.alu_op == ALU_ADD) &&
+                                 u_core.ren_insn[i].base.use_imm &&
+                                 (u_core.ren_insn[i].base.imm == 64'd0) &&
+                                 (u_core.ren_insn[i].base.rs1_arch == 5'd0)) ||
+                                ((u_core.ren_insn[i].base.fu_type == FU_ALU) &&
+                                 (u_core.ren_insn[i].base.alu_op == ALU_XOR) &&
+                                 !u_core.ren_insn[i].base.use_imm &&
+                                 u_core.ren_insn[i].base.rs1_valid &&
+                                 u_core.ren_insn[i].base.rs2_valid &&
+                                 (u_core.ren_insn[i].base.rs1_arch ==
+                                  u_core.ren_insn[i].base.rs2_arch));
+                            btl_preg_alu_wop[u_core.ren_insn[i].pdst] <=
+                                u_core.ren_insn[i].base.is_w_op;
+                            btl_preg_alu_fused[u_core.ren_insn[i].pdst] <=
+                                u_core.ren_insn[i].base.is_fused;
                             btl_preg_state[u_core.ren_insn[i].pdst] <=
                                 BTL_PREG_STATE_WAIT_ISSUE;
                         end
@@ -3593,6 +3869,9 @@ module tb_top
                      macro_fused_commit_store);
             $display("Rename elimination accounting:");
             $display("  move_candidates: %0d", rename_move_candidate_total);
+            $display("  move rs1 ready/wait: %0d / %0d",
+                     rename_move_candidate_ready_total,
+                     rename_move_candidate_wait_total);
             $display("  zero_eliminated: %0d", rename_zero_elim_total);
             $display("Average IQ occupancy (of 32):");
             $display("  iq0_avg: %0d.%02d", iq0_cnt_sum / perf_total_cyc,
@@ -3868,9 +4147,27 @@ module tb_top
                 $display("xs bottleneck_dep_alu_wait_issued_not_wb : %0d", btl_dep_alu_wait_issued_not_wb);
                 $display("xs bottleneck_dep_alu_wait_done_stale : %0d", btl_dep_alu_wait_done_stale);
                 $display("xs bottleneck_dep_alu_wait_state_unknown : %0d", btl_dep_alu_wait_state_unknown);
+                $display("xs bottleneck_dep_alu_blocked_prod_add : %0d", btl_dep_alu_blocked_prod_add);
+                $display("xs bottleneck_dep_alu_blocked_prod_sub : %0d", btl_dep_alu_blocked_prod_sub);
+                $display("xs bottleneck_dep_alu_blocked_prod_logic : %0d", btl_dep_alu_blocked_prod_logic);
+                $display("xs bottleneck_dep_alu_blocked_prod_shift : %0d", btl_dep_alu_blocked_prod_shift);
+                $display("xs bottleneck_dep_alu_blocked_prod_compare : %0d", btl_dep_alu_blocked_prod_compare);
+                $display("xs bottleneck_dep_alu_blocked_prod_zba : %0d", btl_dep_alu_blocked_prod_zba);
+                $display("xs bottleneck_dep_alu_blocked_prod_zbb_zbs : %0d", btl_dep_alu_blocked_prod_zbb_zbs);
+                $display("xs bottleneck_dep_alu_blocked_prod_other : %0d", btl_dep_alu_blocked_prod_other);
+                $display("xs bottleneck_dep_alu_blocked_prod_imm : %0d", btl_dep_alu_blocked_prod_imm);
+                $display("xs bottleneck_dep_alu_blocked_prod_reg : %0d", btl_dep_alu_blocked_prod_reg);
+                $display("xs bottleneck_dep_alu_blocked_prod_move_candidate : %0d", btl_dep_alu_blocked_prod_move_candidate);
+                $display("xs bottleneck_dep_alu_blocked_prod_zero_candidate : %0d", btl_dep_alu_blocked_prod_zero_candidate);
+                $display("xs bottleneck_dep_alu_blocked_prod_wop : %0d", btl_dep_alu_blocked_prod_wop);
+                $display("xs bottleneck_dep_alu_blocked_prod_fused : %0d", btl_dep_alu_blocked_prod_fused);
                 $display("xs bottleneck_dep_alu_wakeup_same_cycle_candidate : %0d", btl_dep_alu_wakeup_same_cycle_candidate);
                 $display("xs bottleneck_dep_alu_wakeup_same_cycle_missed : %0d", btl_dep_alu_wakeup_same_cycle_missed);
                 $display("xs bottleneck_dep_alu_ready_not_selected : %0d", btl_dep_alu_ready_not_selected);
+                $display("xs bottleneck_rename_move_candidates : %0d", rename_move_candidate_total);
+                $display("xs bottleneck_rename_move_candidates_rs1_ready : %0d", rename_move_candidate_ready_total);
+                $display("xs bottleneck_rename_move_candidates_rs1_wait : %0d", rename_move_candidate_wait_total);
+                $display("xs bottleneck_rename_zero_eliminated : %0d", rename_zero_elim_total);
                 $display("xs bottleneck_dep_wait_on_load : %0d", btl_dep_wait_on_load);
                 $display("xs bottleneck_dep_wait_on_branch : %0d", btl_dep_wait_on_branch);
                 $display("xs bottleneck_dep_wait_on_mul : %0d", btl_dep_wait_on_mul);
@@ -3917,6 +4214,16 @@ module tb_top
                 $display("xs bottleneck_branch_ret_mispredicts : %0d", ctl_misp_ret_cyc);
                 $display("xs bottleneck_branch_ghr_restore : %0d", ghr_restore_cyc);
                 $display("xs bottleneck_branch_ras_restore : %0d", ras_restore_cyc);
+                $display("ALU blocked producer top PCs: pc weighted_wait move/imm");
+                for (int i = 0; i < BTL_ALU_CHAIN_PC_HIST_SLOTS; i++) begin
+                    if (btl_alu_chain_pc_hist_count[i] != 0) begin
+                        $display("    %016h %0d %0d/%0d",
+                            btl_alu_chain_pc_hist_pc[i],
+                            btl_alu_chain_pc_hist_count[i],
+                            btl_alu_chain_pc_hist_move[i],
+                            btl_alu_chain_pc_hist_imm[i]);
+                    end
+                end
             end
         end
     end
