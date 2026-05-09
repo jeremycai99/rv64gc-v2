@@ -20,6 +20,9 @@ under `doc/archive/`.
 - `stage2_frontend_optimization_target_2026-05-06.md` - Stage 2 frontend
   optimization target: structural runahead, IFU work cursor, runahead
   opportunities, and evidence gates.
+- `stage2_bottleneck_dse_plan_2026-05-09.md` - active long-form DSE plan for
+  selecting the next structural bottleneck target from full
+  `+BOTTLENECK_PROFILE` evidence.
 - `rv64gc_v2_uarch.md` - current rv64gc-v2 microarchitecture specification.
 - `partial_replay_spec.md` - selective replay design note; keep here while LSU
   replay policy remains under evaluation.

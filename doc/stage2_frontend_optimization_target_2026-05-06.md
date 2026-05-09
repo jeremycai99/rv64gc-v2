@@ -1421,6 +1421,9 @@ Next high-leverage architectural directions:
 | Broader scheduler/wakeup/select redesign | ALU dependency counters show true producer-chain depth, but local IQ0 chaining is too small. A real redesign should address producer blocking, wakeup fanout, select fairness, and cluster steering across integer IQs. | Multi-row reduction in `xs_bottleneck_dep_wait_on_alu`, producer-blocked counts, and IQ not-ready pressure with no branch/control regression and at least 3-5 percent broad upside. |
 | Memory and load-use pipeline | Current Stage 2 work has mostly targeted frontend and integer ALU chains. A broader workload set will expose load-use, forwarding, retry, D-cache conflict, and store-backlog limits. | Full bottleneck run shows LSU or load-use counters dominate multiple rows; any load speculation or forwarding change includes replay correctness and no stale wakeup side effects. |
 
+Detailed DSE execution plan:
+`doc/stage2_bottleneck_dse_plan_2026-05-09.md`.
+
 ## Implementation Order
 
 | Phase | Task | Exit criterion |
