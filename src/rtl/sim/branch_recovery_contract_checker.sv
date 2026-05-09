@@ -34,6 +34,10 @@ module branch_recovery_contract_checker
     logic duplicate_release_c;
     logic invalid_release_c;
     logic invalid_restore_c;
+    logic save_accept_c;
+    logic save_overwrite_c;
+    logic save_blocked_with_free_c;
+    logic save_ignored_recovery_c;
     logic restore_released_c;
     logic keep_restore_slot_c;
     logic restore_mask_mismatch_c;
@@ -52,6 +56,9 @@ module branch_recovery_contract_checker
     integer checkpoint_invalid_release_count;
     integer checkpoint_duplicate_release_count;
     integer checkpoint_invalid_restore_count;
+    integer checkpoint_save_overwrite_count;
+    integer checkpoint_save_blocked_with_free_count;
+    integer checkpoint_save_ignored_recovery_count;
     integer checkpoint_restore_release_conflict_count;
     integer checkpoint_restore_mask_mismatch_count;
     integer checkpoint_restore_kept_self_count;
@@ -65,6 +72,15 @@ module branch_recovery_contract_checker
         duplicate_release_c = 1'b0;
         invalid_release_c = 1'b0;
         invalid_restore_c = restore_valid && !occupied[restore_id];
+        save_accept_c = save_valid && save_avail && !restore_valid && !flush;
+        save_overwrite_c = save_accept_c && occupied_after_release[save_id];
+        save_blocked_with_free_c =
+            save_valid &&
+            !save_avail &&
+            !restore_valid &&
+            !flush &&
+            (occupied_after_release != {NUM_CHECKPOINTS{1'b1}});
+        save_ignored_recovery_c = save_valid && (restore_valid || flush);
         restore_released_c = 1'b0;
         keep_restore_slot_c = restore_valid && restore_keep_mask[restore_id];
         restore_mask_mismatch_c = 1'b0;
@@ -119,6 +135,9 @@ module branch_recovery_contract_checker
             checkpoint_invalid_release_count               <= 0;
             checkpoint_duplicate_release_count             <= 0;
             checkpoint_invalid_restore_count               <= 0;
+            checkpoint_save_overwrite_count                <= 0;
+            checkpoint_save_blocked_with_free_count        <= 0;
+            checkpoint_save_ignored_recovery_count         <= 0;
             checkpoint_restore_release_conflict_count      <= 0;
             checkpoint_restore_mask_mismatch_count         <= 0;
             checkpoint_restore_kept_self_count             <= 0;
@@ -126,11 +145,15 @@ module branch_recovery_contract_checker
             branch_recovery_cycles <= branch_recovery_cycles + 1;
 
             if (save_valid) begin
-                if (save_avail)
+                if (save_ignored_recovery_c) begin
+                    checkpoint_save_ignored_recovery_count <=
+                        checkpoint_save_ignored_recovery_count + 1;
+                end else if (save_avail) begin
                     checkpoint_save_count <= checkpoint_save_count + 1;
-                else
+                end else begin
                     checkpoint_save_blocked_count <=
                         checkpoint_save_blocked_count + 1;
+                end
             end
 
             checkpoint_release_count <=
@@ -144,6 +167,35 @@ module branch_recovery_contract_checker
                 checkpoint_restore_discarded_count <=
                     checkpoint_restore_discarded_count +
                     restore_discard_count_c;
+            end
+
+            if (save_overwrite_c) begin
+                checkpoint_save_overwrite_count <=
+                    checkpoint_save_overwrite_count + 1;
+                if (checkpoint_save_overwrite_count <
+                    BRANCH_RECOVERY_PRINT_LIMIT) begin
+                    $display("[BRANCH_RECOVERY_CHECK] save overwrote occupied checkpoint save_id=%0d occupied=%0h occupied_after_release=%0h release_valid=%0b",
+                             save_id,
+                             occupied,
+                             occupied_after_release,
+                             release_valid);
+                end
+                if (branch_recovery_strict_en)
+                    $fatal(1, "checkpoint save overwrite");
+            end
+
+            if (save_blocked_with_free_c) begin
+                checkpoint_save_blocked_with_free_count <=
+                    checkpoint_save_blocked_with_free_count + 1;
+                if (checkpoint_save_blocked_with_free_count <
+                    BRANCH_RECOVERY_PRINT_LIMIT) begin
+                    $display("[BRANCH_RECOVERY_CHECK] save blocked with free checkpoint occupied=%0h occupied_after_release=%0h save_id=%0d",
+                             occupied,
+                             occupied_after_release,
+                             save_id);
+                end
+                if (branch_recovery_strict_en)
+                    $fatal(1, "checkpoint save blocked with free slot");
             end
 
             if (invalid_release_c) begin
@@ -253,6 +305,8 @@ module branch_recovery_contract_checker
                      checkpoint_save_count);
             $display("checkpoint saves blocked          : %0d",
                      checkpoint_save_blocked_count);
+            $display("checkpoint saves ignored recovery : %0d",
+                     checkpoint_save_ignored_recovery_count);
             $display("checkpoint releases               : %0d",
                      checkpoint_release_count);
             $display("checkpoint restores               : %0d",
@@ -267,11 +321,37 @@ module branch_recovery_contract_checker
                      checkpoint_duplicate_release_count);
             $display("invalid restores                  : %0d",
                      checkpoint_invalid_restore_count);
+            $display("save overwrites                   : %0d",
+                     checkpoint_save_overwrite_count);
+            $display("save blocked with free slot       : %0d",
+                     checkpoint_save_blocked_with_free_count);
             $display("restore/release conflicts         : %0d",
                      checkpoint_restore_release_conflict_count);
             $display("restore keep-mask mismatches      : %0d",
                      checkpoint_restore_mask_mismatch_count);
             $display("restore kept recovered checkpoint : %0d",
+                     checkpoint_restore_kept_self_count);
+            $display("xs branch recovery saves accepted : %0d",
+                     checkpoint_save_count);
+            $display("xs branch recovery saves blocked full : %0d",
+                     checkpoint_save_blocked_count);
+            $display("xs branch recovery saves ignored recovery : %0d",
+                     checkpoint_save_ignored_recovery_count);
+            $display("xs branch recovery invalid release : %0d",
+                     checkpoint_invalid_release_count);
+            $display("xs branch recovery duplicate release : %0d",
+                     checkpoint_duplicate_release_count);
+            $display("xs branch recovery invalid restore : %0d",
+                     checkpoint_invalid_restore_count);
+            $display("xs branch recovery save overwrite : %0d",
+                     checkpoint_save_overwrite_count);
+            $display("xs branch recovery save blocked with free : %0d",
+                     checkpoint_save_blocked_with_free_count);
+            $display("xs branch recovery restore release conflict : %0d",
+                     checkpoint_restore_release_conflict_count);
+            $display("xs branch recovery restore mask mismatch : %0d",
+                     checkpoint_restore_mask_mismatch_count);
+            $display("xs branch recovery restore kept self : %0d",
                      checkpoint_restore_kept_self_count);
         end
     end
