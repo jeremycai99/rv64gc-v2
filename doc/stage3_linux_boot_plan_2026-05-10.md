@@ -142,6 +142,32 @@ v1 status caveat:
 | Interrupt hookup | `tb_top.sv` currently ties `mtip/msip/meip/stip/ssip/seip` low and passes `time_val=cycle_count` | Linux needs timer interrupt generation and software interrupt plumbing |
 | Endpoint | Current bare-metal rows use testbench-observed stores to configurable `TOHOST_ADDR` | Keep for bare-metal tests only; Stage 3 uses UART/log/syscon milestones |
 
+## Current Scaffold Status
+
+Implemented scaffold commit: `3d100ef`.
+
+What exists now:
+
+- `tools/run_stage3_rtl_guard.py` rebuilds the selected simulator and enforces
+  the four-row DS/CM gate before any Stage 3 RTL promotion.
+- `tools/run_linux_boot.py` builds and later runs Linux-platform images through
+  UART/log milestones rather than `tohost`.
+- `sw/linux_boot/` contains the Sv39 DTS, minimal initramfs source, M-mode UART
+  smoke source, linker script, and Linux/OpenSBI build wrapper.
+- The M-mode smoke image builds to `build/linux_boot/m_mode_uart_smoke.hex`.
+
+Important L0 RTL blocker:
+
+- A UART/CLINT platform model alone is not sufficient for v2 because the current
+  core top exposes only the cache-line L2 memory interface. Stores to
+  `0x1000_0000` would go through the data cache and may never become a
+  device-visible byte transaction.
+- Do not fake Linux UART progress by snooping internal LSU store signals in the
+  testbench. That would recreate the wrong kind of side-channel endpoint.
+- The first real RTL slice should add a clean uncached MMIO request/response
+  path at the core/platform boundary, then connect UART and CLINT behind that
+  path. After that slice, rerun `tools/run_stage3_rtl_guard.py`.
+
 ## Stage 3 Architecture Direction
 
 ### Platform Shape
