@@ -131,6 +131,8 @@ DRIFT_SAFE_COUNTER_INVARIANTS = {
     "xs_packet_stale_idx_mismatch": {"max": 0},
     "xs_packet_stale_epoch_mismatch": {"max": 0},
     "xs_packet_stale_tag_mismatch": {"max": 0},
+    "xs_delivery_owner_switch": {"max": 0},
+    "xs_delivery_noncontig_pcs": {"max": 0},
 }
 
 DEFAULT_COUNTER_EXPECTATIONS = {
