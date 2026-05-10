@@ -181,6 +181,338 @@ Important interpretation rule:
 - Every DSE branch must include both views: pressure counter movement and
   cycle-level movement.
 
+## Deep DSE Master Plan
+
+This section is the longer execution plan for the next optimization campaign.
+It is intentionally stricter than the earlier local DSE loops. The objective is
+to turn the current bottleneck analysis into a sequence of structural
+experiments that can expose multi-percent opportunities or reject them with
+clear evidence.
+
+### Current Bottleneck Stacks
+
+The current counters do not point to one isolated bug. They point to five
+overlapping bottleneck stacks that must be separated before more RTL tuning:
+
+| Stack | Current evidence | Architectural hypothesis | First proof needed |
+|---|---|---|---|
+| Frontend owner delivery | CoreMark 10 has `xs_data_present_no_emit=83,016`, `xs_data_no_emit_pktbuf_empty=61,010`, and branch hotspot has `xs_data_present_no_emit=30,172` with `xs_data_no_emit_owner_live=30,172`. | A post-IFU owner can be live with data present, but the frontend cannot prove that a legal decode packet should be emitted, replayed, or killed. | Delivery scoreboard plus owner/epoch no-emit classification. |
+| Branch recovery contract | CoreMark 10 has `redirect_recovery=29,575`; branch hotspot has `redirect_recovery=8,331`. A0 showed many non-head mispredicts with useful younger work. | Recovery opportunity is real, but the checkpoint, frontend, and backend contracts are not yet strong enough for an early recovery behavior change. | Checkpoint boundary metadata repair, then a resource-aware recovery scheduler, not raw plusarg replay. |
+| Scheduler dependency pressure | CoreMark 10 has `xs_bottleneck_dep_wait_on_alu=13,495,221`, but local IQ0/short-ALU variants were marginal and sometimes regressed branch rows. | The real backend opportunity is broader wakeup/select or criticality scheduling, not a local same-cycle chain shortcut. | Producer state, select-loss, and cross-IQ criticality attribution. |
+| Load-use and memory latency | Dhrystone 100 has `xs_bottleneck_dep_wait_on_load=17,175`, and CoreMark 10 still has large load-wait pressure. | Dhrystone is partly memory/load-use limited, so a frontend-only campaign cannot explain all anchor-row movement. | Load latency, store-forward, cache-port, replay, and consumer-wakeup split. |
+| Commit and window drain | CoreMark 10 has high commit-zero pressure and branch hotspot has high head-block pressure. | Commit-zero may be a downstream symptom of branch recovery, memory, or scheduler stalls rather than a commit-width bottleneck. | ROB-head block cause and correlation with redirect, load, and scheduler stalls. |
+
+The working priority is:
+
+1. Finish Branch A evidence cleanup because branch-boundary checkpoint metadata
+   already showed large opportunity-counter movement.
+2. Build Branch B delivery-scoreboard evidence before changing duplicate or
+   redirect handoff behavior.
+3. Add Branch C/D attribution only after the frontend and recovery ownership
+   evidence is current, because backend counter pressure is large but not yet
+   cycle-bound enough for a behavior slice.
+4. Treat Branch E as a dependent investigation until head-block cause proves
+   actual commit/window limits.
+
+### Phase 0: Evidence Freeze And Run Hygiene
+
+Purpose:
+
+- Prevent another cycle where results from different RTL states are compared as
+  if they were one baseline.
+- Make every DSE row reproducible and traceable.
+
+Required work:
+
+- Keep `benchmark_results/stage2_bottleneck_baseline_20260509` as the locked
+  baseline until a full 16-row promoted candidate replaces it.
+- Record every behavior trial against that baseline using `--baseline-results`.
+- Do not cite a run if its result summary predates the RTL under test.
+- Rebuild DSim or XSim after every RTL change.
+- Commit validated instrumentation separately from behavior changes.
+- Do not leave dirty RTL running in a long run.
+
+Exit criteria:
+
+- `git status --short` is understood before every run.
+- The doc records which artifact is baseline, instrumentation, behavior trial,
+  rejected trial, or promoted candidate.
+- Any stale run is labeled as functionality-only or historical evidence.
+
+### Phase 1: Counter Completeness Pass
+
+Purpose:
+
+- Ensure every major bottleneck stack has enough cycle-bound counters to drive
+  an architectural decision.
+- Avoid implementing an RTL mechanism when the current counters only show a
+  symptom.
+
+Required counter coverage:
+
+| Area | Missing or required split | Why it matters |
+|---|---|---|
+| Frontend owner delivery | For every data-present no-emit cycle: owner phase, FTQ idx, epoch valid, redirect pending, predicted-control hold, straddle/remainder hold, packet-ready hold, IBuffer state, and duplicate safe/unsafe classification. | Distinguishes a legal owner handoff repair from unsafe duplicate suppression removal. |
+| Redirect refill | Redirect to first I-cache request, first line response, first emitted packet, and first decoded packet. | Separates branch recovery latency from fetch delivery policy. |
+| Branch recovery | Recovery candidate by branch type, ROB age, checkpoint state, resource headroom, side-effect class, and younger useful work. | Prevents raw early recovery from firing in states that cannot recover safely. |
+| Scheduler | Not-ready producer state, producer FU class, consumer IQ, select-lost reason, FU-port busy, age priority loss, and ready-hidden by IQ. | Determines whether the fix is wakeup timing, select policy, port steering, or true dependency depth. |
+| Load-use | Load latency bucket, load-to-consumer wakeup delay, store-forward wait/fail reason, dcache port conflict, replay reason, and LSU queue pressure. | Prevents Dhrystone-oriented changes from masking a load-use issue. |
+| Commit/window | ROB head class, head ready state, ready younger count, ROB occupancy, rename stall cause, PRF pressure, and redirect/load correlation. | Distinguishes root-cause drain from commit-width symptoms. |
+
+Exit criteria:
+
+- A new bottleneck rank report includes both cycle counters and pressure
+  counters for all 16 rows.
+- Each proposed behavior branch has one primary target counter and one
+  cycle-bound companion counter.
+- If a branch lacks a cycle-bound companion counter, only instrumentation work
+  is allowed.
+
+### Phase 2: Branch A Recovery Contract DSE
+
+Purpose:
+
+- Convert branch recovery from a known opportunity into a safe architectural
+  mechanism.
+- Avoid reusing the old partial-recovery plusargs as a proxy for a real design.
+
+Required sequence:
+
+1. A1a checkpoint-boundary metadata repair.
+   - Repair branch checkpoint ownership so the recorded checkpoint boundary
+     matches the branch ROB, not the rename group head.
+   - Validate as default-performance-neutral structural metadata.
+   - Expected counter movement: `xs_branch_opportunity_reject_checkpoint`
+     drops sharply without cycle changes.
+
+2. A1b recovery scheduler attribution.
+   - Add counters for why a candidate is not fired after metadata repair:
+     resource headroom, commit conflict, frontend pending redirect, side-effect
+     class, UOC activity, ROB age, and cooldown.
+   - Add counters for recovery attempts that increase redirect work instead of
+     reducing it.
+
+3. A1c resource-aware backend-only recovery.
+   - Fire only when checkpoint, RAT, free-list, ROB tail, writeback filtering,
+     and LSU cleanup are all proven safe.
+   - Do not redirect frontend early yet.
+   - Primary expected movement: lower `redirect_recovery` and commit-zero after
+     mispredict, with zero branch-recovery invariant counters.
+
+4. A2 early frontend redirect.
+   - Start only after A1c is clean.
+   - Restore BPU history, RAS, FTQ owner, IFU cursor, and IBuffer epoch from one
+     owner rule.
+   - Any stale owner, duplicate delivery, or checkpoint mismatch rejects the
+     trial.
+
+Promotion criteria:
+
+- T2 branch hotspot improves by at least 3 percent.
+- CoreMark 1 and CoreMark 10 improve or stay neutral.
+- Dhrystone 100, backend ALU chain, and frontend branch dense do not regress.
+- Strict fetch owner, delivery, and branch-recovery violation counters remain
+  zero.
+
+### Phase 3: Branch B Owner Delivery DSE
+
+Purpose:
+
+- Attack the largest current frontend opportunity without reviving the loop
+  buffer or adding blind packet storage.
+
+Required sequence:
+
+1. B1a delivery scoreboard instrumentation.
+   - Track every required PC for a post-IFU owner until decode delivery.
+   - Classify each no-emit as already-delivered, must-replay, must-kill,
+     predicted-control hold, straddle/remainder hold, redirect hold, or
+     downstream hold.
+   - This is instrumentation first. It must not change cycles.
+
+2. B1b owner/epoch duplicate handoff.
+   - Convert global duplicate suppression into an owner/epoch checked rule only
+     for scoreboard-proven already-delivered packets.
+   - Unsafe duplicate cases remain conservative.
+   - Primary target counters:
+     `xs_data_no_emit_dup`, `xs_data_no_emit_pktbuf_empty`,
+     `packet_empty_noemit_dup`.
+
+3. B1c redirect no-emit handoff.
+   - For redirect-driven no-emit with an empty packet buffer, classify whether
+     the owner is killed, replayed, or legally deliverable.
+   - Update FTQ, IFU cursor, and IBuffer from one owner transition.
+
+4. B2 owner-aware capacity.
+   - Add more delivery capacity only if B1 leaves `xs_data_no_emit_pktbuf_full`
+     or packet-age counters as the dominant limiter.
+   - Each entry carries FTQ idx, epoch, start PC, valid mask, predicted-control
+     metadata, and delivery-complete state.
+
+Promotion criteria:
+
+- T2 CoreMark 10 and branch hotspot reduce data-present no-emit with no rise in
+  stale owner, duplicate-delivery, packet-full, or backend packet-ready stalls.
+- If `xs_data_no_emit_pktbuf_empty` does not fall, the candidate did not fix
+  the dominant measured shape and is not promotable.
+- Capacity-only work is forbidden until empty-buffer owner-live no-emit is no
+  longer dominant.
+
+### Phase 4: Branch C Scheduler DSE
+
+Purpose:
+
+- Reopen backend performance only as a structural scheduler study, not as local
+  IQ0 tuning.
+
+Required sequence:
+
+1. C0 criticality attribution.
+   - Add producer-chain depth, producer issue state, select-loss reason,
+     ready-hidden by IQ, and FU-port utilization counters.
+   - Split ALU dependency pressure into true dependency, producer blocked,
+     ready not selected, steering conflict, and wakeup timing.
+
+2. C1 broad scheduler candidate.
+   - Allowed mechanisms include age-aware select fairness, cluster-level simple
+     integer steering, registered fast-lane wakeup token, or producer
+     criticality priority.
+   - Rejected mechanisms include local port op-list tuning, scalar threshold
+     chasing, and any path that only targets Dhrystone/CoreMark.
+
+Promotion criteria:
+
+- At least 3 percent CoreMark 10 improvement.
+- No regression on branch dense, branch hotspot, Dhrystone 100, memory rows,
+  backend independent rows, or ALU-chain guards.
+- `xs_bottleneck_dep_wait_on_alu` must fall with a cycle-bound companion such
+  as commit IPC, issue utilization, or commit-zero movement.
+
+### Phase 5: Branch D Load-Use DSE
+
+Purpose:
+
+- Explain Dhrystone sensitivity and prevent frontend/backend changes from
+  hiding load-use latency.
+
+Required sequence:
+
+1. D0 load-use attribution.
+   - Add issue-to-data latency buckets.
+   - Add load-to-consumer wakeup delay buckets.
+   - Add store-forward wait/fail reasons.
+   - Add dcache-port conflict and replay cause counters.
+
+2. D1 structural memory candidate.
+   - Allowed mechanisms include store-forward latency repair, speculative load
+     wakeup with replay, or dcache port/banking adjustment if counters justify
+     them.
+   - Raw load speculation without replay correctness is rejected.
+
+Promotion criteria:
+
+- Dhrystone improves without CoreMark or branch hotspot regression.
+- Memory generalization rows improve or stay neutral.
+- Replay, stale wakeup, and wrong-path store safety counters stay clean.
+
+### Phase 6: Branch E Commit And Window DSE
+
+Purpose:
+
+- Determine whether commit-zero pressure is root cause or a symptom.
+
+Required sequence:
+
+1. E0 head-block attribution.
+   - Classify ROB head block by uop class and ready state.
+   - Count ready younger slots hidden behind the head.
+   - Correlate head blocks with redirect, load, scheduler, rename, and PRF
+     pressure.
+
+2. E1 window or drain candidate.
+   - Only implement if E0 proves actual admission or retirement structure is
+     limiting broad rows.
+
+Promotion criteria:
+
+- Commit-zero cycles fall and IPC rises without increasing frontend packet
+  empty, backend packet-ready stall, or branch recovery pressure.
+
+### Phase 7: Cross-Branch Interaction Review
+
+Purpose:
+
+- Prevent one branch from improving a local counter while worsening a shared
+  architectural contract.
+
+Required review after every T2:
+
+| Check | Required question |
+|---|---|
+| Frontend and branch | Did redirect recovery fall by making packet delivery more conservative, or did packet delivery improve by increasing wrong-path work? |
+| Frontend and backend | Did packet-empty fall only because decode stalls grew, or did useful decode/commit IPC improve? |
+| Branch and commit | Did early recovery reduce useful flush work, or did it increase recovery attempts and commit-zero windows? |
+| Scheduler and branch | Did wakeup/select changes alter branch resolution timing enough to regress branch rows? |
+| Load-use and scheduler | Did speculative load wakeup reduce real load-use latency, or did it add replay pressure? |
+
+Exit criteria:
+
+- Every promoted candidate has a before/after table for primary counters,
+  companion cycle counters, and guard counters.
+- Any cross-branch regression is either fixed before promotion or the candidate
+  is classified as DSE-only or rejected.
+
+### Phase 8: Broader Workload Expansion
+
+Purpose:
+
+- Reduce overfitting to Dhrystone and CoreMark while still using them as anchor
+  rows for continuity with the MegaBOOM comparison.
+
+Execution rules:
+
+- First keep the six-row T2 set for fast architectural screening.
+- Add broader rows only after T2 is clean, so the long run is not wasted on an
+  already-regressing candidate.
+- Include integer control, pointer chasing, memcpy/memset, branch dense, cache
+  pressure, independent ALU, dependent ALU, load-use, and mixed call/return
+  rows.
+- A candidate that only improves Dhrystone/CoreMark and regresses broader rows
+  is not an architectural promotion.
+
+Exit criteria:
+
+- Stage 2 promoted mechanisms are measured on the full Stage 1 manifest first.
+- Additional broader rows are used to rank the next architectural direction,
+  not to excuse regressions in the locked signoff rows.
+
+### Experiment Decision Record Template
+
+Every DSE branch should add a compact decision block to this document:
+
+```text
+Experiment:
+Mechanism class:
+Mechanism name:
+RTL state or commit:
+Baseline artifact:
+Run artifacts:
+Hypothesis:
+Primary target counter:
+Cycle-bound companion counter:
+Expected delta:
+Observed delta:
+Rows improved:
+Rows regressed:
+Strict checker status:
+Verdict:
+Next action:
+```
+
+Verdicts must use one of the scoring labels in this document. Do not describe a
+trial as "promising" unless it has a named next structural fix and clean guard
+rows.
+
 ## Ground Rules
 
 1. Lock the baseline before DSE.
@@ -504,6 +836,47 @@ Interpretation:
 - Redirect-to-fetch and redirect-to-decode latency can still be added later,
   but this A0 result is already sufficient to reject another old-plusarg retry
   and select checkpoint-boundary ownership as the next Branch A design problem.
+
+Checkpoint-boundary metadata repair result, May 9, 2026:
+
+- T1 artifact: `benchmark_results/stage2_branch_ckpt_boundary_t1_20260509`.
+- T2 artifact: `benchmark_results/stage2_branch_ckpt_boundary_t2_20260509`.
+- Both runs passed strict owner, delivery, and branch-recovery checks.
+- Cycles matched the locked baseline exactly, so this is structural enabling
+  work, not a performance improvement claim.
+- The repair changes the branch checkpoint boundary metadata so a branch
+  checkpoint records the branch ROB boundary instead of the rename group head.
+
+| Row | Cycles | Partial candidates before | Partial candidates after | Resource-ok after | Checkpoint at branch after | Checkpoint rejects before | Checkpoint rejects after |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | `18,577` | `64` | `74` | `74` | `78` | `18` | `8` |
+| CoreMark 10 | `1,500,110` | `21,002` | `31,617` | `28,090` | `34,812` | `10,990` | `375` |
+| CoreMark 1 | `163,013` | `2,930` | `4,202` | `3,879` | `4,572` | `1,328` | `56` |
+| Frontend mixed branch dense | `7,220` | `198` | `456` | `456` | `564` | `258` | `0` |
+| Backend ALU chain 8 | `3,039` | `0` | `2` | `1` | `2` | `2` | `0` |
+| Branch hotspot | `141,326` | `1,671` | `8,231` | `8,231` | `8,563` | `6,711` | `151` |
+
+Interpretation:
+
+- The checkpoint metadata issue was a real architectural blocker. It hid most
+  branch-hotspot recovery opportunity and a large CoreMark 10 opportunity.
+- Default cycles did not change, so the repair should be treated as enabling
+  metadata, not a Stage 2 performance mechanism by itself.
+- After the repair, remaining rejects are no longer dominated by checkpoint
+  ownership. The next recovery question is whether the backend and frontend can
+  safely consume those candidates without increasing wrong-path or replay work.
+
+Behavior plusarg trials after checkpoint repair:
+
+| Trial | Artifact | Result | Verdict |
+|---|---|---|---|
+| Raw `+EXEC_PARTIAL_BRANCH_RECOVERY` | `benchmark_results/stage2_branch_partial_recovery_t1_20260509` | Dhrystone regressed from `18,577` to `36,434`; CoreMark 1 timed out at `999,960` cycles. Strict invariant counters stayed zero, but recovery attempts exploded. | Rejected due regression and timeout. Do not promote raw execution partial recovery. |
+| `+SELECTIVE_BRANCH_RECOVERY` | `benchmark_results/stage2_branch_selective_recovery_t1_20260509` | Dhrystone regressed from `18,577` to `18,894`; CoreMark 1 regressed from `163,013` to `171,729`. Strict owner, stale, and branch-recovery violation counters stayed zero. | DSE-only rejected behavior. The resource gate is safer than raw recovery, but it still increases useful work loss or refill cost. |
+
+The immediate Branch A conclusion is that opportunity exists, metadata repair
+was necessary, and the old behavior knobs are not the final design. The next
+Branch A step must be a recovery scheduler and redirect/refill attribution
+pass, not another plusarg retry.
 
 ### A1: Backend-Only Recovery Contract Repair
 
@@ -940,18 +1313,24 @@ slice or a revert before starting the next long run.
 
 ## Recommended First Direction
 
-Start with a two-part decision step, not a behavior patch:
+Start with a three-part evidence cleanup, not a new behavior patch:
 
-1. Branch B1 owner-aware no-emit contract repair remains the first frontend
+1. Commit and preserve the checkpoint-boundary metadata repair as structural
+   enabling work if the working tree matches the validated artifacts.
+2. Branch B1 owner-aware no-emit contract repair remains the first frontend
    candidate, but only for duplicate/control owner handoff and redirect
    no-emit recovery. It is not a generic packet-buffer expansion.
-2. Branch A0 branch recovery opportunity attribution runs before any early
-   redirect or partial recovery retry, because redirect no-emit is broad and
-   previous partial-recovery attempts failed on the checkpoint/free-list
-   contract.
+3. Branch A continues as recovery-scheduler attribution, not as another retry
+   of raw or selective partial-recovery plusargs.
 
 Reason:
 
+- The checkpoint-boundary repair reduced checkpoint rejects dramatically
+  without changing default cycles. That proves the metadata contract was an
+  architectural blocker, but not yet a performance mechanism.
+- Raw and selective partial-recovery behavior trials both regressed, so the
+  next Branch A work must explain recovery attempt cost and redirect/refill
+  latency before another behavior change.
 - CoreMark 10 has `packet_empty=91,909`,
   `xs_data_present_no_emit=83,016`, and
   `xs_runahead_dup_alloc_block=89,972`, which remain larger cycle-bound
@@ -976,17 +1355,23 @@ Immediate next steps:
    `stage2_ftq_depth_profile_t2_20260509`,
    `stage2_noemit_attr_t1_20260509`, and
    `stage2_noemit_attr_t2_20260509` as completed behavior-neutral evidence.
-3. Treat `stage2_branch_a0_profile_t1_20260509` and
-   `stage2_branch_a0_profile_t2_20260509` as completed A0 opportunity
-   evidence. The first Branch A behavior slice should target branch-boundary
-   checkpoint ownership, not the old opt-in partial recovery knobs.
-4. Add a Branch B1 delivery scoreboard before changing duplicate or redirect
+3. Treat `stage2_branch_a0_profile_t1_20260509`,
+   `stage2_branch_a0_profile_t2_20260509`,
+   `stage2_branch_ckpt_boundary_t1_20260509`, and
+   `stage2_branch_ckpt_boundary_t2_20260509` as completed Branch A evidence.
+   The checkpoint-boundary repair is enabling metadata and should be committed
+   separately from any behavior trial.
+4. Treat `stage2_branch_partial_recovery_t1_20260509` and
+   `stage2_branch_selective_recovery_t1_20260509` as rejected behavior trials.
+   They show that available recovery candidates are not enough; the recovery
+   scheduler and redirect/refill contract must be repaired first.
+5. Add a Branch B1 delivery scoreboard before changing duplicate or redirect
    handoff behavior. The scoreboard is the promotion guard for any attempt to
    make duplicate suppression assertion-only in a safe subset.
-5. Choose the first behavior trial from the updated A0/B1 report:
-   - If redirect refill and non-head checkpoint opportunity dominate, implement
-     A1 branch-boundary checkpoint ownership repair before enabling
-     backend-only recovery.
+6. Choose the first behavior trial from the updated A1/B1 report:
+   - If redirect refill and recovery attempt cost dominate, implement a
+     resource-aware Branch A recovery scheduler before enabling backend-only
+     recovery.
    - If duplicate/control live-owner no-emit dominates with provable delivered
      PCs, implement B1 control-aware duplicate cursor recovery.
    - If packet-full and packet age become dominant after those fixes, implement
