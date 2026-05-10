@@ -351,6 +351,213 @@ not accepted until this run is clean and committed.
 8. If the LSU slice is rejected, pivot to the second direction:
    load-use critical-consumer select with a narrower causality contract.
 
+## Signoff DS Design Breakdown
+
+The DS signoff target is a sequence of architectural milestones, not one large
+DSE patch. Each milestone must be committed independently after it passes its
+gate. Do not merge stages just because an intermediate probe shows a good DS
+number.
+
+### Signoff Definition
+
+Primary DS signoff target:
+
+- DS100: `4.0 DMIPS/MHz`, about `14,229` timed cycles.
+- DS300: same direction and close to `4.0 DMIPS/MHz`, about `42,686` timed
+  cycles.
+- CM1 and CM10: no timed-cycle regression versus the fixed-binary baseline.
+- Broader guard rows: endpoint clean, no unexplained regression.
+
+Near-term DS milestone targets:
+
+| Milestone | DS100 timed-cycle target | DS300 timed-cycle target | Purpose |
+|---|---:|---:|---|
+| M0 baseline | 18,161 | 53,469 | current reference |
+| M1 first LSU mechanism | 17,616 or better | 52,400 or better | prove the memory-dependence direction |
+| M2 combined LSU mechanism | under 17,000 | under 50,800 | meaningful DS latency reduction |
+| M3 scheduler/load-use follow-up | under 16,000 | under 47,500 | move beyond LSU-only bound |
+| M4 signoff stretch | about 14,229 | about 42,686 | final 4.0 DMIPS/MHz target |
+
+### M0: Lock The Measurement Contract
+
+Goal: make every later claim comparable.
+
+Tasks:
+
+- Keep DS100, DS300, CM1, and CM10 fixed-binary hashes locked.
+- Keep the required strict plusargs unchanged.
+- Preserve current instrumentation and avoid behavior RTL changes in the
+  measurement harness.
+- Add any missing counters as instrumentation-only commits before behavior
+  work.
+
+Exit criteria:
+
+- XSim and DSim rebuild from the current tree.
+- DS100 and CM1 smoke cycle-identical when instrumentation only changes.
+- Results include load issue, SQ wait, replay, stale-load, ROB-head, and CM
+  guard counters.
+
+### M1: Replay-Safe Load Past Unresolved Store
+
+Goal: prove that conservative unresolved-store blocking is a real performance
+limit and can be relaxed safely.
+
+Mechanism:
+
+- Add a replay-backed speculative load issue mode for loads blocked only by
+  unresolved older store addresses.
+- Track the speculative load in the load queue with enough metadata to detect a
+  later older-store alias.
+- On later STA alias, trigger the existing memory-order violation or replay
+  path from the violating load's ROB index.
+- Keep the initial policy conservative: allow speculation only when there is no
+  known older matching store with missing data and no partial-forward hazard.
+
+Required new counters before promotion:
+
+- load candidates blocked by unresolved older store address.
+- speculative load issued past unresolved store.
+- speculative load later proved non-alias.
+- speculative load replayed by later STA alias.
+- speculative load killed by unrelated flush.
+- replay storm cycles and maximum replay distance.
+
+Expected movement:
+
+- DS100 load issue lost slots down `800-1,500`.
+- DS300 load issue lost slots down `3,000-5,000`.
+- `sq_fwd_wait + sq_wait_p1` down materially.
+- Memory-order violation/replay counters nonzero only when explained and
+  bounded.
+
+Gate:
+
+- T1: DS100 at least 1 percent faster, CM1 non-regressing, no stale-load
+  errors.
+- T2: DS100 at least 3 percent faster and DS300 at least 2 percent faster,
+  CM1/CM10 non-regressing.
+- Reject if replay count is large enough to erase the gain or if CM regresses.
+
+### M2: Same-Cycle STA Visibility And Forwarding
+
+Goal: remove the avoidable one-cycle gap when the older store address becomes
+known in the same cycle as the load candidate.
+
+Mechanism:
+
+- Feed same-cycle STA address compare into the load issue decision before the
+  load is suppressed.
+- If the same-cycle STA proves non-alias for all blocking older stores, allow
+  the load to issue.
+- If the same-cycle STA aliases and same-cycle STD data is complete and fully
+  covers the load, forward safely.
+- If alias is partial or data is missing, keep the load suppressed.
+
+Required counters:
+
+- same-cycle STA proves non-alias.
+- same-cycle STA full forward.
+- same-cycle STA partial/data-missing hold.
+- same-cycle STA allowed load that later replayed.
+
+Expected movement:
+
+- `same-cycle STA proxy` bucket down materially.
+- DS100 under `17,000` timed cycles if M1 and M2 both work.
+- DS300 under `50,800` timed cycles.
+- CM unchanged or slightly better.
+
+Gate:
+
+- T2 required before promotion.
+- T3 required if replay count is nonzero.
+- Reject if any stale load or memory-order violation is not recovered precisely.
+
+### M3: Store-Data Consumer And Load-Use Follow-Up
+
+Goal: reduce the next DS bottleneck after load issue is less constrained.
+
+Likely mechanisms:
+
+- Store-data load-wakeup path: prioritize STD consumers that are woken by a
+  load and unblock older stores.
+- Branch load-use path: reduce load-to-branch scheduling latency only when the
+  branch is a legal load-woken consumer.
+- Narrow ready-at-enqueue visibility for load-woken BRU/STD consumers, not the
+  old broad enqueue bypass.
+
+Entry criteria:
+
+- M1/M2 counters show load issue suppression is no longer the dominant DS
+  blocker.
+- The top remaining DS counters are load-produced BRU or STD consumer waits.
+
+Expected movement:
+
+- `xs_bottleneck_dep_load_consumer_bru` and
+  `xs_bottleneck_dep_load_consumer_store_data` down.
+- ROB-head-load block down or neutral.
+- DS100 under `16,000` timed cycles.
+
+Gate:
+
+- CM1 and CM10 must not regress, because CoreMark is ALU-dependency dominated
+  and should not be destabilized by branch/store-data policy.
+- T3 guard rows required before promotion.
+
+### M4: Port-1 And Dual-Load Cleanup
+
+Goal: recover secondary load bandwidth only after memory-order correctness is
+settled.
+
+Potential mechanisms:
+
+- Safe same-line dual-load policy for port 1.
+- Port-1 forwarded result fast path without reviving the old combinational CDB
+  loop.
+- More precise port-1 retry arbitration if it still appears in the top DS
+  counters.
+
+Entry criteria:
+
+- M1/M2/M3 are committed or explicitly rejected.
+- Port-1 conflict or forward-hold counters are still top-ranked after the main
+  ordering fix.
+
+Gate:
+
+- T2 must show DS gain without CM regression.
+- Full strict smoke must show no CDB loop, stale wakeup, or load replay
+  violation.
+
+### M5: Final Signoff Run
+
+Goal: accept the design for DS signoff only when the score and counters agree.
+
+Run order:
+
+1. T1 smoke after fresh rebuild.
+2. T2 four-row pivot gate.
+3. T3 broader guard gate.
+4. Full Stage 2 signoff matrix.
+
+Acceptance package:
+
+- Final DS100/DS300/CM1/CM10 score table.
+- Counter delta table versus M0 baseline.
+- Replay and stale-load safety counters.
+- Explanation of any guard-row movement.
+- Commit hash of the accepted RTL.
+
+Stop conditions:
+
+- Any CM1 or CM10 regression that is not explained and fixed.
+- Any endpoint failure.
+- Any stale-load, wrong-path load writeback, unrecovered memory-order
+  violation, replay storm, or owner/delivery violation.
+- DS gain below the milestone threshold after T2.
+
 ## Current Verdict
 
 The DS bottleneck is not the current frontend fallthrough path and not generic
