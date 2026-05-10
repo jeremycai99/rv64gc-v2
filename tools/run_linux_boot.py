@@ -91,6 +91,7 @@ def default_run_dir() -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", action="store_true", help="Build software image first.")
+    parser.add_argument("--build-sim", action="store_true", help="Build Stage 3 DSim platform image.")
     parser.add_argument("--run", action="store_true", help="Run the simulator image.")
     parser.add_argument(
         "--build-script",
@@ -114,6 +115,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Future Stage 3 DSim image. The current benchmark image remains separate.",
     )
     parser.add_argument(
+        "--sim-work-dir",
+        type=Path,
+        default=REPO_ROOT / "dsim_linux_work",
+        help="DSim work directory for the Stage 3 platform image.",
+    )
+    parser.add_argument("--sim-image-name", default="tb_linux_image")
+    parser.add_argument(
         "--run-dir",
         type=Path,
         default=None,
@@ -121,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--max-cycles", type=int, default=50_000_000)
     parser.add_argument("--pass-pattern", default="BOOT OK")
+    parser.add_argument("--smoke-check", action="store_true")
     parser.add_argument("--uart-log", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -130,6 +139,25 @@ def main(argv: list[str] | None = None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     build_log = run_dir / "build.log"
+    if args.build_sim:
+        sim_build_rc = run_cmd(
+            ["bash", str(REPO_ROOT / "build_dsim_linux.sh")],
+            REPO_ROOT,
+            run_dir / "sim_build.log",
+        )
+        if sim_build_rc != 0:
+            summarize(
+                run_dir,
+                {
+                    "status": "FAIL",
+                    "reason": f"sim build failed, see {run_dir / 'sim_build.log'}",
+                    "image": str(args.image),
+                    "uart_log": "",
+                    "sim_log": "",
+                },
+            )
+            return sim_build_rc
+
     if args.build:
         build_rc = run_cmd(
             ["bash", str(args.build_script), f"--{args.build_mode}"],
@@ -164,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
 
     image = args.image if args.image.is_absolute() else REPO_ROOT / args.image
     sim_image = args.sim_image if args.sim_image.is_absolute() else REPO_ROOT / args.sim_image
+    sim_work_dir = args.sim_work_dir if args.sim_work_dir.is_absolute() else REPO_ROOT / args.sim_work_dir
     uart_log = args.uart_log or (run_dir / "uart.log")
     sim_log = run_dir / "dsim.log"
 
@@ -194,16 +223,23 @@ def main(argv: list[str] | None = None) -> int:
 
     raw_cmd = [
         "dsim",
+        "-work",
+        str(sim_work_dir),
         "-image",
-        str(sim_image),
+        args.sim_image_name,
         f"+MEMFILE={image}",
         f"+MAX_CYCLES={args.max_cycles}",
         f"+UART_LOGFILE={uart_log}",
     ]
+    if args.smoke_check:
+        raw_cmd.append("+UART_SMOKE_CHECK")
     shell_lines = [
         "set -euo pipefail",
+        ': "${DSIM_HOME:=$HOME/AltairDSim/2026}"',
         'if [[ -n "${DSIM_HOME:-}" && -f "$DSIM_HOME/shell_activate.bash" ]]; then',
+        "  set +u",
         '  source "$DSIM_HOME/shell_activate.bash" >/dev/null',
+        "  set -u",
         "fi",
         'if [[ -z "${DSIM_LICENSE:-}" ]]; then',
         '  if [[ -f "$HOME/metrics-ca/dsim-license.json" ]]; then',

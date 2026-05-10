@@ -95,6 +95,17 @@ module lsu
     input logic [63:0] dcache_fill_addr,
     input logic [LINE_SIZE*8-1:0] dcache_fill_data,
 
+    // Uncached data MMIO interface
+    output logic        data_mmio_req_valid,
+    output logic        data_mmio_req_we,
+    output logic [63:0] data_mmio_req_addr,
+    output logic [63:0] data_mmio_req_wdata,
+    output logic [7:0]  data_mmio_req_wmask,
+    output logic [1:0]  data_mmio_req_size,
+    input  logic        data_mmio_req_ready,
+    input  logic        data_mmio_resp_valid,
+    input  logic [63:0] data_mmio_resp_data,
+
     // Flush
     input flush_t flush_in
 );
@@ -109,6 +120,7 @@ module lsu
     logic [63:0]     p1_eff_addr;
     iq_entry_t       p1_eff_data;
     logic            p1_eff_nocache;
+    logic            p1_eff_addr_mmio;
     logic            p0_fwd_hit;
     logic            fwd_hold_valid_r;
     logic            p1_fwd_hold_valid_r;
@@ -118,6 +130,13 @@ module lsu
     logic            p1_fast_fwd_fire;
     logic            fwd_hold_blocked;
     logic            lmb_wb_port_free;
+    logic            mmio_resp_hold_valid_r;
+    logic            mmio_load0_block;
+    logic            mmio_load1_block;
+    logic            mmio_store_launch;
+    logic            mmio_load0_launch;
+    logic            mmio_load1_launch;
+    logic            mmio_load_wb_fire;
 
     // =========================================================================
     // Load AGU: effective address computation (x2)
@@ -128,6 +147,7 @@ module lsu
     // pc + imm.  Other fusions never produce loads.
     logic [63:0] load_eff_addr [0:1];
     logic [1:0]  load_addr_misaligned;
+    logic [1:0]  load_addr_mmio;
 
     genvar li;
     generate
@@ -149,6 +169,14 @@ module lsu
                     default:   load_addr_misaligned[li] = 1'b0;
                 endcase
             end
+
+            assign load_addr_mmio[li] =
+                ((load_eff_addr[li] >= CLINT_BASE) &&
+                 (load_eff_addr[li] < (CLINT_BASE + CLINT_SIZE))) ||
+                ((load_eff_addr[li] >= PLIC_BASE) &&
+                 (load_eff_addr[li] < (PLIC_BASE + PLIC_SIZE))) ||
+                ((load_eff_addr[li] >= UART_BASE) &&
+                 (load_eff_addr[li] < (UART_BASE + UART_SIZE)));
         end
     endgenerate
 
@@ -159,6 +187,7 @@ module lsu
     // because the store's base register comes from the auipc half.
     logic [63:0] sta_eff_addr;
     logic        sta_addr_misaligned;
+    logic        sta_addr_mmio;
     logic [2:0]  sta_off;
 
     wire sta_is_pc_rel = sta_issue_data.is_fused;
@@ -174,6 +203,14 @@ module lsu
             default:   sta_addr_misaligned = 1'b0;
         endcase
     end
+
+    assign sta_addr_mmio =
+        ((sta_eff_addr >= CLINT_BASE) &&
+         (sta_eff_addr < (CLINT_BASE + CLINT_SIZE))) ||
+        ((sta_eff_addr >= PLIC_BASE) &&
+         (sta_eff_addr < (PLIC_BASE + PLIC_SIZE))) ||
+        ((sta_eff_addr >= UART_BASE) &&
+         (sta_eff_addr < (UART_BASE + UART_SIZE)));
 
     // =========================================================================
     // Store data: byte mask generation
@@ -634,7 +671,8 @@ module lsu
             load_eff_addr_r[0]    <= load_eff_addr[0];
             load_eff_addr_r[1]    <= p1_eff_addr;
             load_nocache_r[0]     <= load_issue_valid[0] &
-                                     (load_addr_misaligned[0] | p0_fwd_hit |
+                                     (load_addr_misaligned[0] | load_addr_mmio[0] |
+                                      p0_fwd_hit |
                                       sq_fwd_partial | flush_in.valid);
             load_nocache_r[1]     <= p1_eff_valid & p1_eff_nocache;
 
@@ -727,7 +765,13 @@ module lsu
     // =========================================================================
     // Committed Store Buffer
     // =========================================================================
-    logic csb_enq_ready;
+    logic        csb_enq_ready;
+    logic        csb_deq_valid;
+    logic [63:0] csb_deq_addr;
+    logic [63:0] csb_deq_data;
+    logic [7:0]  csb_deq_byte_mask;
+    logic        csb_deq_ack;
+    logic        csb_deq_mmio;
 
     committed_store_buffer u_csb (
         .clk            (clk),
@@ -737,12 +781,12 @@ module lsu
         .enq_data       (sq_drain_entry),
         .enq_ready      (csb_enq_ready),
         // Dequeue to D-cache
-        .deq_valid      (dcache_store_req_valid),
-        .deq_addr       (dcache_store_req_addr),
-        .deq_data       (dcache_store_req_data),
-        .deq_byte_mask  (dcache_store_req_byte_mask),
+        .deq_valid      (csb_deq_valid),
+        .deq_addr       (csb_deq_addr),
+        .deq_data       (csb_deq_data),
+        .deq_byte_mask  (csb_deq_byte_mask),
         .deq_size       (),
-        .deq_ack        (dcache_store_ack),
+        .deq_ack        (csb_deq_ack),
         // Store-to-load forwarding
         .fwd_valid      (load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
         .fwd_addr       ((load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
@@ -760,6 +804,19 @@ module lsu
     );
 
     assign sq_drain_ready = csb_enq_ready;
+
+    assign csb_deq_mmio =
+        ((csb_deq_addr >= CLINT_BASE) &&
+         (csb_deq_addr < (CLINT_BASE + CLINT_SIZE))) ||
+        ((csb_deq_addr >= PLIC_BASE) &&
+         (csb_deq_addr < (PLIC_BASE + PLIC_SIZE))) ||
+        ((csb_deq_addr >= UART_BASE) &&
+         (csb_deq_addr < (UART_BASE + UART_SIZE)));
+
+    assign dcache_store_req_valid     = csb_deq_valid & ~csb_deq_mmio;
+    assign dcache_store_req_addr      = csb_deq_addr;
+    assign dcache_store_req_data      = csb_deq_data;
+    assign dcache_store_req_byte_mask = csb_deq_byte_mask;
 
     // =========================================================================
     // D-cache load request generation
@@ -797,6 +854,7 @@ module lsu
     logic [63:0]     p1_retry_addr_r;
     logic            p1_retry_misalign_r;
     logic            p1_retry_load_nocache_r;
+    logic            p1_retry_addr_mmio;
     logic            p1_fwd_blocked;
 `ifdef SIMULATION
     logic            sim_p1_fast_fwd_enable;
@@ -835,7 +893,8 @@ module lsu
         load_issue_candidate_valid[0] &&
         ~load_addr_misaligned[0] &&
         ~flush_in.valid &&
-        (p0_sq_order_wait_block || same_cycle_sta_wait0 || fwd_hold_blocked);
+        (p0_sq_order_wait_block || same_cycle_sta_wait0 ||
+         fwd_hold_blocked || mmio_load0_block);
 
 `ifndef SYNTHESIS
     bit sim_allow_same_line_dual_load;
@@ -1051,9 +1110,25 @@ module lsu
         (p1_retry_valid_r ||
          (!load_addr_misaligned[1] && !flush_in.valid && !p1_retry_valid_r &&
           (p1_sq_order_wait_block || sq_fwd_partial_p1 || p1_fwd_blocked ||
-           same_cycle_sta_wait1 || lq_p1_issue_block)));
+           same_cycle_sta_wait1 || lq_p1_issue_block || mmio_load1_block)));
 
     assign load_issue_spec_past_addr_unknown = 2'b00;
+
+    assign p1_retry_addr_mmio =
+        ((p1_retry_addr_r >= CLINT_BASE) &&
+         (p1_retry_addr_r < (CLINT_BASE + CLINT_SIZE))) ||
+        ((p1_retry_addr_r >= PLIC_BASE) &&
+         (p1_retry_addr_r < (PLIC_BASE + PLIC_SIZE))) ||
+        ((p1_retry_addr_r >= UART_BASE) &&
+         (p1_retry_addr_r < (UART_BASE + UART_SIZE)));
+
+    assign p1_eff_addr_mmio =
+        ((p1_eff_addr >= CLINT_BASE) &&
+         (p1_eff_addr < (CLINT_BASE + CLINT_SIZE))) ||
+        ((p1_eff_addr >= PLIC_BASE) &&
+         (p1_eff_addr < (PLIC_BASE + PLIC_SIZE))) ||
+        ((p1_eff_addr >= UART_BASE) &&
+         (p1_eff_addr < (UART_BASE + UART_SIZE)));
 
     always_comb begin
         if (p1_retry_valid_r) begin
@@ -1065,6 +1140,7 @@ module lsu
             p1_eff_addr     = p1_retry_addr_r;
             p1_eff_misalign = p1_retry_misalign_r;
             p1_eff_nocache  = p1_retry_load_nocache_r |
+                              p1_retry_addr_mmio |
                               p1_any_fwd_hit | sq_fwd_partial_p1;
         end else if (load_issue_valid[1] && !p1_sq_order_wait_block && !sq_fwd_partial_p1 &&
                      !lq_p1_issue_block &&
@@ -1074,6 +1150,7 @@ module lsu
             p1_eff_addr     = load_eff_addr[1];
             p1_eff_misalign = load_addr_misaligned[1];
             p1_eff_nocache  = load_addr_misaligned[1] | flush_in.valid |
+                              load_addr_mmio[1] |
                               p1_any_fwd_hit | sq_fwd_partial_p1;
         end else begin
             p1_eff_valid    = 1'b0;
@@ -1112,8 +1189,180 @@ module lsu
         end
     end
 
+    // =========================================================================
+    // Uncached data MMIO request path
+    // =========================================================================
+    logic        mmio_req_valid_r;
+    logic        mmio_req_we_r;
+    logic        mmio_req_is_load_r;
+    logic        mmio_req_drop_r;
+    logic [63:0] mmio_req_addr_r;
+    logic [63:0] mmio_req_wdata_r;
+    logic [7:0]  mmio_req_wmask_r;
+    logic [1:0]  mmio_req_size_r;
+    iq_entry_t   mmio_req_load_data_r;
+
+    logic        mmio_wait_resp_r;
+    logic        mmio_store_resp_fire_r;
+    logic        mmio_available;
+
+    logic [63:0] mmio_resp_raw_r;
+    iq_entry_t   mmio_resp_load_data_r;
+    logic [63:0] mmio_resp_ext;
+
+    assign mmio_available =
+        !mmio_req_valid_r && !mmio_wait_resp_r && !mmio_resp_hold_valid_r;
+
+    assign mmio_store_launch =
+        mmio_available && !mmio_store_resp_fire_r &&
+        csb_deq_valid && csb_deq_mmio;
+
+    assign mmio_load0_launch =
+        mmio_available && !mmio_store_launch &&
+        load_issue_valid[0] &&
+        !load_addr_misaligned[0] &&
+        load_addr_mmio[0] &&
+        !p0_fwd_hit &&
+        !sq_fwd_partial &&
+        !same_cycle_fwd_partial &&
+        !flush_in.valid;
+
+    assign mmio_load1_launch =
+        mmio_available && !mmio_store_launch && !mmio_load0_launch &&
+        p1_eff_valid &&
+        !p1_eff_misalign &&
+        p1_eff_addr_mmio &&
+        !p1_any_fwd_hit &&
+        !sq_fwd_partial_p1 &&
+        !flush_in.valid;
+
+    assign mmio_load0_block =
+        load_issue_candidate_valid[0] &&
+        !load_addr_misaligned[0] &&
+        load_addr_mmio[0] &&
+        (!mmio_available || mmio_store_launch);
+
+    assign mmio_load1_block =
+        load_issue_candidate_valid[1] &&
+        !load_addr_misaligned[1] &&
+        load_addr_mmio[1] &&
+        (!mmio_available || mmio_store_launch || mmio_load0_launch);
+
+    assign data_mmio_req_valid = mmio_req_valid_r;
+    assign data_mmio_req_we    = mmio_req_we_r;
+    assign data_mmio_req_addr  = mmio_req_addr_r;
+    assign data_mmio_req_wdata = mmio_req_wdata_r;
+    assign data_mmio_req_wmask = mmio_req_wmask_r;
+    assign data_mmio_req_size  = mmio_req_size_r;
+
+    always_comb begin
+        case (mmio_resp_load_data_r.mem_size)
+            MEM_BYTE:  mmio_resp_ext = mmio_resp_load_data_r.is_unsigned
+                        ? {56'b0, mmio_resp_raw_r[7:0]}
+                        : {{56{mmio_resp_raw_r[7]}}, mmio_resp_raw_r[7:0]};
+            MEM_HALF:  mmio_resp_ext = mmio_resp_load_data_r.is_unsigned
+                        ? {48'b0, mmio_resp_raw_r[15:0]}
+                        : {{48{mmio_resp_raw_r[15]}}, mmio_resp_raw_r[15:0]};
+            MEM_WORD:  mmio_resp_ext = mmio_resp_load_data_r.is_unsigned
+                        ? {32'b0, mmio_resp_raw_r[31:0]}
+                        : {{32{mmio_resp_raw_r[31]}}, mmio_resp_raw_r[31:0]};
+            default:   mmio_resp_ext = mmio_resp_raw_r;
+        endcase
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            mmio_req_valid_r        <= 1'b0;
+            mmio_req_we_r           <= 1'b0;
+            mmio_req_is_load_r      <= 1'b0;
+            mmio_req_drop_r         <= 1'b0;
+            mmio_req_addr_r         <= 64'd0;
+            mmio_req_wdata_r        <= 64'd0;
+            mmio_req_wmask_r        <= 8'd0;
+            mmio_req_size_r         <= '0;
+            mmio_req_load_data_r    <= '0;
+            mmio_wait_resp_r        <= 1'b0;
+            mmio_store_resp_fire_r  <= 1'b0;
+            mmio_resp_hold_valid_r  <= 1'b0;
+            mmio_resp_raw_r         <= 64'd0;
+            mmio_resp_load_data_r   <= '0;
+        end else begin
+            mmio_store_resp_fire_r <= 1'b0;
+
+            if (mmio_load_wb_fire) begin
+                mmio_resp_hold_valid_r <= 1'b0;
+            end
+
+            if (flush_in.valid && mmio_resp_hold_valid_r) begin
+                mmio_resp_hold_valid_r <= 1'b0;
+            end
+
+            if (flush_in.valid && mmio_req_is_load_r) begin
+                if (mmio_req_valid_r) begin
+                    mmio_req_valid_r <= 1'b0;
+                    mmio_req_drop_r  <= 1'b0;
+                end
+                if (mmio_wait_resp_r) begin
+                    mmio_req_drop_r <= 1'b1;
+                end
+            end
+
+            if (mmio_wait_resp_r && data_mmio_resp_valid) begin
+                mmio_wait_resp_r <= 1'b0;
+                mmio_req_drop_r  <= 1'b0;
+                if (mmio_req_is_load_r && !mmio_req_drop_r && !flush_in.valid) begin
+                    mmio_resp_hold_valid_r <= 1'b1;
+                    mmio_resp_raw_r        <= data_mmio_resp_data;
+                    mmio_resp_load_data_r  <= mmio_req_load_data_r;
+                end else if (!mmio_req_is_load_r) begin
+                    mmio_store_resp_fire_r <= 1'b1;
+                end
+            end
+
+            if (mmio_req_valid_r && data_mmio_req_ready) begin
+                mmio_req_valid_r <= 1'b0;
+                mmio_wait_resp_r <= 1'b1;
+            end
+
+            if (mmio_store_launch) begin
+                mmio_req_valid_r     <= 1'b1;
+                mmio_req_we_r        <= 1'b1;
+                mmio_req_is_load_r   <= 1'b0;
+                mmio_req_drop_r      <= 1'b0;
+                mmio_req_addr_r      <= csb_deq_addr;
+                mmio_req_wdata_r     <= csb_deq_data;
+                mmio_req_wmask_r     <= csb_deq_byte_mask;
+                mmio_req_size_r      <= MEM_DWORD;
+                mmio_req_load_data_r <= '0;
+            end else if (mmio_load0_launch) begin
+                mmio_req_valid_r     <= 1'b1;
+                mmio_req_we_r        <= 1'b0;
+                mmio_req_is_load_r   <= 1'b1;
+                mmio_req_drop_r      <= 1'b0;
+                mmio_req_addr_r      <= load_eff_addr[0];
+                mmio_req_wdata_r     <= 64'd0;
+                mmio_req_wmask_r     <= 8'd0;
+                mmio_req_size_r      <= load_issue_data[0].mem_size;
+                mmio_req_load_data_r <= load_issue_data[0];
+            end else if (mmio_load1_launch) begin
+                mmio_req_valid_r     <= 1'b1;
+                mmio_req_we_r        <= 1'b0;
+                mmio_req_is_load_r   <= 1'b1;
+                mmio_req_drop_r      <= 1'b0;
+                mmio_req_addr_r      <= p1_eff_addr;
+                mmio_req_wdata_r     <= 64'd0;
+                mmio_req_wmask_r     <= 8'd0;
+                mmio_req_size_r      <= p1_eff_data.mem_size;
+                mmio_req_load_data_r <= p1_eff_data;
+            end
+        end
+    end
+
+    assign csb_deq_ack = csb_deq_mmio ? mmio_store_resp_fire_r : dcache_store_ack;
+
     assign dcache_load_req_valid[0] = load_issue_valid[0]
                                     & ~load_addr_misaligned[0]
+                                    & ~load_addr_mmio[0]
                                     & ~p0_fwd_hit
                                     & ~sq_fwd_partial
                                     & ~same_cycle_fwd_partial
@@ -1124,6 +1373,7 @@ module lsu
 
     assign dcache_load_req_valid[1] = p1_eff_valid
                                     & ~p1_eff_misalign
+                                    & ~p1_eff_addr_mmio
                                     & ~p1_any_fwd_hit
                                     & ~sq_fwd_partial_p1
                                     & ~flush_in.valid;
@@ -1785,6 +2035,7 @@ module lsu
     always_comb begin
         // Default LQ index selector (drives lq_result_idx_sel)
         lq_result_idx_sel = '0;
+        mmio_load_wb_fire = 1'b0;
 
         // Port 0 — no same-cycle paths.  Misalign + fwd both go through
         // the hold register (1-cycle delayed) to eliminate CDB loops.
@@ -1831,6 +2082,15 @@ module lsu
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = lmb[lmb_ready_idx].lq_idx;
+        end else if (mmio_resp_hold_valid_r) begin
+            load_wb_valid[0]         = 1'b1;
+            load_wb_rob_idx[0]       = mmio_resp_load_data_r.rob_idx;
+            load_wb_pdst[0]          = mmio_resp_load_data_r.pdst;
+            load_wb_data[0]          = mmio_resp_ext;
+            load_wb_has_exception[0] = 1'b0;
+            load_wb_exc_code[0]      = '0;
+            lq_result_idx_sel        = mmio_resp_load_data_r.lq_idx;
+            mmio_load_wb_fire        = 1'b1;
         end else begin
             load_wb_valid[0]         = 1'b0;
             load_wb_rob_idx[0]       = '0;

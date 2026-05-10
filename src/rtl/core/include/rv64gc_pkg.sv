@@ -195,8 +195,11 @@ package rv64gc_pkg;
     // =========================================================================
     localparam logic [63:0] BOOT_ROM_BASE = 64'h0000_0000;
     localparam logic [63:0] CLINT_BASE    = 64'h0200_0000;
+    localparam logic [63:0] CLINT_SIZE    = 64'h0001_0000;
     localparam logic [63:0] PLIC_BASE     = 64'h0C00_0000;
+    localparam logic [63:0] PLIC_SIZE     = 64'h0400_0000;
     localparam logic [63:0] UART_BASE     = 64'h1000_0000;
+    localparam logic [63:0] UART_SIZE     = 64'h0000_0100;
     localparam logic [63:0] DRAM_BASE     = 64'h8000_0000;
     localparam logic [63:0] RESET_VECTOR  = 64'h8000_0000;
 

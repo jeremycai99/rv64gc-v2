@@ -61,6 +61,7 @@ build_smoke() {
     "${CROSS_ELF}gcc" \
         -nostdlib -nostartfiles -ffreestanding \
         -march="$SMOKE_MARCH" -mabi=lp64d \
+        -Wl,--build-id=none \
         -T "$SW_DIR/link.ld" \
         "$SW_DIR/m_mode_uart_smoke.S" \
         -o "$elf"

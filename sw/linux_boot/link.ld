@@ -31,4 +31,9 @@ SECTIONS
     . = ALIGN(16);
     . += 4096;
     PROVIDE(_stack_top = .);
+
+    /DISCARD/ : {
+        *(.note .note.*)
+        *(.comment)
+    }
 }

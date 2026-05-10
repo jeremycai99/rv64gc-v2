@@ -137,9 +137,9 @@ v1 status caveat:
 | Reset | frontend reset vector is `0x80000000` | Compatible with OpenSBI `FW_TEXT_START=0x80000000` |
 | Privilege CSRs | `csr_file.sv` has M/S privilege state, delegation CSRs, `satp`, traps, `mret`, `sret`, interrupt inputs | Needs privileged validation under OpenSBI before Linux |
 | MMU | `src/rtl/core/mmu/` is empty; caches use physical addresses | Linux cannot boot until instruction/data translation and page faults are implemented |
-| Platform devices | v2 has no CLINT, PLIC, UART, or MMIO interconnect in the active platform | Linux needs at least timer/software interrupt and console |
+| Platform devices | L0 `tb_linux` now has an uncached MMIO path, polling UART, and CLINT timer/software interrupt block; PLIC is only a reserved zero-response range | Linux needs OpenSBI validation, larger memory, and real external interrupt behavior before enabling more devices |
 | Simulation memory | `sim_memory.sv` is a 2 MB byte-addressed RAM loaded by `$readmemh` | Linux needs much larger DRAM and an image loader that can handle OpenSBI plus kernel payload |
-| Interrupt hookup | `tb_top.sv` currently ties `mtip/msip/meip/stip/ssip/seip` low and passes `time_val=cycle_count` | Linux needs timer interrupt generation and software interrupt plumbing |
+| Interrupt hookup | `tb_linux.sv` connects CLINT `mtime`, `mtip`, and `msip`; the existing benchmark `tb_top.sv` still ties interrupts low | Linux needs timer interrupt validation under OpenSBI and later PLIC/external interrupt plumbing |
 | Endpoint | Current bare-metal rows use testbench-observed stores to configurable `TOHOST_ADDR` | Keep for bare-metal tests only; Stage 3 uses UART/log/syscon milestones |
 
 ## Current Scaffold Status
@@ -156,17 +156,39 @@ What exists now:
   smoke source, linker script, and Linux/OpenSBI build wrapper.
 - The M-mode smoke image builds to `build/linux_boot/m_mode_uart_smoke.hex`.
 
-Important L0 RTL blocker:
+Current L0 RTL slice:
 
-- A UART/CLINT platform model alone is not sufficient for v2 because the current
-  core top exposes only the cache-line L2 memory interface. Stores to
-  `0x1000_0000` would go through the data cache and may never become a
-  device-visible byte transaction.
-- Do not fake Linux UART progress by snooping internal LSU store signals in the
-  testbench. That would recreate the wrong kind of side-channel endpoint.
-- The first real RTL slice should add a clean uncached MMIO request/response
-  path at the core/platform boundary, then connect UART and CLINT behind that
-  path. After that slice, rerun `tools/run_stage3_rtl_guard.py`.
+- `rv64gc_core_top.sv` now exposes a clean uncached data MMIO request/response
+  interface at the core boundary. This is a CPU platform bus, not a benchmark
+  endpoint.
+- `lsu.sv` routes UART, CLINT, and reserved PLIC range load/store accesses to
+  that uncached interface instead of the D-cache. Store requests are issued
+  after commit through the committed store buffer, and a response acknowledges
+  the store buffer entry.
+- `src/rtl/platform/uart_16550.sv`, `clint.sv`, and `mmio_platform.sv` provide
+  synthesizable platform RTL for the first UART and timer/software interrupt
+  milestones. UART TX capture and pass/fail matching stay in `tb_linux.sv`.
+- `build_dsim_linux.sh` builds a separate `tb_linux` DSim image so Linux
+  bring-up does not disturb the existing benchmark harness image.
+- The M-mode UART smoke now passes through the platform path:
+  `linux_boot_results/stage3_l0_uart_smoke_clint_lane_fix`.
+- The required DS/CM RTL guard passed after the L0 RTL slice:
+  `benchmark_results/stage3_rtl_guard_20260510_l0_mmio_platform_clint_lane`.
+
+Resolved L0 blocker:
+
+- The earlier blocker was the absence of a device-visible uncached MMIO path.
+  This is now implemented without snooping internal LSU store signals in the
+  testbench and without reintroducing `tohost` into core RTL.
+- The first smoke issue after the path landed was an LSU MMIO store replay:
+  the committed store buffer entry remained visible during the response
+  acknowledge cycle, allowing the same UART store to launch twice. The fix
+  blocks a new MMIO store launch on the store-response fire cycle, so each
+  committed MMIO store produces exactly one platform request.
+- CLINT `mtime` and `mtimecmp` accesses are byte-lane aware, so 32-bit high
+  word accesses are right-justified on reads and update the addressed byte
+  lanes on writes. This keeps the device model suitable for OpenSBI rather
+  than only for the current UART smoke.
 
 ## Stage 3 Architecture Direction
 
@@ -349,8 +371,10 @@ Pass criteria:
    - Linux/OpenSBI build script skeleton.
 2. Build an M-mode UART hello-world image before Linux:
    `sw/linux_boot/build_linux_boot.sh --smoke`.
-3. Add the platform shell and UART/DRAM loader around the core.
-4. Add CLINT/ACLINT timer support and run OpenSBI banner.
+3. Add the platform shell and UART/DRAM loader around the core. Done for the
+   M-mode UART smoke path using the existing hex memory loader.
+4. Validate CLINT timer/software interrupt behavior under OpenSBI and reach the
+   OpenSBI banner.
 5. Implement Sv39 MMU/PTW/TLB and privileged regression tests.
 6. Boot minimal Linux to early console.
 7. Boot to initramfs `BOOT OK`.
@@ -360,12 +384,14 @@ Current Stage 3 scaffold commands:
 ```bash
 sw/linux_boot/build_linux_boot.sh --smoke
 python3 tools/run_linux_boot.py --build --build-mode smoke
+python3 tools/run_linux_boot.py --build-sim --build --build-mode smoke --run \
+  --pass-pattern "RV64GC-V2 STAGE3 UART OK" --smoke-check
 python3 tools/run_linux_boot.py --build --build-mode linux
 ```
 
-The Linux runner currently reports `BLOCKED` for `--run` until the dedicated
-Stage 3 platform simulator image exists. This is expected before the L0 RTL
-platform skeleton lands.
+The Linux runner can now run the M-mode UART smoke. Full Linux remains blocked
+until OpenSBI image loading, privileged timer behavior, and Sv39 translation
+are implemented.
 
 ## Near-Term Non-Goals
 
@@ -376,7 +402,7 @@ platform skeleton lands.
 - Do not optimize Linux performance before the boot contract is correct.
 - Do not expose devices in the DTB before the platform implements them.
 
-## Open Questions To Resolve Before RTL Work
+## Open Questions To Resolve Before Next RTL Work
 
 | Question | Default decision |
 |---|---|
@@ -389,16 +415,21 @@ platform skeleton lands.
 
 ## Current Verdict
 
-Stage 3 is feasible, but not by just running v1's image on v2. The immediate
-blockers are platform and privileged-memory support, not benchmark harness
-policy:
+Stage 3 is feasible, but not by just running v1's image on v2. The first
+platform blocker is resolved: v2 can execute an M-mode UART smoke through a
+device-visible uncached MMIO path while preserving the DS/CM performance gate.
+The remaining blockers are larger platform completeness and privileged-memory
+support, not benchmark harness policy:
 
 - v2 has the right clean core boundary for ASIC-style Linux bring-up.
+- v2 now has an L0 UART/CLINT platform path for early M-mode smoke and OpenSBI
+  bring-up.
 - v2 does not yet have the MMU/PTW/TLB path Linux requires.
-- v2 does not yet have Linux-visible timer, interrupt, UART, or large-memory
-  platform support.
+- v2 does not yet have large-memory loading, Linux-visible PLIC/external
+  interrupts, or validated OpenSBI timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 implementation should start with the platform skeleton and
-M-mode UART/OpenSBI milestones before attempting a full Linux kernel boot.
+The next Stage 3 implementation should move from the L0 M-mode UART smoke to
+OpenSBI banner bring-up, then add Sv39 MMU/PTW/TLB support before attempting a
+full Linux kernel boot.

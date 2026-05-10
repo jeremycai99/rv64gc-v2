@@ -86,6 +86,17 @@ module tb_top
         .mem_resp_valid  (mem_resp_valid),
         .mem_resp_data   (mem_resp_data),
 
+        // Uncached MMIO is unused by the bare metal benchmark harness.
+        .data_mmio_req_valid(),
+        .data_mmio_req_we   (),
+        .data_mmio_req_addr (),
+        .data_mmio_req_wdata(),
+        .data_mmio_req_wmask(),
+        .data_mmio_req_size (),
+        .data_mmio_req_ready(1'b1),
+        .data_mmio_resp_valid(1'b0),
+        .data_mmio_resp_data(64'd0),
+
         // External interrupts — tied off for simulation
         .mtip            (1'b0),
         .msip            (1'b0),

@@ -21,6 +21,17 @@ module rv64gc_core_top
     input  logic        mem_resp_valid,
     input  logic [511:0] mem_resp_data,
 
+    // Uncached data MMIO interface
+    output logic        data_mmio_req_valid,
+    output logic        data_mmio_req_we,
+    output logic [63:0] data_mmio_req_addr,
+    output logic [63:0] data_mmio_req_wdata,
+    output logic [7:0]  data_mmio_req_wmask,
+    output logic [1:0]  data_mmio_req_size,
+    input  logic        data_mmio_req_ready,
+    input  logic        data_mmio_resp_valid,
+    input  logic [63:0] data_mmio_resp_data,
+
     // External interrupts
     input  logic        mtip, msip, meip,
     input  logic        stip, ssip, seip,
@@ -4129,6 +4140,16 @@ module rv64gc_core_top
         .dcache_fill_valid      (dc_fill_snoop_valid),
         .dcache_fill_addr       (dc_fill_snoop_addr),
         .dcache_fill_data       (dc_fill_snoop_data),
+        // Uncached data MMIO
+        .data_mmio_req_valid    (data_mmio_req_valid),
+        .data_mmio_req_we       (data_mmio_req_we),
+        .data_mmio_req_addr     (data_mmio_req_addr),
+        .data_mmio_req_wdata    (data_mmio_req_wdata),
+        .data_mmio_req_wmask    (data_mmio_req_wmask),
+        .data_mmio_req_size     (data_mmio_req_size),
+        .data_mmio_req_ready    (data_mmio_req_ready),
+        .data_mmio_resp_valid   (data_mmio_resp_valid),
+        .data_mmio_resp_data    (data_mmio_resp_data),
         // Flush
         .flush_in               (flush_out)
     );
