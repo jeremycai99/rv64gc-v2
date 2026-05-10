@@ -1762,6 +1762,61 @@ Required attribution before behavior:
 - Owner fate: killed, replayed, delivered, or stale.
 - Whether the redirected target equals the scoreboard next PC.
 
+B1d pred-control blocker result, May 9, 2026:
+
+- T1 artifact: `benchmark_results/stage2_b1d_predctl_blocker_t1_20260509`.
+- T2 artifact: `benchmark_results/stage2_b1d_predctl_blocker_t2_20260509`.
+- T2 rank report:
+  `benchmark_results/stage2_b1d_predctl_blocker_t2_20260509/bottleneck_rank.md`.
+- T1 and T2 passed endpoint, strict owner, strict delivery, and
+  branch-recovery checks.
+- Cycles matched the locked baseline exactly, so this is behavior-neutral
+  evidence.
+
+| Row | Pred-control blocked | Pred taken | Pred not taken | Predecode present | BPU taken now | Conditional | JAL | JALR | RET | Ready same-cycle subset |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `212` |
+| CoreMark 10 | `8,851` | `0` | `8,851` | `8,851` | `1` | `8,848` | `0` | `0` | `3` | `30,228` |
+| CoreMark 1 | `1,044` | `0` | `1,044` | `1,044` | `0` | `1,044` | `0` | `0` | `0` | `3,230` |
+| Frontend mixed branch dense | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` |
+| Backend ALU chain 8 | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` |
+| Branch hotspot | `23,454` | `0` | `23,454` | `23,454` | `3` | `23,454` | `0` | `0` | `0` | `8` |
+
+Interpretation:
+
+- The dominant hotspot block is not a taken-control redirect problem. It is a
+  conditional predicted-not-taken fallthrough handoff problem.
+- CoreMark has two useful subsets: `30,228` ready same-cycle duplicate cycles
+  and `8,851` not-taken conditional pred-control blocked cycles. Branch
+  hotspot has almost no ready subset but has `23,454` not-taken conditional
+  pred-control blocked cycles.
+- Therefore a CoreMark-only same-cycle effective-PC remap remains
+  insufficient. The next promotable Branch B candidate must support fallthrough
+  after an already-delivered not-taken conditional owner.
+- The implementation should not be a local IFU PC mux. It must separate the
+  duplicate-detection PC from the emitted packet PC so the duplicate guard can
+  detect the old already-delivered packet while the boundary, predecode,
+  compact, and guard update paths use the fallthrough PC for the emitted
+  packet.
+
+Next behavior candidate:
+
+- `post_delivery_fallthrough_remap`: same-line effective-PC remap for an
+  owner-tagged last-emitted duplicate when the FTQ predicted control is a
+  conditional not-taken fallthrough or when no predicted-control window blocks
+  the remap.
+- Primary target counters:
+  `xs_post_delivery_dup_ready`,
+  `xs_post_delivery_dup_pred_ctl_not_taken`,
+  `xs_delivery_no_emit_already_delivered`,
+  and `packet_empty_noemit_dup`.
+- Required guard counters:
+  delivery owner switch, delivery non-contiguous PC, stale owner,
+  branch-recovery invariants, redirect recovery, and backend packet-ready
+  stalls.
+- Reject the candidate if it only improves CoreMark while hotspot
+  pred-control blocked cycles remain unchanged.
+
 Candidate behavior:
 
 - Centralize redirect owner handoff so FTQ, IFU cursor, IBuffer, and BPU

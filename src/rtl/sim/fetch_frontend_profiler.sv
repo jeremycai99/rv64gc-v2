@@ -299,6 +299,14 @@ module fetch_frontend_profiler
     integer xs_post_delivery_dup_not_delivered_cycles;
     integer xs_post_delivery_dup_owner_complete_cycles;
     integer xs_post_delivery_dup_pred_ctl_cycles;
+    integer xs_post_delivery_dup_pred_ctl_taken_cycles;
+    integer xs_post_delivery_dup_pred_ctl_not_taken_cycles;
+    integer xs_post_delivery_dup_pred_ctl_predecode_cycles;
+    integer xs_post_delivery_dup_pred_ctl_bp_taken_cycles;
+    integer xs_post_delivery_dup_pred_ctl_cond_cycles;
+    integer xs_post_delivery_dup_pred_ctl_jal_cycles;
+    integer xs_post_delivery_dup_pred_ctl_jalr_cycles;
+    integer xs_post_delivery_dup_pred_ctl_ret_cycles;
     integer xs_post_delivery_dup_next_owner_cycles;
     integer xs_post_delivery_dup_remainder_cycles;
     integer xs_post_delivery_dup_redirect_cycles;
@@ -412,6 +420,14 @@ module fetch_frontend_profiler
     logic xs_post_delivery_dup_not_delivered_c;
     logic xs_post_delivery_dup_owner_complete_c;
     logic xs_post_delivery_dup_pred_ctl_c;
+    logic xs_post_delivery_dup_pred_ctl_taken_c;
+    logic xs_post_delivery_dup_pred_ctl_not_taken_c;
+    logic xs_post_delivery_dup_pred_ctl_predecode_c;
+    logic xs_post_delivery_dup_pred_ctl_bp_taken_c;
+    logic xs_post_delivery_dup_pred_ctl_cond_c;
+    logic xs_post_delivery_dup_pred_ctl_jal_c;
+    logic xs_post_delivery_dup_pred_ctl_jalr_c;
+    logic xs_post_delivery_dup_pred_ctl_ret_c;
     logic xs_post_delivery_dup_next_owner_c;
     logic xs_post_delivery_dup_remainder_c;
     logic xs_post_delivery_dup_redirect_c;
@@ -836,6 +852,31 @@ module fetch_frontend_profiler
     assign xs_post_delivery_dup_pred_ctl_c =
         xs_post_delivery_dup_base_c &&
         !ifu_pred_control_outside_next_packet_c;
+    assign xs_post_delivery_dup_pred_ctl_taken_c =
+        xs_post_delivery_dup_pred_ctl_c &&
+        f2_work_ftq_entry_c.pred_ctl_taken;
+    assign xs_post_delivery_dup_pred_ctl_not_taken_c =
+        xs_post_delivery_dup_pred_ctl_c &&
+        !f2_work_ftq_entry_c.pred_ctl_taken;
+    assign xs_post_delivery_dup_pred_ctl_predecode_c =
+        xs_post_delivery_dup_pred_ctl_c &&
+        predecode_ctl_found_c;
+    assign xs_post_delivery_dup_pred_ctl_bp_taken_c =
+        xs_post_delivery_dup_pred_ctl_c &&
+        bp_branch_found_c &&
+        bp_taken_c;
+    assign xs_post_delivery_dup_pred_ctl_cond_c =
+        xs_post_delivery_dup_pred_ctl_c &&
+        (f2_work_ftq_entry_c.pred_ctl_type == BT_COND);
+    assign xs_post_delivery_dup_pred_ctl_jal_c =
+        xs_post_delivery_dup_pred_ctl_c &&
+        (f2_work_ftq_entry_c.pred_ctl_type == 3'd1);
+    assign xs_post_delivery_dup_pred_ctl_jalr_c =
+        xs_post_delivery_dup_pred_ctl_c &&
+        (f2_work_ftq_entry_c.pred_ctl_type == 3'd2);
+    assign xs_post_delivery_dup_pred_ctl_ret_c =
+        xs_post_delivery_dup_pred_ctl_c &&
+        (f2_work_ftq_entry_c.pred_ctl_type == BT_RET);
     assign xs_post_delivery_dup_next_owner_c =
         xs_post_delivery_dup_base_c &&
         ifu_pred_control_outside_next_packet_c &&
@@ -1220,6 +1261,14 @@ module fetch_frontend_profiler
             xs_post_delivery_dup_not_delivered_cycles <= 0;
             xs_post_delivery_dup_owner_complete_cycles <= 0;
             xs_post_delivery_dup_pred_ctl_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_taken_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_not_taken_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_predecode_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_bp_taken_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_cond_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_jal_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_jalr_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_ret_cycles <= 0;
             xs_post_delivery_dup_next_owner_cycles <= 0;
             xs_post_delivery_dup_remainder_cycles <= 0;
             xs_post_delivery_dup_redirect_cycles <= 0;
@@ -2023,6 +2072,30 @@ module fetch_frontend_profiler
             if (xs_post_delivery_dup_pred_ctl_c)
                 xs_post_delivery_dup_pred_ctl_cycles <=
                     xs_post_delivery_dup_pred_ctl_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_taken_c)
+                xs_post_delivery_dup_pred_ctl_taken_cycles <=
+                    xs_post_delivery_dup_pred_ctl_taken_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_not_taken_c)
+                xs_post_delivery_dup_pred_ctl_not_taken_cycles <=
+                    xs_post_delivery_dup_pred_ctl_not_taken_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_predecode_c)
+                xs_post_delivery_dup_pred_ctl_predecode_cycles <=
+                    xs_post_delivery_dup_pred_ctl_predecode_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_bp_taken_c)
+                xs_post_delivery_dup_pred_ctl_bp_taken_cycles <=
+                    xs_post_delivery_dup_pred_ctl_bp_taken_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_cond_c)
+                xs_post_delivery_dup_pred_ctl_cond_cycles <=
+                    xs_post_delivery_dup_pred_ctl_cond_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_jal_c)
+                xs_post_delivery_dup_pred_ctl_jal_cycles <=
+                    xs_post_delivery_dup_pred_ctl_jal_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_jalr_c)
+                xs_post_delivery_dup_pred_ctl_jalr_cycles <=
+                    xs_post_delivery_dup_pred_ctl_jalr_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_ret_c)
+                xs_post_delivery_dup_pred_ctl_ret_cycles <=
+                    xs_post_delivery_dup_pred_ctl_ret_cycles + 1;
             if (xs_post_delivery_dup_next_owner_c)
                 xs_post_delivery_dup_next_owner_cycles <=
                     xs_post_delivery_dup_next_owner_cycles + 1;
@@ -2587,6 +2660,22 @@ module fetch_frontend_profiler
                      xs_post_delivery_dup_owner_complete_cycles);
             $display("xs post delivery dup pred ctl: %0d",
                      xs_post_delivery_dup_pred_ctl_cycles);
+            $display("xs post delivery dup pred ctl taken: %0d",
+                     xs_post_delivery_dup_pred_ctl_taken_cycles);
+            $display("xs post delivery dup pred ctl not taken: %0d",
+                     xs_post_delivery_dup_pred_ctl_not_taken_cycles);
+            $display("xs post delivery dup pred ctl predecode: %0d",
+                     xs_post_delivery_dup_pred_ctl_predecode_cycles);
+            $display("xs post delivery dup pred ctl bp taken: %0d",
+                     xs_post_delivery_dup_pred_ctl_bp_taken_cycles);
+            $display("xs post delivery dup pred ctl cond: %0d",
+                     xs_post_delivery_dup_pred_ctl_cond_cycles);
+            $display("xs post delivery dup pred ctl jal: %0d",
+                     xs_post_delivery_dup_pred_ctl_jal_cycles);
+            $display("xs post delivery dup pred ctl jalr: %0d",
+                     xs_post_delivery_dup_pred_ctl_jalr_cycles);
+            $display("xs post delivery dup pred ctl ret: %0d",
+                     xs_post_delivery_dup_pred_ctl_ret_cycles);
             $display("xs post delivery dup next owner: %0d",
                      xs_post_delivery_dup_next_owner_cycles);
             $display("xs post delivery dup remainder: %0d",
