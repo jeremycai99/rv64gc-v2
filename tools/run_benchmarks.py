@@ -102,6 +102,7 @@ SIGNOFF_FORBIDDEN_PLUSARGS = {
 SIGNOFF_MECHANISM_CLASSES = {
     "default_rtl",
     "ftq_owned_delivery",
+    "post_delivery_cursor_handoff",
     "ibuffer_delivery",
     "bpu_loop_exit_prediction",
     "fetch_block_handoff",
@@ -1742,7 +1743,8 @@ def main(argv: list[str] | None = None) -> int:
         default="default_rtl",
         help=(
             "Architectural class for the tested mechanism. Scoreable signoff "
-            "classes include ftq_owned_delivery, ibuffer_delivery, "
+            "classes include ftq_owned_delivery, "
+            "post_delivery_cursor_handoff, ibuffer_delivery, "
             "bpu_loop_exit_prediction, fetch_block_handoff, "
             "frontend_prefetch_fdip, decoded_op_cache_ftq_attached, "
             "and issue_wakeup_bypass. "

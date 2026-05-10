@@ -1635,7 +1635,7 @@ python3 tools/run_benchmarks.py \
   --manifest tests/benchmarks/stage1_signoff.json \
   --run-class dse \
   --bench dhrystone_100_checkedin,coremark_iter1_generalization \
-  --mechanism-class ftq_owned_delivery \
+  --mechanism-class post_delivery_cursor_handoff \
   --mechanism-name post_delivery_duplicate_cursor_advance \
   --baseline-results benchmark_results/stage2_delivery_cursor_attr_t2_20260509/results.json \
   --targets-counter xs_delivery_no_emit_already_delivered \
@@ -1662,7 +1662,7 @@ python3 tools/run_benchmarks.py \
   --manifest tests/benchmarks/stage1_signoff.json \
   --run-class dse \
   --bench dhrystone_100_checkedin,coremark_iter1_generalization,coremark_iter10_checkedin,frontend_mixed_branch_dense,backend_alu_chain_8,hotspot_state_crc_branch \
-  --mechanism-class ftq_owned_delivery \
+  --mechanism-class post_delivery_cursor_handoff \
   --mechanism-name post_delivery_duplicate_cursor_advance \
   --baseline-results benchmark_results/stage2_delivery_cursor_attr_t2_20260509/results.json \
   --targets-counter xs_delivery_no_emit_already_delivered \
@@ -1683,10 +1683,66 @@ python3 tools/run_benchmarks.py \
 
 T3 promotion note:
 
-- Before a scoreable signoff run, make sure the harness expectations for
-  `ftq_owned_delivery` match this mechanism. If the default class requires
-  unrelated counter movement, add or select a narrower architectural mechanism
-  class rather than bypassing the data-driven discipline.
+- Use the narrower `post_delivery_cursor_handoff` mechanism class for this
+  trial so the harness checks only the explicitly declared target counter.
+  Do not bypass the data-driven discipline to avoid unrelated default
+  expectations from broader mechanism classes.
+
+B1c behavior and blocker-profile result, May 9, 2026:
+
+- First behavior artifact:
+  `benchmark_results/stage2_b1c_cursor_advance_t1_20260509`.
+- Second behavior artifact:
+  `benchmark_results/stage2_b1c_cursor_advance_t1_r2_20260509`.
+- Blocker profile T1 artifact:
+  `benchmark_results/stage2_b1c_cursor_blocker_t1_20260509`.
+- Blocker profile T2 artifact:
+  `benchmark_results/stage2_b1c_cursor_blocker_t2_20260509`.
+- T2 rank report:
+  `benchmark_results/stage2_b1c_cursor_blocker_t2_20260509/bottleneck_rank.md`.
+- All runs passed endpoint, strict owner, strict delivery, and branch-recovery
+  checks.
+- Both behavior attempts were cycle-identical to baseline and failed the
+  declared counter gate: `xs_delivery_no_emit_already_delivered` did not fall
+  on Dhrystone or CoreMark 1.
+- The behavior RTL from those attempts was reverted. The retained RTL delta is
+  simulation-only blocker attribution.
+
+| Row | Post-delivery duplicate base | Ready same-cycle subset | Pred-control blocked | Next-owner blocked | Redirect blocked | FE-stall blocked | Already-delivered no-emit | Duplicate no-emit |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | `212` | `212` | `0` | `0` | `0` | `0` | `213` | `212` |
+| CoreMark 10 | `41,198` | `30,228` | `8,851` | `36` | `153` | `1,975` | `32,267` | `41,286` |
+| CoreMark 1 | `4,473` | `3,230` | `1,044` | `3` | `35` | `187` | `3,605` | `4,475` |
+| Frontend mixed branch dense | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` |
+| Backend ALU chain 8 | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` |
+| Branch hotspot | `23,462` | `8` | `23,454` | `0` | `1,838` | `0` | `25,328` | `23,635` |
+
+Interpretation:
+
+- A next-cycle work-cursor advance is insufficient. The duplicate bubble is
+  counted in the same cycle that the cursor would learn enough to move, so
+  advancing the registered cursor after the bubble does not reduce
+  `xs_delivery_no_emit_already_delivered`.
+- A same-cycle effective-PC remap could remove a CoreMark-shaped subset:
+  CoreMark 10 has `30,228` ready same-line cycles, roughly 2 percent of the
+  row. That is real, but below the desired 3-5 percent broad promotion bar by
+  itself and does not address the branch hotspot.
+- Branch hotspot is not a ready same-line cursor problem. It has only `8`
+  ready cycles and `23,454` pred-control blocked cycles, so the hotspot needs a
+  control-aware owner handoff, not another duplicate-threshold or local cursor
+  tweak.
+- The next Branch B behavior must combine same-cycle effective-PC delivery
+  with predicted-control and straddle ownership rules, or it should defer to
+  A1 recovery-scheduler attribution. A CoreMark-only same-cycle remap is
+  DSE-only evidence until paired with the hotspot control-handoff mechanism.
+
+Verdict:
+
+- B1c next-cycle post-delivery cursor advancement is rejected as a promoted
+  behavior candidate due to no target-counter movement.
+- The blocker instrumentation is accepted as behavior-neutral evidence.
+- Continue with B1d control-aware redirect/pred-control no-emit handoff before
+  considering any isolated same-cycle remap promotion.
 
 ### Workstream B1d: Redirect No-Emit Handoff
 

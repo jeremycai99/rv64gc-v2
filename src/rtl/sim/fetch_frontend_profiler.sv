@@ -68,6 +68,7 @@ module fetch_frontend_profiler
     input logic [FTQ_ALLOC_TAG_BITS-1:0]    ftq_commit_owner_tag,
     input logic                             packet_flowthrough_owner_match_c,
     input logic                             f2_work_owner_complete_c,
+    input logic                             f2_work_owner_delivered_c,
     input logic                             ftq_empty,
     input logic                             ftq_full,
     input logic [FTQ_IDX_BITS:0]            ftq_count,
@@ -92,6 +93,12 @@ module fetch_frontend_profiler
     input ftq_entry_t                       f2_work_ftq_entry_c,
     input logic [63:LINE_BITS]              f2_work_line_addr_c,
     input logic                             ifu_work_same_owner_advance_c,
+    input logic                             ifu_work_redirect_c,
+    input logic                             ifu_work_take_ftq_next_owner_c,
+    input logic                             ifu_work_take_request_owner_c,
+    input logic                             ifu_work_take_remainder_request_owner_c,
+    input logic                             ifu_same_owner_next_owner_safe_c,
+    input logic                             ifu_pred_control_outside_next_packet_c,
     input logic                             packet_flowthrough_candidate,
     input logic                             packet_flowthrough_valid,
     input logic                             packet_buf_stale_owner_c,
@@ -287,6 +294,19 @@ module fetch_frontend_profiler
     integer xs_same_owner_no_emit_frontend_hold_cycles;
     integer xs_same_owner_no_emit_fe_stall_cycles;
     integer xs_same_owner_no_emit_other_cycles;
+    integer xs_post_delivery_dup_base_cycles;
+    integer xs_post_delivery_dup_ready_cycles;
+    integer xs_post_delivery_dup_not_delivered_cycles;
+    integer xs_post_delivery_dup_owner_complete_cycles;
+    integer xs_post_delivery_dup_pred_ctl_cycles;
+    integer xs_post_delivery_dup_next_owner_cycles;
+    integer xs_post_delivery_dup_remainder_cycles;
+    integer xs_post_delivery_dup_redirect_cycles;
+    integer xs_post_delivery_dup_fe_stall_cycles;
+    integer xs_post_delivery_dup_take_next_cycles;
+    integer xs_post_delivery_dup_take_request_cycles;
+    integer xs_post_delivery_dup_take_remainder_cycles;
+    integer xs_post_delivery_dup_other_cycles;
     integer xs_runahead_req_valid_cycles;
     integer xs_runahead_req_fire_cycles;
     integer xs_runahead_cancel_next_cycles;
@@ -387,6 +407,19 @@ module fetch_frontend_profiler
     logic xs_same_owner_no_emit_frontend_hold_c;
     logic xs_same_owner_no_emit_fe_stall_c;
     logic xs_same_owner_no_emit_other_c;
+    logic xs_post_delivery_dup_base_c;
+    logic xs_post_delivery_dup_ready_c;
+    logic xs_post_delivery_dup_not_delivered_c;
+    logic xs_post_delivery_dup_owner_complete_c;
+    logic xs_post_delivery_dup_pred_ctl_c;
+    logic xs_post_delivery_dup_next_owner_c;
+    logic xs_post_delivery_dup_remainder_c;
+    logic xs_post_delivery_dup_redirect_c;
+    logic xs_post_delivery_dup_fe_stall_c;
+    logic xs_post_delivery_dup_take_next_c;
+    logic xs_post_delivery_dup_take_request_c;
+    logic xs_post_delivery_dup_take_remainder_c;
+    logic xs_post_delivery_dup_other_c;
     logic xs_data_present_no_emit_c;
     logic xs_data_no_emit_dup_c;
     logic xs_data_no_emit_pkt_not_ready_c;
@@ -780,6 +813,71 @@ module fetch_frontend_profiler
         !xs_same_owner_no_emit_redirect_c &&
         !xs_same_owner_no_emit_frontend_hold_c &&
         !xs_same_owner_no_emit_fe_stall_c;
+    assign xs_post_delivery_dup_base_c =
+        f2_duplicate_suppressed_c &&
+        f2_last_emit_hit_c &&
+        f2_seq_valid &&
+        f2_work_ftq_valid_c &&
+        f2_ftq_owner_live_c &&
+        f2_work_line_valid_c &&
+        (f2_duplicate_next_pc_c == f2_seq_next_pc) &&
+        (f2_seq_next_pc[63:LINE_BITS] == f2_work_line_addr_c);
+    assign xs_post_delivery_dup_remainder_c =
+        xs_post_delivery_dup_base_c &&
+        (line_straddle_advance_c ||
+         consume_remainder_c ||
+         consumed_remainder_r);
+    assign xs_post_delivery_dup_not_delivered_c =
+        xs_post_delivery_dup_base_c &&
+        !f2_work_owner_delivered_c;
+    assign xs_post_delivery_dup_owner_complete_c =
+        xs_post_delivery_dup_base_c &&
+        f2_work_owner_complete_c;
+    assign xs_post_delivery_dup_pred_ctl_c =
+        xs_post_delivery_dup_base_c &&
+        !ifu_pred_control_outside_next_packet_c;
+    assign xs_post_delivery_dup_next_owner_c =
+        xs_post_delivery_dup_base_c &&
+        ifu_pred_control_outside_next_packet_c &&
+        !ifu_same_owner_next_owner_safe_c;
+    assign xs_post_delivery_dup_redirect_c =
+        xs_post_delivery_dup_base_c &&
+        (redirect_valid || ifu_work_redirect_c);
+    assign xs_post_delivery_dup_fe_stall_c =
+        xs_post_delivery_dup_base_c &&
+        fe_stall;
+    assign xs_post_delivery_dup_take_next_c =
+        xs_post_delivery_dup_base_c &&
+        ifu_work_take_ftq_next_owner_c;
+    assign xs_post_delivery_dup_take_request_c =
+        xs_post_delivery_dup_base_c &&
+        ifu_work_take_request_owner_c;
+    assign xs_post_delivery_dup_take_remainder_c =
+        xs_post_delivery_dup_base_c &&
+        ifu_work_take_remainder_request_owner_c;
+    assign xs_post_delivery_dup_ready_c =
+        xs_post_delivery_dup_base_c &&
+        !xs_post_delivery_dup_owner_complete_c &&
+        !xs_post_delivery_dup_pred_ctl_c &&
+        !xs_post_delivery_dup_next_owner_c &&
+        !xs_post_delivery_dup_remainder_c &&
+        !xs_post_delivery_dup_redirect_c &&
+        !xs_post_delivery_dup_fe_stall_c &&
+        !xs_post_delivery_dup_take_next_c &&
+        !xs_post_delivery_dup_take_request_c &&
+        !xs_post_delivery_dup_take_remainder_c;
+    assign xs_post_delivery_dup_other_c =
+        xs_post_delivery_dup_base_c &&
+        !xs_post_delivery_dup_ready_c &&
+        !xs_post_delivery_dup_owner_complete_c &&
+        !xs_post_delivery_dup_pred_ctl_c &&
+        !xs_post_delivery_dup_next_owner_c &&
+        !xs_post_delivery_dup_remainder_c &&
+        !xs_post_delivery_dup_redirect_c &&
+        !xs_post_delivery_dup_fe_stall_c &&
+        !xs_post_delivery_dup_take_next_c &&
+        !xs_post_delivery_dup_take_request_c &&
+        !xs_post_delivery_dup_take_remainder_c;
     assign xs_data_present_no_emit_c =
         f2_work_valid_c &&
         f2_data_valid &&
@@ -1117,6 +1215,19 @@ module fetch_frontend_profiler
             xs_same_owner_no_emit_frontend_hold_cycles <= 0;
             xs_same_owner_no_emit_fe_stall_cycles <= 0;
             xs_same_owner_no_emit_other_cycles <= 0;
+            xs_post_delivery_dup_base_cycles <= 0;
+            xs_post_delivery_dup_ready_cycles <= 0;
+            xs_post_delivery_dup_not_delivered_cycles <= 0;
+            xs_post_delivery_dup_owner_complete_cycles <= 0;
+            xs_post_delivery_dup_pred_ctl_cycles <= 0;
+            xs_post_delivery_dup_next_owner_cycles <= 0;
+            xs_post_delivery_dup_remainder_cycles <= 0;
+            xs_post_delivery_dup_redirect_cycles <= 0;
+            xs_post_delivery_dup_fe_stall_cycles <= 0;
+            xs_post_delivery_dup_take_next_cycles <= 0;
+            xs_post_delivery_dup_take_request_cycles <= 0;
+            xs_post_delivery_dup_take_remainder_cycles <= 0;
+            xs_post_delivery_dup_other_cycles <= 0;
             xs_runahead_req_valid_cycles       <= 0;
             xs_runahead_req_fire_cycles        <= 0;
             xs_runahead_cancel_next_cycles      <= 0;
@@ -1897,6 +2008,45 @@ module fetch_frontend_profiler
             if (xs_same_owner_no_emit_other_c)
                 xs_same_owner_no_emit_other_cycles <=
                     xs_same_owner_no_emit_other_cycles + 1;
+            if (xs_post_delivery_dup_base_c)
+                xs_post_delivery_dup_base_cycles <=
+                    xs_post_delivery_dup_base_cycles + 1;
+            if (xs_post_delivery_dup_ready_c)
+                xs_post_delivery_dup_ready_cycles <=
+                    xs_post_delivery_dup_ready_cycles + 1;
+            if (xs_post_delivery_dup_not_delivered_c)
+                xs_post_delivery_dup_not_delivered_cycles <=
+                    xs_post_delivery_dup_not_delivered_cycles + 1;
+            if (xs_post_delivery_dup_owner_complete_c)
+                xs_post_delivery_dup_owner_complete_cycles <=
+                    xs_post_delivery_dup_owner_complete_cycles + 1;
+            if (xs_post_delivery_dup_pred_ctl_c)
+                xs_post_delivery_dup_pred_ctl_cycles <=
+                    xs_post_delivery_dup_pred_ctl_cycles + 1;
+            if (xs_post_delivery_dup_next_owner_c)
+                xs_post_delivery_dup_next_owner_cycles <=
+                    xs_post_delivery_dup_next_owner_cycles + 1;
+            if (xs_post_delivery_dup_remainder_c)
+                xs_post_delivery_dup_remainder_cycles <=
+                    xs_post_delivery_dup_remainder_cycles + 1;
+            if (xs_post_delivery_dup_redirect_c)
+                xs_post_delivery_dup_redirect_cycles <=
+                    xs_post_delivery_dup_redirect_cycles + 1;
+            if (xs_post_delivery_dup_fe_stall_c)
+                xs_post_delivery_dup_fe_stall_cycles <=
+                    xs_post_delivery_dup_fe_stall_cycles + 1;
+            if (xs_post_delivery_dup_take_next_c)
+                xs_post_delivery_dup_take_next_cycles <=
+                    xs_post_delivery_dup_take_next_cycles + 1;
+            if (xs_post_delivery_dup_take_request_c)
+                xs_post_delivery_dup_take_request_cycles <=
+                    xs_post_delivery_dup_take_request_cycles + 1;
+            if (xs_post_delivery_dup_take_remainder_c)
+                xs_post_delivery_dup_take_remainder_cycles <=
+                    xs_post_delivery_dup_take_remainder_cycles + 1;
+            if (xs_post_delivery_dup_other_c)
+                xs_post_delivery_dup_other_cycles <=
+                    xs_post_delivery_dup_other_cycles + 1;
             if (ifu_runahead_req_valid_c)
                 xs_runahead_req_valid_cycles <=
                     xs_runahead_req_valid_cycles + 1;
@@ -2427,6 +2577,32 @@ module fetch_frontend_profiler
                      xs_same_owner_no_emit_fe_stall_cycles);
             $display("xs same owner no emit other : %0d",
                      xs_same_owner_no_emit_other_cycles);
+            $display("xs post delivery dup base   : %0d",
+                     xs_post_delivery_dup_base_cycles);
+            $display("xs post delivery dup ready  : %0d",
+                     xs_post_delivery_dup_ready_cycles);
+            $display("xs post delivery dup not delivered: %0d",
+                     xs_post_delivery_dup_not_delivered_cycles);
+            $display("xs post delivery dup complete: %0d",
+                     xs_post_delivery_dup_owner_complete_cycles);
+            $display("xs post delivery dup pred ctl: %0d",
+                     xs_post_delivery_dup_pred_ctl_cycles);
+            $display("xs post delivery dup next owner: %0d",
+                     xs_post_delivery_dup_next_owner_cycles);
+            $display("xs post delivery dup remainder: %0d",
+                     xs_post_delivery_dup_remainder_cycles);
+            $display("xs post delivery dup redirect: %0d",
+                     xs_post_delivery_dup_redirect_cycles);
+            $display("xs post delivery dup fe stall: %0d",
+                     xs_post_delivery_dup_fe_stall_cycles);
+            $display("xs post delivery dup take next: %0d",
+                     xs_post_delivery_dup_take_next_cycles);
+            $display("xs post delivery dup take request: %0d",
+                     xs_post_delivery_dup_take_request_cycles);
+            $display("xs post delivery dup take remainder: %0d",
+                     xs_post_delivery_dup_take_remainder_cycles);
+            $display("xs post delivery dup other  : %0d",
+                     xs_post_delivery_dup_other_cycles);
             $display("recoverable top F1 PCs:");
             for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
                 if (xs_catchup_top_count[i] != 0) begin
@@ -2548,6 +2724,7 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .ftq_commit_owner_tag            (ftq_commit_owner_tag),
     .packet_flowthrough_owner_match_c(packet_flowthrough_owner_match_c),
     .f2_work_owner_complete_c        (f2_work_owner_complete_c),
+    .f2_work_owner_delivered_c       (f2_work_owner_delivered_c),
     .ftq_empty                       (ftq_empty),
     .ftq_full                        (ftq_full),
     .ftq_count                       (ftq_count),
@@ -2572,6 +2749,12 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .f2_work_ftq_entry_c             (f2_work_ftq_entry_c),
     .f2_work_line_addr_c             (f2_work_line_addr_c),
     .ifu_work_same_owner_advance_c   (ifu_work_same_owner_advance_c),
+    .ifu_work_redirect_c             (ifu_work_redirect_c),
+    .ifu_work_take_ftq_next_owner_c  (ifu_work_take_ftq_next_owner_c),
+    .ifu_work_take_request_owner_c   (ifu_work_take_request_owner_c),
+    .ifu_work_take_remainder_request_owner_c(ifu_work_take_remainder_request_owner_c),
+    .ifu_same_owner_next_owner_safe_c(u_ifu.same_owner_next_owner_safe_c),
+    .ifu_pred_control_outside_next_packet_c(u_ifu.pred_control_outside_next_packet_c),
     .packet_flowthrough_candidate    (packet_flowthrough_candidate),
     .packet_flowthrough_valid        (packet_flowthrough_valid),
     .packet_buf_stale_owner_c        (packet_buf_stale_owner_c),
