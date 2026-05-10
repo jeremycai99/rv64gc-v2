@@ -530,10 +530,9 @@ module rv64gc_core_top
     // so the ifdef SIMULATION init block below can reach them)
     logic                       rob_uses_checkpoint [0:ROB_DEPTH-1];
     logic [CHECKPOINT_BITS-1:0] rob_checkpoint_id   [0:ROB_DEPTH-1];
-    // Checkpoint snapshot tail parallel to ROB.  The current checkpoint
-    // snapshot is taken at the first renamed slot in a batch; a branch can use
-    // execute-time partial recovery without losing older same-batch mappings
-    // only when that snapshot tail equals the branch ROB.
+    // Checkpoint branch boundary parallel to ROB. A branch can use
+    // execute-time partial recovery only when the checkpoint image was taken
+    // at that branch boundary, so older same-batch mappings are preserved.
     logic [ROB_IDX_BITS-1:0]    rob_checkpoint_tail [0:ROB_DEPTH-1];
     logic [ROB_DEPTH-1:0]       rename_buf_partial_clear;
     logic [ROB_IDX_BITS-1:0]    partial_recovered_rob_idx;
@@ -1298,7 +1297,7 @@ module rv64gc_core_top
                                    : RAS_NONE);
                     rob_uses_checkpoint[ren_insn[i].rob_idx] <= ren_insn[i].uses_checkpoint;
                     rob_checkpoint_id[ren_insn[i].rob_idx]   <= ren_insn[i].checkpoint_id;
-                    rob_checkpoint_tail[ren_insn[i].rob_idx] <= rob_alloc_idx[0];
+                    rob_checkpoint_tail[ren_insn[i].rob_idx] <= ren_insn[i].rob_idx;
                 end
             end
         end

@@ -181,6 +181,8 @@ module rename
     // =========================================================================
     logic found_ckpt_branch;
     logic [2:0] ckpt_branch_slot;
+    logic [ROB_IDX_BITS-1:0] ckpt_branch_rob_idx;
+    logic [ROB_IDX_BITS-1:0] ckpt_branch_next_rob_idx;
 
     // Cumulative resource counters at each slot boundary (prefix sums)
     logic [2:0] preg_consumed_before [0:PIPE_WIDTH];
@@ -553,7 +555,13 @@ module rename
             rat_snapshot[i] = '0;
         end
         fl_bitmap_snapshot = '0;
-        rob_tail_snapshot  = rob_alloc_idx[0];
+        ckpt_branch_rob_idx = rob_alloc_idx[ckpt_branch_slot];
+        if (ckpt_branch_rob_idx == ROB_IDX_BITS'(ROB_DEPTH - 1)) begin
+            ckpt_branch_next_rob_idx = '0;
+        end else begin
+            ckpt_branch_next_rob_idx = ckpt_branch_rob_idx + 1'b1;
+        end
+        rob_tail_snapshot  = ckpt_branch_next_rob_idx;
     end
 
     // =========================================================================
