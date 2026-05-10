@@ -1829,6 +1829,391 @@ Promotion target:
   frontend branch dense packet-empty without increasing duplicate or stale
   owner counters.
 
+B1d fallthrough-remap trial result, May 9, 2026:
+
+- Behavior artifacts:
+  `benchmark_results/stage2_b1d_fallthrough_remap_t1_20260509` and
+  `benchmark_results/stage2_b1d_fallthrough_remap_t2_20260509`.
+- Baseline artifact:
+  `benchmark_results/stage2_b1d_predctl_blocker_t2_20260509`.
+- This RTL state is an uncommitted behavior trial. It is not promoted.
+- T1 was endpoint-clean and reduced the declared target counter on the smoke
+  rows.
+- T2 was endpoint-clean, but CoreMark 10 regressed, so the candidate cannot be
+  accepted without a deeper explanation and structural repair.
+
+| Row | Baseline `mcycle` | Trial `mcycle` | Delta | Already-delivered delta | Duplicate no-emit delta | Packet-empty delta | Redirect-recovery delta | Backend-ready delta | Remaps |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | `18,577` | `18,371` | `-206` | `-213` | `-212` | `-206` | `0` | `0` | `212` |
+| CoreMark 10 | `1,500,110` | `1,514,156` | `+14,046` | `-29,755` | `-39,840` | `-17,763` | `+4,383` | `-9,766` | `45,623` |
+| CoreMark 1 | `163,013` | `161,534` | `-1,479` | `-3,243` | `-4,295` | `-2,471` | `+100` | `-701` | `4,857` |
+| Frontend mixed branch dense | `7,220` | `7,220` | `0` | `0` | `0` | `0` | `0` | `0` | `0` |
+| Backend ALU chain 8 | `3,039` | `3,039` | `0` | `0` | `0` | `0` | `0` | `0` | `0` |
+| Branch hotspot | `141,326` | `126,335` | `-14,991` | `-22,127` | `-21,442` | `-20,602` | `-163` | `+25` | `23,418` |
+
+Interpretation:
+
+- The mechanism attacks a real architectural bucket. It sharply reduces
+  already-delivered and duplicate no-emit counters in CoreMark 10, CoreMark 1,
+  Dhrystone, and the branch hotspot.
+- It is not yet a complete architectural fix. CoreMark 10 loses `14,046`
+  cycles even while duplicate/no-emit counters fall, and the run shows higher
+  `redirect_recovery` plus higher commit-zero pressure.
+- The regression is not explained by backend packet-ready pressure because
+  CoreMark 10 backend-ready stalls fall by `9,766`.
+- The hotspot improvement proves the not-taken fallthrough handoff is not just
+  CoreMark-specific, but the CoreMark 10 regression proves the current remap
+  is missing a branch/recovery or commit-window contract.
+- The next step must be an autopsy of the regression path, not a wider remap
+  or another local PC-steering patch.
+
+Verdict:
+
+- `post_delivery_fallthrough_remap` is DSE-only evidence in its current form.
+- Do not promote it, do not run a full signoff on this dirty RTL, and do not
+  tune its scalar guards until the CoreMark 10 regression is explained by
+  counters.
+- Either add behavior-neutral attribution around the remap and recovery
+  windows, or revert the behavior trial and continue from the committed
+  instrumentation baseline.
+
+## Current Deep DSE Plan After B1d
+
+The current bottleneck analysis says the next campaign needs a wider
+correlation pass before the next behavior change. The frontend remap trial
+proved that a large duplicate/no-emit bucket is removable, but it also showed
+that reducing that bucket can expose or create recovery and commit pressure.
+The next DSE therefore has to track causality across frontend delivery,
+redirect recovery, scheduler dependency, load-use latency, and commit head
+blocking.
+
+### Planning Principle
+
+Each DSE branch must answer four questions before RTL behavior changes:
+
+1. Which cycle-bound counter is the primary limiter?
+2. Which pressure counter explains the dynamic shape behind it?
+3. Which guard counter could prove that an apparent improvement is false?
+4. Which row group, beyond Dhrystone and CoreMark, should also move if the
+   mechanism is architectural?
+
+If any answer is missing, the branch is instrumentation-only.
+
+### Current Ranked Hypotheses
+
+| Priority | Hypothesis | Evidence now | Missing evidence | Allowed next action |
+|---:|---|---|---|---|
+| 1 | Frontend delivery is blocked by an owner handoff contract, not raw buffer capacity. | B1d removes duplicate/no-emit pressure and improves the branch hotspot, but CoreMark 10 regresses. | Per-remap fate, post-remap redirect age, post-remap commit head cause, and whether the emitted fallthrough packet later commits. | Add attribution around remap fate and recovery correlation. Do not widen the remap yet. |
+| 2 | Redirect recovery and frontend delivery are coupled. | CoreMark 10 `redirect_recovery` rises in the remap trial while packet-empty falls. | Redirect source, redirect-to-request latency, redirect-to-decode latency, and useful younger work lost after remap. | Add A1 recovery/refill attribution, then design a scheduler for recovery attempts. |
+| 3 | CoreMark is still dominated by ALU producer chains. | Post-remap rank still shows `xs_bottleneck_dep_wait_on_alu` and blocked not-yet-issued producers as the top pressure family. | Whether the cycle-bound loss is select loss, issue steering, wakeup timing, or true dependency depth. | Add C0 criticality counters before any more IQ0 or short-chain behavior. |
+| 4 | Dhrystone has a load-use component independent of frontend. | Dhrystone rank shows high `xs_bottleneck_dep_wait_on_load` and store-forward wait. | Load latency, store-forward wait/fail, replay, and wakeup delay buckets. | Add D0 LSU/load-use attribution before Dhrystone-directed behavior. |
+| 5 | Commit-zero is probably a symptom, but it can hide regressions. | CoreMark 10 commit-zero rises in the remap trial and is large in baseline. | ROB head class, head ready state, ready-younger slots, and correlation with remap, redirect, load, and scheduler stalls. | Add E0 head-block attribution and use it as a guard for every behavior trial. |
+
+### H0: State Freeze And Trial Classification
+
+Objective:
+
+- Restore a trackable baseline for deeper DSE.
+- Prevent the current dirty remap RTL from becoming the implicit baseline.
+
+Actions:
+
+1. Record `git status --short` before every cited run.
+2. Classify the current B1d fallthrough-remap RTL as DSE-only until CoreMark
+   10 is repaired.
+3. Keep the result artifacts above as evidence, but do not compare future
+   candidates against the dirty remap unless the repaired version becomes a
+   clean T3 baseline.
+4. If the next work is instrumentation, either add it on top of the dirty
+   behavior only for autopsy runs or revert the behavior first. Do not mix
+   accepted instrumentation with unaccepted behavior in one commit.
+5. Commit only behavior-neutral documentation or instrumentation unless a
+   behavior slice passes the promotion ladder.
+
+Exit criteria:
+
+- The doc says whether the active RTL is baseline, instrumentation-only,
+  dirty behavior trial, rejected behavior, or accepted candidate.
+- No long run starts from an unclassified dirty RTL state.
+
+### H1: Remap Regression Autopsy
+
+Objective:
+
+- Explain why CoreMark 10 regresses after duplicate/no-emit counters fall.
+
+New attribution to add:
+
+| Counter family | Required split | Decision it enables |
+|---|---|---|
+| Remap fate | Remap emitted, emitted packet entered decode, packet killed by redirect, packet reached commit, packet became stale, packet caused delivery checker skip. | Determines whether the remap creates useful work or wrong-path work. |
+| Remap class | No predicted control, conditional not-taken fallthrough, predicted-control offset before next PC, straddle/remainder, owner-complete pending. | Shows which sub-class is beneficial or harmful without scalar threshold tuning. |
+| Post-remap redirect window | Redirect within 1, 2, 3, 4-7, 8+ cycles after remap, source of redirect, redirect target equal to remap PC or next owner PC. | Separates legal fallthrough progress from soon-to-be-killed work. |
+| Post-remap commit window | Commit-zero within 1, 2, 3, 4-7, 8+ cycles after remap, ROB head class, ready-younger slots hidden. | Explains the CoreMark 10 commit-zero increase. |
+| Delivery scoreboard | Required PC after remap, owner completion state, noncontiguous delivery, duplicate delivery, owner switch. | Proves endpoint identity is still exact. |
+
+Expected outcomes:
+
+- If remapped packets mostly commit and redirect/commit-zero rise is
+  unrelated, continue with a structural recovery/commit fix.
+- If remapped packets are often killed soon after decode, narrow the remap to a
+  stronger owner/predictor-safe class.
+- If commit-zero rises because the remap changes decode burst timing, the next
+  fix is downstream drain scheduling, not more frontend delivery.
+- If checker-visible owner ambiguity appears, reject the remap and return to
+  Branch A/C/D attribution.
+
+T1 autopsy run:
+
+```bash
+python3 tools/run_benchmarks.py \
+  --runner dsim \
+  --manifest tests/benchmarks/stage1_signoff.json \
+  --run-class dse \
+  --bench dhrystone_100_checkedin,coremark_iter1_generalization \
+  --mechanism-class post_delivery_cursor_handoff \
+  --mechanism-name post_delivery_fallthrough_remap_autopsy \
+  --baseline-results benchmark_results/stage2_b1d_predctl_blocker_t2_20260509/results.json \
+  --targets-counter xs_post_delivery_fallthrough_remap \
+  --expect-counter-decrease xs_post_delivery_fallthrough_remap:0 \
+  --run-id stage2_b1d_fallthrough_remap_autopsy_t1_YYYYMMDD \
+  --run-dir benchmark_results/stage2_b1d_fallthrough_remap_autopsy_t1_YYYYMMDD \
+  --plusarg +FETCH_DELIVERY_CHECK \
+  --plusarg +FETCH_DELIVERY_STRICT \
+  --plusarg +FETCH_OWNER_CHECK \
+  --plusarg +FETCH_OWNER_STRICT \
+  --plusarg +BRANCH_RECOVERY_CHECK \
+  --plusarg +BRANCH_RECOVERY_STRICT \
+  --plusarg +PERF_PROFILE \
+  --plusarg +PERF_COUNTERS \
+  --plusarg +STAT_DUMP \
+  --plusarg +BOTTLENECK_PROFILE
+```
+
+T2 autopsy run:
+
+- Use the six-row T2 set.
+- Compare against `stage2_b1d_predctl_blocker_t2_20260509`.
+- Required report columns:
+  remaps, remap-commit, remap-kill, remap-stale, redirect-after-remap,
+  commit-zero-after-remap, packet-empty, redirect recovery, backend-ready,
+  and cycle delta.
+
+Promotion rule:
+
+- H1 does not promote behavior. It either produces a repaired B1d design
+  target, rejects the remap, or redirects the next effort to A1, C0, D0, or E0.
+
+### H2: Branch A And B Coupled Recovery Study
+
+Objective:
+
+- Determine whether the current frontend delivery changes need a branch
+  recovery scheduler before they can be safely profitable.
+
+Required counters:
+
+- Redirect source by age and branch type.
+- Redirect assertion to first IFU request.
+- Redirect assertion to first I-cache response.
+- Redirect assertion to first emitted packet.
+- Redirect assertion to first decoded packet.
+- Useful younger uops flushed by redirect.
+- Ready younger uops flushed by redirect.
+- Recovery candidate blocked by resource, checkpoint read, LSU, writeback,
+  frontend pending redirect, or owner handoff.
+- Recovery attempt later followed by full flush.
+
+Design directions allowed after attribution:
+
+- Backend-only resource-aware recovery scheduler.
+- Delayed frontend redirect only when the owner state and checkpoint state
+  agree.
+- FTQ/IFU/IBuffer/BPU history recovery from one owner rule.
+
+Design directions rejected:
+
+- Raw partial-recovery plusarg retry.
+- Selective recovery with no refill-cost model.
+- Any frontend target steer that does not update FTQ owner, BPU history, RAS,
+  IFU cursor, and IBuffer epoch together.
+
+Success target:
+
+- Branch hotspot at least 3 percent faster.
+- CoreMark 10 neutral or faster.
+- Redirect recovery falls without increasing packet-empty, stale owner,
+  duplicate delivery, or commit-zero guard counters.
+
+### H3: Scheduler Criticality Study
+
+Objective:
+
+- Find a structural scheduler mechanism with multi-percent potential instead
+  of another local IQ0 or short-chain variant.
+
+Required counters:
+
+- Producer-chain depth at issue and while blocked.
+- Producer state: not issued, issued this cycle, selected-lost, waiting on
+  ALU, waiting on load, waiting on multiply/divide, waiting on branch.
+- Consumer IQ and producer IQ pair.
+- FU utilization by class and issue port.
+- Select-lost cause by IQ: older-priority loss, port unavailable, operand not
+  ready, FU mismatch, branch or LSU conflict.
+- Ready-hidden count by IQ and FU class.
+- Same-cycle wakeup candidate that could be supported by a registered
+  next-cycle token without an ALU-to-IQ combinational path.
+
+Candidate mechanisms after attribution:
+
+| Candidate | Required proof | Expected broad effect |
+|---|---|---|
+| Age-aware select fairness | High ready-not-selected or arb-loss pressure across multiple IQs. | Reduces starvation without benchmark op-list tuning. |
+| Simple-integer steering | Cross-IQ producer/consumer chains show avoidable cluster imbalance. | Improves CoreMark and backend guards without branch regression. |
+| Registered fast-lane wakeup token | Same-cycle wakeup candidates are broad and miss selection because readiness arrives late. | Improves dependency chains while staying timing-clean. |
+| Producer criticality priority | Long producer chains dominate and critical producers lose selection. | Reduces blocked not-yet-issued producer pressure. |
+
+Reject conditions:
+
+- Improvement is below 1 percent and target pressure does not fall.
+- Branch rows regress due changed branch issue timing.
+- The mechanism is an op-list or scalar threshold tuned around Dhrystone or
+  CoreMark.
+
+### H4: Load-Use And LSU Study
+
+Objective:
+
+- Explain Dhrystone and memory-sensitive rows with explicit load-use evidence.
+
+Required counters:
+
+- Load issue-to-data latency buckets.
+- Load data-to-consumer-ready latency buckets.
+- Store-forward hit, wait, fail, and ambiguity causes.
+- D-cache port or bank conflict cycles.
+- Load queue and store queue pressure.
+- Replay cause and replay age.
+- Speculative load wakeup issued, consumed, cancelled, replayed, and committed.
+
+Candidate mechanisms after attribution:
+
+- Store-forward path repair.
+- Speculative load wakeup with replay correctness.
+- D-cache port or bank adjustment if broad memory rows prove the pressure.
+
+Reject conditions:
+
+- Dhrystone improves while CoreMark or memory generalization rows regress.
+- Replay pressure rises enough to erase the load-use benefit.
+- Any stale load wakeup or wrong-path store safety counter trips.
+
+### H5: Commit And Window Correlation Study
+
+Objective:
+
+- Make commit-zero a guard and possible root-cause branch, not a vague
+  after-the-fact explanation.
+
+Required counters:
+
+- ROB head uop class and ready state.
+- ROB head blocked by load, branch, ALU, multiply/divide, store, CSR,
+  exception, or unknown.
+- Ready younger commit slots hidden behind the head.
+- ROB occupancy, IQ occupancy, dispatch occupancy, rename stall cause, and PRF
+  pressure during commit-zero windows.
+- Correlation of commit-zero windows with remap, redirect, load-use, and
+  scheduler blocked-producer windows.
+
+Decision rules:
+
+- If commit-zero is mostly redirect-correlated, continue Branch A/B.
+- If commit-zero is mostly load-correlated, continue Branch D.
+- If commit-zero is mostly scheduler-correlated, continue Branch C.
+- If ready-younger slots are high and independent of other stalls, plan a
+  window or retirement structure change.
+
+### H6: Broader Coverage Before Promotion
+
+Objective:
+
+- Keep DSE architectural and avoid Dhrystone/CoreMark overfit.
+
+Coverage ladder:
+
+1. T1 smoke: Dhrystone 100 and CoreMark 1.
+2. T2 focused: Dhrystone 100, CoreMark 1, CoreMark 10, branch dense, backend
+   ALU chain 8, and branch hotspot.
+3. T3 signoff: full `tests/benchmarks/stage1_signoff.json`.
+4. T4 generalization: add rows for pointer chasing, memcpy/memset, load-use,
+   store-forward, call/return, indirect branch, independent ALU, dependent
+   ALU, and cache-pressure microbenchmarks.
+
+Promotion rule:
+
+- A behavior candidate must pass T3 before it becomes the new Stage 2
+  baseline.
+- T4 is not allowed to excuse a regression in T3. It is used to rank the next
+  architectural direction and to expose overfit risk.
+
+### H7: Decision Records Required For Every Trial
+
+Every trial must add a compact block with these fields:
+
+```text
+Experiment:
+Mechanism class:
+Mechanism name:
+RTL state or commit:
+Baseline artifact:
+Run artifacts:
+Hypothesis:
+Primary target counter:
+Cycle-bound companion counter:
+Guard counters:
+Predicted removable cycles:
+Observed counter delta:
+Observed cycle delta:
+Rows improved:
+Rows regressed:
+Strict checker status:
+Verdict:
+Next action:
+```
+
+Verdicts:
+
+- Accepted architectural candidate.
+- DSE-only evidence.
+- Rejected due regression.
+- Rejected due correctness.
+- Quarantined as overfit risk.
+
+### Immediate Next Session Plan
+
+1. Freeze the current state and decide whether the dirty remap RTL is kept only
+   for H1 autopsy or reverted before new instrumentation.
+2. Add H1 attribution counters at the simulation boundary where possible. If a
+   synthesizable signal must be exposed, keep it as a narrow profiling signal
+   and commit it separately from behavior.
+3. Rebuild DSim. If DSim has a license conflict, rebuild XSim and run the same
+   strict plusargs.
+4. Run H1 T1 on Dhrystone 100 and CoreMark 1.
+5. If H1 T1 is endpoint-clean and counters are populated, run H1 T2 on the
+   six-row set.
+6. Classify the current fallthrough-remap behavior:
+   DSE-only repaired candidate, rejected due CoreMark 10 regression, or
+   ready for a structural B1d repair.
+7. If the remap is rejected, revert the dirty behavior and continue with A1
+   recovery/refill attribution.
+8. If the remap has a clean structural repair target, implement exactly that
+   target and rerun T1/T2 with declared counter expectations.
+9. If A1 does not expose a multi-percent recovery candidate, move to C0
+   scheduler criticality attribution before any backend behavior patch.
+10. Only after a clean T2, run T3 full signoff and update the Stage 2 baseline.
+
 ### Workstream A1: Recovery Scheduler Attribution
 
 Start in parallel as instrumentation if B1c is compiling or running; do not
@@ -1949,17 +2334,22 @@ Candidate behaviors after attribution:
 
 ## DSE Cadence For The Next Sessions
 
-1. Update and commit this plan.
-2. Implement B1c as the only first behavior trial.
-3. Rebuild DSim. If license conflict occurs, rebuild XSim and use the same
-   plusargs.
-4. Run T1 strict smoke with explicit target-counter expectations.
-5. If T1 fails, fix or revert before running anything longer.
-6. If T1 passes and counters move, run T2 focused six-row.
-7. Classify B1c using the scoring labels in this document.
-8. If B1c is accepted as a candidate, run T3 full 16-row before changing the
-   Stage 2 baseline.
-9. If B1c is DSE-only or rejected, run A1 attribution next, then C0 if A1 does
-   not expose a multi-percent behavior candidate.
-10. Keep every instrumentation slice and every behavior slice in separate
+1. Update and commit documentation separately from behavior RTL.
+2. Treat B1c next-cycle cursor advancement as rejected for no target-counter
+   movement.
+3. Treat the current B1d fallthrough-remap RTL as DSE-only until H1 explains
+   the CoreMark 10 regression.
+4. Do not continue scalar guard tuning on the remap.
+5. Run H1 remap regression autopsy if the dirty RTL is kept, otherwise revert
+   the behavior and start A1 recovery/refill attribution from the committed
+   baseline.
+6. Rebuild DSim. If license conflict occurs, rebuild XSim and use the same
+   strict plusargs.
+7. Run T1 strict smoke with explicit target-counter expectations.
+8. If T1 fails, fix or revert before running anything longer.
+9. If T1 passes and counters are meaningful, run T2 focused six-row.
+10. Classify the trial using the scoring labels in this document.
+11. Continue to T3 full 16-row only after T2 is endpoint-clean,
+    regression-free, and counter movement matches the hypothesis.
+12. Keep every instrumentation slice and every behavior slice in separate
     commits.
