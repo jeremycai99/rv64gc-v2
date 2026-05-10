@@ -3,8 +3,8 @@
 Date: May 9, 2026
 
 Status: planning document. This is the execution plan for deeper DSE after the
-short-ALU/IQ0 chaining audit. It is not a performance claim and does not
-promote any RTL change.
+short-ALU/IQ0 chaining audit and the post-IFU no-emit attribution pass. It is
+not a performance claim and does not promote any RTL change.
 
 ## Purpose
 
@@ -86,10 +86,12 @@ Direction selection update from this full baseline:
 - Local IQ0/short-ALU work remains quarantined. It targets a real entry-slot
   pressure counter, but the measured clean variant was only about 1 percent and
   neighboring variants regressed branch rows.
-- The next implementation branch is therefore Branch B, true FTQ/IBuffer
-  runahead attribution and then owner-aware buffering. This is the best match
-  to the current cycle-level evidence and is a recognizable architectural
-  direction rather than benchmark tuning.
+- The next implementation branch must stay inside Branch B or Branch A, but
+  Branch B cannot mean "add another FIFO" by default. The newer attribution
+  shows that most data-present no-emit cycles happen with the existing packet
+  buffer empty and owner state live. That points at an owner/control delivery
+  contract, duplicate cursor recovery, or branch recovery contract issue rather
+  than raw packet storage capacity.
 
 B0 depth-profile instrumentation result, May 9, 2026:
 
@@ -115,10 +117,58 @@ The depth profile recalibrates Branch B:
   `alloc2ifu` path stays at zero in all T2 rows.
 - The live opportunity sits after IFU consumption: `ifu2wb` and especially
   `ifu2commit` show sustained depth while packet delivery still bubbles.
-- Therefore B1 should not start by adding a XiangShan-style `pfPtr`. The next
-  structural candidate is owner-aware delivery buffering and FTQ writeback or
-  commit decoupling, with additional counters that explain why post-IFU owners
-  do not produce decode packets.
+- Therefore B1 should not start by adding a XiangShan-style `pfPtr`. Before
+  any behavior change, the next question is why post-IFU live owners do not
+  produce legal decode packets.
+
+B0b post-IFU no-emit attribution result, May 9, 2026:
+
+- Instrumentation commit: `89a4b8b Add post-IFU no-emit attribution counters`.
+- T1 artifact: `benchmark_results/stage2_noemit_attr_t1_20260509`.
+- T2 artifact: `benchmark_results/stage2_noemit_attr_t2_20260509`.
+- Both T1 and T2 passed strict owner, delivery, and branch-recovery checks.
+- Cycles matched the locked baseline exactly, so the counters are
+  performance-neutral evidence.
+
+| Row | Data no-emit | Duplicate | Redirect | IBuffer empty | IBuffer nonempty | IBuffer full | Owner live | Main implication |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Dhrystone 100 | `289` | `212` | `77` | `289` | `0` | `0` | `289` | Small frontend issue; all no-emit is live-owner and empty-buffer. |
+| CoreMark 1 | `9,741` | `4,475` | `3,933` | `7,407` | `2,334` | `1,521` | `9,741` | Mostly empty-buffer live-owner no-emit, with a secondary packet-full component. |
+| CoreMark 10 | `83,016` | `41,286` | `30,052` | `61,010` | `22,006` | `13,654` | `82,982` | The largest row has true owner/control no-emit plus some downstream fullness. |
+| Frontend mixed branch dense | `425` | `0` | `425` | `425` | `0` | `0` | `425` | Pure redirect no-emit with empty packet buffer. |
+| Backend ALU chain 8 | `2` | `0` | `2` | `2` | `0` | `0` | `2` | Not a frontend capacity row, but still validates the redirect accounting path. |
+| Branch hotspot | `30,172` | `23,635` | `6,537` | `30,122` | `50` | `0` | `30,172` | Control/straddle owner no-emit, not packet storage capacity. |
+
+Additional owner shape:
+
+| Row | IFU-to-commit max | IFU-to-commit 2-3 cyc | IFU-to-commit 4-7 cyc | IFU-to-commit 8-15 cyc | Duplicate no-same-owner | Duplicate owner-control | Duplicate owner-straddle |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | `3` | `6,537` | `0` | `0` | `109` | `4` | `109` |
+| CoreMark 1 | `9` | `48,488` | `6,480` | `18` | `3,266` | `1,059` | `3,266` |
+| CoreMark 10 | `9` | `450,207` | `61,878` | `289` | `29,898` | `8,968` | `29,864` |
+| Frontend mixed branch dense | `2` | `373` | `0` | `0` | `0` | `0` | `0` |
+| Backend ALU chain 8 | `3` | `2,010` | `0` | `0` | `0` | `0` | `0` |
+| Branch hotspot | `3` | `64,771` | `0` | `0` | `23,635` | `23,635` | `23,635` |
+
+This result changes the Branch B entry point:
+
+- The existing `fetch_packet_buffer` is already a multi-entry owner-aware
+  packet buffer. Its empty state dominates the no-emit cycles in the important
+  rows, so a second generic delivery FIFO is not justified as the next
+  behavior slice.
+- `xs_data_no_emit_owner_live` nearly equals `xs_data_present_no_emit` on all
+  rows. The bug or missed opportunity is in the owner/control delivery
+  contract while a live post-IFU owner exists, not in FTQ allocation depth.
+- CoreMark 10 has a real packet-full component, but branch hotspot and branch
+  dense do not. Any capacity change must be treated as a secondary repair and
+  must not be used to explain control-dominated rows.
+- Branch hotspot duplicate no-emit is entirely no-same-owner, owner-control,
+  and owner-straddle. Removing duplicate suppression locally would be an
+  endpoint risk. A legal fix must prove each required owner PC reaches decode
+  exactly once before changing the suppressor.
+- The next DSE must split redirect-driven no-emit from duplicate/control
+  owner handoff before behavior changes. Branch A and Branch B are now coupled
+  by the same owner contract, but they still need separate DSE branches.
 
 Important interpretation rule:
 
@@ -269,6 +319,123 @@ Selection rule:
 - If a high entry-slot counter has no cycle-bound path, add attribution first
   rather than implementing RTL.
 
+## Deep DSE Execution Ladder
+
+The DSE loop should be long enough to prevent another marginal scalar-tuning
+cycle. Each branch must pass through these steps before RTL promotion.
+
+### Step 1: Symptom To Root-Cause Split
+
+Start from cycle-level symptoms, not aggregate entry-slot counts:
+
+| Symptom | Candidate root causes | Required split before RTL |
+|---|---|---|
+| `packet_empty` and `fe_zero` | Missing fetch data, legal packet held, redirect recovery, decode not ready, packet buffer full | Split by F2 data valid, no-emit cause, IBuffer state, owner live state, and redirect age. |
+| `xs_data_present_no_emit` | Duplicate guard, predicted-control hold, straddle/remainder hold, packet-ready hold, redirect hold | Split by duplicate vs redirect vs stall, then by owner continuity and post-IFU depth. |
+| `redirect_recovery` | Late branch detection, checkpoint restore latency, frontend redirect replay, BPU history/RAS restore | Split by branch type, ROB age, checkpoint availability, flushed useful work, and fetch/decode refill latency. |
+| `xs_bottleneck_dep_wait_on_alu` | True dependency depth, producer blocked, ready-not-selected, same-cycle wakeup not visible, cluster steering | Split by producer issue state, producer FU class, consumer IQ, and selected-lost reason. |
+| `xs_bottleneck_dep_wait_on_load` | Load-use latency, store-forward wait, cache port conflict, replay, queue pressure | Split by load latency bucket, store-forward status, cache conflict, and replay cause. |
+| `rob_commit_zero` | Branch recovery drain, long-latency load, exception/CSR, scheduler starvation, window pressure | Split by ROB head uop class, ready younger slots, redirect correlation, and LSU/mul/div wait. |
+
+Step 1 exit:
+
+- Every branch has a named counter family that is cycle-bound and row-shared.
+- The hypothesis states why the issue is architectural and not a benchmark PC
+  artifact.
+- The expected upside is at least 3 percent on the intended row group or the
+  branch is kept as instrumentation only.
+
+### Step 2: Opportunity Quantification
+
+Before behavior changes, quantify removable cycles with conservative
+accounting:
+
+- `removable_upper_bound = min(symptom_cycles, target_counter_cycles)`.
+- Discount overlapping counters. For example, `xs_data_no_emit_dup` and
+  `packet_empty_f2_data` overlap and cannot both be counted as additive gain.
+- For entry-slot counters, require a cycle-bound companion counter before
+  predicting cycle gain.
+- For microbench rows, require absolute movement as well as percent movement.
+
+Step 2 exit:
+
+- Each candidate has a table with baseline cycles, target counter, predicted
+  counter delta, expected cycle delta, and rows that may regress.
+- The predicted delta is passed into `tools/run_benchmarks.py` using
+  `--targets-counter` and `--expect-counter-decrease`.
+
+### Step 3: Behavior-Neutral Instrumentation
+
+Add counters and checkers before RTL behavior:
+
+- Prefer `src/rtl/sim/*` profiler modules or existing simulation boundary
+  files.
+- Do not add new `$display`, `$test$plusargs`, or ad hoc debug blocks to
+  synthesizable RTL unless the file already owns simulation-only debug and the
+  change is explicitly a profiling debt slice.
+- Compile tools and rebuild the simulator after instrumentation.
+- Run T1 and T2. Cycles should match baseline exactly for instrumentation-only
+  commits.
+
+Step 3 exit:
+
+- Instrumentation is committed separately.
+- The plan document is updated with a table that either selects a behavior
+  branch or rejects the branch as not actionable.
+
+### Step 4: Smallest Architectural Behavior Slice
+
+Implement the smallest mechanism that matches the chosen root cause:
+
+- One branch, one mechanism, one primary target counter.
+- No scalar threshold chasing unless the threshold is part of a documented
+  general predictor mechanism.
+- No benchmark PC lists, no benchmark-specific op lists, and no loop-buffer
+  revival.
+- Keep behavior changes separated from style cleanup.
+
+Step 4 exit:
+
+- T1 strict smoke passes.
+- Target counters move in the predicted direction.
+- No strict fetch owner, delivery, branch recovery, stale owner, or endpoint
+  failures.
+
+### Step 5: Focused Coverage And Quarantine
+
+Run T2 before any long run:
+
+- Dhrystone 100
+- CoreMark 1
+- CoreMark 10
+- Frontend mixed branch dense
+- Backend ALU chain 8
+- Branch hotspot
+
+Step 5 exit:
+
+- T2 has no unexplained regression.
+- Any regression has a counter-backed explanation and a structural repair path.
+- If the candidate improves only one anchor row and regresses a guard row, mark
+  it DSE-only or rejected instead of continuing.
+
+### Step 6: Full Coverage And Competitor Context
+
+Run T3 only after T2 passes:
+
+- Full `tests/benchmarks/stage1_signoff.json`.
+- Same strict plusargs and bottleneck profile.
+- Compare against locked baseline and calibrated MegaBOOM methodology only
+  after the full row set is clean.
+
+Step 6 exit:
+
+- Full 16-row pass.
+- No unexplained regression above the documented thresholds.
+- Counter movement matches the hypothesis.
+- The doc classifies the candidate and records whether it changes the Stage 2
+  baseline.
+
 ## Branch A: Branch Recovery And Checkpoint Contract
 
 Why this branch matters:
@@ -378,12 +545,13 @@ Exit criterion:
   alloc-to-IFU empty, IFU-to-writeback live, IFU-to-commit live, redirect hold,
   remainder hold, packet-ready hold, and IBuffer full.
 
-### B1: Owner-Aware Delivery Decoupling
+### B1: Owner-Aware No-Emit Contract Repair
 
 The T1/T2 depth profile shows `alloc2ifu` is already zero in the current
 frontend, so simply splitting an allocation pointer is not the highest leverage
-first behavior change. B1 should instead decouple packet delivery from
-post-IFU owner lifetime while preserving the FTQ owner contract.
+first behavior change. The B0b no-emit attribution also shows that the existing
+packet buffer is usually empty on no-emit cycles. B1 should therefore repair
+the legal delivery contract for live post-IFU owners before adding storage.
 
 Behavior-neutral first slice:
 
@@ -393,16 +561,37 @@ Behavior-neutral first slice:
   packet delivery work.
 - Preserve owner metadata until all required PCs for that owner are delivered.
 - Keep strict owner and delivery checkers active.
+- Add a delivery scoreboard that can prove every required owner PC reaches
+  decode exactly once.
+- Add a duplicate-suppression audit counter that distinguishes safe duplicate
+  suppression from a suppressed packet that should have been delivered through
+  a different owner phase.
 
-Behavior slice candidate:
+Behavior slice candidates, in order:
 
-- Introduce a small owner-aware delivery queue in front of decode.
-- Each entry carries FTQ index, owner epoch, start PC, packet valid mask, and
-  predicted-control metadata.
-- Allow IFU/F2 to enqueue a legal packet for an owner even when that owner
-  remains live for writeback, training, or commit.
-- Convert last-emitted-PC duplicate suppression from an active throttle into an
-  assertion against duplicate delivery of the same owner/PC packet.
+1. Control-aware duplicate cursor recovery.
+   - Permit IFU/F2 to advance past a duplicate-held packet only when the
+     delivery scoreboard proves the packet is already delivered for that exact
+     owner and epoch.
+   - Keep predicted-control and straddle owners conservative until their
+     endpoint identity is proven.
+   - Convert `last_emitted_pc` from a global throttle into an owner/epoch
+     assertion for the safe subset.
+
+2. Redirect no-emit recovery handoff.
+   - When data-present no-emit is redirect-driven and the packet buffer is
+     empty, explicitly classify whether the owner should be killed, replayed,
+     or delivered.
+   - The handoff must update FTQ, IFU cursor, IBuffer, and BPU history from one
+     owner rule. No local PC steering in IFU is allowed.
+
+3. Owner-aware delivery capacity only if counters justify it.
+   - Add packet storage only for rows where `xs_data_no_emit_pktbuf_full`,
+     packet age, or downstream drain evidence explains the loss.
+   - Each entry must carry FTQ index, owner epoch, start PC, packet valid mask,
+     and predicted-control metadata.
+   - This is not the first B1 behavior slice because B0b shows empty-buffer
+     no-emit dominates branch hotspot and most CoreMark no-emit cycles.
 
 Primary target counters:
 
@@ -413,19 +602,24 @@ Primary target counters:
 - `packet_empty_f2_data`
 - `packet_empty_noemit_dup`
 - `xs_dup_last_emit`
+- `xs_data_no_emit_pktbuf_empty`
+- `xs_data_no_emit_owner_live`
+- `xs_data_no_emit_redir_pktbuf_empty`
 
 Promotion gate:
 
 - CoreMark 10 and branch hotspot packet-empty buckets drop without increasing
-  `xs_packet_buf_full_cycles`, `xs_backend_stall_pkt_ready`, or redirect
-  recovery.
+  `xs_packet_buf_full_cycles`, `xs_backend_stall_pkt_ready`, redirect
+  recovery, stale owner, or duplicate-delivery violations.
 - T2 must show broad reduction in data-present no-emit on CoreMark 1,
-  CoreMark 10, backend ALU chain 8, and branch hotspot before a full 16-row
-  run.
+  CoreMark 10, frontend mixed branch dense, and branch hotspot before a full
+  16-row run.
+- If `xs_data_no_emit_pktbuf_empty` does not drop, the mechanism did not fix
+  the currently dominant B0b shape and must not be promoted.
 
 ### B2: Full Owner-Aware IBuffer
 
-Implement after B1:
+Implement after B1 only if capacity remains the measured bottleneck:
 
 - At least four packet entries.
 - Each packet carries FTQ index, epoch, tag, start PC, valid mask, predicted
@@ -445,6 +639,8 @@ Promotion gate:
 
 - Broad reduction in duplicate/no-emit and F2-data packet-empty buckets.
 - No rise in packet-full or backend-packet-ready stalls.
+- Explicit evidence that capacity, not live-owner empty-buffer no-emit, is the
+  remaining limiter.
 
 ### B3: Optional Prefetch Pointer
 
@@ -706,41 +902,62 @@ slice or a revert before starting the next long run.
 
 ## Recommended First Direction
 
-Start with Branch B, true FTQ/IBuffer runahead, based on the full profiled
-baseline. Branch A remains the second structural direction, but the current
-cycle-level data says packet/data-present no-emit pressure is the broader first
-lever than pure redirect recovery.
+Start with a two-part decision step, not a behavior patch:
+
+1. Branch B1 owner-aware no-emit contract repair remains the first frontend
+   candidate, but only for duplicate/control owner handoff and redirect
+   no-emit recovery. It is not a generic packet-buffer expansion.
+2. Branch A0 branch recovery opportunity attribution runs before any early
+   redirect or partial recovery retry, because redirect no-emit is broad and
+   previous partial-recovery attempts failed on the checkpoint/free-list
+   contract.
 
 Reason:
 
 - CoreMark 10 has `packet_empty=91,909`,
   `xs_data_present_no_emit=83,016`, and
-  `xs_runahead_dup_alloc_block=89,972`, which are larger cycle-bound
+  `xs_runahead_dup_alloc_block=89,972`, which remain larger cycle-bound
   opportunities than `redirect_recovery=29,575`.
-- The branch hotspot has `packet_empty=39,804` and
-  `xs_data_no_emit_dup=23,635`, all tied to no-same-owner control/straddle
-  context. That argues for owner-aware buffering, not duplicate-suppression
-  tweaks.
-- Backend independent quad also shows `packet_empty_f2_data=2,003` and
-  duplicate no-emit pressure, so this is not isolated to CoreMark.
-- It avoids continuing the local short-ALU/IQ0 path that has already shown
-  marginal gains and nearby regressions.
+- The B0b profile shows `xs_data_no_emit_pktbuf_empty=61,010` on CoreMark 10
+  and `30,122` on branch hotspot. Adding storage is not the direct answer when
+  the buffer is empty during the bubble.
+- Branch hotspot has `xs_data_no_emit_dup=23,635`, and all of it is
+  no-same-owner, owner-control, and owner-straddle. That argues for a
+  scoreboard-backed owner handoff, not duplicate-suppression removal.
+- Frontend mixed branch dense is pure redirect no-emit
+  (`425/425`) with empty buffer, so Branch A cannot be postponed behind a
+  capacity-only Branch B implementation.
+- The local short-ALU/IQ0 path remains quarantined because the accepted gains
+  were marginal and nearby variants regressed branch rows.
 
 Immediate next steps:
 
 1. Keep `benchmark_results/stage2_bottleneck_baseline_20260509` as the locked
    comparison artifact.
-2. Treat `stage2_ftq_depth_profile_t1_20260509` and
-   `stage2_ftq_depth_profile_t2_20260509` as completed B0 instrumentation
-   smoke evidence.
-3. Add one more B0 profile slice only if needed: classify
-   `xs_data_present_no_emit` and `packet_empty_f2_data` by post-IFU owner
-   state, redirect hold, remainder hold, packet-ready hold, and IBuffer full.
-4. Implement B1 as owner-aware delivery decoupling, not scalar duplicate
-   suppression tuning and not `pfPtr`.
-5. Run B1 with an explicit prediction before measurement:
-   `--targets-counter xs_data_present_no_emit` and
-   `--expect-counter-decrease xs_data_present_no_emit:<predicted_delta>`.
-6. Promote B1 only if T2 shows a meaningful broad drop in data-present no-emit
-   and packet-empty buckets without regression, then run the full 16-row signoff
-   before considering B2.
+2. Treat `stage2_ftq_depth_profile_t1_20260509`,
+   `stage2_ftq_depth_profile_t2_20260509`,
+   `stage2_noemit_attr_t1_20260509`, and
+   `stage2_noemit_attr_t2_20260509` as completed behavior-neutral evidence.
+3. Add Branch A0 branch recovery opportunity counters if they are not already
+   sufficient in the current profile: mispredict type, ROB age, checkpoint
+   availability, flushed useful work, redirect-to-fetch latency, and
+   redirect-to-decode latency.
+4. Add a Branch B1 delivery scoreboard before changing duplicate or redirect
+   handoff behavior. The scoreboard is the promotion guard for any attempt to
+   make duplicate suppression assertion-only in a safe subset.
+5. Choose the first behavior trial from the updated A0/B1 report:
+   - If redirect refill and non-head checkpoint opportunity dominate, implement
+     A1 backend-only recovery contract repair.
+   - If duplicate/control live-owner no-emit dominates with provable delivered
+     PCs, implement B1 control-aware duplicate cursor recovery.
+   - If packet-full and packet age become dominant after those fixes, implement
+     B2 capacity.
+6. Run every behavior trial with an explicit prediction before measurement.
+   B1 examples:
+   `--targets-counter xs_data_no_emit_pktbuf_empty` and
+   `--expect-counter-decrease xs_data_no_emit_pktbuf_empty:<predicted_delta>`.
+   A1 examples:
+   `--targets-counter xs_bottleneck_fe_redirect_recovery` and
+   `--expect-counter-decrease xs_bottleneck_fe_redirect_recovery:<predicted_delta>`.
+7. Promote only if T2 shows meaningful broad movement, then run the full
+   16-row signoff before updating the Stage 2 baseline.
