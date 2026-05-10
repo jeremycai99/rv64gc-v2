@@ -1,0 +1,357 @@
+# Stage 3 Linux Boot Plan
+
+Date: May 10, 2026
+
+Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
+phase. This document defines the platform direction before RTL or harness
+changes.
+
+## Goal
+
+Bring rv64gc-v2 from reset into a real RISC-V Linux boot flow while preserving
+the ASIC-style core boundary.
+
+The target is not another benchmark ABI. The target is a normal CPU plus
+platform simulation stack:
+
+- reset into M-mode firmware at `0x80000000`,
+- run OpenSBI as the machine-mode runtime,
+- enter an S-mode Linux kernel with a DTB,
+- print deterministic boot progress through a real platform console,
+- terminate simulation through platform-level events or log milestones, not
+  through a core-specific `tohost` port.
+
+## Ground Rules
+
+- Do not add `tohost`, benchmark-result MMIO, HTIF, CoreMark, Dhrystone, or
+  Linux-specific pass/fail logic into synthesizable core RTL.
+- Keep endpoint handling in the simulation platform, testbench, or runner.
+- Treat Linux boot as a SoC/platform contract, not as a bare-metal test ABI.
+- Use v1 as infrastructure reference only. Do not copy v1 debug shortcuts that
+  made Linux progress look like core architecture.
+- Prefer standard components and device-tree-visible devices: OpenSBI,
+  NS16550A UART, CLINT or ACLINT timer/software interrupt, PLIC when external
+  interrupts are needed, and a normal DRAM region.
+- Every RTL modification made for Stage 3 must preserve the committed
+  Dhrystone and CoreMark performance baseline. Linux boot progress is not a
+  substitute for this regression gate.
+
+## Hard RTL Modification Gate
+
+This is mandatory for every Stage 3 RTL change, including changes that appear
+to be platform-only. A Linux boot fix is not promotable if it regresses the
+committed DS/CM performance baseline.
+
+Baseline to preserve:
+
+Reference artifact: `benchmark_results/dse_stage2_ds_viability_profile_20260510`
+on commit `bddfed8`.
+
+| Row | Required timed cycles | Required metric |
+|---|---:|---:|
+| Dhrystone 100 | `18,161` or lower | `3.133924 DMIPS/MHz` or higher |
+| Dhrystone 300 | `53,469` or lower | `3.193357 DMIPS/MHz` or higher |
+| CoreMark 1 | `154,233` or lower | `6.483697 CM/MHz` or higher |
+| CoreMark 10 | `1,491,334` or lower | `6.705406 CM/MHz` or higher |
+
+Required regression command shape after each RTL slice:
+
+```bash
+python3 tools/run_benchmarks.py \
+  --runner dsim \
+  --run-class dse \
+  --manifest tests/benchmarks/stage1_signoff.json \
+  --bench dhrystone_100_checkedin \
+  --bench dhrystone_300_stage1_anchor \
+  --bench coremark_iter1_generalization \
+  --bench coremark_iter10_checkedin \
+  --mechanism-name stage3_linux_rtl_guard \
+  --mechanism-class default_rtl \
+  --plusarg +FETCH_DELIVERY_CHECK \
+  --plusarg +FETCH_DELIVERY_STRICT \
+  --plusarg +FETCH_OWNER_CHECK \
+  --plusarg +FETCH_OWNER_STRICT \
+  --plusarg +BRANCH_RECOVERY_CHECK \
+  --plusarg +BRANCH_RECOVERY_STRICT \
+  --plusarg +PERF_PROFILE \
+  --plusarg +PERF_COUNTERS \
+  --plusarg +STAT_DUMP \
+  --plusarg +BOTTLENECK_PROFILE \
+  --run-id stage3_rtl_guard_<date>_<slice>
+```
+
+Gate rules:
+
+- Rebuild the simulator from the current RTL before running the guard.
+- All four rows must pass endpoint checks.
+- Timed cycles must be equal to or better than the baseline table above.
+- Owner, delivery, branch-recovery, stale-owner, legacy loop-buffer, and
+  standalone decoded-op replay checks must remain clean.
+- Any performance regression blocks the RTL commit unless the change is
+  explicitly separated as a performance trade-off and approved before
+  promotion.
+- The existing bare-metal `tohost` ABI is allowed for this regression gate
+  because it is a testbench endpoint. It must not be used as the Linux boot
+  endpoint or reintroduced into the core RTL.
+
+## rv64gc-v1 Reference
+
+Useful v1 assets:
+
+| v1 asset | What to reuse | What to change for v2 |
+|---|---|---|
+| `sw/build_mainline_linux.sh` | Linux plus OpenSBI build flow, initramfs creation, DTB compile, `fw_payload.elf` image generation | Move to a v2 `sw/` or `tools/linux_boot/` flow with reproducible output paths and no WSL/PowerShell assumption |
+| `sw/dts/rv64gc_mainline.dts` | Simple single-core Linux device tree with DRAM at `0x80000000`, CLINT, and NS16550A UART at `0x10000000` | Start with `mmu-type = "riscv,sv39"` for v2 unless Sv48 is fully implemented and verified |
+| `sw/initramfs/mainline/init.c` | Tiny initramfs milestone that prints `BOOT OK` | Keep the milestone idea, but terminate through UART/log matching or platform poweroff, not `tohost` |
+| `src/rtl/platform/clint.sv`, `plic.sv`, `uart_16550.sv` | Concrete platform-device implementation references | Port deliberately under `src/rtl/platform/` with clean core memory-bus/MMIO boundaries |
+| `src/rtl/core/mmu/{itlb,dtlb,ptw}.sv` | Translation architecture reference | Re-evaluate before porting; v2 backend/frontend contracts differ and need a clean integration plan |
+| `src/sim/run_mainline_linux*.ps1` | Run knobs, UART log, status interval, max-cycle controls | Replace with Linux-friendly Python runner in v2; keep PowerShell only as optional wrapper |
+
+v1 method to avoid:
+
+- `+TOHOST_ADDR=80040f10` and HTIF-style DTB nodes were useful for old harness
+  completion, but they are not the right Stage 3 termination mechanism.
+- Linux boot should not depend on a `tohost` symbol or a fixed `tohost` address.
+- A Linux-capable core should not know whether the software is OpenSBI, Linux,
+  riscv-tests, Dhrystone, or CoreMark.
+
+v1 status caveat:
+
+- The archived v1 boot logs show useful progress into S-mode Linux, but also
+  long stalls after entering high kernel virtual addresses. Treat v1 as a map
+  of required components, not as a known-good implementation to clone.
+
+## Current v2 Starting Point
+
+| Area | Current v2 state | Stage 3 implication |
+|---|---|---|
+| Core boundary | `rv64gc_core_top.sv` exposes memory request/response, interrupt inputs, and `time_val`; no fixed `tohost` port | Good ASIC-style boundary to preserve |
+| Reset | frontend reset vector is `0x80000000` | Compatible with OpenSBI `FW_TEXT_START=0x80000000` |
+| Privilege CSRs | `csr_file.sv` has M/S privilege state, delegation CSRs, `satp`, traps, `mret`, `sret`, interrupt inputs | Needs privileged validation under OpenSBI before Linux |
+| MMU | `src/rtl/core/mmu/` is empty; caches use physical addresses | Linux cannot boot until instruction/data translation and page faults are implemented |
+| Platform devices | v2 has no CLINT, PLIC, UART, or MMIO interconnect in the active platform | Linux needs at least timer/software interrupt and console |
+| Simulation memory | `sim_memory.sv` is a 2 MB byte-addressed RAM loaded by `$readmemh` | Linux needs much larger DRAM and an image loader that can handle OpenSBI plus kernel payload |
+| Interrupt hookup | `tb_top.sv` currently ties `mtip/msip/meip/stip/ssip/seip` low and passes `time_val=cycle_count` | Linux needs timer interrupt generation and software interrupt plumbing |
+| Endpoint | Current bare-metal rows use testbench-observed stores to configurable `TOHOST_ADDR` | Keep for bare-metal tests only; Stage 3 uses UART/log/syscon milestones |
+
+## Stage 3 Architecture Direction
+
+### Platform Shape
+
+Use a simple single-core SoC shell around the existing core:
+
+| Address | Device | Required for first Linux boot? | Notes |
+|---:|---|---|---|
+| `0x8000_0000` | DRAM | yes | Start with 128 MB to match v1 DTS; allow larger later |
+| `0x0200_0000` | CLINT or ACLINT | yes | Provides `mtime`, `mtimecmp`, and `msip` for OpenSBI/Linux timer flow |
+| `0x1000_0000` | NS16550A UART | yes | Use polling first; interrupts can come later |
+| `0x0c00_0000` | PLIC | optional for first polling-UART boot | Needed when UART/external interrupts are enabled |
+| `0x2000_5000` or similar | syscon poweroff | optional | Useful for clean simulation exit from initramfs |
+
+The first DTB should advertise only devices that actually work. Do not expose a
+PLIC, block device, or LupIO device until the RTL/sim platform supports it.
+
+### Software Shape
+
+Initial software image:
+
+1. Build a minimal Linux kernel with:
+   - `CONFIG_SMP=n`,
+   - `CONFIG_MMU=y`,
+   - `CONFIG_RISCV_ISA_V=n`,
+   - no modules,
+   - initramfs embedded,
+   - early console enabled.
+2. Build OpenSBI generic firmware:
+   - `FW_TEXT_START=0x80000000`,
+   - `FW_PAYLOAD_PATH=<Linux Image>`,
+   - `FW_FDT_PATH=<rv64gc-v2 DTB>`,
+   - `FW_PAYLOAD_OFFSET=0x200000`,
+   - DTB placed at a stable high DRAM address such as `0x86000000`.
+3. Load `fw_payload.elf` or a generated memory image into simulated DRAM.
+
+Initial kernel command line:
+
+`console=ttyS0 earlycon=uart8250,mmio,0x10000000 loglevel=8 ignore_loglevel nokaslr`
+
+Use `nokaslr` during bring-up to keep traces stable.
+
+### Endpoint Shape
+
+Stage 3 completion should be one of:
+
+- UART log contains a chosen milestone, for example `BOOT OK`,
+- kernel panic/oops is detected and the run is marked failed,
+- platform syscon poweroff is written and the harness exits,
+- max-cycle timeout is reached and the run is marked incomplete.
+
+`tohost` remains available only for existing bare-metal score rows. It is not a
+Linux boot mechanism and must not be required by OpenSBI, Linux, the core, or
+the Linux DTB.
+
+## Bring-Up Gates
+
+### L0: Platform Skeleton And Loader
+
+Goal: run a tiny M-mode firmware image from larger DRAM and print over UART.
+
+Tasks:
+
+- Add or port a large simulation DRAM model, parameterized to at least 128 MB.
+- Add an MMIO decode shell outside the core.
+- Add a simple UART model with TX capture to a log file.
+- Add an ELF or binary loader path for OpenSBI-style images.
+- Keep existing bare-metal `tohost` benchmark flow working as a separate ABI.
+
+Pass criteria:
+
+- M-mode UART hello-world prints a known string.
+- Existing DS/CoreMark smoke still passes through the current harness ABI.
+- If any RTL changed, the full hard RTL modification gate above passes.
+- No synthesizable core RTL contains benchmark endpoint logic.
+
+### L1: OpenSBI M-Mode Boot
+
+Goal: boot OpenSBI far enough to print the banner and probe platform devices.
+
+Tasks:
+
+- Add CLINT or ACLINT timer/software interrupt model.
+- Connect `mtip`, `msip`, and `time_val` through the platform shell.
+- Build `fw_payload.elf` with a tiny payload or dummy next stage first.
+- Validate CSR trap/delegation and `mret` behavior with OpenSBI.
+
+Pass criteria:
+
+- UART log reaches OpenSBI banner and platform probe.
+- No illegal instruction, trap-loop, or silent WFI/deadlock before payload handoff.
+- If any RTL changed, the full hard RTL modification gate above passes.
+
+### L2: MMU Bring-Up
+
+Goal: support Sv39 instruction and data translation well enough for S-mode
+Linux entry.
+
+Tasks:
+
+- Implement or port ITLB, DTLB, and PTW under v2 frontend/LSU contracts.
+- Support `satp` mode Bare and Sv39 first.
+- Implement page fault causes and `stval`/`mtval` behavior needed by Linux.
+- Handle `sfence.vma` as a serializing TLB flush.
+- Add translation-aware instruction fetch and load/store exception paths.
+
+Pass criteria:
+
+- Bare-metal Sv39 page-table smoke passes for fetch, load, store, execute
+  permission, user/supervisor permission, and page-fault cases.
+- OpenSBI can enter S-mode payload with virtual memory still disabled or with
+  simple test page tables before full Linux.
+- If any RTL changed, the full hard RTL modification gate above passes.
+
+### L3: Linux Early Boot
+
+Goal: enter Linux and reach early console output.
+
+Tasks:
+
+- Build v2 DTB with only working devices.
+- Build minimal Linux plus initramfs.
+- Use OpenSBI `fw_payload.elf` or equivalent payload image.
+- Add Linux-specific progress probes in the simulation boundary only:
+  UART log scanner, trap-loop detector, WFI/no-retire watchdog, optional PC
+  symbolization from `vmlinux`.
+
+Pass criteria:
+
+- UART shows Linux decompression/early boot messages.
+- The run reaches `start_kernel` progress or first initramfs output.
+- If any RTL changed, the full hard RTL modification gate above passes.
+
+### L4: Initramfs Milestone
+
+Goal: reach userspace `/init` and print `BOOT OK`.
+
+Tasks:
+
+- Keep the initramfs tiny and deterministic.
+- Avoid block devices initially.
+- Add optional syscon poweroff after printing `BOOT OK`.
+
+Pass criteria:
+
+- UART log includes `BOOT OK`.
+- Simulation terminates by syscon or runner log match.
+- No `tohost` dependency.
+- If any RTL changed, the full hard RTL modification gate above passes.
+
+### L5: Robustness And Regression
+
+Goal: make Linux boot repeatable enough to use as a regression target.
+
+Tasks:
+
+- Add a `tools/run_linux_boot.py` runner with manifest, image provenance,
+  timeout, UART log, and status summary.
+- Keep Linux artifacts out of git unless they are tiny source/config files.
+- Archive exact build hashes and command lines in result directories.
+- Add short privileged/MMU/unit tests so Linux is not the first debug point for
+  every bug.
+
+Pass criteria:
+
+- Rebuilt image boots to the same milestone.
+- Runner emits PASS/FAIL/TIMEOUT with log paths.
+- Existing bare-metal benchmark runner remains unchanged except for sharing
+  loader utilities where useful.
+- Every RTL commit in the Stage 3 sequence has an attached DS/CM guard run with
+  no performance regression.
+
+## First Implementation Order
+
+1. Create the v2 Linux software/platform directory structure and copy only the
+   reusable v1 source/config ideas:
+   - DTS template,
+   - initramfs `init.c`,
+   - Linux/OpenSBI build script skeleton.
+2. Build an M-mode UART hello-world image before Linux.
+3. Add the platform shell and UART/DRAM loader around the core.
+4. Add CLINT/ACLINT timer support and run OpenSBI banner.
+5. Implement Sv39 MMU/PTW/TLB and privileged regression tests.
+6. Boot minimal Linux to early console.
+7. Boot to initramfs `BOOT OK`.
+
+## Near-Term Non-Goals
+
+- Do not boot a disk-backed root filesystem.
+- Do not add SMP.
+- Do not enable vector, hypervisor, Zicbom/Zicboz, crypto, Zfh, or Zcb.
+- Do not revive HTIF/tohost as the Linux pass/fail path.
+- Do not optimize Linux performance before the boot contract is correct.
+- Do not expose devices in the DTB before the platform implements them.
+
+## Open Questions To Resolve Before RTL Work
+
+| Question | Default decision |
+|---|---|
+| Sv39 or Sv48 first? | Sv39 first. v1 tried Sv48 in one DTS, but v2 should start with the smallest Linux-supported translation mode. |
+| UART or SBI console first? | UART first for Linux visibility; SBI console is useful during OpenSBI but should still write through platform UART. |
+| CLINT or ACLINT? | CLINT is acceptable for first boot because v1 already used it; ACLINT can replace it later if we want newer platform naming. |
+| ELF loader or hex only? | Add ELF/binary loading in the runner or memory model. Keep byte-hex compatibility for existing tests. |
+| How to stop the sim? | UART milestone or syscon poweroff. Never a core `tohost` port. |
+| What is the first success milestone? | OpenSBI banner, then Linux early console, then initramfs `BOOT OK`. |
+
+## Current Verdict
+
+Stage 3 is feasible, but not by just running v1's image on v2. The immediate
+blockers are platform and privileged-memory support, not benchmark harness
+policy:
+
+- v2 has the right clean core boundary for ASIC-style Linux bring-up.
+- v2 does not yet have the MMU/PTW/TLB path Linux requires.
+- v2 does not yet have Linux-visible timer, interrupt, UART, or large-memory
+  platform support.
+- v1 provides useful references for those pieces, but its `tohost`/HTIF-style
+  completion should not be carried forward.
+
+The next Stage 3 implementation should start with the platform skeleton and
+M-mode UART/OpenSBI milestones before attempting a full Linux kernel boot.

@@ -23,6 +23,9 @@ under `doc/archive/`.
 - `stage2_bottleneck_dse_plan_2026-05-09.md` - active long-form DSE plan for
   selecting the next structural bottleneck target from full
   `+BOTTLENECK_PROFILE` evidence.
+- `stage3_linux_boot_plan_2026-05-10.md` - Stage 3 Linux boot plan, v1
+  infrastructure references, ASIC-style endpoint policy, and mandatory DS/CM
+  performance regression gate for any RTL change.
 - `rv64gc_v2_uarch.md` - current rv64gc-v2 microarchitecture specification.
 - `partial_replay_spec.md` - selective replay design note; keep here while LSU
   replay policy remains under evaluation.
