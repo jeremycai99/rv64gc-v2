@@ -121,6 +121,47 @@ BOTTLENECK_COUNTERS = [
     ("xs_bottleneck_load_enq_wakeup_candidate", "dependency/wakeup", "enqueue lanes whose load-produced source was woken this cycle"),
     ("xs_bottleneck_load_enq_wakeup_issued_bypass", "issue queue", "load-woken enqueue lanes issued by enqueue bypass"),
     ("xs_bottleneck_load_enq_wakeup_hidden", "issue queue", "load-woken enqueue lanes ready but hidden from same-cycle issue"),
+    ("xs_bottleneck_load_bru_wakeup_candidate", "dependency/wakeup", "resident branch uops made eligible by a load wakeup"),
+    ("xs_bottleneck_load_bru_wakeup_selected", "dependency/wakeup", "load-woken resident branch uops selected in the same cycle"),
+    ("xs_bottleneck_load_bru_wakeup_missed_port_busy", "issue queue", "load-woken branch uops missed because issue capacity was occupied"),
+    ("xs_bottleneck_load_bru_wakeup_missed_older_ready", "issue queue", "load-woken branch uops missed behind other ready work"),
+    ("xs_bottleneck_load_bru_wakeup_missed_fu_blocked", "issue queue", "load-woken branch uops missed by FU or port restriction"),
+    ("xs_bottleneck_load_bru_wakeup_missed_suppress_flush", "issue queue", "load-woken branch uops missed during flush"),
+    ("xs_bottleneck_load_bru_wakeup_missed_other", "issue queue", "load-woken branch uops missed for uncategorized reasons"),
+    ("xs_bottleneck_load_bru_enq_wakeup_candidate", "dependency/wakeup", "branch enqueue lanes whose load-produced source was woken this cycle"),
+    ("xs_bottleneck_load_bru_enq_wakeup_issued_bypass", "issue queue", "load-woken branch enqueue lanes issued by enqueue bypass"),
+    ("xs_bottleneck_load_bru_enq_wakeup_hidden", "issue queue", "load-woken branch enqueue lanes ready but hidden from same-cycle issue"),
+    ("xs_bottleneck_load_std_wakeup_candidate", "dependency/wakeup", "resident store-data uops made eligible by a load wakeup"),
+    ("xs_bottleneck_load_std_wakeup_selected", "dependency/wakeup", "load-woken resident store-data uops selected in the same cycle"),
+    ("xs_bottleneck_load_std_wakeup_missed_port_busy", "issue queue", "load-woken store-data uops missed because issue capacity was occupied"),
+    ("xs_bottleneck_load_std_wakeup_missed_older_ready", "issue queue", "load-woken store-data uops missed behind other ready work"),
+    ("xs_bottleneck_load_std_wakeup_missed_suppress_flush", "issue queue", "load-woken store-data uops missed during flush"),
+    ("xs_bottleneck_load_std_wakeup_missed_other", "issue queue", "load-woken store-data uops missed for uncategorized reasons"),
+    ("xs_bottleneck_load_std_enq_wakeup_candidate", "dependency/wakeup", "store-data enqueue lanes whose load-produced source was woken this cycle"),
+    ("xs_bottleneck_load_std_enq_wakeup_issued_bypass", "issue queue", "load-woken store-data enqueue lanes issued by enqueue bypass"),
+    ("xs_bottleneck_load_std_enq_wakeup_hidden", "issue queue", "load-woken store-data enqueue lanes ready but hidden from same-cycle issue"),
+    ("xs_bottleneck_load_to_bru_issue_delay_0", "critical path", "load-to-branch issue edges where the branch issued on the load writeback cycle"),
+    ("xs_bottleneck_load_to_bru_issue_delay_1", "critical path", "load-to-branch issue edges one cycle after load writeback"),
+    ("xs_bottleneck_load_to_bru_issue_delay_2", "critical path", "load-to-branch issue edges two cycles after load writeback"),
+    ("xs_bottleneck_load_to_bru_issue_delay_3", "critical path", "load-to-branch issue edges three cycles after load writeback"),
+    ("xs_bottleneck_load_to_bru_issue_delay_4", "critical path", "load-to-branch issue edges four cycles after load writeback"),
+    ("xs_bottleneck_load_to_bru_issue_delay_5_7", "critical path", "load-to-branch issue edges five to seven cycles after load writeback"),
+    ("xs_bottleneck_load_to_bru_issue_delay_8_15", "critical path", "load-to-branch issue edges eight to fifteen cycles after load writeback"),
+    ("xs_bottleneck_load_to_bru_issue_delay_16plus", "critical path", "load-to-branch issue edges at least sixteen cycles after load writeback"),
+    ("xs_bottleneck_load_to_bru_issue_delay_unknown", "critical path invariant", "load-to-branch issue edges without a matching tracked load writeback"),
+    ("xs_bottleneck_load_to_std_issue_delay_0", "critical path", "load-to-store-data issue edges where STD issued on the load writeback cycle"),
+    ("xs_bottleneck_load_to_std_issue_delay_1", "critical path", "load-to-store-data issue edges one cycle after load writeback"),
+    ("xs_bottleneck_load_to_std_issue_delay_2", "critical path", "load-to-store-data issue edges two cycles after load writeback"),
+    ("xs_bottleneck_load_to_std_issue_delay_3", "critical path", "load-to-store-data issue edges three cycles after load writeback"),
+    ("xs_bottleneck_load_to_std_issue_delay_4", "critical path", "load-to-store-data issue edges four cycles after load writeback"),
+    ("xs_bottleneck_load_to_std_issue_delay_5_7", "critical path", "load-to-store-data issue edges five to seven cycles after load writeback"),
+    ("xs_bottleneck_load_to_std_issue_delay_8_15", "critical path", "load-to-store-data issue edges eight to fifteen cycles after load writeback"),
+    ("xs_bottleneck_load_to_std_issue_delay_16plus", "critical path", "load-to-store-data issue edges at least sixteen cycles after load writeback"),
+    ("xs_bottleneck_load_to_std_issue_delay_unknown", "critical path invariant", "load-to-store-data issue edges without a matching tracked load writeback"),
+    ("xs_bottleneck_rob_head_load_bru_block_cycles", "critical path", "ROB head cycles where a branch waits on a load-produced source"),
+    ("xs_bottleneck_rob_head_load_std_block_cycles", "critical path", "ROB head cycles where a store-data uop waits on a load-produced source"),
+    ("xs_bottleneck_lsu_lost_load_to_head_bru_cycles", "critical path", "ROB head branch/load chain cycles whose source load previously lost an issue slot"),
+    ("xs_bottleneck_lsu_lost_load_to_head_std_cycles", "critical path", "ROB head store-data/load chain cycles whose source load previously lost an issue slot"),
     ("xs_bottleneck_iq0_not_ready_entry_sum", "issue queue", "IQ0 valid-entry cycles blocked on operands"),
     ("xs_bottleneck_iq1_not_ready_entry_sum", "issue queue", "IQ1 valid-entry cycles blocked on operands"),
     ("xs_bottleneck_iq2_not_ready_entry_sum", "issue queue", "IQ2 valid-entry cycles blocked on operands"),
@@ -418,6 +459,19 @@ BOTTLENECK_COUNTERS = [
     ("xs_ic_stall_ftq_full",         "icache",                  "icache req gated by FTQ full"),
 ]
 
+NON_ACTIONABLE_DOMINANT = {
+    "xs_packet_buf_empty_cycles",
+    "xs_ftq_alloc2ifu_occ_sum",
+    "xs_ftq_alloc2ifu_occ_max",
+    "xs_ftq_alloc2ifu_occ_hist_2to3",
+    "xs_ftq_ifu2wb_occ_sum",
+    "xs_ftq_ifu2wb_occ_max",
+    "xs_ftq_ifu2wb_occ_hist_2to3",
+    "xs_ftq_ifu2commit_occ_sum",
+    "xs_ftq_ifu2commit_occ_max",
+    "xs_ftq_ifu2commit_occ_hist_2to3",
+}
+
 
 def load_results(path: Path) -> list[dict]:
     """Load a result.json (single-bench) or results.json (multi-bench)."""
@@ -438,6 +492,128 @@ def total_cycles(row: dict) -> int | None:
     if (mc := pc.get("xs_ic_req_valid_cycles")) is not None:
         return int(mc)
     return None
+
+
+def counter(pc: dict, name: str) -> int:
+    return int(pc.get(name, 0) or 0)
+
+
+def sum_counters(pc: dict, names: list[str]) -> int:
+    return sum(counter(pc, name) for name in names)
+
+
+def pct(value: int, total: int) -> str:
+    if total <= 0:
+        return "0.0%"
+    return f"{100.0 * value / total:.1f}%"
+
+
+def render_load_consumer_view(row: dict, total: int) -> list[str]:
+    pc = row.get("perf_counters") or {}
+
+    bru_present = any(name in pc for name in (
+        "xs_bottleneck_load_bru_wakeup_candidate",
+        "xs_bottleneck_load_bru_enq_wakeup_candidate",
+        "xs_bottleneck_load_to_bru_issue_delay_0",
+    ))
+    std_present = any(name in pc for name in (
+        "xs_bottleneck_load_std_wakeup_candidate",
+        "xs_bottleneck_load_std_enq_wakeup_candidate",
+        "xs_bottleneck_load_to_std_issue_delay_0",
+    ))
+    if not bru_present and not std_present:
+        return []
+
+    bru_missed = sum_counters(pc, [
+        "xs_bottleneck_load_bru_wakeup_missed_port_busy",
+        "xs_bottleneck_load_bru_wakeup_missed_older_ready",
+        "xs_bottleneck_load_bru_wakeup_missed_fu_blocked",
+        "xs_bottleneck_load_bru_wakeup_missed_suppress_flush",
+        "xs_bottleneck_load_bru_wakeup_missed_other",
+    ])
+    std_missed = sum_counters(pc, [
+        "xs_bottleneck_load_std_wakeup_missed_port_busy",
+        "xs_bottleneck_load_std_wakeup_missed_older_ready",
+        "xs_bottleneck_load_std_wakeup_missed_suppress_flush",
+        "xs_bottleneck_load_std_wakeup_missed_other",
+    ])
+    bru_delay = sum_counters(pc, [
+        "xs_bottleneck_load_to_bru_issue_delay_0",
+        "xs_bottleneck_load_to_bru_issue_delay_1",
+        "xs_bottleneck_load_to_bru_issue_delay_2",
+        "xs_bottleneck_load_to_bru_issue_delay_3",
+        "xs_bottleneck_load_to_bru_issue_delay_4",
+        "xs_bottleneck_load_to_bru_issue_delay_5_7",
+        "xs_bottleneck_load_to_bru_issue_delay_8_15",
+        "xs_bottleneck_load_to_bru_issue_delay_16plus",
+        "xs_bottleneck_load_to_bru_issue_delay_unknown",
+    ])
+    std_delay = sum_counters(pc, [
+        "xs_bottleneck_load_to_std_issue_delay_0",
+        "xs_bottleneck_load_to_std_issue_delay_1",
+        "xs_bottleneck_load_to_std_issue_delay_2",
+        "xs_bottleneck_load_to_std_issue_delay_3",
+        "xs_bottleneck_load_to_std_issue_delay_4",
+        "xs_bottleneck_load_to_std_issue_delay_5_7",
+        "xs_bottleneck_load_to_std_issue_delay_8_15",
+        "xs_bottleneck_load_to_std_issue_delay_16plus",
+        "xs_bottleneck_load_to_std_issue_delay_unknown",
+    ])
+    bru_delay_fast = sum_counters(pc, [
+        "xs_bottleneck_load_to_bru_issue_delay_0",
+        "xs_bottleneck_load_to_bru_issue_delay_1",
+    ])
+    std_delay_fast = sum_counters(pc, [
+        "xs_bottleneck_load_to_std_issue_delay_0",
+        "xs_bottleneck_load_to_std_issue_delay_1",
+    ])
+    rob_head_load_consumer = sum_counters(pc, [
+        "xs_bottleneck_rob_head_load_bru_block_cycles",
+        "xs_bottleneck_rob_head_load_std_block_cycles",
+    ])
+    lsu_lost_to_head = sum_counters(pc, [
+        "xs_bottleneck_lsu_lost_load_to_head_bru_cycles",
+        "xs_bottleneck_lsu_lost_load_to_head_std_cycles",
+    ])
+
+    out = []
+    out.append("**DS critical load-consumer viability view:**")
+    out.append("")
+    out.append("| Path | Resident wakeups | Selected | Missed | Enqueue candidates | Enqueue hidden | Load-WB to issue edges | 0-1 cycle edges | ROB-head block cycles |")
+    out.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    out.append(
+        "| Load -> BRU | "
+        f"{counter(pc, 'xs_bottleneck_load_bru_wakeup_candidate'):,} | "
+        f"{counter(pc, 'xs_bottleneck_load_bru_wakeup_selected'):,} | "
+        f"{bru_missed:,} | "
+        f"{counter(pc, 'xs_bottleneck_load_bru_enq_wakeup_candidate'):,} | "
+        f"{counter(pc, 'xs_bottleneck_load_bru_enq_wakeup_hidden'):,} | "
+        f"{bru_delay:,} | "
+        f"{bru_delay_fast:,} | "
+        f"{counter(pc, 'xs_bottleneck_rob_head_load_bru_block_cycles'):,} |"
+    )
+    out.append(
+        "| Load -> STD | "
+        f"{counter(pc, 'xs_bottleneck_load_std_wakeup_candidate'):,} | "
+        f"{counter(pc, 'xs_bottleneck_load_std_wakeup_selected'):,} | "
+        f"{std_missed:,} | "
+        f"{counter(pc, 'xs_bottleneck_load_std_enq_wakeup_candidate'):,} | "
+        f"{counter(pc, 'xs_bottleneck_load_std_enq_wakeup_hidden'):,} | "
+        f"{std_delay:,} | "
+        f"{std_delay_fast:,} | "
+        f"{counter(pc, 'xs_bottleneck_rob_head_load_std_block_cycles'):,} |"
+    )
+    out.append("")
+    out.append(
+        "Read this as a viability gate, not as additive cycle accounting. "
+        f"Combined load-produced BRU/STD ROB-head block cycles are "
+        f"`{rob_head_load_consumer:,}` ({pct(rob_head_load_consumer, total)} of run), "
+        f"and the subset whose producer load previously lost an LSU issue slot is "
+        f"`{lsu_lost_to_head:,}`. If these stay near zero, a local load-to-BRU/STD "
+        "select repair is unlikely to have a multi-percent DS payoff."
+    )
+    out.append("")
+    return out
 
 
 def render_one(row: dict, top_n: int) -> str:
@@ -487,18 +663,20 @@ def render_one(row: dict, top_n: int) -> str:
                    f"decode bubble row above, which equals `packet_empty` to within a cycle.")
         out.append("")
 
+    out.extend(render_load_consumer_view(row, total))
+
     out.append("**Per-counter ranking (some entries overlap; bypass-corrected view above is authoritative):**")
     out.append("")
     out.append("| Rank | Counter | Count | Count / timed cycle | Attribution | Meaning |")
     out.append("|---:|---|---:|---:|---|---|")
     for i, (counter, attribution, meaning, val, pct) in enumerate(rows[:top_n], 1):
-        flag = " ⚠ artifact" if counter == "xs_packet_buf_empty_cycles" else ""
+        flag = " ⚠ indicator" if counter in NON_ACTIONABLE_DOMINANT else ""
         out.append(f"| {i} | `{counter}`{flag} | {val:,} | {pct:.1f}% | {attribution} | {meaning} |")
     out.append("")
 
     # Architectural recommendation. Skip xs_packet_buf_empty_cycles (artifact)
-    # when picking the dominant bottleneck.
-    actionable = [r for r in rows if r[0] != "xs_packet_buf_empty_cycles"]
+    # and occupancy indicators when picking the dominant bottleneck.
+    actionable = [r for r in rows if r[0] not in NON_ACTIONABLE_DOMINANT]
     if actionable:
         top = actionable[0]
         out.append(f"**Dominant actionable bottleneck:** `{top[0]}` "

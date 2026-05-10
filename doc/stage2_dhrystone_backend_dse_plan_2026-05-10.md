@@ -2,16 +2,19 @@
 
 Date: May 10, 2026
 
-Status: instrumentation baseline implemented and first LSU speculation DSE
-audited. This document is the backend Dhrystone/DMIPS pivot plan. It does not
-promote a behavior RTL optimization yet.
+Status: instrumentation baseline implemented, first LSU speculation DSE
+audited, and the critical load-consumer viability counters added. This document
+is the backend Dhrystone/DMIPS pivot plan. It does not promote a behavior RTL
+optimization yet.
 
 ## Current Run State
 
 - No DSim or benchmark run is active.
 - The unaccepted frontend fallthrough/remap DSE RTL was reverted before this
-  pivot. The working tree was clean at `f9d4719` before the counter slice.
-- XSim and DSim were rebuilt from the current tree after the counter changes.
+  pivot. The working tree was clean at `1954fda` before the current
+  measurement-only counter slice.
+- DSim was rebuilt from the current tree after the critical load-consumer
+  counter changes. XSim was not needed for this measurement-only update.
 - Strict T1 smoke passed with the new machine-readable backend counters:
   `benchmark_results/stage2_ds_backend_attr_t1b_20260510_005527`.
 - Same-day four-row profile used for DS/CM ranking:
@@ -28,7 +31,9 @@ promote a behavior RTL optimization yet.
     `stage2_ds_lsu_memdep_t2_cm10_20260510_103007`,
   - p1 same-cycle forward probe:
     `stage2_ds_lsu_memdep_p1fwd_t2_20260510_102019`.
-- A later four-row rerun with the expanded load-issue display was stopped
+- Completed critical load-consumer viability profile:
+  `benchmark_results/dse_stage2_ds_viability_profile_20260510`.
+- A previous four-row rerun with the expanded load-issue display was stopped
   because the profiling overhead made it too slow and the run had not reached a
   useful complete artifact. That partial output is not used.
 
@@ -72,6 +77,10 @@ Implemented in the simulation harness only:
 - Replay-safety counters for speculative unresolved-store loads, currently
   expected to remain zero in the committed baseline.
 - Machine-readable load issue candidate/fire/lost-slot/suppress counters.
+- Load-to-BRU and load-to-STD critical-consumer counters:
+  resident load-wakeup selected/missed, enqueue load-wakeup hidden, load-WB to
+  consumer-issue delay buckets, ROB-head load-consumer block cycles, and the
+  subset whose producer load previously lost an LSU issue slot.
 
 Instrumentation validation:
 
@@ -79,13 +88,15 @@ Instrumentation validation:
 |---|---|---|
 | `stage2_ds_backend_attr_t1b_20260510_005527` | DS100, CM1 | PASS, cycle-identical to baseline |
 | `stage2_ds_lsu_reason_counters_t1_20260510_104034` | DS100, CM1 | PASS, cycle-identical to baseline, exact SQ address/data wait reasons populated |
+| `dse_stage2_ds_viability_profile_20260510` | DS100, DS300, CM1, CM10 | PASS, metrics unchanged versus fixed-binary baseline, critical load-consumer counters populated |
 | `build_xsim.sh` | full RTL/TB compile | PASS |
 | `build_dsim.sh` | full RTL/TB compile | PASS |
 
-The counter slice changes `store_queue.sv` and `lsu.sv` to expose reason
-signals, `tb_top.sv` to count them, and `tools/bottleneck_analysis.py` to
-classify them. The committed LSU gating remains behavior-equivalent to the
-baseline.
+The committed counter slices changed `store_queue.sv` and `lsu.sv` to expose
+reason signals, `tb_top.sv` to count them, and `tools/bottleneck_analysis.py`
+to classify them. The current slice changes only `tb_top.sv` and
+`tools/bottleneck_analysis.py`. The committed LSU gating and core behavior
+remain baseline-equivalent.
 
 ## Ranked Bottleneck Report
 
@@ -113,14 +124,33 @@ issue no-fire bound direct cycle payoff.
 DS is dominated by load-produced branch and store-data consumers. That points
 to scalar loop control and memory-dependency timing, not a frontend-only issue.
 
-### Load-Wakeup Selection Is Not The Main DS Limiter
+### Critical Load-Consumer Select Is Not The Main DS Limiter
 
-| Row | Resident load-wakeup candidates | Selected | Missed | Miss cause |
-|---|---:|---:|---:|---|
-| DS100 | 900 | 801 | 99 | all port busy |
-| DS300 | 1,808 | 1,808 | 0 | none |
-| CM1 | 2,734 | 2,712 | 22 | all port busy |
-| CM10 | 26,952 | 26,699 | 253 | all port busy |
+The May 10 viability profile breaks the old load-wakeup bucket into the
+load-to-branch and load-to-store-data paths that matter most for Dhrystone.
+
+| Row | Path | Resident wakeups | Selected | Missed | Enqueue candidates | Enqueue hidden | Load-WB to issue edges | 0 to 1 cycle edges | ROB-head block cycles |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| DS100 | load -> BRU | 201 | 201 | 0 | 5,533 | 2 | 10,887 | 10,574 | 0 |
+| DS100 | load -> STD | 103 | 103 | 0 | 303 | 1 | 4,717 | 4,164 | 0 |
+| DS300 | load -> BRU | 604 | 604 | 0 | 15,829 | 3 | 33,674 | 31,272 | 0 |
+| DS300 | load -> STD | 305 | 305 | 0 | 901 | 2 | 13,861 | 10,859 | 0 |
+| CM1 | load -> BRU | 224 | 224 | 0 | 12,435 | 509 | 34,982 | 29,797 | 0 |
+| CM1 | load -> STD | 20 | 11 | 9 | 36 | 8 | 815 | 672 | 0 |
+| CM10 | load -> BRU | 2,208 | 2,204 | 4 | 122,717 | 4,838 | 346,860 | 294,780 | 0 |
+| CM10 | load -> STD | 212 | 20 | 192 | 281 | 24 | 2,147 | 1,463 | 0 |
+
+Interpretation:
+
+- DS resident load-woken BRU and STD consumers are selected immediately when
+  they are present.
+- DS enqueue-hidden opportunities are single digits, far below the 545-cycle
+  DS100 threshold for a 3 percent gain.
+- DS ROB-head load-produced BRU/STD block cycles are zero, so this path does
+  not explain the score gap at commit.
+- CoreMark has more hidden load-to-BRU enqueue opportunities, but CoreMark is
+  still dominated by ALU dependency pressure. A DS-focused BRU/STD select
+  patch would carry CoreMark risk without a measured DS cycle bound.
 
 The earlier broad `+IQ_READY_ENQ_BYPASS` probe confirmed that hidden enqueue
 work exists, but it is not enough to unblock DS materially:
@@ -131,7 +161,8 @@ work exists, but it is not enough to unblock DS materially:
 | `+IQ_READY_ENQ_BYPASS` | 18,563 | -14 | 162,433 | -580 |
 
 This is useful architectural evidence, but not a promoted performance
-mechanism. The resident load-wakeup path is already mostly selecting legal work.
+mechanism. The critical load-consumer path is already mostly selecting legal
+work on DS.
 
 ### Load-Store Dependency Timing Is The Stronger DS Lead
 
@@ -238,10 +269,10 @@ Conclusion:
 - Removing unresolved-store suppression does not move DS materially once replay
   cost and downstream consumers are included.
 - M1 unresolved-store speculation is not the next promoted direction.
-- The next DS signoff attempt should target load-produced critical consumers,
-  especially branch and store-data consumers, because DS load wait remains
-  dominated by those classes and the load issue slot reduction did not shorten
-  the benchmark.
+- The later critical-consumer viability pass rules out a local BRU/STD select
+  repair as the next promoted behavior mechanism. The next DS attempt, if any,
+  should first measure exact LSU blocker identity and same-cycle
+  non-alias/full-forward legality.
 
 Secondary issues to keep separate:
 
@@ -314,12 +345,49 @@ Cycle target for the first promoted candidate:
 
 | Priority | Direction | Why it is in scope | Why it is not first |
 |---:|---|---|---|
-| 1 | Load-use critical-consumer select for BRU and STD | DS load wait is dominated by branch and store-data consumers, and M1 showed load-issue suppression alone is not on the critical path. | First after M1 rejection. |
+| 1 | Exact LSU same-cycle blocker attribution | Strong lost-load evidence remains, but the naive speculation probe failed. The remaining question is whether there are exact, legal same-cycle non-alias or full-forward cases. | Measurement first only; behavior remains blocked until exact per-load blocker counters expose a direct cycle bucket. |
 | 2 | LSU memory-dependence and store-forward timing | Strong lost-load evidence remains, and reason counters are now precise. | First speculative approach was rejected; revisit only with a stronger predictor and CM10 guard evidence. |
 | 3 | Scheduler ready-at-enqueue visibility | Large across DS and CM. | Prior broad bypass DSE was marginal; needs a narrower causality contract. |
 | 4 | ALU-to-branch short-chain scheduling | Branch consumers waiting on load and ALU are visible. | Current CoreMark risk is high because ALU dependency dominates CM. |
 | 5 | ROB head/commit drain repair | Commit-zero exists on DS and larger on CM. | Likely downstream symptom until load/store and ALU producers improve. |
 | 6 | Frontend owner/fallthrough continuation | Still relevant for CoreMark and hotspot rows. | DS frontend empty is too small and recent frontend DSE regressed CM10. |
+
+Load-use critical-consumer select for BRU and STD is removed from the promoted
+next-direction slot. It can be revisited only if a later profile shows
+nonzero ROB-head load-consumer block cycles or a material DS enqueue-hidden
+bucket.
+
+## Go/No-Go Decision
+
+Current verdict: **no-go for a behavior RTL promotion from the current DS
+backend evidence.**
+
+Specific calls:
+
+| Candidate | Verdict | Reason |
+|---|---|---|
+| Local load-to-BRU/STD select repair | No-go | DS selected all resident load-woken BRU/STD consumers, enqueue-hidden counts are `2/1` on DS100 and `3/2` on DS300, and ROB-head load-consumer block cycles are zero. |
+| Broad ready-at-enqueue bypass | No-go | Prior probe moved DS100 by only 14 mcycles and is not a multi-percent mechanism. |
+| Naive unresolved-store speculation | No-go | Replay cost and CM10 regression reject it as a promoted path. |
+| 4.0 DMIPS/MHz claim from current backend plan | No-go | The fixed-binary gap is `3,932` DS100 timed cycles and `10,783` DS300 timed cycles. No current exact cycle bucket covers that gap safely. |
+| Exact same-cycle STA/non-alias/full-forward attribution | Conditional go for measurement only | The plan still has one open question: the current same-cycle STA counter is a proxy, not an exact blocker identity. Add exact per-load blocker attribution before any behavior RTL. |
+
+Plan loopholes closed by the current slice:
+
+- Entry-slot counters are pressure indicators, not additive cycle savings.
+- FTQ occupancy sums are runahead indicators, not direct DS bottleneck cycles.
+- Load-to-BRU/STD consumer counts looked large, but the new selected/missed,
+  delay, and ROB-head counters show little direct DS payoff.
+
+Remaining loophole:
+
+- The LSU same-cycle STA bucket still does not identify the exact blocking SQ
+  entry or prove non-alias/full-forward legality for the candidate load. The
+  only justified next DS work is an exact blocker-attribution pass. If that
+  pass does not expose at least `545` DS100 timed cycles and `1,069` DS300
+  timed cycles of legal avoidable wait with CM-neutral shape, the DS backend
+  direction should stop and the optimization loop should pivot to a broader
+  architectural mechanism.
 
 ## Non-Regression Gate
 
@@ -397,17 +465,18 @@ not accepted until this run is clean and committed.
    validation.
 2. Treat unresolved-store speculation and p1 same-cycle forward as rejected DSE
    until a materially different mechanism is proposed.
-3. Start the next behavior branch from load-produced critical consumers:
-   load-to-branch and load-to-store-data scheduling/selection.
-4. Add any missing counters before the behavior change, specifically selected
-   load wakeup to BRU/STD, missed same-cycle BRU/STD wakeup, and ROB-head wait
-   after a load-produced BRU/STD chain.
-5. Run T1 and reject immediately if CM1 regresses or memory-order/replay
-   counters move.
-6. Run T2 and require DS100 at least 3 percent faster, DS300 same direction at
-   least 2 percent faster, and CM1/CM10 non-regression.
-7. Run T3 and full signoff only after T2 passes with the predicted counter
-   movement.
+3. Do not start a behavior branch from load-produced critical-consumer select;
+   the new counters do not support it.
+4. Add one more measurement-only LSU pass if we continue this DS path:
+   exact blocking SQ entry identity, same-cycle STA non-alias/full-forward,
+   data-missing/partial-forward, and whether the load could have issued safely
+   this cycle.
+5. Require that exact LSU pass to expose at least 545 DS100 timed cycles and
+   1,069 DS300 timed cycles of legal avoidable wait before any behavior RTL.
+6. If the exact LSU pass fails, stop the DS backend path and pivot to a broader
+   architectural mechanism instead of chasing fractional DS movement.
+7. Run T3 and full signoff only after a T2 behavior candidate passes with
+   predicted counter movement.
 
 ## Signoff DS Design Breakdown
 
@@ -538,7 +607,10 @@ Gate:
 
 ### M3: Store-Data Consumer And Load-Use Follow-Up
 
-Goal: reduce the next DS bottleneck after load issue is less constrained.
+Status: no-go as the next promoted direction on the May 10 viability profile.
+
+Goal if revisited later: reduce the next DS bottleneck after load issue is less
+constrained.
 
 Likely mechanisms:
 
@@ -554,6 +626,8 @@ Entry criteria:
 - M1/M2 counters show load issue suppression is no longer the dominant DS
   blocker.
 - The top remaining DS counters are load-produced BRU or STD consumer waits.
+- New critical-consumer counters show nonzero ROB-head load-consumer block
+  cycles or material DS enqueue-hidden opportunities.
 
 Expected movement:
 
@@ -622,9 +696,10 @@ Stop conditions:
 
 ## Current Verdict
 
-The DS bottleneck is not the current frontend fallthrough path and not generic
-resident load-wakeup selection. The current best evidence points to LSU
-memory-dependence timing:
+The DS bottleneck is not the current frontend fallthrough path, not generic
+resident load-wakeup selection, and not local load-to-BRU/STD critical-consumer
+select. The current best evidence still points to LSU memory-dependence timing,
+but only as a conditional measurement direction:
 
 - DS load wait is dominated by branch and store-data consumers.
 - Resident load-woken entries are mostly selected when legal.
@@ -632,7 +707,12 @@ memory-dependence timing:
   store-address blocking.
 - A naive load-past-STA suppress-mask probe has no effect, so the real fix must
   be in the LSU memory-dependence, store-forward, and replay contract.
+- The new load-to-BRU/STD counters remove the obvious shortcut: DS selected all
+  resident critical consumers, enqueue-hidden opportunities are tiny, and
+  ROB-head load-consumer block cycles are zero.
 
-No behavior RTL is accepted yet. The next promoted optimization must be a
-general memory-dependence mechanism with DS100/DS300 material improvement and
-CM1/CM10 non-regression.
+No behavior RTL is accepted yet. The next DS backend step is go only for exact
+LSU blocker attribution. It becomes no-go if exact counters do not expose a
+multi-percent legal wait bucket. The next promoted optimization, if any, must
+be a general memory-dependence mechanism with DS100/DS300 material improvement
+and CM1/CM10 non-regression.

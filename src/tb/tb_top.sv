@@ -573,6 +573,7 @@ module tb_top
     localparam int BTL_PREG_STATE_ISSUED_WAIT_WB = 2;
     localparam int BTL_PREG_STATE_DONE = 3;
     localparam int BTL_ALU_CHAIN_PC_HIST_SLOTS = 16;
+    localparam int BTL_CRIT_LAT_BUCKETS = 8;
     integer btl_iq_valid_entry_sum [0:BTL_IQ_COUNT-1];
     integer btl_iq_ready_entry_sum [0:BTL_IQ_COUNT-1];
     integer btl_iq_not_ready_entry_sum [0:BTL_IQ_COUNT-1];
@@ -679,6 +680,33 @@ module tb_top
     integer btl_load_enq_wakeup_candidate;
     integer btl_load_enq_wakeup_issued_bypass;
     integer btl_load_enq_wakeup_hidden;
+    integer btl_load_bru_wakeup_candidate;
+    integer btl_load_bru_wakeup_selected;
+    integer btl_load_bru_wakeup_missed_port_busy;
+    integer btl_load_bru_wakeup_missed_older_ready;
+    integer btl_load_bru_wakeup_missed_fu_blocked;
+    integer btl_load_bru_wakeup_missed_suppress_flush;
+    integer btl_load_bru_wakeup_missed_other;
+    integer btl_load_bru_enq_wakeup_candidate;
+    integer btl_load_bru_enq_wakeup_issued_bypass;
+    integer btl_load_bru_enq_wakeup_hidden;
+    integer btl_load_std_wakeup_candidate;
+    integer btl_load_std_wakeup_selected;
+    integer btl_load_std_wakeup_missed_port_busy;
+    integer btl_load_std_wakeup_missed_older_ready;
+    integer btl_load_std_wakeup_missed_suppress_flush;
+    integer btl_load_std_wakeup_missed_other;
+    integer btl_load_std_enq_wakeup_candidate;
+    integer btl_load_std_enq_wakeup_issued_bypass;
+    integer btl_load_std_enq_wakeup_hidden;
+    integer btl_load_to_bru_issue_hist [0:BTL_CRIT_LAT_BUCKETS-1];
+    integer btl_load_to_std_issue_hist [0:BTL_CRIT_LAT_BUCKETS-1];
+    integer btl_load_to_bru_issue_unknown;
+    integer btl_load_to_std_issue_unknown;
+    integer btl_rob_head_load_bru_block_cycles;
+    integer btl_rob_head_load_std_block_cycles;
+    integer btl_lsu_lost_load_to_head_bru_cycles;
+    integer btl_lsu_lost_load_to_head_std_cycles;
     integer btl_rename_slots_lost_total;
     integer btl_rename_free_preg_min;
     integer btl_rename_rob_free_min;
@@ -692,6 +720,9 @@ module tb_top
     integer btl_preg_class [0:INT_PRF_DEPTH-1];
     integer btl_preg_state [0:INT_PRF_DEPTH-1];
     logic [63:0] btl_preg_pc [0:INT_PRF_DEPTH-1];
+    logic [ROB_IDX_BITS-1:0] btl_preg_rob [0:INT_PRF_DEPTH-1];
+    logic btl_load_wb_seen_valid [0:INT_PRF_DEPTH-1];
+    integer btl_load_wb_seen_cycle [0:INT_PRF_DEPTH-1];
     alu_op_e btl_preg_alu_op [0:INT_PRF_DEPTH-1];
     logic btl_preg_alu_use_imm [0:INT_PRF_DEPTH-1];
     logic btl_preg_alu_imm_zero [0:INT_PRF_DEPTH-1];
@@ -703,6 +734,7 @@ module tb_top
     integer btl_alu_chain_pc_hist_count [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
     integer btl_alu_chain_pc_hist_move [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
     integer btl_alu_chain_pc_hist_imm [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
+    logic [ROB_DEPTH-1:0] btl_lost_load_rob_r;
     function automatic logic tb_btl_enq_load_wakeup(
         input logic enq_valid_i,
         input logic rs1_ready_i,
@@ -1304,6 +1336,36 @@ module tb_top
             btl_load_enq_wakeup_candidate <= 0;
             btl_load_enq_wakeup_issued_bypass <= 0;
             btl_load_enq_wakeup_hidden <= 0;
+            btl_load_bru_wakeup_candidate <= 0;
+            btl_load_bru_wakeup_selected <= 0;
+            btl_load_bru_wakeup_missed_port_busy <= 0;
+            btl_load_bru_wakeup_missed_older_ready <= 0;
+            btl_load_bru_wakeup_missed_fu_blocked <= 0;
+            btl_load_bru_wakeup_missed_suppress_flush <= 0;
+            btl_load_bru_wakeup_missed_other <= 0;
+            btl_load_bru_enq_wakeup_candidate <= 0;
+            btl_load_bru_enq_wakeup_issued_bypass <= 0;
+            btl_load_bru_enq_wakeup_hidden <= 0;
+            btl_load_std_wakeup_candidate <= 0;
+            btl_load_std_wakeup_selected <= 0;
+            btl_load_std_wakeup_missed_port_busy <= 0;
+            btl_load_std_wakeup_missed_older_ready <= 0;
+            btl_load_std_wakeup_missed_suppress_flush <= 0;
+            btl_load_std_wakeup_missed_other <= 0;
+            btl_load_std_enq_wakeup_candidate <= 0;
+            btl_load_std_enq_wakeup_issued_bypass <= 0;
+            btl_load_std_enq_wakeup_hidden <= 0;
+            for (int i = 0; i < BTL_CRIT_LAT_BUCKETS; i++) begin
+                btl_load_to_bru_issue_hist[i] <= 0;
+                btl_load_to_std_issue_hist[i] <= 0;
+            end
+            btl_load_to_bru_issue_unknown <= 0;
+            btl_load_to_std_issue_unknown <= 0;
+            btl_rob_head_load_bru_block_cycles <= 0;
+            btl_rob_head_load_std_block_cycles <= 0;
+            btl_lsu_lost_load_to_head_bru_cycles <= 0;
+            btl_lsu_lost_load_to_head_std_cycles <= 0;
+            btl_lost_load_rob_r <= '0;
             btl_rename_slots_lost_total <= 0;
             btl_rename_free_preg_min <= INT_PRF_DEPTH;
             btl_rename_rob_free_min <= ROB_DEPTH;
@@ -1318,6 +1380,9 @@ module tb_top
                 btl_preg_class[i] <= BTL_PROD_UNKNOWN;
                 btl_preg_state[i] <= BTL_PREG_STATE_UNKNOWN;
                 btl_preg_pc[i] <= 64'd0;
+                btl_preg_rob[i] <= '0;
+                btl_load_wb_seen_valid[i] <= 1'b0;
+                btl_load_wb_seen_cycle[i] <= 0;
                 btl_preg_alu_op[i] <= ALU_ADD;
                 btl_preg_alu_use_imm[i] <= 1'b0;
                 btl_preg_alu_imm_zero[i] <= 1'b0;
@@ -1471,6 +1536,33 @@ module tb_top
             automatic int btl_load_enq_wakeup_candidate_now;
             automatic int btl_load_enq_wakeup_issued_bypass_now;
             automatic int btl_load_enq_wakeup_hidden_now;
+            automatic int btl_load_bru_wakeup_candidate_now;
+            automatic int btl_load_bru_wakeup_selected_now;
+            automatic int btl_load_bru_wakeup_missed_port_busy_now;
+            automatic int btl_load_bru_wakeup_missed_older_ready_now;
+            automatic int btl_load_bru_wakeup_missed_fu_blocked_now;
+            automatic int btl_load_bru_wakeup_missed_suppress_flush_now;
+            automatic int btl_load_bru_wakeup_missed_other_now;
+            automatic int btl_load_bru_enq_wakeup_candidate_now;
+            automatic int btl_load_bru_enq_wakeup_issued_bypass_now;
+            automatic int btl_load_bru_enq_wakeup_hidden_now;
+            automatic int btl_load_std_wakeup_candidate_now;
+            automatic int btl_load_std_wakeup_selected_now;
+            automatic int btl_load_std_wakeup_missed_port_busy_now;
+            automatic int btl_load_std_wakeup_missed_older_ready_now;
+            automatic int btl_load_std_wakeup_missed_suppress_flush_now;
+            automatic int btl_load_std_wakeup_missed_other_now;
+            automatic int btl_load_std_enq_wakeup_candidate_now;
+            automatic int btl_load_std_enq_wakeup_issued_bypass_now;
+            automatic int btl_load_std_enq_wakeup_hidden_now;
+            automatic int btl_load_to_bru_issue_hist_now [0:BTL_CRIT_LAT_BUCKETS-1];
+            automatic int btl_load_to_std_issue_hist_now [0:BTL_CRIT_LAT_BUCKETS-1];
+            automatic int btl_load_to_bru_issue_unknown_now;
+            automatic int btl_load_to_std_issue_unknown_now;
+            automatic int btl_rob_head_load_bru_block_now;
+            automatic int btl_rob_head_load_std_block_now;
+            automatic int btl_lsu_lost_load_to_head_bru_now;
+            automatic int btl_lsu_lost_load_to_head_std_now;
             automatic int btl_younger_ready_now;
             automatic logic [INT_PRF_DEPTH-1:0] btl_issue_pdst_now;
             automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_now;
@@ -1618,6 +1710,35 @@ module tb_top
             btl_load_enq_wakeup_candidate_now = 0;
             btl_load_enq_wakeup_issued_bypass_now = 0;
             btl_load_enq_wakeup_hidden_now = 0;
+            btl_load_bru_wakeup_candidate_now = 0;
+            btl_load_bru_wakeup_selected_now = 0;
+            btl_load_bru_wakeup_missed_port_busy_now = 0;
+            btl_load_bru_wakeup_missed_older_ready_now = 0;
+            btl_load_bru_wakeup_missed_fu_blocked_now = 0;
+            btl_load_bru_wakeup_missed_suppress_flush_now = 0;
+            btl_load_bru_wakeup_missed_other_now = 0;
+            btl_load_bru_enq_wakeup_candidate_now = 0;
+            btl_load_bru_enq_wakeup_issued_bypass_now = 0;
+            btl_load_bru_enq_wakeup_hidden_now = 0;
+            btl_load_std_wakeup_candidate_now = 0;
+            btl_load_std_wakeup_selected_now = 0;
+            btl_load_std_wakeup_missed_port_busy_now = 0;
+            btl_load_std_wakeup_missed_older_ready_now = 0;
+            btl_load_std_wakeup_missed_suppress_flush_now = 0;
+            btl_load_std_wakeup_missed_other_now = 0;
+            btl_load_std_enq_wakeup_candidate_now = 0;
+            btl_load_std_enq_wakeup_issued_bypass_now = 0;
+            btl_load_std_enq_wakeup_hidden_now = 0;
+            btl_load_to_bru_issue_unknown_now = 0;
+            btl_load_to_std_issue_unknown_now = 0;
+            btl_rob_head_load_bru_block_now = 0;
+            btl_rob_head_load_std_block_now = 0;
+            btl_lsu_lost_load_to_head_bru_now = 0;
+            btl_lsu_lost_load_to_head_std_now = 0;
+            for (int i = 0; i < BTL_CRIT_LAT_BUCKETS; i++) begin
+                btl_load_to_bru_issue_hist_now[i] = 0;
+                btl_load_to_std_issue_hist_now[i] = 0;
+            end
             btl_younger_ready_now = 0;
             btl_issue_pdst_now = '0;
             btl_prod_iq_blocked_now = '0;
@@ -3404,6 +3525,376 @@ module tb_top
                     end
                 end
 
+                begin : btl_critical_load_consumer_profile
+                    automatic logic selected_now_crit;
+                    automatic logic wakeup_load_now_crit;
+                    automatic logic head_bru_block_seen;
+                    automatic logic head_std_block_seen;
+                    automatic logic head_bru_lost_seen;
+                    automatic logic head_std_lost_seen;
+                    automatic logic [PHYS_REG_BITS-1:0] src_tag;
+                    automatic int delay;
+                    automatic int bucket;
+
+                    head_bru_block_seen = 1'b0;
+                    head_std_block_seen = 1'b0;
+                    head_bru_lost_seen = 1'b0;
+                    head_std_lost_seen = 1'b0;
+
+                    for (int q = 0; q < 2; q++) begin
+                        if ((u_core.u_iq0.enq_data[q].fu_type == FU_BRU) &&
+                            tb_btl_enq_load_wakeup(
+                                u_core.u_iq0.enq_valid[q],
+                                u_core.u_iq0.enq_data[q].rs1_ready,
+                                u_core.u_iq0.enq_data[q].rs1_phys,
+                                u_core.u_iq0.enq_s1_wakeup_hit[q],
+                                u_core.u_iq0.enq_s1_spec_wakeup[q],
+                                u_core.u_iq0.enq_data[q].rs2_ready,
+                                u_core.u_iq0.enq_data[q].rs2_phys,
+                                u_core.u_iq0.enq_s2_wakeup_hit[q],
+                                u_core.u_iq0.enq_s2_spec_wakeup[q])) begin
+                            btl_load_bru_enq_wakeup_candidate_now++;
+                            if (u_core.u_iq0.enq_ready_issued_bypass[q])
+                                btl_load_bru_enq_wakeup_issued_bypass_now++;
+                            else if (u_core.u_iq0.enq_ready_hidden[q])
+                                btl_load_bru_enq_wakeup_hidden_now++;
+                        end
+                        if ((u_core.u_iq1.enq_data[q].fu_type == FU_BRU) &&
+                            tb_btl_enq_load_wakeup(
+                                u_core.u_iq1.enq_valid[q],
+                                u_core.u_iq1.enq_data[q].rs1_ready,
+                                u_core.u_iq1.enq_data[q].rs1_phys,
+                                u_core.u_iq1.enq_s1_wakeup_hit[q],
+                                u_core.u_iq1.enq_s1_spec_wakeup[q],
+                                u_core.u_iq1.enq_data[q].rs2_ready,
+                                u_core.u_iq1.enq_data[q].rs2_phys,
+                                u_core.u_iq1.enq_s2_wakeup_hit[q],
+                                u_core.u_iq1.enq_s2_spec_wakeup[q])) begin
+                            btl_load_bru_enq_wakeup_candidate_now++;
+                            if (u_core.u_iq1.enq_ready_issued_bypass[q])
+                                btl_load_bru_enq_wakeup_issued_bypass_now++;
+                            else if (u_core.u_iq1.enq_ready_hidden[q])
+                                btl_load_bru_enq_wakeup_hidden_now++;
+                        end
+                        if ((u_core.u_iq2.enq_data[q].fu_type == FU_BRU) &&
+                            tb_btl_enq_load_wakeup(
+                                u_core.u_iq2.enq_valid[q],
+                                u_core.u_iq2.enq_data[q].rs1_ready,
+                                u_core.u_iq2.enq_data[q].rs1_phys,
+                                u_core.u_iq2.enq_s1_wakeup_hit[q],
+                                u_core.u_iq2.enq_s1_spec_wakeup[q],
+                                u_core.u_iq2.enq_data[q].rs2_ready,
+                                u_core.u_iq2.enq_data[q].rs2_phys,
+                                u_core.u_iq2.enq_s2_wakeup_hit[q],
+                                u_core.u_iq2.enq_s2_spec_wakeup[q])) begin
+                            btl_load_bru_enq_wakeup_candidate_now++;
+                            if (u_core.u_iq2.enq_ready_issued_bypass[q])
+                                btl_load_bru_enq_wakeup_issued_bypass_now++;
+                            else if (u_core.u_iq2.enq_ready_hidden[q])
+                                btl_load_bru_enq_wakeup_hidden_now++;
+                        end
+                        if ((u_core.u_iq_store_data.enq_data[q].fu_type == FU_STD) &&
+                            tb_btl_enq_load_wakeup(
+                                u_core.u_iq_store_data.enq_valid[q],
+                                u_core.u_iq_store_data.enq_data[q].rs1_ready,
+                                u_core.u_iq_store_data.enq_data[q].rs1_phys,
+                                u_core.u_iq_store_data.enq_s1_wakeup_hit[q],
+                                u_core.u_iq_store_data.enq_s1_spec_wakeup[q],
+                                u_core.u_iq_store_data.enq_data[q].rs2_ready,
+                                u_core.u_iq_store_data.enq_data[q].rs2_phys,
+                                u_core.u_iq_store_data.enq_s2_wakeup_hit[q],
+                                u_core.u_iq_store_data.enq_s2_spec_wakeup[q])) begin
+                            btl_load_std_enq_wakeup_candidate_now++;
+                            if (u_core.u_iq_store_data.enq_ready_issued_bypass[q])
+                                btl_load_std_enq_wakeup_issued_bypass_now++;
+                            else if (u_core.u_iq_store_data.enq_ready_hidden[q])
+                                btl_load_std_enq_wakeup_hidden_now++;
+                        end
+                    end
+
+                    for (int e = 0; e < IQ_INT_DEPTH; e++) begin
+                        if (u_core.u_iq0.entry_valid[e] &&
+                            (u_core.u_iq0.fu_type_r[e] == FU_BRU)) begin
+                            selected_now_crit = 1'b0;
+                            for (int p = 0; p < 2; p++) begin
+                                if (u_core.u_iq0.sel_found[p] &&
+                                    !u_core.u_iq0.issue_suppress[p] &&
+                                    (u_core.u_iq0.sel_idx[p] == e[$clog2(IQ_INT_DEPTH)-1:0]))
+                                    selected_now_crit = 1'b1;
+                            end
+                            wakeup_load_now_crit =
+                                ((!u_core.u_iq0.src1_ready[e] &&
+                                  (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                 (!u_core.u_iq0.src2_ready[e] &&
+                                  (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]] == BTL_PROD_LOAD))) &&
+                                u_core.u_iq0.eligible[e];
+                            if (wakeup_load_now_crit) begin
+                                btl_load_bru_wakeup_candidate_now++;
+                                if (selected_now_crit) begin
+                                    btl_load_bru_wakeup_selected_now++;
+                                end else if (u_core.flush_out.valid) begin
+                                    btl_load_bru_wakeup_missed_suppress_flush_now++;
+                                end else if (btl_iq_selected_now[BTL_IQ0] >= 2) begin
+                                    btl_load_bru_wakeup_missed_port_busy_now++;
+                                end else if (u_core.u_iq0.sel_found[0]) begin
+                                    btl_load_bru_wakeup_missed_fu_blocked_now++;
+                                end else if (btl_iq_selected_now[BTL_IQ0] != 0) begin
+                                    btl_load_bru_wakeup_missed_older_ready_now++;
+                                end else begin
+                                    btl_load_bru_wakeup_missed_other_now++;
+                                end
+                            end
+                            if (u_core.rob_head_valid[0] &&
+                                !u_core.rob_head_ready[0] &&
+                                (u_core.u_iq0.rob_idx_r[e] == u_core.rob_head_idx) &&
+                                (((!u_core.u_iq0.next_src1_ready[e]) &&
+                                  (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                 ((!u_core.u_iq0.next_src2_ready[e]) &&
+                                  (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]] == BTL_PROD_LOAD)))) begin
+                                head_bru_block_seen = 1'b1;
+                                if (((!u_core.u_iq0.next_src1_ready[e]) &&
+                                     (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]] == BTL_PROD_LOAD) &&
+                                     btl_lost_load_rob_r[btl_preg_rob[u_core.u_iq0.rs1_phys_r[e]]]) ||
+                                    ((!u_core.u_iq0.next_src2_ready[e]) &&
+                                     (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]] == BTL_PROD_LOAD) &&
+                                     btl_lost_load_rob_r[btl_preg_rob[u_core.u_iq0.rs2_phys_r[e]]]))
+                                    head_bru_lost_seen = 1'b1;
+                            end
+                        end
+
+                        if (u_core.u_iq1.entry_valid[e] &&
+                            (u_core.u_iq1.fu_type_r[e] == FU_BRU)) begin
+                            selected_now_crit =
+                                u_core.u_iq1.sel_found[0] &&
+                                !u_core.u_iq1.issue_suppress[0] &&
+                                (u_core.u_iq1.sel_idx[0] == e[$clog2(IQ_INT_DEPTH)-1:0]);
+                            wakeup_load_now_crit =
+                                ((!u_core.u_iq1.src1_ready[e] &&
+                                  (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                 (!u_core.u_iq1.src2_ready[e] &&
+                                  (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]] == BTL_PROD_LOAD))) &&
+                                u_core.u_iq1.eligible[e];
+                            if (wakeup_load_now_crit) begin
+                                btl_load_bru_wakeup_candidate_now++;
+                                if (selected_now_crit) begin
+                                    btl_load_bru_wakeup_selected_now++;
+                                end else if (u_core.flush_out.valid) begin
+                                    btl_load_bru_wakeup_missed_suppress_flush_now++;
+                                end else if (btl_iq_selected_now[BTL_IQ1] >= 1) begin
+                                    btl_load_bru_wakeup_missed_port_busy_now++;
+                                end else if (u_core.u_iq1.sel_found[0]) begin
+                                    btl_load_bru_wakeup_missed_fu_blocked_now++;
+                                end else if (btl_iq_selected_now[BTL_IQ1] != 0) begin
+                                    btl_load_bru_wakeup_missed_older_ready_now++;
+                                end else begin
+                                    btl_load_bru_wakeup_missed_other_now++;
+                                end
+                            end
+                            if (u_core.rob_head_valid[0] &&
+                                !u_core.rob_head_ready[0] &&
+                                (u_core.u_iq1.rob_idx_r[e] == u_core.rob_head_idx) &&
+                                (((!u_core.u_iq1.next_src1_ready[e]) &&
+                                  (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                 ((!u_core.u_iq1.next_src2_ready[e]) &&
+                                  (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]] == BTL_PROD_LOAD)))) begin
+                                head_bru_block_seen = 1'b1;
+                                if (((!u_core.u_iq1.next_src1_ready[e]) &&
+                                     (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]] == BTL_PROD_LOAD) &&
+                                     btl_lost_load_rob_r[btl_preg_rob[u_core.u_iq1.rs1_phys_r[e]]]) ||
+                                    ((!u_core.u_iq1.next_src2_ready[e]) &&
+                                     (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]] == BTL_PROD_LOAD) &&
+                                     btl_lost_load_rob_r[btl_preg_rob[u_core.u_iq1.rs2_phys_r[e]]]))
+                                    head_bru_lost_seen = 1'b1;
+                            end
+                        end
+
+                        if (u_core.u_iq2.entry_valid[e] &&
+                            (u_core.u_iq2.fu_type_r[e] == FU_BRU)) begin
+                            selected_now_crit =
+                                u_core.u_iq2.sel_found[0] &&
+                                !u_core.u_iq2.issue_suppress[0] &&
+                                (u_core.u_iq2.sel_idx[0] == e[$clog2(IQ_INT_DEPTH)-1:0]);
+                            wakeup_load_now_crit =
+                                ((!u_core.u_iq2.src1_ready[e] &&
+                                  (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                 (!u_core.u_iq2.src2_ready[e] &&
+                                  (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]] == BTL_PROD_LOAD))) &&
+                                u_core.u_iq2.eligible[e];
+                            if (wakeup_load_now_crit) begin
+                                btl_load_bru_wakeup_candidate_now++;
+                                if (selected_now_crit) begin
+                                    btl_load_bru_wakeup_selected_now++;
+                                end else if (u_core.flush_out.valid) begin
+                                    btl_load_bru_wakeup_missed_suppress_flush_now++;
+                                end else if (btl_iq_selected_now[BTL_IQ2] >= 1) begin
+                                    btl_load_bru_wakeup_missed_port_busy_now++;
+                                end else if (u_core.u_iq2.sel_found[0]) begin
+                                    btl_load_bru_wakeup_missed_fu_blocked_now++;
+                                end else if (btl_iq_selected_now[BTL_IQ2] != 0) begin
+                                    btl_load_bru_wakeup_missed_older_ready_now++;
+                                end else begin
+                                    btl_load_bru_wakeup_missed_other_now++;
+                                end
+                            end
+                            if (u_core.rob_head_valid[0] &&
+                                !u_core.rob_head_ready[0] &&
+                                (u_core.u_iq2.rob_idx_r[e] == u_core.rob_head_idx) &&
+                                (((!u_core.u_iq2.next_src1_ready[e]) &&
+                                  (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                 ((!u_core.u_iq2.next_src2_ready[e]) &&
+                                  (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]] == BTL_PROD_LOAD)))) begin
+                                head_bru_block_seen = 1'b1;
+                                if (((!u_core.u_iq2.next_src1_ready[e]) &&
+                                     (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]] == BTL_PROD_LOAD) &&
+                                     btl_lost_load_rob_r[btl_preg_rob[u_core.u_iq2.rs1_phys_r[e]]]) ||
+                                    ((!u_core.u_iq2.next_src2_ready[e]) &&
+                                     (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]] == BTL_PROD_LOAD) &&
+                                     btl_lost_load_rob_r[btl_preg_rob[u_core.u_iq2.rs2_phys_r[e]]]))
+                                    head_bru_lost_seen = 1'b1;
+                            end
+                        end
+                    end
+
+                    for (int e = 0; e < IQ_MEM_DEPTH; e++) begin
+                        if (u_core.u_iq_store_data.entry_valid[e]) begin
+                            selected_now_crit =
+                                u_core.u_iq_store_data.sel_found[0] &&
+                                !u_core.u_iq_store_data.issue_suppress[0] &&
+                                (u_core.u_iq_store_data.sel_idx[0] == e[$clog2(IQ_MEM_DEPTH)-1:0]);
+                            wakeup_load_now_crit =
+                                ((!u_core.u_iq_store_data.src1_ready[e] &&
+                                  (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                 (!u_core.u_iq_store_data.src2_ready[e] &&
+                                  (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]] == BTL_PROD_LOAD))) &&
+                                u_core.u_iq_store_data.eligible[e];
+                            if (wakeup_load_now_crit) begin
+                                btl_load_std_wakeup_candidate_now++;
+                                if (selected_now_crit) begin
+                                    btl_load_std_wakeup_selected_now++;
+                                end else if (u_core.flush_out.valid) begin
+                                    btl_load_std_wakeup_missed_suppress_flush_now++;
+                                end else if (btl_iq_selected_now[BTL_IQ_STD] >= 1) begin
+                                    btl_load_std_wakeup_missed_port_busy_now++;
+                                end else if (btl_iq_selected_now[BTL_IQ_STD] != 0) begin
+                                    btl_load_std_wakeup_missed_older_ready_now++;
+                                end else begin
+                                    btl_load_std_wakeup_missed_other_now++;
+                                end
+                            end
+                            if (u_core.rob_head_valid[0] &&
+                                !u_core.rob_head_ready[0] &&
+                                (u_core.u_iq_store_data.rob_idx_r[e] == u_core.rob_head_idx) &&
+                                (((!u_core.u_iq_store_data.next_src1_ready[e]) &&
+                                  (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                 ((!u_core.u_iq_store_data.next_src2_ready[e]) &&
+                                  (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]] == BTL_PROD_LOAD)))) begin
+                                head_std_block_seen = 1'b1;
+                                if (((!u_core.u_iq_store_data.next_src1_ready[e]) &&
+                                     (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]] == BTL_PROD_LOAD) &&
+                                     btl_lost_load_rob_r[btl_preg_rob[u_core.u_iq_store_data.rs1_phys_r[e]]]) ||
+                                    ((!u_core.u_iq_store_data.next_src2_ready[e]) &&
+                                     (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]] == BTL_PROD_LOAD) &&
+                                     btl_lost_load_rob_r[btl_preg_rob[u_core.u_iq_store_data.rs2_phys_r[e]]]))
+                                    head_std_lost_seen = 1'b1;
+                            end
+                        end
+                    end
+
+                    if (head_bru_block_seen)
+                        btl_rob_head_load_bru_block_now = 1;
+                    if (head_std_block_seen)
+                        btl_rob_head_load_std_block_now = 1;
+                    if (head_bru_lost_seen)
+                        btl_lsu_lost_load_to_head_bru_now = 1;
+                    if (head_std_lost_seen)
+                        btl_lsu_lost_load_to_head_std_now = 1;
+
+                    for (int p = 0; p < 2; p++) begin
+                        if (u_core.iq0_issue_valid[p] &&
+                            (u_core.iq0_issue_data[p].fu_type == FU_BRU)) begin
+                            for (int s = 0; s < 2; s++) begin
+                                src_tag = (s == 0) ? u_core.iq0_issue_data[p].rs1_phys :
+                                                     u_core.iq0_issue_data[p].rs2_phys;
+                                if (btl_preg_class[src_tag] == BTL_PROD_LOAD) begin
+                                    if ((u_core.load_wb_valid_live[0] &&
+                                         (u_core.load_wb_pdst[0] == src_tag)) ||
+                                        (u_core.load_wb_valid_live[1] &&
+                                         (u_core.load_wb_pdst[1] == src_tag))) begin
+                                        delay = 0;
+                                    end else if (btl_load_wb_seen_valid[src_tag]) begin
+                                        delay = perf_total_cyc - btl_load_wb_seen_cycle[src_tag];
+                                    end else begin
+                                        delay = -1;
+                                    end
+
+                                    if (delay < 0) begin
+                                        btl_load_to_bru_issue_unknown_now++;
+                                    end else begin
+                                        if (delay == 0)
+                                            bucket = 0;
+                                        else if (delay == 1)
+                                            bucket = 1;
+                                        else if (delay == 2)
+                                            bucket = 2;
+                                        else if (delay == 3)
+                                            bucket = 3;
+                                        else if (delay == 4)
+                                            bucket = 4;
+                                        else if (delay <= 7)
+                                            bucket = 5;
+                                        else if (delay <= 15)
+                                            bucket = 6;
+                                        else
+                                            bucket = 7;
+                                        btl_load_to_bru_issue_hist_now[bucket]++;
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    if (u_core.routed_std_valid) begin
+                        for (int s = 0; s < 2; s++) begin
+                            src_tag = (s == 0) ? u_core.routed_std_data.rs1_phys :
+                                                 u_core.routed_std_data.rs2_phys;
+                            if (btl_preg_class[src_tag] == BTL_PROD_LOAD) begin
+                                if ((u_core.load_wb_valid_live[0] &&
+                                     (u_core.load_wb_pdst[0] == src_tag)) ||
+                                    (u_core.load_wb_valid_live[1] &&
+                                     (u_core.load_wb_pdst[1] == src_tag))) begin
+                                    delay = 0;
+                                end else if (btl_load_wb_seen_valid[src_tag]) begin
+                                    delay = perf_total_cyc - btl_load_wb_seen_cycle[src_tag];
+                                end else begin
+                                    delay = -1;
+                                end
+
+                                if (delay < 0) begin
+                                    btl_load_to_std_issue_unknown_now++;
+                                end else begin
+                                    if (delay == 0)
+                                        bucket = 0;
+                                    else if (delay == 1)
+                                        bucket = 1;
+                                    else if (delay == 2)
+                                        bucket = 2;
+                                    else if (delay == 3)
+                                        bucket = 3;
+                                    else if (delay == 4)
+                                        bucket = 4;
+                                    else if (delay <= 7)
+                                        bucket = 5;
+                                    else if (delay <= 15)
+                                        bucket = 6;
+                                    else
+                                        bucket = 7;
+                                    btl_load_to_std_issue_hist_now[bucket]++;
+                                end
+                            end
+                        end
+                    end
+                end
+
                 for (int i = 0; i < INT_PRF_DEPTH; i++) begin
                     if (btl_wait_alu_not_issued_by_preg_now[i] != 0) begin
                         if (btl_prod_iq_selected_now[i]) begin
@@ -3857,6 +4348,89 @@ module tb_top
                 btl_load_enq_wakeup_hidden <=
                     btl_load_enq_wakeup_hidden +
                     btl_load_enq_wakeup_hidden_now;
+                btl_load_bru_wakeup_candidate <=
+                    btl_load_bru_wakeup_candidate +
+                    btl_load_bru_wakeup_candidate_now;
+                btl_load_bru_wakeup_selected <=
+                    btl_load_bru_wakeup_selected +
+                    btl_load_bru_wakeup_selected_now;
+                btl_load_bru_wakeup_missed_port_busy <=
+                    btl_load_bru_wakeup_missed_port_busy +
+                    btl_load_bru_wakeup_missed_port_busy_now;
+                btl_load_bru_wakeup_missed_older_ready <=
+                    btl_load_bru_wakeup_missed_older_ready +
+                    btl_load_bru_wakeup_missed_older_ready_now;
+                btl_load_bru_wakeup_missed_fu_blocked <=
+                    btl_load_bru_wakeup_missed_fu_blocked +
+                    btl_load_bru_wakeup_missed_fu_blocked_now;
+                btl_load_bru_wakeup_missed_suppress_flush <=
+                    btl_load_bru_wakeup_missed_suppress_flush +
+                    btl_load_bru_wakeup_missed_suppress_flush_now;
+                btl_load_bru_wakeup_missed_other <=
+                    btl_load_bru_wakeup_missed_other +
+                    btl_load_bru_wakeup_missed_other_now;
+                btl_load_bru_enq_wakeup_candidate <=
+                    btl_load_bru_enq_wakeup_candidate +
+                    btl_load_bru_enq_wakeup_candidate_now;
+                btl_load_bru_enq_wakeup_issued_bypass <=
+                    btl_load_bru_enq_wakeup_issued_bypass +
+                    btl_load_bru_enq_wakeup_issued_bypass_now;
+                btl_load_bru_enq_wakeup_hidden <=
+                    btl_load_bru_enq_wakeup_hidden +
+                    btl_load_bru_enq_wakeup_hidden_now;
+                btl_load_std_wakeup_candidate <=
+                    btl_load_std_wakeup_candidate +
+                    btl_load_std_wakeup_candidate_now;
+                btl_load_std_wakeup_selected <=
+                    btl_load_std_wakeup_selected +
+                    btl_load_std_wakeup_selected_now;
+                btl_load_std_wakeup_missed_port_busy <=
+                    btl_load_std_wakeup_missed_port_busy +
+                    btl_load_std_wakeup_missed_port_busy_now;
+                btl_load_std_wakeup_missed_older_ready <=
+                    btl_load_std_wakeup_missed_older_ready +
+                    btl_load_std_wakeup_missed_older_ready_now;
+                btl_load_std_wakeup_missed_suppress_flush <=
+                    btl_load_std_wakeup_missed_suppress_flush +
+                    btl_load_std_wakeup_missed_suppress_flush_now;
+                btl_load_std_wakeup_missed_other <=
+                    btl_load_std_wakeup_missed_other +
+                    btl_load_std_wakeup_missed_other_now;
+                btl_load_std_enq_wakeup_candidate <=
+                    btl_load_std_enq_wakeup_candidate +
+                    btl_load_std_enq_wakeup_candidate_now;
+                btl_load_std_enq_wakeup_issued_bypass <=
+                    btl_load_std_enq_wakeup_issued_bypass +
+                    btl_load_std_enq_wakeup_issued_bypass_now;
+                btl_load_std_enq_wakeup_hidden <=
+                    btl_load_std_enq_wakeup_hidden +
+                    btl_load_std_enq_wakeup_hidden_now;
+                for (int i = 0; i < BTL_CRIT_LAT_BUCKETS; i++) begin
+                    btl_load_to_bru_issue_hist[i] <=
+                        btl_load_to_bru_issue_hist[i] +
+                        btl_load_to_bru_issue_hist_now[i];
+                    btl_load_to_std_issue_hist[i] <=
+                        btl_load_to_std_issue_hist[i] +
+                        btl_load_to_std_issue_hist_now[i];
+                end
+                btl_load_to_bru_issue_unknown <=
+                    btl_load_to_bru_issue_unknown +
+                    btl_load_to_bru_issue_unknown_now;
+                btl_load_to_std_issue_unknown <=
+                    btl_load_to_std_issue_unknown +
+                    btl_load_to_std_issue_unknown_now;
+                btl_rob_head_load_bru_block_cycles <=
+                    btl_rob_head_load_bru_block_cycles +
+                    btl_rob_head_load_bru_block_now;
+                btl_rob_head_load_std_block_cycles <=
+                    btl_rob_head_load_std_block_cycles +
+                    btl_rob_head_load_std_block_now;
+                btl_lsu_lost_load_to_head_bru_cycles <=
+                    btl_lsu_lost_load_to_head_bru_cycles +
+                    btl_lsu_lost_load_to_head_bru_now;
+                btl_lsu_lost_load_to_head_std_cycles <=
+                    btl_lsu_lost_load_to_head_std_cycles +
+                    btl_lsu_lost_load_to_head_std_now;
 
                 if (u_core.rename_dec_count > u_core.ren_count_w)
                     btl_rename_slots_lost_total <=
@@ -3905,6 +4479,9 @@ module tb_top
                         btl_preg_class[i] <= BTL_PROD_UNKNOWN;
                         btl_preg_state[i] <= BTL_PREG_STATE_UNKNOWN;
                         btl_preg_pc[i] <= 64'd0;
+                        btl_preg_rob[i] <= '0;
+                        btl_load_wb_seen_valid[i] <= 1'b0;
+                        btl_load_wb_seen_cycle[i] <= 0;
                         btl_preg_alu_op[i] <= ALU_ADD;
                         btl_preg_alu_use_imm[i] <= 1'b0;
                         btl_preg_alu_imm_zero[i] <= 1'b0;
@@ -3913,7 +4490,37 @@ module tb_top
                         btl_preg_alu_wop[i] <= 1'b0;
                         btl_preg_alu_fused[i] <= 1'b0;
                     end
+                    btl_lost_load_rob_r <= '0;
                 end else begin
+                    begin : btl_lost_load_track
+                        automatic logic [ROB_DEPTH-1:0] next_lost_load_rob;
+                        automatic int load_rob_idx;
+                        automatic int clear_idx;
+
+                        next_lost_load_rob = btl_lost_load_rob_r;
+                        if (u_core.flush_out.valid) begin
+                            next_lost_load_rob = '0;
+                        end else begin
+                            for (int c = 0; c < PIPE_WIDTH; c++) begin
+                                if (c < int'(u_core.commit_count)) begin
+                                    clear_idx = int'(u_core.rob_head_idx) + c;
+                                    if (clear_idx >= ROB_DEPTH)
+                                        clear_idx = clear_idx - ROB_DEPTH;
+                                    next_lost_load_rob[clear_idx] = 1'b0;
+                                end
+                            end
+                            for (int p = 0; p < 2; p++) begin
+                                if (u_core.iq_load_issue_candidate_valid[p] &&
+                                    !u_core.iq_load_issue_valid[p]) begin
+                                    load_rob_idx =
+                                        int'(u_core.iq_load_issue_data[p].rob_idx);
+                                    if (load_rob_idx < ROB_DEPTH)
+                                        next_lost_load_rob[load_rob_idx] = 1'b1;
+                                end
+                            end
+                        end
+                        btl_lost_load_rob_r <= next_lost_load_rob;
+                    end
                     for (int i = 0; i < INT_PRF_DEPTH; i++) begin
                         if (btl_issue_pdst_now[i])
                             btl_preg_state[i] <= BTL_PREG_STATE_ISSUED_WAIT_WB;
@@ -3924,9 +4531,14 @@ module tb_top
                     end
                     for (int i = 0; i < 2; i++) begin
                         if (u_core.load_wb_valid_live[i] &&
-                            (u_core.load_wb_pdst[i] != '0))
+                            (u_core.load_wb_pdst[i] != '0)) begin
                             btl_preg_state[u_core.load_wb_pdst[i]] <=
                                 BTL_PREG_STATE_DONE;
+                            btl_load_wb_seen_valid[u_core.load_wb_pdst[i]] <=
+                                1'b1;
+                            btl_load_wb_seen_cycle[u_core.load_wb_pdst[i]] <=
+                                perf_total_cyc;
+                        end
                     end
                     for (int i = 0; i < PIPE_WIDTH; i++) begin
                         if ((3'(i) < u_core.ren_count_w) &&
@@ -3963,6 +4575,12 @@ module tb_top
                             endcase
                             btl_preg_pc[u_core.ren_insn[i].pdst] <=
                                 u_core.ren_insn[i].base.pc;
+                            btl_preg_rob[u_core.ren_insn[i].pdst] <=
+                                u_core.ren_insn[i].rob_idx;
+                            btl_load_wb_seen_valid[u_core.ren_insn[i].pdst] <=
+                                1'b0;
+                            btl_load_wb_seen_cycle[u_core.ren_insn[i].pdst] <=
+                                0;
                             btl_preg_alu_op[u_core.ren_insn[i].pdst] <=
                                 u_core.ren_insn[i].base.alu_op;
                             btl_preg_alu_use_imm[u_core.ren_insn[i].pdst] <=
@@ -5142,6 +5760,47 @@ module tb_top
                 $display("xs bottleneck_load_enq_wakeup_candidate : %0d", btl_load_enq_wakeup_candidate);
                 $display("xs bottleneck_load_enq_wakeup_issued_bypass : %0d", btl_load_enq_wakeup_issued_bypass);
                 $display("xs bottleneck_load_enq_wakeup_hidden : %0d", btl_load_enq_wakeup_hidden);
+                $display("xs bottleneck_load_bru_wakeup_candidate : %0d", btl_load_bru_wakeup_candidate);
+                $display("xs bottleneck_load_bru_wakeup_selected : %0d", btl_load_bru_wakeup_selected);
+                $display("xs bottleneck_load_bru_wakeup_missed_port_busy : %0d", btl_load_bru_wakeup_missed_port_busy);
+                $display("xs bottleneck_load_bru_wakeup_missed_older_ready : %0d", btl_load_bru_wakeup_missed_older_ready);
+                $display("xs bottleneck_load_bru_wakeup_missed_fu_blocked : %0d", btl_load_bru_wakeup_missed_fu_blocked);
+                $display("xs bottleneck_load_bru_wakeup_missed_suppress_flush : %0d", btl_load_bru_wakeup_missed_suppress_flush);
+                $display("xs bottleneck_load_bru_wakeup_missed_other : %0d", btl_load_bru_wakeup_missed_other);
+                $display("xs bottleneck_load_bru_enq_wakeup_candidate : %0d", btl_load_bru_enq_wakeup_candidate);
+                $display("xs bottleneck_load_bru_enq_wakeup_issued_bypass : %0d", btl_load_bru_enq_wakeup_issued_bypass);
+                $display("xs bottleneck_load_bru_enq_wakeup_hidden : %0d", btl_load_bru_enq_wakeup_hidden);
+                $display("xs bottleneck_load_std_wakeup_candidate : %0d", btl_load_std_wakeup_candidate);
+                $display("xs bottleneck_load_std_wakeup_selected : %0d", btl_load_std_wakeup_selected);
+                $display("xs bottleneck_load_std_wakeup_missed_port_busy : %0d", btl_load_std_wakeup_missed_port_busy);
+                $display("xs bottleneck_load_std_wakeup_missed_older_ready : %0d", btl_load_std_wakeup_missed_older_ready);
+                $display("xs bottleneck_load_std_wakeup_missed_suppress_flush : %0d", btl_load_std_wakeup_missed_suppress_flush);
+                $display("xs bottleneck_load_std_wakeup_missed_other : %0d", btl_load_std_wakeup_missed_other);
+                $display("xs bottleneck_load_std_enq_wakeup_candidate : %0d", btl_load_std_enq_wakeup_candidate);
+                $display("xs bottleneck_load_std_enq_wakeup_issued_bypass : %0d", btl_load_std_enq_wakeup_issued_bypass);
+                $display("xs bottleneck_load_std_enq_wakeup_hidden : %0d", btl_load_std_enq_wakeup_hidden);
+                $display("xs bottleneck_load_to_bru_issue_delay_0 : %0d", btl_load_to_bru_issue_hist[0]);
+                $display("xs bottleneck_load_to_bru_issue_delay_1 : %0d", btl_load_to_bru_issue_hist[1]);
+                $display("xs bottleneck_load_to_bru_issue_delay_2 : %0d", btl_load_to_bru_issue_hist[2]);
+                $display("xs bottleneck_load_to_bru_issue_delay_3 : %0d", btl_load_to_bru_issue_hist[3]);
+                $display("xs bottleneck_load_to_bru_issue_delay_4 : %0d", btl_load_to_bru_issue_hist[4]);
+                $display("xs bottleneck_load_to_bru_issue_delay_5_7 : %0d", btl_load_to_bru_issue_hist[5]);
+                $display("xs bottleneck_load_to_bru_issue_delay_8_15 : %0d", btl_load_to_bru_issue_hist[6]);
+                $display("xs bottleneck_load_to_bru_issue_delay_16plus : %0d", btl_load_to_bru_issue_hist[7]);
+                $display("xs bottleneck_load_to_bru_issue_delay_unknown : %0d", btl_load_to_bru_issue_unknown);
+                $display("xs bottleneck_load_to_std_issue_delay_0 : %0d", btl_load_to_std_issue_hist[0]);
+                $display("xs bottleneck_load_to_std_issue_delay_1 : %0d", btl_load_to_std_issue_hist[1]);
+                $display("xs bottleneck_load_to_std_issue_delay_2 : %0d", btl_load_to_std_issue_hist[2]);
+                $display("xs bottleneck_load_to_std_issue_delay_3 : %0d", btl_load_to_std_issue_hist[3]);
+                $display("xs bottleneck_load_to_std_issue_delay_4 : %0d", btl_load_to_std_issue_hist[4]);
+                $display("xs bottleneck_load_to_std_issue_delay_5_7 : %0d", btl_load_to_std_issue_hist[5]);
+                $display("xs bottleneck_load_to_std_issue_delay_8_15 : %0d", btl_load_to_std_issue_hist[6]);
+                $display("xs bottleneck_load_to_std_issue_delay_16plus : %0d", btl_load_to_std_issue_hist[7]);
+                $display("xs bottleneck_load_to_std_issue_delay_unknown : %0d", btl_load_to_std_issue_unknown);
+                $display("xs bottleneck_rob_head_load_bru_block_cycles : %0d", btl_rob_head_load_bru_block_cycles);
+                $display("xs bottleneck_rob_head_load_std_block_cycles : %0d", btl_rob_head_load_std_block_cycles);
+                $display("xs bottleneck_lsu_lost_load_to_head_bru_cycles : %0d", btl_lsu_lost_load_to_head_bru_cycles);
+                $display("xs bottleneck_lsu_lost_load_to_head_std_cycles : %0d", btl_lsu_lost_load_to_head_std_cycles);
                 $display("xs bottleneck_rob_commit_zero_cycles : %0d", commit_hist[0]);
                 $display("xs bottleneck_rob_younger_ready_behind_head : %0d", btl_rob_younger_ready_behind_head);
                 $display("xs bottleneck_rob_commit_slots_lost_head_block : %0d", btl_rob_commit_slots_lost_head_block);
