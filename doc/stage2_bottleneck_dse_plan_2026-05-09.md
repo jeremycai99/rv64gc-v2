@@ -6,6 +6,18 @@ Status: planning document. This is the execution plan for deeper DSE after the
 short-ALU/IQ0 chaining audit and the post-IFU no-emit attribution pass. It is
 not a performance claim and does not promote any RTL change.
 
+## May 10 Pivot
+
+The active optimization loop is paused from fractional frontend score chasing
+and redirected to Dhrystone/DMIPS backend latency improvement with CoreMark
+non-regression. The frontend ownership/fallthrough evidence remains useful,
+but it is not promoted as score progress while CM10 regression is unexplained.
+
+Use `doc/stage2_dhrystone_backend_dse_plan_2026-05-10.md` as the current
+execution plan for the next DSE loop. The first branch is load-use wakeup and
+critical-consumer select attribution, then one structural backend behavior
+slice if the counters confirm the timing loss.
+
 ## Purpose
 
 The next optimization loop must move from short local policy variants to
