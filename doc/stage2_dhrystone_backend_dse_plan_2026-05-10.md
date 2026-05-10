@@ -2,9 +2,9 @@
 
 Date: May 10, 2026
 
-Status: instrumentation baseline implemented. This document is the backend
-Dhrystone/DMIPS pivot plan. It does not promote a behavior RTL optimization
-yet.
+Status: instrumentation baseline implemented and first LSU speculation DSE
+audited. This document is the backend Dhrystone/DMIPS pivot plan. It does not
+promote a behavior RTL optimization yet.
 
 ## Current Run State
 
@@ -16,6 +16,18 @@ yet.
   `benchmark_results/stage2_ds_backend_attr_t1b_20260510_005527`.
 - Same-day four-row profile used for DS/CM ranking:
   `benchmark_results/stage2_ds_backend_attr_t2_20260510_004044`.
+- Additional LSU reason-split counters were added and revalidated as
+  behavior-neutral:
+  `benchmark_results/stage2_ds_lsu_reason_counters_t1_20260510_104034`.
+- Rejected LSU behavior probes are kept as DSE evidence only:
+  - unconditional unresolved-store speculation:
+    `stage2_ds_lsu_spec_m1_t1_20260510_100945`,
+  - replay-trained memory-dependence prediction:
+    `stage2_ds_lsu_memdep_m1_t1_20260510_101458`,
+    `stage2_ds_lsu_memdep_t2_ds300_20260510_102919`,
+    `stage2_ds_lsu_memdep_t2_cm10_20260510_103007`,
+  - p1 same-cycle forward probe:
+    `stage2_ds_lsu_memdep_p1fwd_t2_20260510_102019`.
 - A later four-row rerun with the expanded load-issue display was stopped
   because the profiling overhead made it too slow and the run had not reached a
   useful complete artifact. That partial output is not used.
@@ -55,6 +67,10 @@ Implemented in the simulation harness only:
 - ROB head not-ready cause surfaced from the core.
 - Store-forward cause buckets: address missing, data missing, path busy,
   partial, spill hold, backlog, unknown.
+- Store queue reason outputs for address-unknown versus data-missing wait,
+  consumed only by unchanged LSU gating and the simulation harness.
+- Replay-safety counters for speculative unresolved-store loads, currently
+  expected to remain zero in the committed baseline.
 - Machine-readable load issue candidate/fire/lost-slot/suppress counters.
 
 Instrumentation validation:
@@ -62,11 +78,14 @@ Instrumentation validation:
 | Run | Rows | Result |
 |---|---|---|
 | `stage2_ds_backend_attr_t1b_20260510_005527` | DS100, CM1 | PASS, cycle-identical to baseline |
+| `stage2_ds_lsu_reason_counters_t1_20260510_104034` | DS100, CM1 | PASS, cycle-identical to baseline, exact SQ address/data wait reasons populated |
 | `build_xsim.sh` | full RTL/TB compile | PASS |
 | `build_dsim.sh` | full RTL/TB compile | PASS |
 
-The counter slice changes only `src/tb/tb_top.sv` and
-`tools/bottleneck_analysis.py`. No synthesizable behavior RTL is changed.
+The counter slice changes `store_queue.sv` and `lsu.sv` to expose reason
+signals, `tb_top.sv` to count them, and `tools/bottleneck_analysis.py` to
+classify them. The committed LSU gating remains behavior-equivalent to the
+baseline.
 
 ## Ranked Bottleneck Report
 
@@ -187,6 +206,43 @@ prove no wait or to forward. Higher-performance OoO designs typically reduce
 this loss with a load-store dependence predictor, store-set style predictor, or
 replay-backed speculative load issue guarded by violation detection.
 
+### M1 DSE Outcome: Do Not Promote
+
+The first unresolved-store speculation attempts did not meet the DS signoff
+gate.
+
+| Probe | DS100 timed cycles | DS300 timed cycles | CM1 timed cycles | CM10 timed cycles | Verdict |
+|---|---:|---:|---:|---:|---|
+| Fixed baseline | 18,161 | 53,469 | 154,233 | 1,491,334 | reference |
+| Unconditional unresolved-store speculation | 20,123 | not run | 157,061 | not run | rejected, replay storm |
+| Replay-trained memory-dependence predictor | 18,163 | 53,468 | 153,872 | 1,493,709 | rejected, DS flat and CM10 regresses |
+| p1 same-cycle forward probe | not promoted | ITERLIMIT | not promoted | 1,493,709 | rejected, simulator convergence failure |
+
+Counter evidence:
+
+- Unconditional speculation exposed the correctness cost: DS100 issued `1,505`
+  speculative unresolved-store loads and replayed `200`; CM1 issued `575` and
+  replayed `191`. Replay recovery erased any load-issue gain.
+- The replay-trained predictor reduced replay pressure to DS100 `4` and CM1
+  `1`, but it also blocked many of the same loads later and left DS cycles
+  essentially unchanged. CM10 regressed by about `2,375` timed cycles.
+- The p1 same-cycle forward probe produced no T1 score movement and triggered
+  a DSim timestep iteration-limit failure on DS300. It is quarantined, not a
+  candidate.
+
+Conclusion:
+
+- The new SQ reason counters prove most DS store-order loss is
+  address-unknown rather than data-missing: DS100 p0/p1 address-unknown
+  waits are `903/1099`, while data-missing waits are `200/0`.
+- Removing unresolved-store suppression does not move DS materially once replay
+  cost and downstream consumers are included.
+- M1 unresolved-store speculation is not the next promoted direction.
+- The next DS signoff attempt should target load-produced critical consumers,
+  especially branch and store-data consumers, because DS load wait remains
+  dominated by those classes and the load issue slot reduction did not shorten
+  the benchmark.
+
 Secondary issues to keep separate:
 
 - Port 1 same-line D-cache conflict is real but smaller for DS100
@@ -207,9 +263,9 @@ Any DS mechanism that increases CoreMark cycles should be rejected unless the
 regression is explained and fixed. The DS path should first target
 load-store/load-use timing without disturbing ALU scheduling.
 
-## Proposed First Structural Mechanism
+## Audited First Structural Mechanism
 
-First candidate: LSU memory-dependence and store-forward timing repair.
+First candidate audited: LSU memory-dependence and store-forward timing repair.
 
 This is a general OoO backend mechanism, not a Dhrystone shortcut. Loads that
 are blocked only because an older store address or store data becomes known in
@@ -258,8 +314,8 @@ Cycle target for the first promoted candidate:
 
 | Priority | Direction | Why it is in scope | Why it is not first |
 |---:|---|---|---|
-| 1 | LSU memory-dependence and store-forward timing | Strong DS lost-load evidence, especially same-cycle STA blocking. General OoO mechanism. | First. |
-| 2 | Load-use wakeup and critical-consumer select | Load wait is large and general. | Resident load-wakeup selection is already near perfect; enqueue bypass evidence was marginal. |
+| 1 | Load-use critical-consumer select for BRU and STD | DS load wait is dominated by branch and store-data consumers, and M1 showed load-issue suppression alone is not on the critical path. | First after M1 rejection. |
+| 2 | LSU memory-dependence and store-forward timing | Strong lost-load evidence remains, and reason counters are now precise. | First speculative approach was rejected; revisit only with a stronger predictor and CM10 guard evidence. |
 | 3 | Scheduler ready-at-enqueue visibility | Large across DS and CM. | Prior broad bypass DSE was marginal; needs a narrower causality contract. |
 | 4 | ALU-to-branch short-chain scheduling | Branch consumers waiting on load and ALU are visible. | Current CoreMark risk is high because ALU dependency dominates CM. |
 | 5 | ROB head/commit drain repair | Commit-zero exists on DS and larger on CM. | Likely downstream symptom until load/store and ALU producers improve. |
@@ -337,19 +393,21 @@ not accepted until this run is clean and committed.
 
 ## Execution Plan
 
-1. Commit the instrumentation-only counter baseline after T0/T1 validation.
-2. Inspect LSU/store queue interfaces for the smallest safe way to expose
-   same-cycle older-store address/data readiness to load issue.
-3. Add memory-order/replay safety counters before changing behavior.
-4. Implement one behavior slice for same-cycle STA/load issue timing. Do not
-   mix it with frontend policy, ALU chaining, or generic scheduler bypass.
-5. Run T1 and reject immediately if CM1 regresses or memory-order counters move.
+1. Commit the behavior-neutral LSU reason-counter baseline after T0/T1
+   validation.
+2. Treat unresolved-store speculation and p1 same-cycle forward as rejected DSE
+   until a materially different mechanism is proposed.
+3. Start the next behavior branch from load-produced critical consumers:
+   load-to-branch and load-to-store-data scheduling/selection.
+4. Add any missing counters before the behavior change, specifically selected
+   load wakeup to BRU/STD, missed same-cycle BRU/STD wakeup, and ROB-head wait
+   after a load-produced BRU/STD chain.
+5. Run T1 and reject immediately if CM1 regresses or memory-order/replay
+   counters move.
 6. Run T2 and require DS100 at least 3 percent faster, DS300 same direction at
    least 2 percent faster, and CM1/CM10 non-regression.
 7. Run T3 and full signoff only after T2 passes with the predicted counter
    movement.
-8. If the LSU slice is rejected, pivot to the second direction:
-   load-use critical-consumer select with a narrower causality contract.
 
 ## Signoff DS Design Breakdown
 
@@ -399,6 +457,10 @@ Exit criteria:
   guard counters.
 
 ### M1: Replay-Safe Load Past Unresolved Store
+
+Status: rejected as the next promoted direction by the May 10 DSE listed
+above. Keep this section as the contract required if the direction is revisited
+with a materially stronger predictor.
 
 Goal: prove that conservative unresolved-store blocking is a real performance
 limit and can be relaxed safely.

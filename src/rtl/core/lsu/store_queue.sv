@@ -42,6 +42,8 @@ module store_queue
     output logic fwd_hit,
     output logic fwd_partial,
     output logic fwd_wait,
+    output logic fwd_wait_addr_unknown,
+    output logic fwd_wait_data_missing,
     output logic [63:0] fwd_data,
 
     // Address-known / data-not-ready hazard check for a second load request
@@ -52,6 +54,8 @@ module store_queue
     output logic wait_fwd_hit,
     output logic wait_partial,
     output logic wait_wait,
+    output logic wait_wait_addr_unknown,
+    output logic wait_wait_data_missing,
     output logic [63:0] wait_data,
     output logic wait_hit,
     input logic [ROB_IDX_BITS-1:0] rob_head,
@@ -178,10 +182,14 @@ module store_queue
         logic [ROB_AGE_BITS-1:0] fwd_req_age;
         logic [7:0]              fwd_cover_mask;
         logic [7:0]              fwd_wait_mask;
+        logic [7:0]              fwd_wait_addr_mask;
+        logic [7:0]              fwd_wait_data_mask;
 
         fwd_req_age   = rob_age_from_head(fwd_req_rob_idx);
         fwd_cover_mask = '0;
         fwd_wait_mask  = '0;
+        fwd_wait_addr_mask = '0;
+        fwd_wait_data_mask = '0;
         fwd_data       = '0;
 
         for (int step = 0; step < SQ_DEPTH; step++) begin
@@ -245,6 +253,7 @@ module store_queue
 
 	                if (store_is_older && !scan_addr_valid) begin
 	                    fwd_wait_mask = fwd_wait_mask | uncovered_mask;
+	                    fwd_wait_addr_mask = fwd_wait_addr_mask | uncovered_mask;
 	                end else if (data_ready) begin
 	                    for (int b = 0; b < 8; b++) begin
 	                        if (uncovered_mask[b] &&
@@ -256,23 +265,30 @@ module store_queue
 	                    fwd_cover_mask = fwd_cover_mask | uncovered_mask;
                 end else begin
                     fwd_wait_mask = fwd_wait_mask | uncovered_mask;
+                    fwd_wait_data_mask = fwd_wait_data_mask | uncovered_mask;
                 end
             end
         end
 
-        fwd_hit     = fwd_req_valid && (fwd_cover_mask == fwd_req_bmask);
-        fwd_partial = fwd_req_valid && (fwd_cover_mask != 8'h00) && !fwd_hit;
-        fwd_wait    = fwd_req_valid && (fwd_wait_mask != 8'h00);
+        fwd_hit               = fwd_req_valid && (fwd_cover_mask == fwd_req_bmask);
+        fwd_partial           = fwd_req_valid && (fwd_cover_mask != 8'h00) && !fwd_hit;
+        fwd_wait              = fwd_req_valid && (fwd_wait_mask != 8'h00);
+        fwd_wait_addr_unknown = fwd_req_valid && (fwd_wait_addr_mask != 8'h00);
+        fwd_wait_data_missing = fwd_req_valid && (fwd_wait_data_mask != 8'h00);
     end
 
     always_comb begin
         logic [ROB_AGE_BITS-1:0] wait_req_age_now;
         logic [7:0]              wait_cover_mask;
         logic [7:0]              wait_wait_mask;
+        logic [7:0]              wait_wait_addr_mask;
+        logic [7:0]              wait_wait_data_mask;
 
         wait_req_age_now = rob_age_from_head(wait_req_rob_idx);
         wait_cover_mask  = '0;
         wait_wait_mask   = '0;
+        wait_wait_addr_mask = '0;
+        wait_wait_data_mask = '0;
         wait_data        = '0;
 
         for (int step = 0; step < SQ_DEPTH; step++) begin
@@ -336,6 +352,7 @@ module store_queue
 
 	                if (store_is_older && !scan_addr_valid) begin
 	                    wait_wait_mask = wait_wait_mask | uncovered_mask;
+	                    wait_wait_addr_mask = wait_wait_addr_mask | uncovered_mask;
 	                end else if (data_ready) begin
 	                    for (int b = 0; b < 8; b++) begin
 	                        if (uncovered_mask[b] &&
@@ -347,13 +364,16 @@ module store_queue
                     wait_cover_mask = wait_cover_mask | uncovered_mask;
                 end else begin
                     wait_wait_mask = wait_wait_mask | uncovered_mask;
+                    wait_wait_data_mask = wait_wait_data_mask | uncovered_mask;
                 end
             end
         end
 
-        wait_fwd_hit = wait_req_valid && (wait_cover_mask == wait_req_bmask);
-        wait_partial = wait_req_valid && (wait_cover_mask != 8'h00) && !wait_fwd_hit;
-        wait_wait    = wait_req_valid && (wait_wait_mask != 8'h00);
+        wait_fwd_hit           = wait_req_valid && (wait_cover_mask == wait_req_bmask);
+        wait_partial           = wait_req_valid && (wait_cover_mask != 8'h00) && !wait_fwd_hit;
+        wait_wait              = wait_req_valid && (wait_wait_mask != 8'h00);
+        wait_wait_addr_unknown = wait_req_valid && (wait_wait_addr_mask != 8'h00);
+        wait_wait_data_missing = wait_req_valid && (wait_wait_data_mask != 8'h00);
     end
 
     assign wait_hit     = wait_wait;

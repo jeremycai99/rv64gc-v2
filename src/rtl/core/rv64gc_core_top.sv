@@ -1659,19 +1659,8 @@ module rv64gc_core_top
     assign store_iq_load_probe_rob_idx[0] = iq_load_issue_data[0].rob_idx;
     assign store_iq_load_probe_rob_idx[1] = iq_load_issue_data[1].rob_idx;
 
-`ifndef SYNTHESIS
-    bit sim_allow_load_spec_past_sta;
-    initial sim_allow_load_spec_past_sta =
-        $test$plusargs("ALLOW_LOAD_SPEC_PAST_STA");
-`endif
-
-    assign lsu_load_issue_suppress = lsu_load_issue_suppress_raw |
-`ifndef SYNTHESIS
-                                     (sim_allow_load_spec_past_sta
-                                      ? 2'b00 : store_iq_older_than_load);
-`else
-                                     store_iq_older_than_load;
-`endif
+    assign lsu_load_issue_suppress =
+        lsu_load_issue_suppress_raw | store_iq_older_than_load;
 
     // =========================================================================
     // Dispatch routing: precompute renamed_insn_t to iq_entry_t conversion

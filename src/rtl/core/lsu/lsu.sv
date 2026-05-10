@@ -230,8 +230,12 @@ module lsu
     logic        sq_fwd_hit;
     logic        sq_fwd_partial;
     logic        sq_fwd_wait;
+    logic        sq_fwd_wait_addr_unknown;
+    logic        sq_fwd_wait_data_missing;
     logic [63:0] sq_fwd_data;
     logic        sq_wait_p1;
+    logic        sq_wait_p1_addr_unknown;
+    logic        sq_wait_p1_data_missing;
     logic        sq_fwd_hit_p1;
     logic        sq_fwd_partial_p1;
     logic [63:0] sq_fwd_data_p1;
@@ -245,6 +249,9 @@ module lsu
     logic        csb_fwd_hit_p1;
     logic [63:0] csb_fwd_data_p1;
     logic        p1_any_fwd_hit;
+    logic        p0_sq_order_wait_block;
+    logic        p1_sq_order_wait_block;
+    logic [1:0]  load_issue_spec_past_addr_unknown;
 
     // =========================================================================
     // Same-cycle STA/STD → load forwarding bypass
@@ -419,6 +426,8 @@ module lsu
         .fwd_hit         (sq_fwd_hit),
         .fwd_partial     (sq_fwd_partial),
         .fwd_wait        (sq_fwd_wait),
+        .fwd_wait_addr_unknown(sq_fwd_wait_addr_unknown),
+        .fwd_wait_data_missing(sq_fwd_wait_data_missing),
         .fwd_data        (sq_fwd_data),
         .wait_req_valid  (p1_wait_req_valid),
         .wait_req_addr   (p1_wait_req_addr),
@@ -427,6 +436,8 @@ module lsu
         .wait_fwd_hit    (sq_fwd_hit_p1),
         .wait_partial    (sq_fwd_partial_p1),
         .wait_wait       (sq_wait_p1),
+        .wait_wait_addr_unknown(sq_wait_p1_addr_unknown),
+        .wait_wait_data_missing(sq_wait_p1_data_missing),
         .wait_data       (sq_fwd_data_p1),
         .wait_hit        (),
         // Commit
@@ -762,6 +773,10 @@ module lsu
     // p0_fwd_hit declared earlier (forward decl)
     assign p0_fwd_hit = same_cycle_fwd_hit | sq_fwd_hit | csb_fwd_hit;
     assign p1_any_fwd_hit = sq_fwd_hit_p1 | csb_fwd_hit_p1;
+    assign p0_sq_order_wait_block =
+        sq_fwd_wait_data_missing || sq_fwd_wait_addr_unknown;
+    assign p1_sq_order_wait_block =
+        sq_wait_p1_data_missing || sq_wait_p1_addr_unknown;
 
     // -------------------------------------------------------------------------
     // Port-1 retry hold register for d-cache same-set conflicts.
@@ -809,7 +824,7 @@ module lsu
         p1_eff_valid &&
         !p1_eff_misalign &&
         p1_any_fwd_hit &&
-        !sq_wait_p1 &&
+        !p1_sq_order_wait_block &&
         !sq_fwd_partial_p1 &&
         !sta_issue_valid &&
         !p1_normal_wb_valid &&
@@ -820,7 +835,7 @@ module lsu
         load_issue_candidate_valid[0] &&
         ~load_addr_misaligned[0] &&
         ~flush_in.valid &&
-        (sq_fwd_wait || same_cycle_sta_wait0 || fwd_hold_blocked);
+        (p0_sq_order_wait_block || same_cycle_sta_wait0 || fwd_hold_blocked);
 
 `ifndef SYNTHESIS
     bit sim_allow_same_line_dual_load;
@@ -1028,19 +1043,21 @@ module lsu
         !load_addr_misaligned[1] &&
         !flush_in.valid &&
         p1_any_fwd_hit &&
-        !sq_wait_p1 &&
+        !p1_sq_order_wait_block &&
         p1_fwd_hold_valid_r;
 
     assign load_issue_suppress[1] =
         load_issue_candidate_valid[1] &&
         (p1_retry_valid_r ||
          (!load_addr_misaligned[1] && !flush_in.valid && !p1_retry_valid_r &&
-          (sq_wait_p1 || sq_fwd_partial_p1 || p1_fwd_blocked ||
+          (p1_sq_order_wait_block || sq_fwd_partial_p1 || p1_fwd_blocked ||
            same_cycle_sta_wait1 || lq_p1_issue_block)));
+
+    assign load_issue_spec_past_addr_unknown = 2'b00;
 
     always_comb begin
         if (p1_retry_valid_r) begin
-            p1_eff_valid    = !sq_wait_p1 &&
+            p1_eff_valid    = !p1_sq_order_wait_block &&
                               !sq_fwd_partial_p1 &&
                               !lq_p1_issue_block &&
                               (!p1_any_fwd_hit || !p1_fwd_hold_valid_r);
@@ -1049,7 +1066,7 @@ module lsu
             p1_eff_misalign = p1_retry_misalign_r;
             p1_eff_nocache  = p1_retry_load_nocache_r |
                               p1_any_fwd_hit | sq_fwd_partial_p1;
-        end else if (load_issue_valid[1] && !sq_wait_p1 && !sq_fwd_partial_p1 &&
+        end else if (load_issue_valid[1] && !p1_sq_order_wait_block && !sq_fwd_partial_p1 &&
                      !lq_p1_issue_block &&
                      (p1_any_fwd_hit ? !p1_fwd_hold_valid_r : !dcache_conflict)) begin
             p1_eff_valid    = 1'b1;
@@ -1079,12 +1096,13 @@ module lsu
                 // Drain after one cycle unless the retried load is still
                 // blocked by an older store whose address is known but whose
                 // data has not reached the SQ yet.
-                if (!sq_wait_p1 && !sq_fwd_partial_p1 &&
+                if (!p1_sq_order_wait_block && !sq_fwd_partial_p1 &&
                     !lq_p1_issue_block &&
                     (!p1_any_fwd_hit || !p1_fwd_hold_valid_r))
                     p1_retry_valid_r <= 1'b0;
             end
-            if (dcache_conflict && !sq_wait_p1 && !sq_fwd_partial_p1 && !p1_any_fwd_hit) begin
+            if (dcache_conflict && !p1_sq_order_wait_block &&
+                !sq_fwd_partial_p1 && !p1_any_fwd_hit) begin
                 p1_retry_valid_r        <= 1'b1;
                 p1_retry_data_r         <= load_issue_data[1];
                 p1_retry_addr_r         <= load_eff_addr[1];
@@ -1737,7 +1755,7 @@ module lsu
                 p1_eff_valid &&
                 !p1_eff_misalign &&
                 p1_any_fwd_hit &&
-                !sq_wait_p1 &&
+                !p1_sq_order_wait_block &&
                 !flush_in.valid) begin
                 p1_fwd_hold_valid_r   <= 1'b1;
                 p1_fwd_hold_rob_idx_r <= p1_eff_data.rob_idx;

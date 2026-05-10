@@ -790,6 +790,17 @@ module tb_top
     integer btl_lsu_store_fwd_spill_hold;
     integer btl_lsu_store_fwd_backlog;
     integer btl_lsu_store_fwd_unknown;
+    integer btl_lsu_sq_addr_unknown_p0;
+    integer btl_lsu_sq_addr_unknown_p1;
+    integer btl_lsu_sq_data_missing_p0;
+    integer btl_lsu_sq_data_missing_p1;
+    integer btl_lsu_spec_past_addr_unknown_p0;
+    integer btl_lsu_spec_past_addr_unknown_p1;
+    integer btl_lsu_ordering_violation_total;
+    integer btl_lsu_spec_replay_total;
+    integer btl_lsu_replay_valid_total;
+    integer btl_lsu_spec_killed_by_flush;
+    logic [ROB_DEPTH-1:0] lsu_spec_load_rob_r;
     localparam int LOAD_LAT_BUCKETS = 10;
     localparam int LOAD_LAT_PC_HIST_SLOTS = 24;
     localparam int LOAD_SRC_DCHIT  = 0;
@@ -1075,6 +1086,17 @@ module tb_top
             btl_lsu_store_fwd_spill_hold <= 0;
             btl_lsu_store_fwd_backlog <= 0;
             btl_lsu_store_fwd_unknown <= 0;
+            btl_lsu_sq_addr_unknown_p0 <= 0;
+            btl_lsu_sq_addr_unknown_p1 <= 0;
+            btl_lsu_sq_data_missing_p0 <= 0;
+            btl_lsu_sq_data_missing_p1 <= 0;
+            btl_lsu_spec_past_addr_unknown_p0 <= 0;
+            btl_lsu_spec_past_addr_unknown_p1 <= 0;
+            btl_lsu_ordering_violation_total <= 0;
+            btl_lsu_spec_replay_total <= 0;
+            btl_lsu_replay_valid_total <= 0;
+            btl_lsu_spec_killed_by_flush <= 0;
+            lsu_spec_load_rob_r <= '0;
             load_lat_issue_total <= 0;
             load_lat_reissue_total <= 0;
             load_lat_wb_total <= 0;
@@ -4196,6 +4218,79 @@ module tb_top
             if (u_core.u_lsu.p1_retry_valid_r)           p1_retry_valid_cyc <= p1_retry_valid_cyc + 1;
             if (u_core.u_lsu.p1_retry_valid_r && !prev_p1_retry_valid)
                 p1_retry_capture_cyc <= p1_retry_capture_cyc + 1;
+            begin : lsu_spec_order_profile
+                logic [ROB_DEPTH-1:0] next_spec_load_rob;
+                logic replay_flush_now;
+                int clear_idx;
+                int killed_now;
+                int spec_idx;
+
+                next_spec_load_rob = lsu_spec_load_rob_r;
+                replay_flush_now   = 1'b0;
+                killed_now         = 0;
+
+                if (u_core.u_lsu.sq_fwd_wait_addr_unknown)
+                    btl_lsu_sq_addr_unknown_p0 <= btl_lsu_sq_addr_unknown_p0 + 1;
+                if (u_core.u_lsu.sq_wait_p1_addr_unknown)
+                    btl_lsu_sq_addr_unknown_p1 <= btl_lsu_sq_addr_unknown_p1 + 1;
+                if (u_core.u_lsu.sq_fwd_wait_data_missing)
+                    btl_lsu_sq_data_missing_p0 <= btl_lsu_sq_data_missing_p0 + 1;
+                if (u_core.u_lsu.sq_wait_p1_data_missing)
+                    btl_lsu_sq_data_missing_p1 <= btl_lsu_sq_data_missing_p1 + 1;
+                if (u_core.u_lsu.load_issue_spec_past_addr_unknown[0]) begin
+                    btl_lsu_spec_past_addr_unknown_p0 <=
+                        btl_lsu_spec_past_addr_unknown_p0 + 1;
+                    spec_idx = int'(u_core.iq_load_issue_data[0].rob_idx);
+                    if (spec_idx < ROB_DEPTH)
+                        next_spec_load_rob[spec_idx] = 1'b1;
+                end
+                if (u_core.u_lsu.load_issue_spec_past_addr_unknown[1]) begin
+                    btl_lsu_spec_past_addr_unknown_p1 <=
+                        btl_lsu_spec_past_addr_unknown_p1 + 1;
+                    spec_idx = int'(u_core.u_lsu.p1_eff_data.rob_idx);
+                    if (spec_idx < ROB_DEPTH)
+                        next_spec_load_rob[spec_idx] = 1'b1;
+                end
+
+                if (u_core.lsu_ordering_violation) begin
+                    btl_lsu_ordering_violation_total <=
+                        btl_lsu_ordering_violation_total + 1;
+                    if (lsu_spec_load_rob_r[int'(u_core.lsu_violation_rob_idx)])
+                        btl_lsu_spec_replay_total <= btl_lsu_spec_replay_total + 1;
+                end
+                if (u_core.replay_valid)
+                    btl_lsu_replay_valid_total <= btl_lsu_replay_valid_total + 1;
+
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if (u_core.rob_head_valid[i] &&
+                        u_core.rob_head_has_exception[i] &&
+                        (u_core.rob_head_exc_code[i] == 4'd15))
+                        replay_flush_now = 1'b1;
+                end
+
+                if (u_core.flush_out.valid && u_core.flush_out.full_flush) begin
+                    if (!replay_flush_now) begin
+                        for (int r = 0; r < ROB_DEPTH; r++) begin
+                            if (next_spec_load_rob[r])
+                                killed_now++;
+                        end
+                        btl_lsu_spec_killed_by_flush <=
+                            btl_lsu_spec_killed_by_flush + killed_now;
+                    end
+                    next_spec_load_rob = '0;
+                end else begin
+                    for (int c = 0; c < PIPE_WIDTH; c++) begin
+                        if (c < int'(u_core.commit_count)) begin
+                            clear_idx = int'(u_core.rob_head_idx) + c;
+                            if (clear_idx >= ROB_DEPTH)
+                                clear_idx = clear_idx - ROB_DEPTH;
+                            next_spec_load_rob[clear_idx] = 1'b0;
+                        end
+                    end
+                end
+
+                lsu_spec_load_rob_r <= next_spec_load_rob;
+            end
 
             begin : load_latency_profile
                 int issue_idx;
@@ -5111,6 +5206,25 @@ module tb_top
                 $display("xs bottleneck_lsu_store_fwd_spill_hold : %0d", btl_lsu_store_fwd_spill_hold);
                 $display("xs bottleneck_lsu_store_fwd_backlog : %0d", btl_lsu_store_fwd_backlog);
                 $display("xs bottleneck_lsu_store_fwd_unknown : %0d", btl_lsu_store_fwd_unknown);
+                $display("xs bottleneck_lsu_sq_addr_unknown_p0 : %0d", btl_lsu_sq_addr_unknown_p0);
+                $display("xs bottleneck_lsu_sq_addr_unknown_p1 : %0d", btl_lsu_sq_addr_unknown_p1);
+                $display("xs bottleneck_lsu_sq_data_missing_p0 : %0d", btl_lsu_sq_data_missing_p0);
+                $display("xs bottleneck_lsu_sq_data_missing_p1 : %0d", btl_lsu_sq_data_missing_p1);
+                $display("xs bottleneck_lsu_spec_past_addr_unknown_total : %0d",
+                    btl_lsu_spec_past_addr_unknown_p0 +
+                    btl_lsu_spec_past_addr_unknown_p1);
+                $display("xs bottleneck_lsu_spec_past_addr_unknown_p0 : %0d",
+                    btl_lsu_spec_past_addr_unknown_p0);
+                $display("xs bottleneck_lsu_spec_past_addr_unknown_p1 : %0d",
+                    btl_lsu_spec_past_addr_unknown_p1);
+                $display("xs bottleneck_lsu_ordering_violations : %0d",
+                    btl_lsu_ordering_violation_total);
+                $display("xs bottleneck_lsu_spec_replays : %0d",
+                    btl_lsu_spec_replay_total);
+                $display("xs bottleneck_lsu_replay_valid : %0d",
+                    btl_lsu_replay_valid_total);
+                $display("xs bottleneck_lsu_spec_killed_by_flush : %0d",
+                    btl_lsu_spec_killed_by_flush);
                 $display("xs bottleneck_lsu_dcache_port_wait : %0d", p1_dcache_conflict_cyc);
                 $display("xs bottleneck_lsu_dual_load_conflict : %0d", p1_dcache_conflict_cyc);
                 $display("xs bottleneck_lsu_p1_retry_live : %0d", p1_retry_valid_cyc);
