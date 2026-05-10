@@ -978,9 +978,69 @@ Behavior-neutral first slice:
   suppression from a suppressed packet that should have been delivered through
   a different owner phase.
 
+Delivery-scoreboard instrumentation result, May 9, 2026:
+
+- Instrumentation commit: `96a655d Add fetch delivery scoreboard counters`.
+- T1 artifact: `benchmark_results/stage2_delivery_scoreboard_t1_20260509`.
+- T2 artifact: `benchmark_results/stage2_delivery_scoreboard_t2_20260509`.
+- T2 rank report:
+  `benchmark_results/stage2_delivery_scoreboard_t2_20260509/bottleneck_rank.md`.
+- T1 and T2 passed strict owner, delivery, and branch-recovery checks.
+- Cycles matched the locked baseline exactly on all six T2 rows, so this is
+  behavior-neutral evidence.
+- New delivery invariants stayed clean:
+  `xs_delivery_owner_switch=0` and `xs_delivery_noncontig_pcs=0` on every T2
+  row.
+
+| Row | Data no-emit | Score active | Expected-PC no-emit | Already-delivered no-emit | Dup expected-PC | Dup already-delivered | Redirect hold | Control | Taken control |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | `289` | `6,537` | `6` | `213` | `0` | `212` | `6` | `3` | `3` |
+| CoreMark 10 | `83,016` | `479,647` | `3,508` | `32,267` | `1` | `32,257` | `3,507` | `2,262` | `1,927` |
+| CoreMark 1 | `9,741` | `51,672` | `433` | `3,605` | `1` | `3,603` | `432` | `279` | `244` |
+| Frontend mixed branch dense | `425` | `373` | `19` | `0` | `0` | `0` | `19` | `19` | `19` |
+| Backend ALU chain 8 | `2` | `2,010` | `1` | `0` | `0` | `0` | `1` | `1` | `1` |
+| Branch hotspot | `30,172` | `64,551` | `1,974` | `25,328` | `0` | `23,635` | `1,974` | `1,712` | `41` |
+
+Interpretation:
+
+- Local duplicate-suppression removal is not justified. The scoreboard sees
+  almost no duplicate-suppressed no-emit cycles at the next required PC:
+  CoreMark 10 has `1`, CoreMark 1 has `1`, and branch hotspot has `0`.
+- The dominant duplicate bucket is already-delivered or non-next-PC repetition:
+  CoreMark 10 has `32,257` duplicate already-delivered cycles and branch
+  hotspot has `23,635`. Emitting those packets would be wrong; the frontend
+  must advance or redirect the owner cursor instead.
+- Expected-PC no-emit is mostly redirect hold: CoreMark 10 has
+  `3,507/3,508`, CoreMark 1 has `432/433`, and branch hotspot has
+  `1,974/1,974`. That ties the remaining legal-delivery stalls back to the
+  Branch A/B redirect and owner handoff contract.
+- The next B1 slice should not be a behavior patch. It should add
+  post-delivery cursor attribution for why F2 revisits an already-delivered PC
+  instead of moving to the scoreboard's next required PC.
+
+Required B1b attribution before behavior:
+
+- Split already-delivered no-emit by whether the scoreboard next PC is same
+  line, cross line, predicted target, branch target, or unknown.
+- Split by IFU cursor state: current `work_pc`, `seq_next_pc`, requested PC,
+  duplicate next PC, successor request validity, runahead pending, and
+  `ftq_next_owner` stability.
+- Split by redirect state: commit redirect, BPU redirect, request redirect, and
+  redirect target equal to scoreboard next PC.
+- Split by line availability: line-state reuse, ICQ hit/mismatch, data wait,
+  and future-line head block.
+- Only after that attribution identifies a structural owner-cursor bug should a
+  behavior trial modify duplicate, redirect, or successor handoff.
+
 Behavior slice candidates, in order:
 
-1. Control-aware duplicate cursor recovery.
+1. Post-delivery cursor advancement or redirect/refill repair.
+   - Move the IFU work cursor from an already-delivered/non-next PC toward the
+     scoreboard next required PC through FTQ, IFU, IBuffer, and BPU ownership.
+   - This is the current first behavior candidate, but only after B1b proves
+     the missing handoff source.
+
+2. Control-aware duplicate cursor recovery.
    - Permit IFU/F2 to advance past a duplicate-held packet only when the
      delivery scoreboard proves the packet is already delivered for that exact
      owner and epoch.
@@ -989,14 +1049,14 @@ Behavior slice candidates, in order:
    - Convert `last_emitted_pc` from a global throttle into an owner/epoch
      assertion for the safe subset.
 
-2. Redirect no-emit recovery handoff.
+3. Redirect no-emit recovery handoff.
    - When data-present no-emit is redirect-driven and the packet buffer is
      empty, explicitly classify whether the owner should be killed, replayed,
      or delivered.
    - The handoff must update FTQ, IFU cursor, IBuffer, and BPU history from one
      owner rule. No local PC steering in IFU is allowed.
 
-3. Owner-aware delivery capacity only if counters justify it.
+4. Owner-aware delivery capacity only if counters justify it.
    - Add packet storage only for rows where `xs_data_no_emit_pktbuf_full`,
      packet age, or downstream drain evidence explains the loss.
    - Each entry must carry FTQ index, owner epoch, start PC, packet valid mask,
@@ -1365,23 +1425,29 @@ Immediate next steps:
    `stage2_branch_selective_recovery_t1_20260509` as rejected behavior trials.
    They show that available recovery candidates are not enough; the recovery
    scheduler and redirect/refill contract must be repaired first.
-5. Add a Branch B1 delivery scoreboard before changing duplicate or redirect
-   handoff behavior. The scoreboard is the promotion guard for any attempt to
-   make duplicate suppression assertion-only in a safe subset.
-6. Choose the first behavior trial from the updated A1/B1 report:
+5. Treat `stage2_delivery_scoreboard_t1_20260509` and
+   `stage2_delivery_scoreboard_t2_20260509` as completed B1a
+   behavior-neutral evidence. The scoreboard rejects local duplicate-emission
+   as the next behavior because expected-PC duplicate suppression is near zero.
+6. Add B1b post-delivery cursor attribution before changing duplicate or
+   redirect handoff behavior. The key question is why F2 revisits an
+   already-delivered or non-next PC while the scoreboard has a different next
+   required PC.
+7. Choose the first behavior trial from the updated A1/B1b report:
    - If redirect refill and recovery attempt cost dominate, implement a
      resource-aware Branch A recovery scheduler before enabling backend-only
      recovery.
-   - If duplicate/control live-owner no-emit dominates with provable delivered
-     PCs, implement B1 control-aware duplicate cursor recovery.
+   - If post-delivery cursor attribution shows a general owner-cursor handoff
+     bug, implement B1 post-delivery cursor advancement or redirect/refill
+     repair.
    - If packet-full and packet age become dominant after those fixes, implement
      B2 capacity.
-6. Run every behavior trial with an explicit prediction before measurement.
+8. Run every behavior trial with an explicit prediction before measurement.
    B1 examples:
    `--targets-counter xs_data_no_emit_pktbuf_empty` and
    `--expect-counter-decrease xs_data_no_emit_pktbuf_empty:<predicted_delta>`.
    A1 examples:
    `--targets-counter xs_bottleneck_fe_redirect_recovery` and
    `--expect-counter-decrease xs_bottleneck_fe_redirect_recovery:<predicted_delta>`.
-7. Promote only if T2 shows meaningful broad movement, then run the full
+9. Promote only if T2 shows meaningful broad movement, then run the full
    16-row signoff before updating the Stage 2 baseline.
