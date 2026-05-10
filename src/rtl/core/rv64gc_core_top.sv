@@ -2421,6 +2421,46 @@ module rv64gc_core_top
     end
 
 `ifdef SIMULATION
+    logic sim_branch_opportunity_en;
+    logic [CDB_WIDTH-1:0] sim_a0_cdb_mispredict_slot;
+    logic [2:0] sim_a0_candidate_type_c;
+    logic [ROB_IDX_BITS:0] sim_a0_candidate_age_c;
+    logic [ROB_IDX_BITS:0] sim_a0_entry_age_c [0:ROB_DEPTH-1];
+    logic [ROB_IDX_BITS:0] sim_a0_rob_occ_c;
+    logic [ROB_IDX_BITS:0] sim_a0_younger_count_c;
+    integer sim_a0_ready_younger_count_c;
+    integer sim_a0_cdb_mispredict_cycles;
+    integer sim_a0_cdb_mispredict_slots;
+    integer sim_a0_type_cond;
+    integer sim_a0_type_jal;
+    integer sim_a0_type_jalr;
+    integer sim_a0_type_call;
+    integer sim_a0_type_ret;
+    integer sim_a0_age_head;
+    integer sim_a0_age_near;
+    integer sim_a0_age_mid;
+    integer sim_a0_age_far;
+    integer sim_a0_age_older;
+    integer sim_a0_age_sum;
+    integer sim_a0_age_max;
+    integer sim_a0_checkpoint_any;
+    integer sim_a0_checkpoint_at_branch;
+    integer sim_a0_checkpoint_missing;
+    integer sim_a0_side_effect;
+    integer sim_a0_partial_candidate;
+    integer sim_a0_partial_resource_ok;
+    integer sim_a0_reject_commit;
+    integer sim_a0_reject_rename;
+    integer sim_a0_reject_uoc;
+    integer sim_a0_reject_side_effect;
+    integer sim_a0_reject_checkpoint;
+    integer sim_a0_reject_rename_headroom;
+    integer sim_a0_reject_frontend_headroom;
+    integer sim_a0_reject_burst;
+    integer sim_a0_younger_sum;
+    integer sim_a0_younger_ready_sum;
+    integer sim_a0_younger_max;
+    integer sim_a0_younger_ready_max;
     integer sim_sel_rec_cdb_mispredict;
     integer sim_sel_rec_candidate;
     integer sim_sel_rec_accepted;
@@ -2433,8 +2473,92 @@ module rv64gc_core_top
     integer sim_sel_rec_reject_frontend_headroom;
     integer sim_sel_rec_reject_burst;
 
+    initial begin
+        sim_branch_opportunity_en =
+            $test$plusargs("PERF_PROFILE") ||
+            $test$plusargs("STAT_DUMP") ||
+            $test$plusargs("TRACE_BRANCH_OPPORTUNITY");
+    end
+
+    always_comb begin
+        sim_a0_cdb_mispredict_slot = '0;
+        for (int i = 0; i < CDB_WIDTH; i++) begin
+            sim_a0_cdb_mispredict_slot[i] =
+                cdb_valid_r[i] && cdb_is_branch_r[i] &&
+                cdb_branch_mispredict_r[i];
+        end
+
+        sim_a0_candidate_type_c = u_rob.bpu_type_r[bru_partial_candidate_rob_idx];
+
+        if (bru_partial_candidate_rob_idx >= rob_head_idx) begin
+            sim_a0_candidate_age_c =
+                {1'b0, bru_partial_candidate_rob_idx} - {1'b0, rob_head_idx};
+        end else begin
+            sim_a0_candidate_age_c =
+                (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                {1'b0, rob_head_idx} + {1'b0, bru_partial_candidate_rob_idx};
+        end
+
+        sim_a0_rob_occ_c = (ROB_IDX_BITS+1)'(ROB_DEPTH) - rob_free_count;
+        sim_a0_younger_count_c =
+            (sim_a0_rob_occ_c > (sim_a0_candidate_age_c + 1'b1))
+                ? (sim_a0_rob_occ_c - sim_a0_candidate_age_c - 1'b1)
+                : '0;
+        sim_a0_ready_younger_count_c = 0;
+        for (int i = 0; i < ROB_DEPTH; i++) begin
+            if (ROB_IDX_BITS'(i) >= rob_head_idx) begin
+                sim_a0_entry_age_c[i] =
+                    {1'b0, ROB_IDX_BITS'(i)} - {1'b0, rob_head_idx};
+            end else begin
+                sim_a0_entry_age_c[i] =
+                    (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                    {1'b0, rob_head_idx} + {1'b0, ROB_IDX_BITS'(i)};
+            end
+
+            if (u_rob.valid_r[i] &&
+                (sim_a0_entry_age_c[i] > sim_a0_candidate_age_c) &&
+                (sim_a0_entry_age_c[i] < sim_a0_rob_occ_c) &&
+                u_rob.ready_r[i]) begin
+                sim_a0_ready_younger_count_c =
+                    sim_a0_ready_younger_count_c + 1;
+            end
+        end
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            sim_a0_cdb_mispredict_cycles       <= 0;
+            sim_a0_cdb_mispredict_slots        <= 0;
+            sim_a0_type_cond                   <= 0;
+            sim_a0_type_jal                    <= 0;
+            sim_a0_type_jalr                   <= 0;
+            sim_a0_type_call                   <= 0;
+            sim_a0_type_ret                    <= 0;
+            sim_a0_age_head                    <= 0;
+            sim_a0_age_near                    <= 0;
+            sim_a0_age_mid                     <= 0;
+            sim_a0_age_far                     <= 0;
+            sim_a0_age_older                   <= 0;
+            sim_a0_age_sum                     <= 0;
+            sim_a0_age_max                     <= 0;
+            sim_a0_checkpoint_any              <= 0;
+            sim_a0_checkpoint_at_branch        <= 0;
+            sim_a0_checkpoint_missing          <= 0;
+            sim_a0_side_effect                 <= 0;
+            sim_a0_partial_candidate           <= 0;
+            sim_a0_partial_resource_ok         <= 0;
+            sim_a0_reject_commit               <= 0;
+            sim_a0_reject_rename               <= 0;
+            sim_a0_reject_uoc                  <= 0;
+            sim_a0_reject_side_effect          <= 0;
+            sim_a0_reject_checkpoint           <= 0;
+            sim_a0_reject_rename_headroom      <= 0;
+            sim_a0_reject_frontend_headroom    <= 0;
+            sim_a0_reject_burst                <= 0;
+            sim_a0_younger_sum                 <= 0;
+            sim_a0_younger_ready_sum           <= 0;
+            sim_a0_younger_max                 <= 0;
+            sim_a0_younger_ready_max           <= 0;
             sim_sel_rec_cdb_mispredict       <= 0;
             sim_sel_rec_candidate            <= 0;
             sim_sel_rec_accepted             <= 0;
@@ -2446,49 +2570,208 @@ module rv64gc_core_top
             sim_sel_rec_reject_rename_headroom <= 0;
             sim_sel_rec_reject_frontend_headroom <= 0;
             sim_sel_rec_reject_burst         <= 0;
-        end else if (sim_selective_branch_recovery) begin
-            if (bru_partial_cdb_mispredict_valid) begin
-                sim_sel_rec_cdb_mispredict <=
-                    sim_sel_rec_cdb_mispredict + 1;
+        end else begin
+            if (sim_branch_opportunity_en &&
+                bru_partial_cdb_mispredict_valid) begin
+                sim_a0_cdb_mispredict_cycles <=
+                    sim_a0_cdb_mispredict_cycles + 1;
+                sim_a0_cdb_mispredict_slots <=
+                    sim_a0_cdb_mispredict_slots +
+                    (sim_a0_cdb_mispredict_slot[0] ? 1 : 0) +
+                    (sim_a0_cdb_mispredict_slot[1] ? 1 : 0);
+
+                case (sim_a0_candidate_type_c)
+                    BT_JAL:  sim_a0_type_jal  <= sim_a0_type_jal + 1;
+                    BT_JALR: sim_a0_type_jalr <= sim_a0_type_jalr + 1;
+                    BT_CALL: sim_a0_type_call <= sim_a0_type_call + 1;
+                    BT_RET:  sim_a0_type_ret  <= sim_a0_type_ret + 1;
+                    default: sim_a0_type_cond <= sim_a0_type_cond + 1;
+                endcase
+
+                if (sim_a0_candidate_age_c == '0) begin
+                    sim_a0_age_head <= sim_a0_age_head + 1;
+                end else if (sim_a0_candidate_age_c <= (ROB_IDX_BITS+1)'(3)) begin
+                    sim_a0_age_near <= sim_a0_age_near + 1;
+                end else if (sim_a0_candidate_age_c <= (ROB_IDX_BITS+1)'(15)) begin
+                    sim_a0_age_mid <= sim_a0_age_mid + 1;
+                end else if (sim_a0_candidate_age_c <= (ROB_IDX_BITS+1)'(63)) begin
+                    sim_a0_age_far <= sim_a0_age_far + 1;
+                end else begin
+                    sim_a0_age_older <= sim_a0_age_older + 1;
+                end
+                sim_a0_age_sum <= sim_a0_age_sum + int'(sim_a0_candidate_age_c);
+                if (int'(sim_a0_candidate_age_c) > sim_a0_age_max) begin
+                    sim_a0_age_max <= int'(sim_a0_candidate_age_c);
+                end
+
+                if (rob_uses_checkpoint[bru_partial_candidate_rob_idx]) begin
+                    sim_a0_checkpoint_any <= sim_a0_checkpoint_any + 1;
+                end else begin
+                    sim_a0_checkpoint_missing <= sim_a0_checkpoint_missing + 1;
+                end
+                if (rob_uses_checkpoint[bru_partial_candidate_rob_idx] &&
+                    (rob_checkpoint_tail[bru_partial_candidate_rob_idx] ==
+                     bru_partial_candidate_rob_idx)) begin
+                    sim_a0_checkpoint_at_branch <=
+                        sim_a0_checkpoint_at_branch + 1;
+                end
+                if (rename_buf[bru_partial_candidate_rob_idx].rd_valid) begin
+                    sim_a0_side_effect <= sim_a0_side_effect + 1;
+                end
+
+                sim_a0_younger_sum <=
+                    sim_a0_younger_sum + int'(sim_a0_younger_count_c);
+                sim_a0_younger_ready_sum <=
+                    sim_a0_younger_ready_sum + sim_a0_ready_younger_count_c;
+                if (int'(sim_a0_younger_count_c) > sim_a0_younger_max) begin
+                    sim_a0_younger_max <= int'(sim_a0_younger_count_c);
+                end
+                if (sim_a0_ready_younger_count_c >
+                    sim_a0_younger_ready_max) begin
+                    sim_a0_younger_ready_max <= sim_a0_ready_younger_count_c;
+                end
 
                 if (bru_partial_candidate_valid) begin
-                    sim_sel_rec_candidate <= sim_sel_rec_candidate + 1;
+                    sim_a0_partial_candidate <= sim_a0_partial_candidate + 1;
+                    if (selective_branch_recovery_resource_ok) begin
+                        sim_a0_partial_resource_ok <=
+                            sim_a0_partial_resource_ok + 1;
+                    end else if (!rename_recovery_headroom_ok) begin
+                        sim_a0_reject_rename_headroom <=
+                            sim_a0_reject_rename_headroom + 1;
+                    end else if (!frontend_recovery_headroom_ok) begin
+                        sim_a0_reject_frontend_headroom <=
+                            sim_a0_reject_frontend_headroom + 1;
+                    end else if (!branch_recovery_burst_ready) begin
+                        sim_a0_reject_burst <= sim_a0_reject_burst + 1;
+                    end
                 end else if (commit_flush.valid) begin
-                    sim_sel_rec_reject_commit <=
-                        sim_sel_rec_reject_commit + 1;
+                    sim_a0_reject_commit <= sim_a0_reject_commit + 1;
                 end else if (rename_stall) begin
-                    sim_sel_rec_reject_rename <=
-                        sim_sel_rec_reject_rename + 1;
+                    sim_a0_reject_rename <= sim_a0_reject_rename + 1;
                 end else if (uoc_active) begin
-                    sim_sel_rec_reject_uoc <=
-                        sim_sel_rec_reject_uoc + 1;
+                    sim_a0_reject_uoc <= sim_a0_reject_uoc + 1;
                 end else if (rename_buf[bru_partial_candidate_rob_idx].rd_valid) begin
-                    sim_sel_rec_reject_side_effect <=
-                        sim_sel_rec_reject_side_effect + 1;
+                    sim_a0_reject_side_effect <=
+                        sim_a0_reject_side_effect + 1;
                 end else begin
-                    sim_sel_rec_reject_checkpoint <=
-                        sim_sel_rec_reject_checkpoint + 1;
+                    sim_a0_reject_checkpoint <= sim_a0_reject_checkpoint + 1;
                 end
             end
 
-            if (bru_partial_candidate_valid) begin
-                if (bru_partial_recovery_valid) begin
-                    sim_sel_rec_accepted <= sim_sel_rec_accepted + 1;
-                end else if (!rename_recovery_headroom_ok) begin
-                    sim_sel_rec_reject_rename_headroom <=
-                        sim_sel_rec_reject_rename_headroom + 1;
-                end else if (!frontend_recovery_headroom_ok) begin
-                    sim_sel_rec_reject_frontend_headroom <=
-                        sim_sel_rec_reject_frontend_headroom + 1;
-                end else if (!branch_recovery_burst_ready) begin
-                    sim_sel_rec_reject_burst <=
-                        sim_sel_rec_reject_burst + 1;
+            if (sim_selective_branch_recovery) begin
+                if (bru_partial_cdb_mispredict_valid) begin
+                    sim_sel_rec_cdb_mispredict <=
+                        sim_sel_rec_cdb_mispredict + 1;
+
+                    if (bru_partial_candidate_valid) begin
+                        sim_sel_rec_candidate <= sim_sel_rec_candidate + 1;
+                    end else if (commit_flush.valid) begin
+                        sim_sel_rec_reject_commit <=
+                            sim_sel_rec_reject_commit + 1;
+                    end else if (rename_stall) begin
+                        sim_sel_rec_reject_rename <=
+                            sim_sel_rec_reject_rename + 1;
+                    end else if (uoc_active) begin
+                        sim_sel_rec_reject_uoc <=
+                            sim_sel_rec_reject_uoc + 1;
+                    end else if (rename_buf[bru_partial_candidate_rob_idx].rd_valid) begin
+                        sim_sel_rec_reject_side_effect <=
+                            sim_sel_rec_reject_side_effect + 1;
+                    end else begin
+                        sim_sel_rec_reject_checkpoint <=
+                            sim_sel_rec_reject_checkpoint + 1;
+                    end
+                end
+
+                if (bru_partial_candidate_valid) begin
+                    if (bru_partial_recovery_valid) begin
+                        sim_sel_rec_accepted <= sim_sel_rec_accepted + 1;
+                    end else if (!rename_recovery_headroom_ok) begin
+                        sim_sel_rec_reject_rename_headroom <=
+                            sim_sel_rec_reject_rename_headroom + 1;
+                    end else if (!frontend_recovery_headroom_ok) begin
+                        sim_sel_rec_reject_frontend_headroom <=
+                            sim_sel_rec_reject_frontend_headroom + 1;
+                    end else if (!branch_recovery_burst_ready) begin
+                        sim_sel_rec_reject_burst <=
+                            sim_sel_rec_reject_burst + 1;
+                    end
                 end
             end
         end
     end
 
     final begin
+        if (sim_branch_opportunity_en) begin
+            $display("");
+            $display("=== BRANCH RECOVERY OPPORTUNITY PROFILE ===");
+            $display("xs branch opportunity cdb mispredict cycles : %0d",
+                     sim_a0_cdb_mispredict_cycles);
+            $display("xs branch opportunity cdb mispredict slots : %0d",
+                     sim_a0_cdb_mispredict_slots);
+            $display("xs branch opportunity type cond : %0d",
+                     sim_a0_type_cond);
+            $display("xs branch opportunity type jal : %0d",
+                     sim_a0_type_jal);
+            $display("xs branch opportunity type jalr : %0d",
+                     sim_a0_type_jalr);
+            $display("xs branch opportunity type call : %0d",
+                     sim_a0_type_call);
+            $display("xs branch opportunity type ret : %0d",
+                     sim_a0_type_ret);
+            $display("xs branch opportunity age head : %0d",
+                     sim_a0_age_head);
+            $display("xs branch opportunity age near : %0d",
+                     sim_a0_age_near);
+            $display("xs branch opportunity age mid : %0d",
+                     sim_a0_age_mid);
+            $display("xs branch opportunity age far : %0d",
+                     sim_a0_age_far);
+            $display("xs branch opportunity age older : %0d",
+                     sim_a0_age_older);
+            $display("xs branch opportunity age sum : %0d",
+                     sim_a0_age_sum);
+            $display("xs branch opportunity age max : %0d",
+                     sim_a0_age_max);
+            $display("xs branch opportunity checkpoint any : %0d",
+                     sim_a0_checkpoint_any);
+            $display("xs branch opportunity checkpoint at branch : %0d",
+                     sim_a0_checkpoint_at_branch);
+            $display("xs branch opportunity checkpoint missing : %0d",
+                     sim_a0_checkpoint_missing);
+            $display("xs branch opportunity side effect : %0d",
+                     sim_a0_side_effect);
+            $display("xs branch opportunity partial candidate : %0d",
+                     sim_a0_partial_candidate);
+            $display("xs branch opportunity partial resource ok : %0d",
+                     sim_a0_partial_resource_ok);
+            $display("xs branch opportunity reject commit : %0d",
+                     sim_a0_reject_commit);
+            $display("xs branch opportunity reject rename : %0d",
+                     sim_a0_reject_rename);
+            $display("xs branch opportunity reject uoc : %0d",
+                     sim_a0_reject_uoc);
+            $display("xs branch opportunity reject side effect : %0d",
+                     sim_a0_reject_side_effect);
+            $display("xs branch opportunity reject checkpoint : %0d",
+                     sim_a0_reject_checkpoint);
+            $display("xs branch opportunity reject rename headroom : %0d",
+                     sim_a0_reject_rename_headroom);
+            $display("xs branch opportunity reject frontend headroom : %0d",
+                     sim_a0_reject_frontend_headroom);
+            $display("xs branch opportunity reject burst : %0d",
+                     sim_a0_reject_burst);
+            $display("xs branch opportunity younger sum : %0d",
+                     sim_a0_younger_sum);
+            $display("xs branch opportunity younger ready sum : %0d",
+                     sim_a0_younger_ready_sum);
+            $display("xs branch opportunity younger max : %0d",
+                     sim_a0_younger_max);
+            $display("xs branch opportunity younger ready max : %0d",
+                     sim_a0_younger_ready_max);
+        end
+
         if (sim_selective_branch_recovery) begin
             $display("");
             $display("=== SELECTIVE BRANCH RECOVERY SUMMARY ===");

@@ -467,6 +467,44 @@ Exit criterion:
 - The report can state whether non-head recovery has enough dynamic
   opportunity to move at least 3 percent on branch-heavy rows.
 
+A0 baseline opportunity result, May 9, 2026:
+
+- Instrumentation artifact: `benchmark_results/stage2_branch_a0_profile_t2_20260509`.
+- T1 artifact: `benchmark_results/stage2_branch_a0_profile_t1_20260509`.
+- Both runs passed strict owner, delivery, and branch-recovery checks.
+- Cycles matched the locked baseline exactly, so the counters are
+  behavior-neutral evidence.
+
+| Row | CDB mispredict cycles | Redirect recovery | Partial candidates | Resource-ok candidates | Checkpoint at branch | Checkpoint rejects | Younger sum | Younger ready sum |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | `88` | `81` | `64` | `64` | `67` | `18` | `556` | `23` |
+| CoreMark 1 | `4,685` | `4,052` | `2,930` | `2,897` | `3,184` | `1,328` | `37,571` | `1,365` |
+| CoreMark 10 | `35,512` | `29,575` | `21,002` | `20,478` | `22,976` | `10,990` | `293,294` | `9,349` |
+| Frontend mixed branch dense | `564` | `426` | `198` | `198` | `240` | `258` | `4,961` | `104` |
+| Backend ALU chain 8 | `2` | `2` | `0` | `0` | `0` | `2` | `24` | `2` |
+| Branch hotspot | `8,738` | `8,331` | `1,671` | `1,671` | `1,857` | `6,711` | `63,873` | `3,043` |
+
+Interpretation:
+
+- Branch recovery is real and broad enough for a structural branch. CoreMark 10
+  has `35,512` execute-time mispredict cycles and `29,575` redirect-recovery
+  cycles, so the cycle-bound upper bound is large enough to justify A1 work.
+- The current safe-boundary partial recovery rule is not enough for the branch
+  hotspot. It finds only `1,671` candidates while `6,711` opportunities reject
+  on checkpoint ownership.
+- The dominant checkpoint reject shape is "checkpoint exists, but the
+  checkpoint tail is not the branch ROB", not raw checkpoint absence.
+  Branch hotspot has `8,563` checkpointed mispredicts and only `175`
+  checkpoint-missing cases.
+- Resource headroom is not the limiter for current candidates. Resource-ok
+  counts nearly equal partial-candidate counts in the important rows.
+- The next Branch A behavior candidate must repair branch-boundary checkpoint
+  ownership. Re-enabling the old partial-recovery plusargs without changing the
+  checkpoint contract would only replay a known limited mechanism.
+- Redirect-to-fetch and redirect-to-decode latency can still be added later,
+  but this A0 result is already sufficient to reject another old-plusarg retry
+  and select checkpoint-boundary ownership as the next Branch A design problem.
+
 ### A1: Backend-Only Recovery Contract Repair
 
 Implement or harden only backend semantics first:
@@ -938,16 +976,17 @@ Immediate next steps:
    `stage2_ftq_depth_profile_t2_20260509`,
    `stage2_noemit_attr_t1_20260509`, and
    `stage2_noemit_attr_t2_20260509` as completed behavior-neutral evidence.
-3. Add Branch A0 branch recovery opportunity counters if they are not already
-   sufficient in the current profile: mispredict type, ROB age, checkpoint
-   availability, flushed useful work, redirect-to-fetch latency, and
-   redirect-to-decode latency.
+3. Treat `stage2_branch_a0_profile_t1_20260509` and
+   `stage2_branch_a0_profile_t2_20260509` as completed A0 opportunity
+   evidence. The first Branch A behavior slice should target branch-boundary
+   checkpoint ownership, not the old opt-in partial recovery knobs.
 4. Add a Branch B1 delivery scoreboard before changing duplicate or redirect
    handoff behavior. The scoreboard is the promotion guard for any attempt to
    make duplicate suppression assertion-only in a safe subset.
 5. Choose the first behavior trial from the updated A0/B1 report:
    - If redirect refill and non-head checkpoint opportunity dominate, implement
-     A1 backend-only recovery contract repair.
+     A1 branch-boundary checkpoint ownership repair before enabling
+     backend-only recovery.
    - If duplicate/control live-owner no-emit dominates with provable delivered
      PCs, implement B1 control-aware duplicate cursor recovery.
    - If packet-full and packet age become dominant after those fixes, implement
