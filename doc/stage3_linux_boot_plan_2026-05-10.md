@@ -57,9 +57,18 @@ on commit `bddfed8`.
 Required regression command shape after each RTL slice:
 
 ```bash
-python3 tools/run_benchmarks.py \
-  --runner dsim \
-  --run-class dse \
+python3 tools/run_stage3_rtl_guard.py --runner dsim --run-id <date>_<slice>
+```
+
+The wrapper rebuilds the selected simulator, runs the four locked DS/CM rows
+with the strict owner, delivery, branch-recovery, performance, stat, and
+bottleneck plusargs, then checks timed cycles and metrics against the table
+above. Use `--runner xsim-sh` when DSim is blocked by license availability.
+
+The equivalent expanded command remains:
+
+```bash
+python3 tools/run_benchmarks.py --runner dsim --run-class dse \
   --manifest tests/benchmarks/stage1_signoff.json \
   --bench dhrystone_100_checkedin \
   --bench dhrystone_300_stage1_anchor \
@@ -76,8 +85,7 @@ python3 tools/run_benchmarks.py \
   --plusarg +PERF_PROFILE \
   --plusarg +PERF_COUNTERS \
   --plusarg +STAT_DUMP \
-  --plusarg +BOTTLENECK_PROFILE \
-  --run-id stage3_rtl_guard_<date>_<slice>
+  --plusarg +BOTTLENECK_PROFILE
 ```
 
 Gate rules:
@@ -313,12 +321,25 @@ Pass criteria:
    - DTS template,
    - initramfs `init.c`,
    - Linux/OpenSBI build script skeleton.
-2. Build an M-mode UART hello-world image before Linux.
+2. Build an M-mode UART hello-world image before Linux:
+   `sw/linux_boot/build_linux_boot.sh --smoke`.
 3. Add the platform shell and UART/DRAM loader around the core.
 4. Add CLINT/ACLINT timer support and run OpenSBI banner.
 5. Implement Sv39 MMU/PTW/TLB and privileged regression tests.
 6. Boot minimal Linux to early console.
 7. Boot to initramfs `BOOT OK`.
+
+Current Stage 3 scaffold commands:
+
+```bash
+sw/linux_boot/build_linux_boot.sh --smoke
+python3 tools/run_linux_boot.py --build --build-mode smoke
+python3 tools/run_linux_boot.py --build --build-mode linux
+```
+
+The Linux runner currently reports `BLOCKED` for `--run` until the dedicated
+Stage 3 platform simulator image exists. This is expected before the L0 RTL
+platform skeleton lands.
 
 ## Near-Term Non-Goals
 

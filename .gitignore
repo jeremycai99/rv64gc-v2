@@ -20,6 +20,7 @@ obj_iv/
 /tmp_result.txt
 /*_objdump_*.txt
 /build_xsim_trace.bat
+/build/
 
 # DSim simulator artefacts
 dsim_work/
@@ -51,6 +52,7 @@ verif/**/results.xml
 
 # Benchmark runner outputs and local licensed benchmark images
 benchmark_results/
+linux_boot_results/
 tests/spec/external/
 tests/spec/work/
 
