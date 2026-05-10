@@ -30,6 +30,17 @@ module fetch_delivery_checker
     input logic                             f2_has_emit_payload_c,
     input logic                             f2_will_emit_c,
     input logic                             f2_duplicate_suppressed_c,
+    input logic [63:0]                      f2_duplicate_next_pc_c,
+    input logic                             f2_seq_valid,
+    input logic [63:0]                      f2_seq_next_pc,
+    input logic                             req_redirect_c,
+    input logic                             f2_bpu_redirect_c,
+    input logic [63:0]                      f2_bpu_target_c,
+    input logic                             successor_req_valid_c,
+    input logic [63:0]                      successor_req_pc_c,
+    input logic [63:0]                      req_pc_c,
+    input logic                             ifu_runahead_pending_c,
+    input logic [63:0]                      ifu_runahead_pending_pc_c,
     input logic                             packet_buf_enq_ready,
     input logic                             fe_stall,
     input logic                             line_straddle_advance_c,
@@ -38,6 +49,10 @@ module fetch_delivery_checker
     input logic                             predecode_ctl_found_c,
     input logic                             bp_branch_found_c,
     input logic                             bp_taken_c,
+    input logic                             f2_work_line_valid_c,
+    input logic [63:LINE_BITS]              f2_work_line_addr_c,
+    input logic                             icq_deq_valid,
+    input logic [63:LINE_BITS]              icq_deq_line_addr,
     input logic                             ftq_enq_valid,
     input logic [FTQ_IDX_BITS-1:0]          ftq_enq_idx,
     input logic [FTQ_ALLOC_TAG_BITS-1:0]    ftq_enq_tag,
@@ -90,6 +105,21 @@ module fetch_delivery_checker
     logic delivery_no_emit_control_c;
     logic delivery_no_emit_taken_control_c;
     logic delivery_no_emit_other_c;
+    logic delivery_cursor_same_line_c;
+    logic delivery_cursor_cross_line_c;
+    logic delivery_cursor_seq_next_match_c;
+    logic delivery_cursor_dup_next_match_c;
+    logic delivery_cursor_req_pc_match_c;
+    logic delivery_cursor_successor_match_c;
+    logic delivery_cursor_runahead_match_c;
+    logic delivery_cursor_bpu_redirect_match_c;
+    logic delivery_cursor_req_redirect_c;
+    logic delivery_cursor_bpu_redirect_c;
+    logic delivery_cursor_commit_redirect_c;
+    logic delivery_cursor_line_state_match_c;
+    logic delivery_cursor_icq_match_c;
+    logic delivery_cursor_ftq_next_start_match_c;
+    logic [63:0] ftq_next_ifu_owner_start_pc_c;
     integer delivery_check_owner_switch_count;
     integer delivery_check_noncontig_count;
     integer delivery_score_active_cycles;
@@ -112,6 +142,20 @@ module fetch_delivery_checker
     integer delivery_no_emit_control_cycles;
     integer delivery_no_emit_taken_control_cycles;
     integer delivery_no_emit_other_cycles;
+    integer delivery_cursor_same_line_cycles;
+    integer delivery_cursor_cross_line_cycles;
+    integer delivery_cursor_seq_next_match_cycles;
+    integer delivery_cursor_dup_next_match_cycles;
+    integer delivery_cursor_req_pc_match_cycles;
+    integer delivery_cursor_successor_match_cycles;
+    integer delivery_cursor_runahead_match_cycles;
+    integer delivery_cursor_bpu_redirect_match_cycles;
+    integer delivery_cursor_req_redirect_cycles;
+    integer delivery_cursor_bpu_redirect_cycles;
+    integer delivery_cursor_commit_redirect_cycles;
+    integer delivery_cursor_line_state_match_cycles;
+    integer delivery_cursor_icq_match_cycles;
+    integer delivery_cursor_ftq_next_start_match_cycles;
 
     initial begin
         delivery_check_en = $test$plusargs("FETCH_DELIVERY_CHECK");
@@ -219,6 +263,60 @@ module fetch_delivery_checker
         !delivery_no_emit_pkt_not_ready_c &&
         !delivery_no_emit_frontend_hold_c &&
         !delivery_no_emit_fe_stall_c;
+    assign ftq_next_ifu_owner_start_pc_c =
+        ftq_next_ifu_owner_entry.block_pc +
+        64'(ftq_next_ifu_owner_entry.start_offset);
+    assign delivery_cursor_same_line_c =
+        delivery_no_emit_already_delivered_c &&
+        (delivery_score_next_pc_r[63:LINE_BITS] ==
+         f2_work_pc_c[63:LINE_BITS]);
+    assign delivery_cursor_cross_line_c =
+        delivery_no_emit_already_delivered_c &&
+        (delivery_score_next_pc_r[63:LINE_BITS] !=
+         f2_work_pc_c[63:LINE_BITS]);
+    assign delivery_cursor_seq_next_match_c =
+        delivery_no_emit_already_delivered_c &&
+        f2_seq_valid &&
+        (f2_seq_next_pc == delivery_score_next_pc_r);
+    assign delivery_cursor_dup_next_match_c =
+        delivery_no_emit_already_delivered_c &&
+        (f2_duplicate_next_pc_c == delivery_score_next_pc_r);
+    assign delivery_cursor_req_pc_match_c =
+        delivery_no_emit_already_delivered_c &&
+        (req_pc_c == delivery_score_next_pc_r);
+    assign delivery_cursor_successor_match_c =
+        delivery_no_emit_already_delivered_c &&
+        successor_req_valid_c &&
+        (successor_req_pc_c == delivery_score_next_pc_r);
+    assign delivery_cursor_runahead_match_c =
+        delivery_no_emit_already_delivered_c &&
+        ifu_runahead_pending_c &&
+        (ifu_runahead_pending_pc_c == delivery_score_next_pc_r);
+    assign delivery_cursor_bpu_redirect_match_c =
+        delivery_no_emit_already_delivered_c &&
+        f2_bpu_redirect_c &&
+        (f2_bpu_target_c == delivery_score_next_pc_r);
+    assign delivery_cursor_req_redirect_c =
+        delivery_no_emit_already_delivered_c &&
+        req_redirect_c;
+    assign delivery_cursor_bpu_redirect_c =
+        delivery_no_emit_already_delivered_c &&
+        f2_bpu_redirect_c;
+    assign delivery_cursor_commit_redirect_c =
+        delivery_no_emit_already_delivered_c &&
+        redirect_valid;
+    assign delivery_cursor_line_state_match_c =
+        delivery_no_emit_already_delivered_c &&
+        f2_work_line_valid_c &&
+        (f2_work_line_addr_c == delivery_score_next_pc_r[63:LINE_BITS]);
+    assign delivery_cursor_icq_match_c =
+        delivery_no_emit_already_delivered_c &&
+        icq_deq_valid &&
+        (icq_deq_line_addr == delivery_score_next_pc_r[63:LINE_BITS]);
+    assign delivery_cursor_ftq_next_start_match_c =
+        delivery_no_emit_already_delivered_c &&
+        ftq_next_ifu_owner_valid &&
+        (ftq_next_ifu_owner_start_pc_c == delivery_score_next_pc_r);
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -250,6 +348,20 @@ module fetch_delivery_checker
             delivery_no_emit_control_cycles <= 0;
             delivery_no_emit_taken_control_cycles <= 0;
             delivery_no_emit_other_cycles <= 0;
+            delivery_cursor_same_line_cycles <= 0;
+            delivery_cursor_cross_line_cycles <= 0;
+            delivery_cursor_seq_next_match_cycles <= 0;
+            delivery_cursor_dup_next_match_cycles <= 0;
+            delivery_cursor_req_pc_match_cycles <= 0;
+            delivery_cursor_successor_match_cycles <= 0;
+            delivery_cursor_runahead_match_cycles <= 0;
+            delivery_cursor_bpu_redirect_match_cycles <= 0;
+            delivery_cursor_req_redirect_cycles <= 0;
+            delivery_cursor_bpu_redirect_cycles <= 0;
+            delivery_cursor_commit_redirect_cycles <= 0;
+            delivery_cursor_line_state_match_cycles <= 0;
+            delivery_cursor_icq_match_cycles <= 0;
+            delivery_cursor_ftq_next_start_match_cycles <= 0;
         end else begin
             if (delivery_check_en) begin
                 if (delivery_score_active_c)
@@ -311,6 +423,48 @@ module fetch_delivery_checker
                 if (delivery_no_emit_other_c)
                     delivery_no_emit_other_cycles <=
                         delivery_no_emit_other_cycles + 1;
+                if (delivery_cursor_same_line_c)
+                    delivery_cursor_same_line_cycles <=
+                        delivery_cursor_same_line_cycles + 1;
+                if (delivery_cursor_cross_line_c)
+                    delivery_cursor_cross_line_cycles <=
+                        delivery_cursor_cross_line_cycles + 1;
+                if (delivery_cursor_seq_next_match_c)
+                    delivery_cursor_seq_next_match_cycles <=
+                        delivery_cursor_seq_next_match_cycles + 1;
+                if (delivery_cursor_dup_next_match_c)
+                    delivery_cursor_dup_next_match_cycles <=
+                        delivery_cursor_dup_next_match_cycles + 1;
+                if (delivery_cursor_req_pc_match_c)
+                    delivery_cursor_req_pc_match_cycles <=
+                        delivery_cursor_req_pc_match_cycles + 1;
+                if (delivery_cursor_successor_match_c)
+                    delivery_cursor_successor_match_cycles <=
+                        delivery_cursor_successor_match_cycles + 1;
+                if (delivery_cursor_runahead_match_c)
+                    delivery_cursor_runahead_match_cycles <=
+                        delivery_cursor_runahead_match_cycles + 1;
+                if (delivery_cursor_bpu_redirect_match_c)
+                    delivery_cursor_bpu_redirect_match_cycles <=
+                        delivery_cursor_bpu_redirect_match_cycles + 1;
+                if (delivery_cursor_req_redirect_c)
+                    delivery_cursor_req_redirect_cycles <=
+                        delivery_cursor_req_redirect_cycles + 1;
+                if (delivery_cursor_bpu_redirect_c)
+                    delivery_cursor_bpu_redirect_cycles <=
+                        delivery_cursor_bpu_redirect_cycles + 1;
+                if (delivery_cursor_commit_redirect_c)
+                    delivery_cursor_commit_redirect_cycles <=
+                        delivery_cursor_commit_redirect_cycles + 1;
+                if (delivery_cursor_line_state_match_c)
+                    delivery_cursor_line_state_match_cycles <=
+                        delivery_cursor_line_state_match_cycles + 1;
+                if (delivery_cursor_icq_match_c)
+                    delivery_cursor_icq_match_cycles <=
+                        delivery_cursor_icq_match_cycles + 1;
+                if (delivery_cursor_ftq_next_start_match_c)
+                    delivery_cursor_ftq_next_start_match_cycles <=
+                        delivery_cursor_ftq_next_start_match_cycles + 1;
             end
 
             if (redirect_valid) begin
@@ -513,6 +667,34 @@ module fetch_delivery_checker
                      delivery_no_emit_taken_control_cycles);
             $display("xs delivery no emit other   : %0d",
                      delivery_no_emit_other_cycles);
+            $display("xs delivery cursor same line: %0d",
+                     delivery_cursor_same_line_cycles);
+            $display("xs delivery cursor cross line: %0d",
+                     delivery_cursor_cross_line_cycles);
+            $display("xs delivery cursor seq match: %0d",
+                     delivery_cursor_seq_next_match_cycles);
+            $display("xs delivery cursor dup next match: %0d",
+                     delivery_cursor_dup_next_match_cycles);
+            $display("xs delivery cursor req pc match: %0d",
+                     delivery_cursor_req_pc_match_cycles);
+            $display("xs delivery cursor successor match: %0d",
+                     delivery_cursor_successor_match_cycles);
+            $display("xs delivery cursor runahead match: %0d",
+                     delivery_cursor_runahead_match_cycles);
+            $display("xs delivery cursor bpu target match: %0d",
+                     delivery_cursor_bpu_redirect_match_cycles);
+            $display("xs delivery cursor req redirect: %0d",
+                     delivery_cursor_req_redirect_cycles);
+            $display("xs delivery cursor bpu redirect: %0d",
+                     delivery_cursor_bpu_redirect_cycles);
+            $display("xs delivery cursor commit redirect: %0d",
+                     delivery_cursor_commit_redirect_cycles);
+            $display("xs delivery cursor line state match: %0d",
+                     delivery_cursor_line_state_match_cycles);
+            $display("xs delivery cursor icq match: %0d",
+                     delivery_cursor_icq_match_cycles);
+            $display("xs delivery cursor ftq next start match: %0d",
+                     delivery_cursor_ftq_next_start_match_cycles);
         end
     end
 
@@ -540,6 +722,17 @@ bind fetch_top fetch_delivery_checker u_fetch_delivery_checker (
     .f2_has_emit_payload_c       (f2_has_emit_payload_c),
     .f2_will_emit_c              (f2_will_emit_c),
     .f2_duplicate_suppressed_c   (f2_duplicate_suppressed_c),
+    .f2_duplicate_next_pc_c      (f2_duplicate_next_pc_c),
+    .f2_seq_valid                (f2_seq_valid),
+    .f2_seq_next_pc              (f2_seq_next_pc),
+    .req_redirect_c              (req_redirect_c),
+    .f2_bpu_redirect_c           (f2_bpu_redirect),
+    .f2_bpu_target_c             (f2_bpu_target),
+    .successor_req_valid_c       (successor_req_valid_c),
+    .successor_req_pc_c          (successor_req_pc_c),
+    .req_pc_c                    (req_pc_c),
+    .ifu_runahead_pending_c      (ifu_runahead_pending_c),
+    .ifu_runahead_pending_pc_c   (ifu_runahead_pending_pc_c),
     .packet_buf_enq_ready        (packet_buf_enq_ready),
     .fe_stall                    (fe_stall),
     .line_straddle_advance_c     (line_straddle_advance_c),
@@ -548,6 +741,10 @@ bind fetch_top fetch_delivery_checker u_fetch_delivery_checker (
     .predecode_ctl_found_c       (predecode_ctl_found),
     .bp_branch_found_c           (bp_branch_found),
     .bp_taken_c                  (bp_taken),
+    .f2_work_line_valid_c        (f2_work_line_valid_c),
+    .f2_work_line_addr_c         (f2_work_line_addr_c),
+    .icq_deq_valid               (icq_deq_valid),
+    .icq_deq_line_addr           (icq_deq_line_addr),
     .ftq_enq_valid               (ftq_enq_valid),
     .ftq_enq_idx                 (ftq_enq_idx),
     .ftq_enq_tag                 (ftq_enq_tag),
