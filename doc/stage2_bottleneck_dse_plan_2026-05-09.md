@@ -91,6 +91,35 @@ Direction selection update from this full baseline:
   to the current cycle-level evidence and is a recognizable architectural
   direction rather than benchmark tuning.
 
+B0 depth-profile instrumentation result, May 9, 2026:
+
+- Instrumentation commit: `2a7ba3a Add FTQ runahead depth profiling`.
+- T1 artifact: `benchmark_results/stage2_ftq_depth_profile_t1_20260509`.
+- T2 artifact: `benchmark_results/stage2_ftq_depth_profile_t2_20260509`.
+- Both T1 and T2 passed strict owner, delivery, and branch-recovery checks.
+- Cycles matched the locked baseline exactly, so the instrumentation is
+  performance-neutral evidence.
+
+| Row | Cycles | `alloc2ifu max` | `ifu2wb max` | `ifu2commit max` | `ifu2commit 2-3 cyc` | Main implication |
+|---|---:|---:|---:|---:|---:|---|
+| Dhrystone 100 | `18,577` | `0` | `2` | `3` | `6,537` | Demand allocation is not running ahead of IFU, but owners remain live after IFU delivery. |
+| CoreMark 1 | `163,013` | `0` | `2` | `9` | `48,488` | Owner state can be many entries ahead of commit even though IFU allocation depth is zero. |
+| CoreMark 10 | `1,500,110` | `0` | `2` | `9` | `450,207` | The main score row has sustained post-IFU owner depth plus duplicate/no-emit pressure. |
+| Frontend mixed branch dense | `7,220` | `0` | `1` | `2` | `373` | This row is still redirect dominated, so it remains a Branch A guard. |
+| Backend ALU chain 8 | `3,039` | `0` | `2` | `3` | `2,010` | Even a backend guard accumulates post-IFU owner depth without pre-IFU runahead. |
+| Branch hotspot | `141,326` | `0` | `1` | `3` | `64,771` | Control/straddle owner hold is persistent; local duplicate removal would be unsafe. |
+
+The depth profile recalibrates Branch B:
+
+- The missing runahead is not simply an empty FTQ allocation window. The
+  `alloc2ifu` path stays at zero in all T2 rows.
+- The live opportunity sits after IFU consumption: `ifu2wb` and especially
+  `ifu2commit` show sustained depth while packet delivery still bubbles.
+- Therefore B1 should not start by adding a XiangShan-style `pfPtr`. The next
+  structural candidate is owner-aware delivery buffering and FTQ writeback or
+  commit decoupling, with additional counters that explain why post-IFU owners
+  do not produce decode packets.
+
 Important interpretation rule:
 
 - Entry-slot counters can exceed 100 percent of timed cycles because several IQ
@@ -328,8 +357,9 @@ Why this branch matters:
 
 Add or confirm counters for:
 
-- FTQ allocated-to-IFU depth histogram.
-- IFU-to-commit depth histogram.
+- FTQ allocated-to-IFU depth histogram. Completed in `2a7ba3a`.
+- IFU-to-writeback and IFU-to-commit depth histograms. Completed in
+  `2a7ba3a`.
 - Cycles IFU cannot advance because owner metadata is tied to commit head.
 - Cycles F2 has line data but no legal packet because of owner hold.
 - Packet drops by reason: owner mismatch, epoch mismatch, duplicate guard,
@@ -343,30 +373,57 @@ Exit criterion:
 - The plan can estimate how many `packet_empty_f2_data` and
   `packet_empty_noemit_dup` cycles are removable by runahead rather than caused
   by downstream drain.
+- The next missing attribution must split `xs_data_present_no_emit` and
+  `packet_empty_f2_data` by the live FTQ state:
+  alloc-to-IFU empty, IFU-to-writeback live, IFU-to-commit live, redirect hold,
+  remainder hold, packet-ready hold, and IBuffer full.
 
-### B1: Split FTQ Ownership Pointers
+### B1: Owner-Aware Delivery Decoupling
 
-Behavior-neutral first if possible:
+The T1/T2 depth profile shows `alloc2ifu` is already zero in the current
+frontend, so simply splitting an allocation pointer is not the highest leverage
+first behavior change. B1 should instead decouple packet delivery from
+post-IFU owner lifetime while preserving the FTQ owner contract.
+
+Behavior-neutral first slice:
 
 - Keep existing allocation semantics.
-- Split IFU delivery cursor from commit/training cursor.
+- Keep existing IFU owner consumption semantics.
+- Add assertion and profile state for post-IFU owners that still have pending
+  packet delivery work.
 - Preserve owner metadata until all required PCs for that owner are delivered.
 - Keep strict owner and delivery checkers active.
 
+Behavior slice candidate:
+
+- Introduce a small owner-aware delivery queue in front of decode.
+- Each entry carries FTQ index, owner epoch, start PC, packet valid mask, and
+  predicted-control metadata.
+- Allow IFU/F2 to enqueue a legal packet for an owner even when that owner
+  remains live for writeback, training, or commit.
+- Convert last-emitted-PC duplicate suppression from an active throttle into an
+  assertion against duplicate delivery of the same owner/PC packet.
+
 Primary target counters:
 
+- `xs_data_present_no_emit`
+- `xs_data_no_emit_dup`
+- `xs_runahead_dup_alloc_block`
+- `xs_ftq_ifu2commit_occ_hist_2to3`
 - `packet_empty_f2_data`
 - `packet_empty_noemit_dup`
 - `xs_dup_last_emit`
-- `xs_ftq_empty_cycles`
 
 Promotion gate:
 
 - CoreMark 10 and branch hotspot packet-empty buckets drop without increasing
   `xs_packet_buf_full_cycles`, `xs_backend_stall_pkt_ready`, or redirect
   recovery.
+- T2 must show broad reduction in data-present no-emit on CoreMark 1,
+  CoreMark 10, backend ALU chain 8, and branch hotspot before a full 16-row
+  run.
 
-### B2: Owner-Aware IBuffer
+### B2: Full Owner-Aware IBuffer
 
 Implement after B1:
 
@@ -671,11 +728,19 @@ Reason:
 
 Immediate next steps:
 
-1. Keep the current profiled baseline as the locked comparison artifact.
-2. Use the expanded `bottleneck_analysis.py` ranking to track runahead counters
-   in all future DSE runs.
-3. Add only the missing B0 attribution needed to estimate removable
-   `packet_empty_f2_data` and `packet_empty_noemit_dup` cycles by owner class.
-4. Re-run T1 and T2 as instrumentation-only DSE.
-5. If the attribution confirms the removable fraction, implement B1 split FTQ
-   ownership pointers before B2 owner-aware IBuffer.
+1. Keep `benchmark_results/stage2_bottleneck_baseline_20260509` as the locked
+   comparison artifact.
+2. Treat `stage2_ftq_depth_profile_t1_20260509` and
+   `stage2_ftq_depth_profile_t2_20260509` as completed B0 instrumentation
+   smoke evidence.
+3. Add one more B0 profile slice only if needed: classify
+   `xs_data_present_no_emit` and `packet_empty_f2_data` by post-IFU owner
+   state, redirect hold, remainder hold, packet-ready hold, and IBuffer full.
+4. Implement B1 as owner-aware delivery decoupling, not scalar duplicate
+   suppression tuning and not `pfPtr`.
+5. Run B1 with an explicit prediction before measurement:
+   `--targets-counter xs_data_present_no_emit` and
+   `--expect-counter-decrease xs_data_present_no_emit:<predicted_delta>`.
+6. Promote B1 only if T2 shows a meaningful broad drop in data-present no-emit
+   and packet-empty buckets without regression, then run the full 16-row signoff
+   before considering B2.
