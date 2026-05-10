@@ -605,6 +605,24 @@ module tb_top
     integer btl_dep_wait_on_store;
     integer btl_dep_wait_on_csr;
     integer btl_dep_wait_on_unknown;
+    integer btl_dep_load_consumer_alu;
+    integer btl_dep_load_consumer_bru;
+    integer btl_dep_load_consumer_load_addr;
+    integer btl_dep_load_consumer_store_addr;
+    integer btl_dep_load_consumer_store_data;
+    integer btl_dep_load_consumer_other;
+    integer btl_dep_load_wait_issue_same_cycle;
+    integer btl_dep_load_wait_not_issued;
+    integer btl_dep_load_wait_issued_not_wb;
+    integer btl_dep_load_wait_done_stale;
+    integer btl_dep_load_wait_state_unknown;
+    integer btl_dep_branch_consumer_alu;
+    integer btl_dep_branch_consumer_load;
+    integer btl_dep_branch_consumer_store;
+    integer btl_dep_branch_consumer_csr;
+    integer btl_dep_branch_consumer_mul;
+    integer btl_dep_branch_consumer_div;
+    integer btl_dep_branch_consumer_unknown;
     integer btl_dep_alu_wait_issue_same_cycle;
     integer btl_dep_alu_wait_not_issued;
     integer btl_dep_alu_wait_not_issued_absent;
@@ -650,6 +668,17 @@ module tb_top
     integer btl_dep_alu_blocked_prod_fused;
     integer btl_wakeup_same_cycle_candidate;
     integer btl_wakeup_same_cycle_missed;
+    integer btl_load_wakeup_candidate;
+    integer btl_load_wakeup_selected;
+    integer btl_load_wakeup_missed;
+    integer btl_load_wakeup_missed_port_busy;
+    integer btl_load_wakeup_missed_older_ready;
+    integer btl_load_wakeup_missed_fu_blocked;
+    integer btl_load_wakeup_missed_suppress_flush;
+    integer btl_load_wakeup_missed_other;
+    integer btl_load_enq_wakeup_candidate;
+    integer btl_load_enq_wakeup_issued_bypass;
+    integer btl_load_enq_wakeup_hidden;
     integer btl_rename_slots_lost_total;
     integer btl_rename_free_preg_min;
     integer btl_rename_rob_free_min;
@@ -674,6 +703,26 @@ module tb_top
     integer btl_alu_chain_pc_hist_count [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
     integer btl_alu_chain_pc_hist_move [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
     integer btl_alu_chain_pc_hist_imm [0:BTL_ALU_CHAIN_PC_HIST_SLOTS-1];
+    function automatic logic tb_btl_enq_load_wakeup(
+        input logic enq_valid_i,
+        input logic rs1_ready_i,
+        input logic [PHYS_REG_BITS-1:0] rs1_phys_i,
+        input logic rs1_wakeup_hit_i,
+        input logic rs1_spec_wakeup_i,
+        input logic rs2_ready_i,
+        input logic [PHYS_REG_BITS-1:0] rs2_phys_i,
+        input logic rs2_wakeup_hit_i,
+        input logic rs2_spec_wakeup_i
+    );
+        tb_btl_enq_load_wakeup =
+            enq_valid_i &&
+            (((!rs1_ready_i &&
+               (btl_preg_class[rs1_phys_i] == BTL_PROD_LOAD) &&
+               (rs1_wakeup_hit_i || rs1_spec_wakeup_i))) ||
+             ((!rs2_ready_i &&
+               (btl_preg_class[rs2_phys_i] == BTL_PROD_LOAD) &&
+               (rs2_wakeup_hit_i || rs2_spec_wakeup_i))));
+    endfunction
     integer macro_fused_rename_total;
     integer macro_fused_commit_total;
     integer macro_fused_commit_alu;
@@ -718,6 +767,10 @@ module tb_top
     integer fetch_zero_other_cyc;
     integer ld0_candidate_cyc, ld0_issue_cyc, ld0_suppress_cyc;
     integer ld1_candidate_cyc, ld1_issue_cyc, ld1_suppress_cyc;
+    integer load_issue_no_fire_cyc;
+    integer load_dual_candidate_cyc;
+    integer load_dual_issue_cyc;
+    integer load_dual_candidate_single_issue_cyc;
     integer sq_fwd_wait_cyc, sq_wait_p1_cyc;
     integer storeiq_block_ld0_cyc, storeiq_block_ld1_cyc;
     integer storeiq_block_ld0_with_sta_issue_cyc, storeiq_block_ld1_with_sta_issue_cyc;
@@ -730,6 +783,13 @@ module tb_top
     integer p1_sq_wait_only_cyc;
     integer p1_dcache_conflict_cyc;
     integer p1_retry_valid_cyc, p1_retry_capture_cyc;
+    integer btl_lsu_store_fwd_addr_missing;
+    integer btl_lsu_store_fwd_data_missing;
+    integer btl_lsu_store_fwd_path_busy;
+    integer btl_lsu_store_fwd_partial;
+    integer btl_lsu_store_fwd_spill_hold;
+    integer btl_lsu_store_fwd_backlog;
+    integer btl_lsu_store_fwd_unknown;
     localparam int LOAD_LAT_BUCKETS = 10;
     localparam int LOAD_LAT_PC_HIST_SLOTS = 24;
     localparam int LOAD_SRC_DCHIT  = 0;
@@ -985,6 +1045,10 @@ module tb_top
             ld1_candidate_cyc  <= 0;
             ld1_issue_cyc      <= 0;
             ld1_suppress_cyc   <= 0;
+            load_issue_no_fire_cyc <= 0;
+            load_dual_candidate_cyc <= 0;
+            load_dual_issue_cyc <= 0;
+            load_dual_candidate_single_issue_cyc <= 0;
             sq_fwd_wait_cyc    <= 0;
             sq_wait_p1_cyc     <= 0;
             storeiq_block_ld0_cyc <= 0;
@@ -1004,6 +1068,13 @@ module tb_top
             p1_dcache_conflict_cyc <= 0;
             p1_retry_valid_cyc <= 0;
             p1_retry_capture_cyc <= 0;
+            btl_lsu_store_fwd_addr_missing <= 0;
+            btl_lsu_store_fwd_data_missing <= 0;
+            btl_lsu_store_fwd_path_busy <= 0;
+            btl_lsu_store_fwd_partial <= 0;
+            btl_lsu_store_fwd_spill_hold <= 0;
+            btl_lsu_store_fwd_backlog <= 0;
+            btl_lsu_store_fwd_unknown <= 0;
             load_lat_issue_total <= 0;
             load_lat_reissue_total <= 0;
             load_lat_wb_total <= 0;
@@ -1137,6 +1208,24 @@ module tb_top
             btl_dep_wait_on_store <= 0;
             btl_dep_wait_on_csr <= 0;
             btl_dep_wait_on_unknown <= 0;
+            btl_dep_load_consumer_alu <= 0;
+            btl_dep_load_consumer_bru <= 0;
+            btl_dep_load_consumer_load_addr <= 0;
+            btl_dep_load_consumer_store_addr <= 0;
+            btl_dep_load_consumer_store_data <= 0;
+            btl_dep_load_consumer_other <= 0;
+            btl_dep_load_wait_issue_same_cycle <= 0;
+            btl_dep_load_wait_not_issued <= 0;
+            btl_dep_load_wait_issued_not_wb <= 0;
+            btl_dep_load_wait_done_stale <= 0;
+            btl_dep_load_wait_state_unknown <= 0;
+            btl_dep_branch_consumer_alu <= 0;
+            btl_dep_branch_consumer_load <= 0;
+            btl_dep_branch_consumer_store <= 0;
+            btl_dep_branch_consumer_csr <= 0;
+            btl_dep_branch_consumer_mul <= 0;
+            btl_dep_branch_consumer_div <= 0;
+            btl_dep_branch_consumer_unknown <= 0;
             btl_dep_alu_wait_issue_same_cycle <= 0;
             btl_dep_alu_wait_not_issued <= 0;
             btl_dep_alu_wait_not_issued_absent <= 0;
@@ -1182,6 +1271,17 @@ module tb_top
             btl_dep_alu_blocked_prod_fused <= 0;
             btl_wakeup_same_cycle_candidate <= 0;
             btl_wakeup_same_cycle_missed <= 0;
+            btl_load_wakeup_candidate <= 0;
+            btl_load_wakeup_selected <= 0;
+            btl_load_wakeup_missed <= 0;
+            btl_load_wakeup_missed_port_busy <= 0;
+            btl_load_wakeup_missed_older_ready <= 0;
+            btl_load_wakeup_missed_fu_blocked <= 0;
+            btl_load_wakeup_missed_suppress_flush <= 0;
+            btl_load_wakeup_missed_other <= 0;
+            btl_load_enq_wakeup_candidate <= 0;
+            btl_load_enq_wakeup_issued_bypass <= 0;
+            btl_load_enq_wakeup_hidden <= 0;
             btl_rename_slots_lost_total <= 0;
             btl_rename_free_preg_min <= INT_PRF_DEPTH;
             btl_rename_rob_free_min <= ROB_DEPTH;
@@ -1274,6 +1374,24 @@ module tb_top
             automatic int btl_wait_store_now;
             automatic int btl_wait_csr_now;
             automatic int btl_wait_unknown_now;
+            automatic int btl_load_consumer_alu_now;
+            automatic int btl_load_consumer_bru_now;
+            automatic int btl_load_consumer_load_addr_now;
+            automatic int btl_load_consumer_store_addr_now;
+            automatic int btl_load_consumer_store_data_now;
+            automatic int btl_load_consumer_other_now;
+            automatic int btl_load_wait_issue_same_cycle_now;
+            automatic int btl_load_wait_not_issued_now;
+            automatic int btl_load_wait_issued_not_wb_now;
+            automatic int btl_load_wait_done_stale_now;
+            automatic int btl_load_wait_state_unknown_now;
+            automatic int btl_branch_consumer_alu_now;
+            automatic int btl_branch_consumer_load_now;
+            automatic int btl_branch_consumer_store_now;
+            automatic int btl_branch_consumer_csr_now;
+            automatic int btl_branch_consumer_mul_now;
+            automatic int btl_branch_consumer_div_now;
+            automatic int btl_branch_consumer_unknown_now;
             automatic int btl_wait_alu_issue_same_cycle_now;
             automatic int btl_wait_alu_not_issued_now;
             automatic int btl_wait_alu_not_issued_absent_now;
@@ -1320,6 +1438,17 @@ module tb_top
             automatic int btl_alu_ready_not_selected_now;
             automatic int btl_wakeup_candidate_now;
             automatic int btl_wakeup_missed_now;
+            automatic int btl_load_wakeup_candidate_now;
+            automatic int btl_load_wakeup_selected_now;
+            automatic int btl_load_wakeup_missed_now;
+            automatic int btl_load_wakeup_missed_port_busy_now;
+            automatic int btl_load_wakeup_missed_older_ready_now;
+            automatic int btl_load_wakeup_missed_fu_blocked_now;
+            automatic int btl_load_wakeup_missed_suppress_flush_now;
+            automatic int btl_load_wakeup_missed_other_now;
+            automatic int btl_load_enq_wakeup_candidate_now;
+            automatic int btl_load_enq_wakeup_issued_bypass_now;
+            automatic int btl_load_enq_wakeup_hidden_now;
             automatic int btl_younger_ready_now;
             automatic logic [INT_PRF_DEPTH-1:0] btl_issue_pdst_now;
             automatic logic [INT_PRF_DEPTH-1:0] btl_prod_iq_blocked_now;
@@ -1393,6 +1522,24 @@ module tb_top
             btl_wait_store_now = 0;
             btl_wait_csr_now = 0;
             btl_wait_unknown_now = 0;
+            btl_load_consumer_alu_now = 0;
+            btl_load_consumer_bru_now = 0;
+            btl_load_consumer_load_addr_now = 0;
+            btl_load_consumer_store_addr_now = 0;
+            btl_load_consumer_store_data_now = 0;
+            btl_load_consumer_other_now = 0;
+            btl_load_wait_issue_same_cycle_now = 0;
+            btl_load_wait_not_issued_now = 0;
+            btl_load_wait_issued_not_wb_now = 0;
+            btl_load_wait_done_stale_now = 0;
+            btl_load_wait_state_unknown_now = 0;
+            btl_branch_consumer_alu_now = 0;
+            btl_branch_consumer_load_now = 0;
+            btl_branch_consumer_store_now = 0;
+            btl_branch_consumer_csr_now = 0;
+            btl_branch_consumer_mul_now = 0;
+            btl_branch_consumer_div_now = 0;
+            btl_branch_consumer_unknown_now = 0;
             btl_wait_alu_issue_same_cycle_now = 0;
             btl_wait_alu_not_issued_now = 0;
             btl_wait_alu_not_issued_absent_now = 0;
@@ -1438,6 +1585,17 @@ module tb_top
             btl_alu_ready_not_selected_now = 0;
             btl_wakeup_candidate_now = 0;
             btl_wakeup_missed_now = 0;
+            btl_load_wakeup_candidate_now = 0;
+            btl_load_wakeup_selected_now = 0;
+            btl_load_wakeup_missed_now = 0;
+            btl_load_wakeup_missed_port_busy_now = 0;
+            btl_load_wakeup_missed_older_ready_now = 0;
+            btl_load_wakeup_missed_fu_blocked_now = 0;
+            btl_load_wakeup_missed_suppress_flush_now = 0;
+            btl_load_wakeup_missed_other_now = 0;
+            btl_load_enq_wakeup_candidate_now = 0;
+            btl_load_enq_wakeup_issued_bypass_now = 0;
+            btl_load_enq_wakeup_hidden_now = 0;
             btl_younger_ready_now = 0;
             btl_issue_pdst_now = '0;
             btl_prod_iq_blocked_now = '0;
@@ -1897,6 +2055,7 @@ module tb_top
                 automatic logic ready_now;
                 automatic logic wakeup_now;
                 automatic logic wakeup_alu_now;
+                automatic logic wakeup_load_now;
 
                 btl_iq_eligible_now[BTL_IQ0] = $countones(u_core.u_iq0.eligible);
                 btl_iq_eligible_now[BTL_IQ1] = $countones(u_core.u_iq1.eligible);
@@ -2025,6 +2184,105 @@ module tb_top
                 btl_iq_enq_bypass_fu_blocked_serial_now[BTL_IQ2] =
                     $countones(u_core.u_iq2.enq_bypass_fu_blocked_serial);
 
+                for (int q = 0; q < 2; q++) begin
+                    if (tb_btl_enq_load_wakeup(
+                            u_core.u_iq0.enq_valid[q],
+                            u_core.u_iq0.enq_data[q].rs1_ready,
+                            u_core.u_iq0.enq_data[q].rs1_phys,
+                            u_core.u_iq0.enq_s1_wakeup_hit[q],
+                            u_core.u_iq0.enq_s1_spec_wakeup[q],
+                            u_core.u_iq0.enq_data[q].rs2_ready,
+                            u_core.u_iq0.enq_data[q].rs2_phys,
+                            u_core.u_iq0.enq_s2_wakeup_hit[q],
+                            u_core.u_iq0.enq_s2_spec_wakeup[q])) begin
+                        btl_load_enq_wakeup_candidate_now++;
+                        if (u_core.u_iq0.enq_ready_issued_bypass[q])
+                            btl_load_enq_wakeup_issued_bypass_now++;
+                        else if (u_core.u_iq0.enq_ready_hidden[q])
+                            btl_load_enq_wakeup_hidden_now++;
+                    end
+                    if (tb_btl_enq_load_wakeup(
+                            u_core.u_iq1.enq_valid[q],
+                            u_core.u_iq1.enq_data[q].rs1_ready,
+                            u_core.u_iq1.enq_data[q].rs1_phys,
+                            u_core.u_iq1.enq_s1_wakeup_hit[q],
+                            u_core.u_iq1.enq_s1_spec_wakeup[q],
+                            u_core.u_iq1.enq_data[q].rs2_ready,
+                            u_core.u_iq1.enq_data[q].rs2_phys,
+                            u_core.u_iq1.enq_s2_wakeup_hit[q],
+                            u_core.u_iq1.enq_s2_spec_wakeup[q])) begin
+                        btl_load_enq_wakeup_candidate_now++;
+                        if (u_core.u_iq1.enq_ready_issued_bypass[q])
+                            btl_load_enq_wakeup_issued_bypass_now++;
+                        else if (u_core.u_iq1.enq_ready_hidden[q])
+                            btl_load_enq_wakeup_hidden_now++;
+                    end
+                    if (tb_btl_enq_load_wakeup(
+                            u_core.u_iq2.enq_valid[q],
+                            u_core.u_iq2.enq_data[q].rs1_ready,
+                            u_core.u_iq2.enq_data[q].rs1_phys,
+                            u_core.u_iq2.enq_s1_wakeup_hit[q],
+                            u_core.u_iq2.enq_s1_spec_wakeup[q],
+                            u_core.u_iq2.enq_data[q].rs2_ready,
+                            u_core.u_iq2.enq_data[q].rs2_phys,
+                            u_core.u_iq2.enq_s2_wakeup_hit[q],
+                            u_core.u_iq2.enq_s2_spec_wakeup[q])) begin
+                        btl_load_enq_wakeup_candidate_now++;
+                        if (u_core.u_iq2.enq_ready_issued_bypass[q])
+                            btl_load_enq_wakeup_issued_bypass_now++;
+                        else if (u_core.u_iq2.enq_ready_hidden[q])
+                            btl_load_enq_wakeup_hidden_now++;
+                    end
+                    if (tb_btl_enq_load_wakeup(
+                            u_core.u_iq_load.enq_valid[q],
+                            u_core.u_iq_load.enq_data[q].rs1_ready,
+                            u_core.u_iq_load.enq_data[q].rs1_phys,
+                            u_core.u_iq_load.enq_s1_wakeup_hit[q],
+                            u_core.u_iq_load.enq_s1_spec_wakeup[q],
+                            u_core.u_iq_load.enq_data[q].rs2_ready,
+                            u_core.u_iq_load.enq_data[q].rs2_phys,
+                            u_core.u_iq_load.enq_s2_wakeup_hit[q],
+                            u_core.u_iq_load.enq_s2_spec_wakeup[q])) begin
+                        btl_load_enq_wakeup_candidate_now++;
+                        if (u_core.u_iq_load.enq_ready_issued_bypass[q])
+                            btl_load_enq_wakeup_issued_bypass_now++;
+                        else if (u_core.u_iq_load.enq_ready_hidden[q])
+                            btl_load_enq_wakeup_hidden_now++;
+                    end
+                    if (tb_btl_enq_load_wakeup(
+                            u_core.u_iq_store.enq_valid[q],
+                            u_core.u_iq_store.enq_data[q].rs1_ready,
+                            u_core.u_iq_store.enq_data[q].rs1_phys,
+                            u_core.u_iq_store.enq_s1_wakeup_hit[q],
+                            u_core.u_iq_store.enq_s1_spec_wakeup[q],
+                            u_core.u_iq_store.enq_data[q].rs2_ready,
+                            u_core.u_iq_store.enq_data[q].rs2_phys,
+                            u_core.u_iq_store.enq_s2_wakeup_hit[q],
+                            u_core.u_iq_store.enq_s2_spec_wakeup[q])) begin
+                        btl_load_enq_wakeup_candidate_now++;
+                        if (u_core.u_iq_store.enq_ready_issued_bypass[q])
+                            btl_load_enq_wakeup_issued_bypass_now++;
+                        else if (u_core.u_iq_store.enq_ready_hidden[q])
+                            btl_load_enq_wakeup_hidden_now++;
+                    end
+                    if (tb_btl_enq_load_wakeup(
+                            u_core.u_iq_store_data.enq_valid[q],
+                            u_core.u_iq_store_data.enq_data[q].rs1_ready,
+                            u_core.u_iq_store_data.enq_data[q].rs1_phys,
+                            u_core.u_iq_store_data.enq_s1_wakeup_hit[q],
+                            u_core.u_iq_store_data.enq_s1_spec_wakeup[q],
+                            u_core.u_iq_store_data.enq_data[q].rs2_ready,
+                            u_core.u_iq_store_data.enq_data[q].rs2_phys,
+                            u_core.u_iq_store_data.enq_s2_wakeup_hit[q],
+                            u_core.u_iq_store_data.enq_s2_spec_wakeup[q])) begin
+                        btl_load_enq_wakeup_candidate_now++;
+                        if (u_core.u_iq_store_data.enq_ready_issued_bypass[q])
+                            btl_load_enq_wakeup_issued_bypass_now++;
+                        else if (u_core.u_iq_store_data.enq_ready_hidden[q])
+                            btl_load_enq_wakeup_hidden_now++;
+                    end
+                end
+
                 for (int e = 0; e < IQ_INT_DEPTH; e++) begin
                     if (u_core.u_iq0.entry_valid[e]) begin
                         btl_iq_valid_now[BTL_IQ0]++;
@@ -2116,6 +2374,76 @@ module tb_top
                         if (!u_core.u_iq0.next_src1_ready[e] &&
                             !u_core.u_iq0.next_src2_ready[e])
                             btl_both_src_wait_now++;
+                            if (!u_core.u_iq0.next_src1_ready[e] &&
+                                (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                if (u_core.u_iq0.fu_type_r[e] == FU_ALU)
+                                    btl_load_consumer_alu_now++;
+                                else if (u_core.u_iq0.fu_type_r[e] == FU_BRU)
+                                    btl_load_consumer_bru_now++;
+                                else
+                                    btl_load_consumer_other_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq0.rs1_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq0.rs1_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (!u_core.u_iq0.next_src2_ready[e] &&
+                                (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                if (u_core.u_iq0.fu_type_r[e] == FU_ALU)
+                                    btl_load_consumer_alu_now++;
+                                else if (u_core.u_iq0.fu_type_r[e] == FU_BRU)
+                                    btl_load_consumer_bru_now++;
+                                else
+                                    btl_load_consumer_other_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq0.rs2_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq0.rs2_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (u_core.u_iq0.fu_type_r[e] == FU_BRU) begin
+                                if (!u_core.u_iq0.next_src1_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]])
+                                        BTL_PROD_ALU:   btl_branch_consumer_alu_now++;
+                                        BTL_PROD_LOAD:  btl_branch_consumer_load_now++;
+                                        BTL_PROD_STORE: btl_branch_consumer_store_now++;
+                                        BTL_PROD_CSR:   btl_branch_consumer_csr_now++;
+                                        BTL_PROD_MUL:   btl_branch_consumer_mul_now++;
+                                        BTL_PROD_DIV:   btl_branch_consumer_div_now++;
+                                        default:        btl_branch_consumer_unknown_now++;
+                                    endcase
+                                end
+                                if (!u_core.u_iq0.next_src2_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]])
+                                        BTL_PROD_ALU:   btl_branch_consumer_alu_now++;
+                                        BTL_PROD_LOAD:  btl_branch_consumer_load_now++;
+                                        BTL_PROD_STORE: btl_branch_consumer_store_now++;
+                                        BTL_PROD_CSR:   btl_branch_consumer_csr_now++;
+                                        BTL_PROD_MUL:   btl_branch_consumer_mul_now++;
+                                        BTL_PROD_DIV:   btl_branch_consumer_div_now++;
+                                        default:        btl_branch_consumer_unknown_now++;
+                                    endcase
+                                end
+                            end
                             wakeup_now =
                                 (!u_core.u_iq0.src1_ready[e] ||
                                  !u_core.u_iq0.src2_ready[e]) &&
@@ -2125,6 +2453,11 @@ module tb_top
                                  (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
                                 (!u_core.u_iq0.src2_ready[e] &&
                                  (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            wakeup_load_now =
+                                (!u_core.u_iq0.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq0.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                (!u_core.u_iq0.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq0.rs2_phys_r[e]] == BTL_PROD_LOAD));
                             if (wakeup_now) begin
                                 btl_wakeup_candidate_now++;
                                 if (!selected_now)
@@ -2133,6 +2466,25 @@ module tb_top
                                     btl_alu_wakeup_candidate_now++;
                                     if (!selected_now)
                                         btl_alu_wakeup_missed_now++;
+                                end
+                                if (wakeup_load_now) begin
+                                    btl_load_wakeup_candidate_now++;
+                                    if (selected_now) begin
+                                        btl_load_wakeup_selected_now++;
+                                    end else begin
+                                        btl_load_wakeup_missed_now++;
+                                        if (u_core.flush_out.valid)
+                                            btl_load_wakeup_missed_suppress_flush_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ0] >= 2)
+                                            btl_load_wakeup_missed_port_busy_now++;
+                                        else if (u_core.u_iq0.fu_type_r[e] == FU_BRU &&
+                                                 u_core.u_iq0.sel_found[0])
+                                            btl_load_wakeup_missed_fu_blocked_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ0] != 0)
+                                            btl_load_wakeup_missed_older_ready_now++;
+                                        else
+                                            btl_load_wakeup_missed_other_now++;
+                                    end
                                 end
                             end
                     end
@@ -2224,6 +2576,76 @@ module tb_top
                         if (!u_core.u_iq1.next_src1_ready[e] &&
                             !u_core.u_iq1.next_src2_ready[e])
                             btl_both_src_wait_now++;
+                            if (!u_core.u_iq1.next_src1_ready[e] &&
+                                (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                if (u_core.u_iq1.fu_type_r[e] == FU_ALU)
+                                    btl_load_consumer_alu_now++;
+                                else if (u_core.u_iq1.fu_type_r[e] == FU_BRU)
+                                    btl_load_consumer_bru_now++;
+                                else
+                                    btl_load_consumer_other_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq1.rs1_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq1.rs1_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (!u_core.u_iq1.next_src2_ready[e] &&
+                                (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                if (u_core.u_iq1.fu_type_r[e] == FU_ALU)
+                                    btl_load_consumer_alu_now++;
+                                else if (u_core.u_iq1.fu_type_r[e] == FU_BRU)
+                                    btl_load_consumer_bru_now++;
+                                else
+                                    btl_load_consumer_other_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq1.rs2_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq1.rs2_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (u_core.u_iq1.fu_type_r[e] == FU_BRU) begin
+                                if (!u_core.u_iq1.next_src1_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]])
+                                        BTL_PROD_ALU:   btl_branch_consumer_alu_now++;
+                                        BTL_PROD_LOAD:  btl_branch_consumer_load_now++;
+                                        BTL_PROD_STORE: btl_branch_consumer_store_now++;
+                                        BTL_PROD_CSR:   btl_branch_consumer_csr_now++;
+                                        BTL_PROD_MUL:   btl_branch_consumer_mul_now++;
+                                        BTL_PROD_DIV:   btl_branch_consumer_div_now++;
+                                        default:        btl_branch_consumer_unknown_now++;
+                                    endcase
+                                end
+                                if (!u_core.u_iq1.next_src2_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]])
+                                        BTL_PROD_ALU:   btl_branch_consumer_alu_now++;
+                                        BTL_PROD_LOAD:  btl_branch_consumer_load_now++;
+                                        BTL_PROD_STORE: btl_branch_consumer_store_now++;
+                                        BTL_PROD_CSR:   btl_branch_consumer_csr_now++;
+                                        BTL_PROD_MUL:   btl_branch_consumer_mul_now++;
+                                        BTL_PROD_DIV:   btl_branch_consumer_div_now++;
+                                        default:        btl_branch_consumer_unknown_now++;
+                                    endcase
+                                end
+                            end
                             wakeup_now =
                                 (!u_core.u_iq1.src1_ready[e] ||
                                  !u_core.u_iq1.src2_ready[e]) &&
@@ -2233,6 +2655,11 @@ module tb_top
                                  (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
                                 (!u_core.u_iq1.src2_ready[e] &&
                                  (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            wakeup_load_now =
+                                (!u_core.u_iq1.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq1.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                (!u_core.u_iq1.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq1.rs2_phys_r[e]] == BTL_PROD_LOAD));
                             if (wakeup_now) begin
                                 btl_wakeup_candidate_now++;
                                 if (!selected_now)
@@ -2241,6 +2668,25 @@ module tb_top
                                     btl_alu_wakeup_candidate_now++;
                                     if (!selected_now)
                                         btl_alu_wakeup_missed_now++;
+                                end
+                                if (wakeup_load_now) begin
+                                    btl_load_wakeup_candidate_now++;
+                                    if (selected_now) begin
+                                        btl_load_wakeup_selected_now++;
+                                    end else begin
+                                        btl_load_wakeup_missed_now++;
+                                        if (u_core.flush_out.valid)
+                                            btl_load_wakeup_missed_suppress_flush_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ1] >= 1)
+                                            btl_load_wakeup_missed_port_busy_now++;
+                                        else if (u_core.u_iq1.fu_type_r[e] == FU_BRU &&
+                                                 u_core.u_iq1.sel_found[0])
+                                            btl_load_wakeup_missed_fu_blocked_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ1] != 0)
+                                            btl_load_wakeup_missed_older_ready_now++;
+                                        else
+                                            btl_load_wakeup_missed_other_now++;
+                                    end
                                 end
                             end
                     end
@@ -2332,6 +2778,76 @@ module tb_top
                         if (!u_core.u_iq2.next_src1_ready[e] &&
                             !u_core.u_iq2.next_src2_ready[e])
                             btl_both_src_wait_now++;
+                            if (!u_core.u_iq2.next_src1_ready[e] &&
+                                (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                if (u_core.u_iq2.fu_type_r[e] == FU_ALU)
+                                    btl_load_consumer_alu_now++;
+                                else if (u_core.u_iq2.fu_type_r[e] == FU_BRU)
+                                    btl_load_consumer_bru_now++;
+                                else
+                                    btl_load_consumer_other_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq2.rs1_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq2.rs1_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (!u_core.u_iq2.next_src2_ready[e] &&
+                                (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                if (u_core.u_iq2.fu_type_r[e] == FU_ALU)
+                                    btl_load_consumer_alu_now++;
+                                else if (u_core.u_iq2.fu_type_r[e] == FU_BRU)
+                                    btl_load_consumer_bru_now++;
+                                else
+                                    btl_load_consumer_other_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq2.rs2_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq2.rs2_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (u_core.u_iq2.fu_type_r[e] == FU_BRU) begin
+                                if (!u_core.u_iq2.next_src1_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]])
+                                        BTL_PROD_ALU:   btl_branch_consumer_alu_now++;
+                                        BTL_PROD_LOAD:  btl_branch_consumer_load_now++;
+                                        BTL_PROD_STORE: btl_branch_consumer_store_now++;
+                                        BTL_PROD_CSR:   btl_branch_consumer_csr_now++;
+                                        BTL_PROD_MUL:   btl_branch_consumer_mul_now++;
+                                        BTL_PROD_DIV:   btl_branch_consumer_div_now++;
+                                        default:        btl_branch_consumer_unknown_now++;
+                                    endcase
+                                end
+                                if (!u_core.u_iq2.next_src2_ready[e]) begin
+                                    case (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]])
+                                        BTL_PROD_ALU:   btl_branch_consumer_alu_now++;
+                                        BTL_PROD_LOAD:  btl_branch_consumer_load_now++;
+                                        BTL_PROD_STORE: btl_branch_consumer_store_now++;
+                                        BTL_PROD_CSR:   btl_branch_consumer_csr_now++;
+                                        BTL_PROD_MUL:   btl_branch_consumer_mul_now++;
+                                        BTL_PROD_DIV:   btl_branch_consumer_div_now++;
+                                        default:        btl_branch_consumer_unknown_now++;
+                                    endcase
+                                end
+                            end
                             wakeup_now =
                                 (!u_core.u_iq2.src1_ready[e] ||
                                  !u_core.u_iq2.src2_ready[e]) &&
@@ -2341,6 +2857,11 @@ module tb_top
                                  (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
                                 (!u_core.u_iq2.src2_ready[e] &&
                                  (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            wakeup_load_now =
+                                (!u_core.u_iq2.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq2.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                (!u_core.u_iq2.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq2.rs2_phys_r[e]] == BTL_PROD_LOAD));
                             if (wakeup_now) begin
                                 btl_wakeup_candidate_now++;
                                 if (!selected_now)
@@ -2349,6 +2870,25 @@ module tb_top
                                     btl_alu_wakeup_candidate_now++;
                                     if (!selected_now)
                                         btl_alu_wakeup_missed_now++;
+                                end
+                                if (wakeup_load_now) begin
+                                    btl_load_wakeup_candidate_now++;
+                                    if (selected_now) begin
+                                        btl_load_wakeup_selected_now++;
+                                    end else begin
+                                        btl_load_wakeup_missed_now++;
+                                        if (u_core.flush_out.valid)
+                                            btl_load_wakeup_missed_suppress_flush_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ2] >= 1)
+                                            btl_load_wakeup_missed_port_busy_now++;
+                                        else if (u_core.u_iq2.fu_type_r[e] == FU_BRU &&
+                                                 u_core.u_iq2.sel_found[0])
+                                            btl_load_wakeup_missed_fu_blocked_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ2] != 0)
+                                            btl_load_wakeup_missed_older_ready_now++;
+                                        else
+                                            btl_load_wakeup_missed_other_now++;
+                                    end
                                 end
                             end
                     end
@@ -2434,6 +2974,42 @@ module tb_top
                         if (!u_core.u_iq_load.next_src1_ready[e] &&
                             !u_core.u_iq_load.next_src2_ready[e])
                             btl_both_src_wait_now++;
+                            if (!u_core.u_iq_load.next_src1_ready[e] &&
+                                (btl_preg_class[u_core.u_iq_load.rs1_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                btl_load_consumer_load_addr_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq_load.rs1_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq_load.rs1_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (!u_core.u_iq_load.next_src2_ready[e] &&
+                                (btl_preg_class[u_core.u_iq_load.rs2_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                btl_load_consumer_load_addr_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq_load.rs2_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq_load.rs2_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
                             wakeup_now =
                                 (!u_core.u_iq_load.src1_ready[e] ||
                                  !u_core.u_iq_load.src2_ready[e]) &&
@@ -2443,6 +3019,11 @@ module tb_top
                                  (btl_preg_class[u_core.u_iq_load.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
                                 (!u_core.u_iq_load.src2_ready[e] &&
                                  (btl_preg_class[u_core.u_iq_load.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            wakeup_load_now =
+                                (!u_core.u_iq_load.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_load.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                (!u_core.u_iq_load.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_load.rs2_phys_r[e]] == BTL_PROD_LOAD));
                             if (wakeup_now) begin
                                 selected_now = 1'b0;
                                 for (int p = 0; p < 2; p++) begin
@@ -2458,6 +3039,22 @@ module tb_top
                                     btl_alu_wakeup_candidate_now++;
                                     if (!selected_now)
                                         btl_alu_wakeup_missed_now++;
+                                end
+                                if (wakeup_load_now) begin
+                                    btl_load_wakeup_candidate_now++;
+                                    if (selected_now) begin
+                                        btl_load_wakeup_selected_now++;
+                                    end else begin
+                                        btl_load_wakeup_missed_now++;
+                                        if (u_core.flush_out.valid)
+                                            btl_load_wakeup_missed_suppress_flush_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ_LOAD] >= 2)
+                                            btl_load_wakeup_missed_port_busy_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ_LOAD] != 0)
+                                            btl_load_wakeup_missed_older_ready_now++;
+                                        else
+                                            btl_load_wakeup_missed_other_now++;
+                                    end
                                 end
                             end
                     end
@@ -2541,6 +3138,42 @@ module tb_top
                         if (!u_core.u_iq_store.next_src1_ready[e] &&
                             !u_core.u_iq_store.next_src2_ready[e])
                             btl_both_src_wait_now++;
+                            if (!u_core.u_iq_store.next_src1_ready[e] &&
+                                (btl_preg_class[u_core.u_iq_store.rs1_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                btl_load_consumer_store_addr_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq_store.rs1_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq_store.rs1_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (!u_core.u_iq_store.next_src2_ready[e] &&
+                                (btl_preg_class[u_core.u_iq_store.rs2_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                btl_load_consumer_store_addr_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq_store.rs2_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq_store.rs2_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
                             wakeup_now =
                                 (!u_core.u_iq_store.src1_ready[e] ||
                                  !u_core.u_iq_store.src2_ready[e]) &&
@@ -2550,6 +3183,11 @@ module tb_top
                                  (btl_preg_class[u_core.u_iq_store.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
                                 (!u_core.u_iq_store.src2_ready[e] &&
                                  (btl_preg_class[u_core.u_iq_store.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            wakeup_load_now =
+                                (!u_core.u_iq_store.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_store.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                (!u_core.u_iq_store.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_store.rs2_phys_r[e]] == BTL_PROD_LOAD));
                             if (wakeup_now) begin
                                 selected_now =
                                     u_core.u_iq_store.sel_found[0] &&
@@ -2562,6 +3200,22 @@ module tb_top
                                     btl_alu_wakeup_candidate_now++;
                                     if (!selected_now)
                                         btl_alu_wakeup_missed_now++;
+                                end
+                                if (wakeup_load_now) begin
+                                    btl_load_wakeup_candidate_now++;
+                                    if (selected_now) begin
+                                        btl_load_wakeup_selected_now++;
+                                    end else begin
+                                        btl_load_wakeup_missed_now++;
+                                        if (u_core.flush_out.valid)
+                                            btl_load_wakeup_missed_suppress_flush_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ_STORE] >= 1)
+                                            btl_load_wakeup_missed_port_busy_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ_STORE] != 0)
+                                            btl_load_wakeup_missed_older_ready_now++;
+                                        else
+                                            btl_load_wakeup_missed_other_now++;
+                                    end
                                 end
                             end
                     end
@@ -2645,6 +3299,42 @@ module tb_top
                         if (!u_core.u_iq_store_data.next_src1_ready[e] &&
                             !u_core.u_iq_store_data.next_src2_ready[e])
                             btl_both_src_wait_now++;
+                            if (!u_core.u_iq_store_data.next_src1_ready[e] &&
+                                (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                btl_load_consumer_store_data_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq_store_data.rs1_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq_store_data.rs1_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
+                            if (!u_core.u_iq_store_data.next_src2_ready[e] &&
+                                (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]] == BTL_PROD_LOAD)) begin
+                                btl_load_consumer_store_data_now++;
+                                if (btl_issue_pdst_now[u_core.u_iq_store_data.rs2_phys_r[e]])
+                                    btl_load_wait_issue_same_cycle_now++;
+                                else begin
+                                    case (btl_preg_state[u_core.u_iq_store_data.rs2_phys_r[e]])
+                                        BTL_PREG_STATE_WAIT_ISSUE:
+                                            btl_load_wait_not_issued_now++;
+                                        BTL_PREG_STATE_ISSUED_WAIT_WB:
+                                            btl_load_wait_issued_not_wb_now++;
+                                        BTL_PREG_STATE_DONE:
+                                            btl_load_wait_done_stale_now++;
+                                        default:
+                                            btl_load_wait_state_unknown_now++;
+                                    endcase
+                                end
+                            end
                             wakeup_now =
                                 (!u_core.u_iq_store_data.src1_ready[e] ||
                                  !u_core.u_iq_store_data.src2_ready[e]) &&
@@ -2654,6 +3344,11 @@ module tb_top
                                  (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]] == BTL_PROD_ALU)) ||
                                 (!u_core.u_iq_store_data.src2_ready[e] &&
                                  (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]] == BTL_PROD_ALU));
+                            wakeup_load_now =
+                                (!u_core.u_iq_store_data.src1_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_store_data.rs1_phys_r[e]] == BTL_PROD_LOAD)) ||
+                                (!u_core.u_iq_store_data.src2_ready[e] &&
+                                 (btl_preg_class[u_core.u_iq_store_data.rs2_phys_r[e]] == BTL_PROD_LOAD));
                             if (wakeup_now) begin
                                 selected_now =
                                     u_core.u_iq_store_data.sel_found[0] &&
@@ -2666,6 +3361,22 @@ module tb_top
                                     btl_alu_wakeup_candidate_now++;
                                     if (!selected_now)
                                         btl_alu_wakeup_missed_now++;
+                                end
+                                if (wakeup_load_now) begin
+                                    btl_load_wakeup_candidate_now++;
+                                    if (selected_now) begin
+                                        btl_load_wakeup_selected_now++;
+                                    end else begin
+                                        btl_load_wakeup_missed_now++;
+                                        if (u_core.flush_out.valid)
+                                            btl_load_wakeup_missed_suppress_flush_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ_STD] >= 1)
+                                            btl_load_wakeup_missed_port_busy_now++;
+                                        else if (btl_iq_selected_now[BTL_IQ_STD] != 0)
+                                            btl_load_wakeup_missed_older_ready_now++;
+                                        else
+                                            btl_load_wakeup_missed_other_now++;
+                                    end
                                 end
                             end
                     end
@@ -3036,6 +3747,51 @@ module tb_top
                 btl_dep_wait_on_csr <= btl_dep_wait_on_csr + btl_wait_csr_now;
                 btl_dep_wait_on_unknown <=
                     btl_dep_wait_on_unknown + btl_wait_unknown_now;
+                btl_dep_load_consumer_alu <=
+                    btl_dep_load_consumer_alu + btl_load_consumer_alu_now;
+                btl_dep_load_consumer_bru <=
+                    btl_dep_load_consumer_bru + btl_load_consumer_bru_now;
+                btl_dep_load_consumer_load_addr <=
+                    btl_dep_load_consumer_load_addr +
+                    btl_load_consumer_load_addr_now;
+                btl_dep_load_consumer_store_addr <=
+                    btl_dep_load_consumer_store_addr +
+                    btl_load_consumer_store_addr_now;
+                btl_dep_load_consumer_store_data <=
+                    btl_dep_load_consumer_store_data +
+                    btl_load_consumer_store_data_now;
+                btl_dep_load_consumer_other <=
+                    btl_dep_load_consumer_other + btl_load_consumer_other_now;
+                btl_dep_load_wait_issue_same_cycle <=
+                    btl_dep_load_wait_issue_same_cycle +
+                    btl_load_wait_issue_same_cycle_now;
+                btl_dep_load_wait_not_issued <=
+                    btl_dep_load_wait_not_issued + btl_load_wait_not_issued_now;
+                btl_dep_load_wait_issued_not_wb <=
+                    btl_dep_load_wait_issued_not_wb +
+                    btl_load_wait_issued_not_wb_now;
+                btl_dep_load_wait_done_stale <=
+                    btl_dep_load_wait_done_stale +
+                    btl_load_wait_done_stale_now;
+                btl_dep_load_wait_state_unknown <=
+                    btl_dep_load_wait_state_unknown +
+                    btl_load_wait_state_unknown_now;
+                btl_dep_branch_consumer_alu <=
+                    btl_dep_branch_consumer_alu + btl_branch_consumer_alu_now;
+                btl_dep_branch_consumer_load <=
+                    btl_dep_branch_consumer_load + btl_branch_consumer_load_now;
+                btl_dep_branch_consumer_store <=
+                    btl_dep_branch_consumer_store +
+                    btl_branch_consumer_store_now;
+                btl_dep_branch_consumer_csr <=
+                    btl_dep_branch_consumer_csr + btl_branch_consumer_csr_now;
+                btl_dep_branch_consumer_mul <=
+                    btl_dep_branch_consumer_mul + btl_branch_consumer_mul_now;
+                btl_dep_branch_consumer_div <=
+                    btl_dep_branch_consumer_div + btl_branch_consumer_div_now;
+                btl_dep_branch_consumer_unknown <=
+                    btl_dep_branch_consumer_unknown +
+                    btl_branch_consumer_unknown_now;
                 btl_dep_alu_wakeup_same_cycle_candidate <=
                     btl_dep_alu_wakeup_same_cycle_candidate +
                     btl_alu_wakeup_candidate_now;
@@ -3049,6 +3805,36 @@ module tb_top
                     btl_wakeup_same_cycle_candidate + btl_wakeup_candidate_now;
                 btl_wakeup_same_cycle_missed <=
                     btl_wakeup_same_cycle_missed + btl_wakeup_missed_now;
+                btl_load_wakeup_candidate <=
+                    btl_load_wakeup_candidate + btl_load_wakeup_candidate_now;
+                btl_load_wakeup_selected <=
+                    btl_load_wakeup_selected + btl_load_wakeup_selected_now;
+                btl_load_wakeup_missed <=
+                    btl_load_wakeup_missed + btl_load_wakeup_missed_now;
+                btl_load_wakeup_missed_port_busy <=
+                    btl_load_wakeup_missed_port_busy +
+                    btl_load_wakeup_missed_port_busy_now;
+                btl_load_wakeup_missed_older_ready <=
+                    btl_load_wakeup_missed_older_ready +
+                    btl_load_wakeup_missed_older_ready_now;
+                btl_load_wakeup_missed_fu_blocked <=
+                    btl_load_wakeup_missed_fu_blocked +
+                    btl_load_wakeup_missed_fu_blocked_now;
+                btl_load_wakeup_missed_suppress_flush <=
+                    btl_load_wakeup_missed_suppress_flush +
+                    btl_load_wakeup_missed_suppress_flush_now;
+                btl_load_wakeup_missed_other <=
+                    btl_load_wakeup_missed_other +
+                    btl_load_wakeup_missed_other_now;
+                btl_load_enq_wakeup_candidate <=
+                    btl_load_enq_wakeup_candidate +
+                    btl_load_enq_wakeup_candidate_now;
+                btl_load_enq_wakeup_issued_bypass <=
+                    btl_load_enq_wakeup_issued_bypass +
+                    btl_load_enq_wakeup_issued_bypass_now;
+                btl_load_enq_wakeup_hidden <=
+                    btl_load_enq_wakeup_hidden +
+                    btl_load_enq_wakeup_hidden_now;
 
                 if (u_core.rename_dec_count > u_core.ren_count_w)
                     btl_rename_slots_lost_total <=
@@ -3305,8 +4091,63 @@ module tb_top
             if (u_core.iq_load_issue_candidate_valid[1]) ld1_candidate_cyc <= ld1_candidate_cyc + 1;
             if (u_core.iq_load_issue_valid[1])           ld1_issue_cyc     <= ld1_issue_cyc + 1;
             if (u_core.lsu_load_issue_suppress[1])       ld1_suppress_cyc  <= ld1_suppress_cyc + 1;
+            if ((|u_core.iq_load_issue_candidate_valid) &&
+                !(|u_core.iq_load_issue_valid))
+                load_issue_no_fire_cyc <= load_issue_no_fire_cyc + 1;
+            if (&u_core.iq_load_issue_candidate_valid)
+                load_dual_candidate_cyc <= load_dual_candidate_cyc + 1;
+            if (&u_core.iq_load_issue_valid)
+                load_dual_issue_cyc <= load_dual_issue_cyc + 1;
+            if ((&u_core.iq_load_issue_candidate_valid) &&
+                (^u_core.iq_load_issue_valid))
+                load_dual_candidate_single_issue_cyc <=
+                    load_dual_candidate_single_issue_cyc + 1;
             if (u_core.u_lsu.sq_fwd_wait)                sq_fwd_wait_cyc   <= sq_fwd_wait_cyc + 1;
             if (u_core.u_lsu.sq_wait_p1)                 sq_wait_p1_cyc    <= sq_wait_p1_cyc + 1;
+            if (u_core.u_lsu.sq_fwd_wait) begin
+                if (dbg_p0_sq_wait_missing)
+                    btl_lsu_store_fwd_data_missing <=
+                        btl_lsu_store_fwd_data_missing + 1;
+                else if (u_core.u_lsu.same_cycle_fwd_partial ||
+                         dbg_p0_sq_ready_partial)
+                    btl_lsu_store_fwd_partial <=
+                        btl_lsu_store_fwd_partial + 1;
+                else if (u_core.u_lsu.fwd_hold_blocked)
+                    btl_lsu_store_fwd_path_busy <=
+                        btl_lsu_store_fwd_path_busy + 1;
+                else if (u_core.store_iq_older_than_load[0])
+                    btl_lsu_store_fwd_addr_missing <=
+                        btl_lsu_store_fwd_addr_missing + 1;
+                else
+                    btl_lsu_store_fwd_unknown <=
+                        btl_lsu_store_fwd_unknown + 1;
+            end
+            if (u_core.u_lsu.sq_wait_p1) begin
+                if (dbg_p1_sq_wait_missing)
+                    btl_lsu_store_fwd_data_missing <=
+                        btl_lsu_store_fwd_data_missing + 1;
+                else if (dbg_p1_sq_ready_partial)
+                    btl_lsu_store_fwd_partial <=
+                        btl_lsu_store_fwd_partial + 1;
+                else if (u_core.u_lsu.p1_fwd_hold_valid_r)
+                    btl_lsu_store_fwd_spill_hold <=
+                        btl_lsu_store_fwd_spill_hold + 1;
+                else if (u_core.store_iq_older_than_load[1])
+                    btl_lsu_store_fwd_addr_missing <=
+                        btl_lsu_store_fwd_addr_missing + 1;
+                else
+                    btl_lsu_store_fwd_unknown <=
+                        btl_lsu_store_fwd_unknown + 1;
+            end
+            if (u_core.u_lsu.fwd_hold_blocked)
+                btl_lsu_store_fwd_path_busy <=
+                    btl_lsu_store_fwd_path_busy + 1;
+            if (u_core.u_lsu.p1_fwd_hold_valid_r)
+                btl_lsu_store_fwd_spill_hold <=
+                    btl_lsu_store_fwd_spill_hold + 1;
+            if (u_core.dc_store_req_valid)
+                btl_lsu_store_fwd_backlog <=
+                    btl_lsu_store_fwd_backlog + 1;
             if (u_core.store_iq_older_than_load[0])      storeiq_block_ld0_cyc <= storeiq_block_ld0_cyc + 1;
             if (u_core.store_iq_older_than_load[1])      storeiq_block_ld1_cyc <= storeiq_block_ld1_cyc + 1;
             if (u_core.store_iq_older_than_load[0] &&
@@ -4175,15 +5016,78 @@ module tb_top
                 $display("xs bottleneck_dep_wait_on_store : %0d", btl_dep_wait_on_store);
                 $display("xs bottleneck_dep_wait_on_csr : %0d", btl_dep_wait_on_csr);
                 $display("xs bottleneck_dep_wait_on_unknown : %0d", btl_dep_wait_on_unknown);
+                $display("xs bottleneck_dep_load_consumer_alu : %0d", btl_dep_load_consumer_alu);
+                $display("xs bottleneck_dep_load_consumer_bru : %0d", btl_dep_load_consumer_bru);
+                $display("xs bottleneck_dep_load_consumer_load_addr : %0d", btl_dep_load_consumer_load_addr);
+                $display("xs bottleneck_dep_load_consumer_store_addr : %0d", btl_dep_load_consumer_store_addr);
+                $display("xs bottleneck_dep_load_consumer_store_data : %0d", btl_dep_load_consumer_store_data);
+                $display("xs bottleneck_dep_load_consumer_other : %0d", btl_dep_load_consumer_other);
+                $display("xs bottleneck_dep_load_wait_issue_same_cycle : %0d", btl_dep_load_wait_issue_same_cycle);
+                $display("xs bottleneck_dep_load_wait_not_issued : %0d", btl_dep_load_wait_not_issued);
+                $display("xs bottleneck_dep_load_wait_issued_not_wb : %0d", btl_dep_load_wait_issued_not_wb);
+                $display("xs bottleneck_dep_load_wait_done_stale : %0d", btl_dep_load_wait_done_stale);
+                $display("xs bottleneck_dep_load_wait_state_unknown : %0d", btl_dep_load_wait_state_unknown);
+                $display("xs bottleneck_dep_branch_consumer_alu : %0d", btl_dep_branch_consumer_alu);
+                $display("xs bottleneck_dep_branch_consumer_load : %0d", btl_dep_branch_consumer_load);
+                $display("xs bottleneck_dep_branch_consumer_store : %0d", btl_dep_branch_consumer_store);
+                $display("xs bottleneck_dep_branch_consumer_csr : %0d", btl_dep_branch_consumer_csr);
+                $display("xs bottleneck_dep_branch_consumer_mul : %0d", btl_dep_branch_consumer_mul);
+                $display("xs bottleneck_dep_branch_consumer_div : %0d", btl_dep_branch_consumer_div);
+                $display("xs bottleneck_dep_branch_consumer_unknown : %0d", btl_dep_branch_consumer_unknown);
                 $display("xs bottleneck_wakeup_same_cycle_candidate : %0d", btl_wakeup_same_cycle_candidate);
                 $display("xs bottleneck_wakeup_same_cycle_missed : %0d", btl_wakeup_same_cycle_missed);
+                $display("xs bottleneck_load_wakeup_candidate : %0d", btl_load_wakeup_candidate);
+                $display("xs bottleneck_load_wakeup_selected : %0d", btl_load_wakeup_selected);
+                $display("xs bottleneck_load_wakeup_missed : %0d", btl_load_wakeup_missed);
+                $display("xs bottleneck_load_wakeup_missed_port_busy : %0d", btl_load_wakeup_missed_port_busy);
+                $display("xs bottleneck_load_wakeup_missed_older_ready : %0d", btl_load_wakeup_missed_older_ready);
+                $display("xs bottleneck_load_wakeup_missed_fu_blocked : %0d", btl_load_wakeup_missed_fu_blocked);
+                $display("xs bottleneck_load_wakeup_missed_suppress_flush : %0d", btl_load_wakeup_missed_suppress_flush);
+                $display("xs bottleneck_load_wakeup_missed_other : %0d", btl_load_wakeup_missed_other);
+                $display("xs bottleneck_load_enq_wakeup_candidate : %0d", btl_load_enq_wakeup_candidate);
+                $display("xs bottleneck_load_enq_wakeup_issued_bypass : %0d", btl_load_enq_wakeup_issued_bypass);
+                $display("xs bottleneck_load_enq_wakeup_hidden : %0d", btl_load_enq_wakeup_hidden);
                 $display("xs bottleneck_rob_commit_zero_cycles : %0d", commit_hist[0]);
                 $display("xs bottleneck_rob_younger_ready_behind_head : %0d", btl_rob_younger_ready_behind_head);
                 $display("xs bottleneck_rob_commit_slots_lost_head_block : %0d", btl_rob_commit_slots_lost_head_block);
+                $display("xs bottleneck_rob_head_not_ready_load : %0d", u_core.u_rob.rob_head_not_ready_load_cyc);
+                $display("xs bottleneck_rob_head_not_ready_store : %0d", u_core.u_rob.rob_head_not_ready_store_cyc);
+                $display("xs bottleneck_rob_head_not_ready_branch : %0d", u_core.u_rob.rob_head_not_ready_branch_cyc);
+                $display("xs bottleneck_rob_head_not_ready_serial : %0d", u_core.u_rob.rob_head_not_ready_serial_cyc);
+                $display("xs bottleneck_rob_head_not_ready_other : %0d", u_core.u_rob.rob_head_not_ready_other_cyc);
                 $display("xs bottleneck_lsu_load_issue_total : %0d", load_lat_issue_total);
                 $display("xs bottleneck_lsu_load_reissue_total : %0d", load_lat_reissue_total);
                 $display("xs bottleneck_lsu_load_wb_total : %0d", load_lat_wb_total);
                 $display("xs bottleneck_lsu_load_wb_untracked : %0d", load_lat_wb_untracked_total);
+                $display("xs bottleneck_lsu_load_issue_candidate_total : %0d",
+                    ld0_candidate_cyc + ld1_candidate_cyc);
+                $display("xs bottleneck_lsu_load_issue_fire_total : %0d",
+                    ld0_issue_cyc + ld1_issue_cyc);
+                $display("xs bottleneck_lsu_load_issue_lost_slots : %0d",
+                    (ld0_candidate_cyc - ld0_issue_cyc) +
+                    (ld1_candidate_cyc - ld1_issue_cyc));
+                $display("xs bottleneck_lsu_load_issue_no_fire_cycles : %0d",
+                    load_issue_no_fire_cyc);
+                $display("xs bottleneck_lsu_load_issue_dual_candidate_cycles : %0d",
+                    load_dual_candidate_cyc);
+                $display("xs bottleneck_lsu_load_issue_dual_fire_cycles : %0d",
+                    load_dual_issue_cyc);
+                $display("xs bottleneck_lsu_load_issue_dual_candidate_single_fire_cycles : %0d",
+                    load_dual_candidate_single_issue_cyc);
+                $display("xs bottleneck_lsu_load_issue_suppress_total : %0d",
+                    ld0_suppress_cyc + ld1_suppress_cyc);
+                $display("xs bottleneck_lsu_load_issue_suppress_ld0 : %0d", ld0_suppress_cyc);
+                $display("xs bottleneck_lsu_load_issue_suppress_ld1 : %0d", ld1_suppress_cyc);
+                $display("xs bottleneck_lsu_load_issue_store_order_ld0 : %0d",
+                    storeiq_block_ld0_cyc);
+                $display("xs bottleneck_lsu_load_issue_store_order_ld1 : %0d",
+                    storeiq_block_ld1_cyc);
+                $display("xs bottleneck_lsu_load_issue_store_order_same_cycle_sta_ld0 : %0d",
+                    storeiq_block_ld0_with_sta_issue_cyc);
+                $display("xs bottleneck_lsu_load_issue_store_order_same_cycle_sta_ld1 : %0d",
+                    storeiq_block_ld1_with_sta_issue_cyc);
+                $display("xs bottleneck_lsu_load_issue_p1_retry_captures : %0d",
+                    p1_retry_capture_cyc);
                 $display("xs bottleneck_lsu_load_latency_0 : %0d", load_lat_hist[0]);
                 $display("xs bottleneck_lsu_load_latency_1 : %0d", load_lat_hist[1]);
                 $display("xs bottleneck_lsu_load_latency_2 : %0d", load_lat_hist[2]);
@@ -4200,6 +5104,13 @@ module tb_top
                 $display("xs bottleneck_lsu_store_forward_wait : %0d", sq_fwd_wait_cyc);
                 $display("xs bottleneck_lsu_store_queue_wait : %0d", sq_wait_p1_cyc);
                 $display("xs bottleneck_lsu_store_commit_backlog : %0d", dc_store_req_cyc);
+                $display("xs bottleneck_lsu_store_fwd_addr_missing : %0d", btl_lsu_store_fwd_addr_missing);
+                $display("xs bottleneck_lsu_store_fwd_data_missing : %0d", btl_lsu_store_fwd_data_missing);
+                $display("xs bottleneck_lsu_store_fwd_path_busy : %0d", btl_lsu_store_fwd_path_busy);
+                $display("xs bottleneck_lsu_store_fwd_partial : %0d", btl_lsu_store_fwd_partial);
+                $display("xs bottleneck_lsu_store_fwd_spill_hold : %0d", btl_lsu_store_fwd_spill_hold);
+                $display("xs bottleneck_lsu_store_fwd_backlog : %0d", btl_lsu_store_fwd_backlog);
+                $display("xs bottleneck_lsu_store_fwd_unknown : %0d", btl_lsu_store_fwd_unknown);
                 $display("xs bottleneck_lsu_dcache_port_wait : %0d", p1_dcache_conflict_cyc);
                 $display("xs bottleneck_lsu_dual_load_conflict : %0d", p1_dcache_conflict_cyc);
                 $display("xs bottleneck_lsu_p1_retry_live : %0d", p1_retry_valid_cyc);
