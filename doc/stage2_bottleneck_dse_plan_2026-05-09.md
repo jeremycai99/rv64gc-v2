@@ -36,6 +36,18 @@ Baseline comparison rows:
 - Short-chain audit artifact set:
   `benchmark_results/20260509_iq0_*`.
 
+Executed full profiled baseline, May 9, 2026:
+
+- Rebuilt DSim from the current committed RTL before the run.
+- Artifact: `benchmark_results/stage2_bottleneck_baseline_20260509`.
+- Goal audit: `GOAL_PASS`, `stage1`, `signoff`, `16/16`.
+- All rows passed endpoint gates with legacy loop buffer and standalone
+  decoded-op replay activity at zero.
+- `tools/bottleneck_analysis.py` was updated after this run to surface the
+  existing FTQ/IBuffer runahead attribution counters in ranked output.
+- Expanded rank report:
+  `benchmark_results/stage2_bottleneck_baseline_20260509/bottleneck_rank.md`.
+
 Cycle-level frontend/backend pressure from the accepted signoff baseline:
 
 | Row | Cycles | Main cycle counters | Interpretation |
@@ -56,6 +68,28 @@ Entry-slot pressure from `+BOTTLENECK_PROFILE`:
 | CoreMark 10 | `xs_bottleneck_dep_wait_on_alu=13,495,221` | Same CoreMark shape as iter1. The leading sub-bucket is blocked not-yet-issued ALU producers with ALU-produced operands. |
 | Frontend mixed branch dense | `xs_bottleneck_dep_wait_on_alu=16,558` | ALU pressure exists, but `redirect_recovery=426` almost equals `packet_empty=433`, so control recovery is the cycle-level limiter. |
 | Branch hotspot | `xs_bottleneck_iq0_enq_ready_hidden=78,752` | Ready-enqueue visibility, commit-zero, frontend-zero, packet-empty, duplicate/no-emit, and redirect counters all contribute; this row is not a pure ALU-chain workload. |
+
+Full-run runahead attribution highlights:
+
+| Row | Key runahead counters | Implication |
+|---|---|---|
+| CoreMark 10 | `xs_runahead_req_valid=90,954`, `xs_runahead_req_fire=90,954`, `xs_runahead_dup_alloc_block=89,972`, `xs_runahead_pending_cycles=126,997`, `xs_data_present_no_emit=83,016`, `xs_data_no_emit_dup=41,286`, `xs_data_no_emit_redirect=30,052` | There is real IFU runahead opportunity, but duplicate allocation and no-emit ownership policy prevent those requests from translating into useful decode supply. |
+| CoreMark 10 | `xs_same_owner_candidate=389,324`, `xs_same_owner_advanced=341,599`, `xs_same_owner_block_rem=34,907` | Same-owner advancement is active, but remainder handling still blocks a material fraction of otherwise useful same-owner work. |
+| Branch hotspot | `xs_data_present_no_emit=30,172`, `xs_data_no_emit_dup=23,635`, `xs_dup_no_same_owner=23,635`, `xs_dup_no_owner_control=23,635`, `xs_dup_no_owner_straddle=23,635` | The hotspot is a control/straddle owner problem. Removing duplicate suppression locally is not safe; the fix must be owner-aware buffering and delivery. |
+| Backend independent quad | `packet_empty=2,014`, `packet_empty_f2_data=2,003`, `xs_data_no_emit_dup=1,002` | Even a backend-width guard row exposes frontend duplicate/data-present no-emit pressure, so the issue is not CoreMark-specific. |
+
+Direction selection update from this full baseline:
+
+- Branch recovery remains important, but pure redirect recovery is not the
+  broadest first lever. CoreMark 10 redirect recovery is `29,575` cycles, while
+  packet-empty is `91,909` cycles and data-present no-emit is `83,016` cycles.
+- Local IQ0/short-ALU work remains quarantined. It targets a real entry-slot
+  pressure counter, but the measured clean variant was only about 1 percent and
+  neighboring variants regressed branch rows.
+- The next implementation branch is therefore Branch B, true FTQ/IBuffer
+  runahead attribution and then owner-aware buffering. This is the best match
+  to the current cycle-level evidence and is a recognizable architectural
+  direction rather than benchmark tuning.
 
 Important interpretation rule:
 
@@ -615,25 +649,33 @@ slice or a revert before starting the next long run.
 
 ## Recommended First Direction
 
-Start with Branch A, branch recovery and checkpoint contract, unless the full
-profiled baseline materially changes the ranking.
+Start with Branch B, true FTQ/IBuffer runahead, based on the full profiled
+baseline. Branch A remains the second structural direction, but the current
+cycle-level data says packet/data-present no-emit pressure is the broader first
+lever than pure redirect recovery.
 
 Reason:
 
-- It has a recognizable architectural target and existing strict checker
-  infrastructure.
-- It can improve branch-heavy rows without being benchmark-specific.
-- It interacts directly with `redirect_recovery`, frontend-zero, packet-empty,
-  and commit-zero cycle buckets.
+- CoreMark 10 has `packet_empty=91,909`,
+  `xs_data_present_no_emit=83,016`, and
+  `xs_runahead_dup_alloc_block=89,972`, which are larger cycle-bound
+  opportunities than `redirect_recovery=29,575`.
+- The branch hotspot has `packet_empty=39,804` and
+  `xs_data_no_emit_dup=23,635`, all tied to no-same-owner control/straddle
+  context. That argues for owner-aware buffering, not duplicate-suppression
+  tweaks.
+- Backend independent quad also shows `packet_empty_f2_data=2,003` and
+  duplicate no-emit pressure, so this is not isolated to CoreMark.
 - It avoids continuing the local short-ALU/IQ0 path that has already shown
   marginal gains and nearby regressions.
 
 Immediate next steps:
 
-1. Run the full profiled baseline with `+BOTTLENECK_PROFILE`.
-2. Add missing branch recovery opportunity counters from A0 if the current
-   baseline cannot distinguish head versus non-head opportunity.
-3. Re-run T1 and T2 as instrumentation-only DSE.
-4. Decide whether A1 has enough measured opportunity for a behavior change.
-5. If A1 is justified, implement backend-only checkpoint recovery repair before
-   any early frontend redirect.
+1. Keep the current profiled baseline as the locked comparison artifact.
+2. Use the expanded `bottleneck_analysis.py` ranking to track runahead counters
+   in all future DSE runs.
+3. Add only the missing B0 attribution needed to estimate removable
+   `packet_empty_f2_data` and `packet_empty_noemit_dup` cycles by owner class.
+4. Re-run T1 and T2 as instrumentation-only DSE.
+5. If the attribution confirms the removable fraction, implement B1 split FTQ
+   ownership pointers before B2 owner-aware IBuffer.

@@ -97,6 +97,7 @@ module fetch_frontend_profiler
     input logic                             packet_buf_stale_owner_c,
     input logic [FTQ_IDX_BITS:0]            ftq_count_alloc_to_ifu,
     input logic [FTQ_IDX_BITS:0]            ftq_count_ifu_to_wb,
+    input logic [FTQ_IDX_BITS:0]            ftq_count_ifu_to_commit,
     input logic                             icq_deq_valid,
     input logic [63:LINE_BITS]              icq_deq_line_addr,
     input logic                             f2_work_line_valid_c,
@@ -137,6 +138,15 @@ module fetch_frontend_profiler
     integer xs_ftq_occ_sum;
     integer xs_ftq_occ_max;
     integer xs_ftq_occ_hist [0:5];
+    integer xs_ftq_alloc2ifu_occ_sum;
+    integer xs_ftq_alloc2ifu_occ_max;
+    integer xs_ftq_alloc2ifu_occ_hist [0:5];
+    integer xs_ftq_ifu2wb_occ_sum;
+    integer xs_ftq_ifu2wb_occ_max;
+    integer xs_ftq_ifu2wb_occ_hist [0:5];
+    integer xs_ftq_ifu2commit_occ_sum;
+    integer xs_ftq_ifu2commit_occ_max;
+    integer xs_ftq_ifu2commit_occ_hist [0:5];
     integer xs_packet_buf_empty_cycles;
     integer xs_packet_buf_full_cycles;
     integer xs_packet_buf_occ_sum;
@@ -896,6 +906,12 @@ module fetch_frontend_profiler
             xs_ftq_full_cycles            <= 0;
             xs_ftq_occ_sum                <= 0;
             xs_ftq_occ_max                <= 0;
+            xs_ftq_alloc2ifu_occ_sum      <= 0;
+            xs_ftq_alloc2ifu_occ_max      <= 0;
+            xs_ftq_ifu2wb_occ_sum         <= 0;
+            xs_ftq_ifu2wb_occ_max         <= 0;
+            xs_ftq_ifu2commit_occ_sum     <= 0;
+            xs_ftq_ifu2commit_occ_max     <= 0;
             xs_packet_buf_empty_cycles    <= 0;
             xs_packet_buf_full_cycles     <= 0;
             xs_packet_buf_occ_sum         <= 0;
@@ -1053,6 +1069,9 @@ module fetch_frontend_profiler
             end
             for (int i = 0; i < 6; i++) begin
                 xs_ftq_occ_hist[i] <= 0;
+                xs_ftq_alloc2ifu_occ_hist[i] <= 0;
+                xs_ftq_ifu2wb_occ_hist[i] <= 0;
+                xs_ftq_ifu2commit_occ_hist[i] <= 0;
             end
             for (int i = 0; i < 5; i++) begin
                 xs_packet_buf_occ_hist[i] <= 0;
@@ -1077,6 +1096,75 @@ module fetch_frontend_profiler
                 xs_ftq_occ_hist[4] <= xs_ftq_occ_hist[4] + 1;
             else
                 xs_ftq_occ_hist[5] <= xs_ftq_occ_hist[5] + 1;
+
+            xs_ftq_alloc2ifu_occ_sum <=
+                xs_ftq_alloc2ifu_occ_sum + int'(ftq_count_alloc_to_ifu);
+            if (int'(ftq_count_alloc_to_ifu) > xs_ftq_alloc2ifu_occ_max)
+                xs_ftq_alloc2ifu_occ_max <= int'(ftq_count_alloc_to_ifu);
+            if (ftq_count_alloc_to_ifu == '0)
+                xs_ftq_alloc2ifu_occ_hist[0] <=
+                    xs_ftq_alloc2ifu_occ_hist[0] + 1;
+            else if (ftq_count_alloc_to_ifu == (FTQ_IDX_BITS+1)'(1))
+                xs_ftq_alloc2ifu_occ_hist[1] <=
+                    xs_ftq_alloc2ifu_occ_hist[1] + 1;
+            else if (ftq_count_alloc_to_ifu <= (FTQ_IDX_BITS+1)'(3))
+                xs_ftq_alloc2ifu_occ_hist[2] <=
+                    xs_ftq_alloc2ifu_occ_hist[2] + 1;
+            else if (ftq_count_alloc_to_ifu <= (FTQ_IDX_BITS+1)'(7))
+                xs_ftq_alloc2ifu_occ_hist[3] <=
+                    xs_ftq_alloc2ifu_occ_hist[3] + 1;
+            else if (ftq_count_alloc_to_ifu <= (FTQ_IDX_BITS+1)'(15))
+                xs_ftq_alloc2ifu_occ_hist[4] <=
+                    xs_ftq_alloc2ifu_occ_hist[4] + 1;
+            else
+                xs_ftq_alloc2ifu_occ_hist[5] <=
+                    xs_ftq_alloc2ifu_occ_hist[5] + 1;
+
+            xs_ftq_ifu2wb_occ_sum <=
+                xs_ftq_ifu2wb_occ_sum + int'(ftq_count_ifu_to_wb);
+            if (int'(ftq_count_ifu_to_wb) > xs_ftq_ifu2wb_occ_max)
+                xs_ftq_ifu2wb_occ_max <= int'(ftq_count_ifu_to_wb);
+            if (ftq_count_ifu_to_wb == '0)
+                xs_ftq_ifu2wb_occ_hist[0] <=
+                    xs_ftq_ifu2wb_occ_hist[0] + 1;
+            else if (ftq_count_ifu_to_wb == (FTQ_IDX_BITS+1)'(1))
+                xs_ftq_ifu2wb_occ_hist[1] <=
+                    xs_ftq_ifu2wb_occ_hist[1] + 1;
+            else if (ftq_count_ifu_to_wb <= (FTQ_IDX_BITS+1)'(3))
+                xs_ftq_ifu2wb_occ_hist[2] <=
+                    xs_ftq_ifu2wb_occ_hist[2] + 1;
+            else if (ftq_count_ifu_to_wb <= (FTQ_IDX_BITS+1)'(7))
+                xs_ftq_ifu2wb_occ_hist[3] <=
+                    xs_ftq_ifu2wb_occ_hist[3] + 1;
+            else if (ftq_count_ifu_to_wb <= (FTQ_IDX_BITS+1)'(15))
+                xs_ftq_ifu2wb_occ_hist[4] <=
+                    xs_ftq_ifu2wb_occ_hist[4] + 1;
+            else
+                xs_ftq_ifu2wb_occ_hist[5] <=
+                    xs_ftq_ifu2wb_occ_hist[5] + 1;
+
+            xs_ftq_ifu2commit_occ_sum <=
+                xs_ftq_ifu2commit_occ_sum + int'(ftq_count_ifu_to_commit);
+            if (int'(ftq_count_ifu_to_commit) > xs_ftq_ifu2commit_occ_max)
+                xs_ftq_ifu2commit_occ_max <= int'(ftq_count_ifu_to_commit);
+            if (ftq_count_ifu_to_commit == '0)
+                xs_ftq_ifu2commit_occ_hist[0] <=
+                    xs_ftq_ifu2commit_occ_hist[0] + 1;
+            else if (ftq_count_ifu_to_commit == (FTQ_IDX_BITS+1)'(1))
+                xs_ftq_ifu2commit_occ_hist[1] <=
+                    xs_ftq_ifu2commit_occ_hist[1] + 1;
+            else if (ftq_count_ifu_to_commit <= (FTQ_IDX_BITS+1)'(3))
+                xs_ftq_ifu2commit_occ_hist[2] <=
+                    xs_ftq_ifu2commit_occ_hist[2] + 1;
+            else if (ftq_count_ifu_to_commit <= (FTQ_IDX_BITS+1)'(7))
+                xs_ftq_ifu2commit_occ_hist[3] <=
+                    xs_ftq_ifu2commit_occ_hist[3] + 1;
+            else if (ftq_count_ifu_to_commit <= (FTQ_IDX_BITS+1)'(15))
+                xs_ftq_ifu2commit_occ_hist[4] <=
+                    xs_ftq_ifu2commit_occ_hist[4] + 1;
+            else
+                xs_ftq_ifu2commit_occ_hist[5] <=
+                    xs_ftq_ifu2commit_occ_hist[5] + 1;
 
             if (packet_buf_empty)
                 xs_packet_buf_empty_cycles <= xs_packet_buf_empty_cycles + 1;
@@ -1859,6 +1947,54 @@ module fetch_frontend_profiler
                      xs_ftq_occ_hist[4]);
             $display("xs ftq occ hist 16plus      : %0d",
                      xs_ftq_occ_hist[5]);
+            $display("xs ftq alloc2ifu occ sum    : %0d",
+                     xs_ftq_alloc2ifu_occ_sum);
+            $display("xs ftq alloc2ifu occ max    : %0d",
+                     xs_ftq_alloc2ifu_occ_max);
+            $display("xs ftq alloc2ifu occ hist 0 : %0d",
+                     xs_ftq_alloc2ifu_occ_hist[0]);
+            $display("xs ftq alloc2ifu occ hist 1 : %0d",
+                     xs_ftq_alloc2ifu_occ_hist[1]);
+            $display("xs ftq alloc2ifu occ hist 2to3: %0d",
+                     xs_ftq_alloc2ifu_occ_hist[2]);
+            $display("xs ftq alloc2ifu occ hist 4to7: %0d",
+                     xs_ftq_alloc2ifu_occ_hist[3]);
+            $display("xs ftq alloc2ifu occ hist 8to15: %0d",
+                     xs_ftq_alloc2ifu_occ_hist[4]);
+            $display("xs ftq alloc2ifu occ hist 16plus: %0d",
+                     xs_ftq_alloc2ifu_occ_hist[5]);
+            $display("xs ftq ifu2wb occ sum       : %0d",
+                     xs_ftq_ifu2wb_occ_sum);
+            $display("xs ftq ifu2wb occ max       : %0d",
+                     xs_ftq_ifu2wb_occ_max);
+            $display("xs ftq ifu2wb occ hist 0    : %0d",
+                     xs_ftq_ifu2wb_occ_hist[0]);
+            $display("xs ftq ifu2wb occ hist 1    : %0d",
+                     xs_ftq_ifu2wb_occ_hist[1]);
+            $display("xs ftq ifu2wb occ hist 2to3 : %0d",
+                     xs_ftq_ifu2wb_occ_hist[2]);
+            $display("xs ftq ifu2wb occ hist 4to7 : %0d",
+                     xs_ftq_ifu2wb_occ_hist[3]);
+            $display("xs ftq ifu2wb occ hist 8to15: %0d",
+                     xs_ftq_ifu2wb_occ_hist[4]);
+            $display("xs ftq ifu2wb occ hist 16plus: %0d",
+                     xs_ftq_ifu2wb_occ_hist[5]);
+            $display("xs ftq ifu2commit occ sum   : %0d",
+                     xs_ftq_ifu2commit_occ_sum);
+            $display("xs ftq ifu2commit occ max   : %0d",
+                     xs_ftq_ifu2commit_occ_max);
+            $display("xs ftq ifu2commit occ hist 0: %0d",
+                     xs_ftq_ifu2commit_occ_hist[0]);
+            $display("xs ftq ifu2commit occ hist 1: %0d",
+                     xs_ftq_ifu2commit_occ_hist[1]);
+            $display("xs ftq ifu2commit occ hist 2to3: %0d",
+                     xs_ftq_ifu2commit_occ_hist[2]);
+            $display("xs ftq ifu2commit occ hist 4to7: %0d",
+                     xs_ftq_ifu2commit_occ_hist[3]);
+            $display("xs ftq ifu2commit occ hist 8to15: %0d",
+                     xs_ftq_ifu2commit_occ_hist[4]);
+            $display("xs ftq ifu2commit occ hist 16plus: %0d",
+                     xs_ftq_ifu2commit_occ_hist[5]);
             $display("xs runahead req valid       : %0d",
                      xs_runahead_req_valid_cycles);
             $display("xs runahead req fire        : %0d",
@@ -2297,6 +2433,7 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .packet_buf_stale_owner_c        (packet_buf_stale_owner_c),
     .ftq_count_alloc_to_ifu          (ftq_count_alloc_to_ifu),
     .ftq_count_ifu_to_wb             (ftq_count_ifu_to_wb),
+    .ftq_count_ifu_to_commit         (ftq_count_ifu_to_commit),
     .icq_deq_valid                   (icq_deq_valid),
     .icq_deq_line_addr               (icq_deq_line_addr),
     .f2_work_line_valid_c            (f2_work_line_valid_c),
