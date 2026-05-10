@@ -214,6 +214,41 @@ The working priority is:
 4. Treat Branch E as a dependent investigation until head-block cause proves
    actual commit/window limits.
 
+### Current DSE Thesis After Cursor Attribution
+
+The current bottleneck data now supports one narrow next behavior direction,
+plus several deeper evidence branches. The next DSE campaign should not be a
+menu of independent tweaks. It should test this ordered thesis:
+
+1. The dominant frontend loss is a post-delivery owner-cursor handoff problem,
+   not raw IBuffer capacity and not safe duplicate packet emission.
+2. Branch recovery has real opportunity after checkpoint-boundary metadata
+   repair, but the old recovery behavior knobs are too blunt and currently
+   increase recovery cost.
+3. Scheduler pressure is very large on CoreMark, but previous local IQ0 and
+   short-ALU trials were too marginal. The next backend work must first prove
+   whether the problem is criticality, select fairness, FU steering, or true
+   dependency depth.
+4. Dhrystone still has a load-use component that a frontend-only campaign will
+   not remove.
+5. Commit-zero pressure is probably a symptom until ROB-head attribution proves
+   a direct window or retirement structure bottleneck.
+
+Therefore the near-term DSE queue is:
+
+| Priority | Branch | Reason to run now | First expected proof |
+|---:|---|---|---|
+| 1 | B1 post-delivery cursor handoff | B1b shows repeated same-line already-delivered PCs while seq, duplicate-next, request-PC, and ICQ state often already know the scoreboard next PC. | `xs_delivery_no_emit_already_delivered`, `xs_data_no_emit_dup`, and `packet_empty_noemit_dup` fall without duplicate-delivery or stale-owner violations. |
+| 2 | A1 recovery scheduler attribution | Checkpoint rejects collapsed after metadata repair, but raw and selective recovery regressed. | Recovery attempt cost, refill latency, and useful-work loss are split well enough to design a resource-aware scheduler. |
+| 3 | C0 scheduler criticality attribution | CoreMark ALU dependency pressure is huge, but local chaining was not broad enough. | Producer blocked state and select-loss counters identify one structural scheduler mechanism with at least 3 percent projected upside. |
+| 4 | D0 load-use attribution | Dhrystone ranks load wait above ALU pressure. | Load-use, store-forward, dcache-port, and replay causes are separated before any Dhrystone-directed change. |
+| 5 | E0 ROB-head attribution | Commit-zero pressure is large but entangled with branch, frontend, memory, and scheduler stalls. | Head-block cause and ready-younger hidden slots prove whether commit/window work is root-cause. |
+
+The first behavior trial should be B1 only if it changes the owner cursor
+contract for a scoreboard-proven already-delivered packet. It must not emit a
+duplicate packet, steer to benchmark PCs, revive the old loop buffer, or add
+capacity before the empty-buffer owner-live no-emit bucket is reduced.
+
 ### Phase 0: Evidence Freeze And Run Hygiene
 
 Purpose:
@@ -330,20 +365,26 @@ Required sequence:
      downstream hold.
    - This is instrumentation first. It must not change cycles.
 
-2. B1b owner/epoch duplicate handoff.
-   - Convert global duplicate suppression into an owner/epoch checked rule only
-     for scoreboard-proven already-delivered packets.
+2. B1b post-delivery cursor attribution.
+   - Determine why F2 revisits an already-delivered or non-next PC while the
+     delivery scoreboard has a different next required PC.
+   - Keep this behavior-neutral.
+
+3. B1c owner/epoch duplicate cursor advancement.
+   - Advance the work cursor only for scoreboard-equivalent, same-line,
+     already-delivered duplicate cases.
+   - Keep duplicate packet emission blocked.
    - Unsafe duplicate cases remain conservative.
    - Primary target counters:
      `xs_data_no_emit_dup`, `xs_data_no_emit_pktbuf_empty`,
      `packet_empty_noemit_dup`.
 
-3. B1c redirect no-emit handoff.
+4. B1d redirect no-emit handoff.
    - For redirect-driven no-emit with an empty packet buffer, classify whether
      the owner is killed, replayed, or legally deliverable.
    - Update FTQ, IFU cursor, and IBuffer from one owner transition.
 
-4. B2 owner-aware capacity.
+5. B2 owner-aware capacity.
    - Add more delivery capacity only if B1 leaves `xs_data_no_emit_pktbuf_full`
      or packet-age counters as the dominant limiter.
    - Each entry carries FTQ idx, epoch, start PC, valid mask, predicted-control
@@ -1018,7 +1059,7 @@ Interpretation:
   post-delivery cursor attribution for why F2 revisits an already-delivered PC
   instead of moving to the scoreboard's next required PC.
 
-Required B1b attribution before behavior:
+B1b attribution requirements before behavior:
 
 - Split already-delivered no-emit by whether the scoreboard next PC is same
   line, cross line, predicted target, branch target, or unknown.
@@ -1032,13 +1073,68 @@ Required B1b attribution before behavior:
 - Only after that attribution identifies a structural owner-cursor bug should a
   behavior trial modify duplicate, redirect, or successor handoff.
 
+Post-delivery cursor attribution result, May 9, 2026:
+
+- Instrumentation commit:
+  `a694c08 Add post-delivery cursor attribution counters`.
+- T1 artifact: `benchmark_results/stage2_delivery_cursor_attr_t1_20260509`.
+- T2 artifact: `benchmark_results/stage2_delivery_cursor_attr_t2_20260509`.
+- T2 rank report:
+  `benchmark_results/stage2_delivery_cursor_attr_t2_20260509/bottleneck_rank.md`.
+- T1 and T2 passed strict owner, delivery, and branch-recovery checks.
+- Cycles matched the locked baseline exactly on all six T2 rows, so this is
+  behavior-neutral evidence.
+- New delivery invariant counters remained zero.
+
+| Row | Already delivered | Same line | Cross line | Seq-next match | Duplicate-next match | Request-PC match | Successor match | Runahead match | Redirect overlap | Line-state match | ICQ match | FTQ next-start match |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Dhrystone 100 | `213` | `212` | `1` | `212` | `212` | `109` | `0` | `0` | `0` | `1` | `212` | `0` |
+| CoreMark 10 | `32,267` | `32,259` | `8` | `32,209` | `32,257` | `23,779` | `0` | `0` | `0` | `149` | `32,259` | `0` |
+| CoreMark 1 | `3,605` | `3,603` | `2` | `3,601` | `3,603` | `2,660` | `0` | `0` | `0` | `36` | `3,603` | `0` |
+| Frontend mixed branch dense | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` |
+| Backend ALU chain 8 | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` | `0` |
+| Branch hotspot | `25,328` | `23,635` | `1,693` | `23,462` | `23,635` | `23,635` | `0` | `0` | `0` | `3,534` | `23,635` | `0` |
+
+Interpretation:
+
+- The repeated already-delivered packet is almost always on the same line as
+  the scoreboard next required PC. CoreMark 10 is `32,259/32,267`, CoreMark 1
+  is `3,603/3,605`, and branch hotspot is `23,635/25,328`.
+- The existing local next-PC information is usually sufficient. The computed
+  duplicate next PC matches the scoreboard next PC for CoreMark 10
+  `32,257` times, CoreMark 1 `3,603` times, and branch hotspot `23,635`
+  times. The sequential next PC also matches in nearly all same-line cases.
+- The IFU request PC and ICQ head also often point at the scoreboard next PC:
+  CoreMark 10 has `23,779` request-PC matches and `32,259` ICQ matches;
+  branch hotspot has `23,635` request-PC matches and `23,635` ICQ matches.
+- Redirect overlap is zero for this already-delivered bucket, so this B1
+  behavior candidate is not the same problem as Branch A recovery.
+- Successor, runahead, BPU target, and FTQ next-start matches are zero in this
+  bucket, which means the immediate fix should not be a new prefetch pointer or
+  successor request queue. The local post-delivery work cursor is the first
+  suspect.
+
+B1b verdict:
+
+- The data now proves a broad structural post-delivery cursor advancement
+  opportunity across Dhrystone, CoreMark 1, CoreMark 10, and branch hotspot.
+- The opportunity is not benchmark-specific because the same shape appears on
+  anchor, heavy, and branch-hotspot rows, while branch-dense and backend-chain
+  rows correctly show no already-delivered duplicate bucket.
+- The next behavior trial may update the IFU work cursor only for a
+  scoreboard-equivalent, owner-live, same-line, already-delivered duplicate
+  case. It must keep duplicate packet emission blocked.
+- If that trial does not reduce `xs_delivery_no_emit_already_delivered` and
+  `xs_data_no_emit_dup`, it should be rejected even if a row has marginal cycle
+  movement.
+
 Behavior slice candidates, in order:
 
 1. Post-delivery cursor advancement or redirect/refill repair.
    - Move the IFU work cursor from an already-delivered/non-next PC toward the
      scoreboard next required PC through FTQ, IFU, IBuffer, and BPU ownership.
-   - This is the current first behavior candidate, but only after B1b proves
-     the missing handoff source.
+   - This is now the current first behavior candidate because B1b proved a
+     general same-line missing handoff source.
 
 2. Control-aware duplicate cursor recovery.
    - Permit IFU/F2 to advance past a duplicate-held packet only when the
@@ -1429,25 +1525,330 @@ Immediate next steps:
    `stage2_delivery_scoreboard_t2_20260509` as completed B1a
    behavior-neutral evidence. The scoreboard rejects local duplicate-emission
    as the next behavior because expected-PC duplicate suppression is near zero.
-6. Add B1b post-delivery cursor attribution before changing duplicate or
-   redirect handoff behavior. The key question is why F2 revisits an
-   already-delivered or non-next PC while the scoreboard has a different next
-   required PC.
-7. Choose the first behavior trial from the updated A1/B1b report:
-   - If redirect refill and recovery attempt cost dominate, implement a
-     resource-aware Branch A recovery scheduler before enabling backend-only
-     recovery.
-   - If post-delivery cursor attribution shows a general owner-cursor handoff
-     bug, implement B1 post-delivery cursor advancement or redirect/refill
-     repair.
-   - If packet-full and packet age become dominant after those fixes, implement
-     B2 capacity.
-8. Run every behavior trial with an explicit prediction before measurement.
+6. Treat `stage2_delivery_cursor_attr_t1_20260509` and
+   `stage2_delivery_cursor_attr_t2_20260509` as completed B1b
+   behavior-neutral evidence. B1b proves that repeated already-delivered
+   packets are usually same-line cases where duplicate-next, seq-next,
+   request-PC, and ICQ state already match the scoreboard next PC.
+7. Run the first B1 behavior trial: post-delivery duplicate cursor
+   advancement. This trial may advance the IFU work cursor for an
+   owner-live, same-line, already-delivered duplicate when the local next-PC
+   candidates agree. It must not emit the duplicate packet.
+8. If B1 cursor advancement is endpoint-clean and reduces the target counters,
+   continue to B1 redirect no-emit handoff. If it is endpoint-clean but does
+   not reduce the counters, classify it as DSE-only and move to A1 recovery
+   scheduler attribution. If it fails correctness, revert or quarantine it.
+9. If B1 and A1 both fail to expose multi-percent movement, continue with C0
+   scheduler criticality attribution before any new backend behavior patch.
+10. Run every behavior trial with an explicit prediction before measurement.
    B1 examples:
    `--targets-counter xs_data_no_emit_pktbuf_empty` and
    `--expect-counter-decrease xs_data_no_emit_pktbuf_empty:<predicted_delta>`.
    A1 examples:
    `--targets-counter xs_bottleneck_fe_redirect_recovery` and
    `--expect-counter-decrease xs_bottleneck_fe_redirect_recovery:<predicted_delta>`.
-9. Promote only if T2 shows meaningful broad movement, then run the full
+11. Promote only if T2 shows meaningful broad movement, then run the full
    16-row signoff before updating the Stage 2 baseline.
+
+## Immediate Deep DSE Workplan
+
+This section is the concrete long plan for the next implementation sessions.
+It intentionally starts from the current bottleneck evidence and keeps each
+trial falsifiable.
+
+### Workstream B1c: Post-Delivery Cursor Advancement
+
+Hypothesis:
+
+- The IFU work cursor can remain at an already-delivered PC even when
+  `seq_next_pc`, `duplicate_next_pc`, the active request PC, and the ICQ head
+  already identify the next required same-line PC.
+- Advancing the cursor in this scoreboard-equivalent safe subset should reduce
+  frontend no-emit cycles without changing endpoint identity.
+
+Allowed behavior:
+
+- Advance the IFU work cursor only when all of these are true:
+  owner is live, owner delivery already started, duplicate suppression is
+  active, `seq_next_pc` is valid, `duplicate_next_pc == seq_next_pc`, the next
+  PC is on the same cache line, no remainder or straddle handoff is active, no
+  owner completion is pending, and strict owner state says the owner is still
+  valid.
+- Keep packet emission suppressed for the duplicate packet.
+- Do not add a new packet FIFO, successor queue, prefetch pointer, benchmark PC
+  table, or loop-buffer-like replay path in this slice.
+
+Primary counters:
+
+- `xs_delivery_no_emit_already_delivered`
+- `xs_data_no_emit_dup`
+- `packet_empty_noemit_dup`
+- `xs_data_no_emit_pktbuf_empty`
+
+Companion counters:
+
+- `packet_empty`
+- `packet_empty_f2_data`
+- decode-supply rate from `tools/bottleneck_analysis.py`
+- `xs_backend_stall_pkt_ready`
+- `redirect_recovery`
+
+Guard counters:
+
+- `xs_delivery_owner_switch`
+- `xs_delivery_noncontig_pcs`
+- stale owner counters
+- duplicate delivery counters
+- branch recovery invariant counters
+- packet buffer full counters
+
+T1 predicted movement:
+
+- Dhrystone and CoreMark 1 should show a measurable reduction in
+  `xs_delivery_no_emit_already_delivered`.
+- A small cycle change is acceptable at T1, but no cycle improvement alone is
+  sufficient. The target counters must move.
+
+T2 predicted movement:
+
+- CoreMark 10 should reduce at least several thousand already-delivered or
+  duplicate no-emit cycles.
+- Branch hotspot should reduce the same-line duplicate bucket without
+  increasing redirect recovery.
+- Frontend branch dense and backend ALU chain should stay neutral because
+  their already-delivered bucket is zero.
+
+Reject conditions:
+
+- Any strict checker failure, checksum drift, timeout, stale owner, or
+  duplicate-delivery violation.
+- `xs_backend_stall_pkt_ready` rises enough to explain away a packet-empty
+  decrease.
+- Branch hotspot improves by allowing wrong-path or stale owner packets.
+- The counter movement is limited to Dhrystone or CoreMark only.
+
+T1 command shape:
+
+```bash
+python3 tools/run_benchmarks.py \
+  --runner dsim \
+  --manifest tests/benchmarks/stage1_signoff.json \
+  --run-class dse \
+  --bench dhrystone_100_checkedin,coremark_iter1_generalization \
+  --mechanism-class ftq_owned_delivery \
+  --mechanism-name post_delivery_duplicate_cursor_advance \
+  --baseline-results benchmark_results/stage2_delivery_cursor_attr_t2_20260509/results.json \
+  --targets-counter xs_delivery_no_emit_already_delivered \
+  --expect-counter-decrease xs_delivery_no_emit_already_delivered:100 \
+  --run-id stage2_b1c_cursor_advance_t1_YYYYMMDD \
+  --run-dir benchmark_results/stage2_b1c_cursor_advance_t1_YYYYMMDD \
+  --plusarg +FETCH_DELIVERY_CHECK \
+  --plusarg +FETCH_DELIVERY_STRICT \
+  --plusarg +FETCH_OWNER_CHECK \
+  --plusarg +FETCH_OWNER_STRICT \
+  --plusarg +BRANCH_RECOVERY_CHECK \
+  --plusarg +BRANCH_RECOVERY_STRICT \
+  --plusarg +PERF_PROFILE \
+  --plusarg +PERF_COUNTERS \
+  --plusarg +STAT_DUMP \
+  --plusarg +BOTTLENECK_PROFILE
+```
+
+T2 command shape:
+
+```bash
+python3 tools/run_benchmarks.py \
+  --runner dsim \
+  --manifest tests/benchmarks/stage1_signoff.json \
+  --run-class dse \
+  --bench dhrystone_100_checkedin,coremark_iter1_generalization,coremark_iter10_checkedin,frontend_mixed_branch_dense,backend_alu_chain_8,hotspot_state_crc_branch \
+  --mechanism-class ftq_owned_delivery \
+  --mechanism-name post_delivery_duplicate_cursor_advance \
+  --baseline-results benchmark_results/stage2_delivery_cursor_attr_t2_20260509/results.json \
+  --targets-counter xs_delivery_no_emit_already_delivered \
+  --expect-counter-decrease xs_delivery_no_emit_already_delivered:1000 \
+  --run-id stage2_b1c_cursor_advance_t2_YYYYMMDD \
+  --run-dir benchmark_results/stage2_b1c_cursor_advance_t2_YYYYMMDD \
+  --plusarg +FETCH_DELIVERY_CHECK \
+  --plusarg +FETCH_DELIVERY_STRICT \
+  --plusarg +FETCH_OWNER_CHECK \
+  --plusarg +FETCH_OWNER_STRICT \
+  --plusarg +BRANCH_RECOVERY_CHECK \
+  --plusarg +BRANCH_RECOVERY_STRICT \
+  --plusarg +PERF_PROFILE \
+  --plusarg +PERF_COUNTERS \
+  --plusarg +STAT_DUMP \
+  --plusarg +BOTTLENECK_PROFILE
+```
+
+T3 promotion note:
+
+- Before a scoreable signoff run, make sure the harness expectations for
+  `ftq_owned_delivery` match this mechanism. If the default class requires
+  unrelated counter movement, add or select a narrower architectural mechanism
+  class rather than bypassing the data-driven discipline.
+
+### Workstream B1d: Redirect No-Emit Handoff
+
+Start only if B1c is clean or if B1c proves redirect handoff is the remaining
+B1 limiter.
+
+Hypothesis:
+
+- Data-present no-emit caused by redirect hold with an empty packet buffer can
+  be split into legal kill, replay, or deliver cases from a single owner rule.
+
+Required attribution before behavior:
+
+- Redirect source: commit, BPU, request redirect, or recovery redirect.
+- Redirect age from assertion to first request, first response, first emitted
+  packet, and first decoded packet.
+- Owner fate: killed, replayed, delivered, or stale.
+- Whether the redirected target equals the scoreboard next PC.
+
+Candidate behavior:
+
+- Centralize redirect owner handoff so FTQ, IFU cursor, IBuffer, and BPU
+  history/RAS observe one owner transition.
+- Do not locally steer IFU to a target without updating the owner metadata.
+
+Promotion target:
+
+- Reduce `xs_data_no_emit_redir_pktbuf_empty`, `redirect_recovery`, and
+  frontend branch dense packet-empty without increasing duplicate or stale
+  owner counters.
+
+### Workstream A1: Recovery Scheduler Attribution
+
+Start in parallel as instrumentation if B1c is compiling or running; do not
+promote behavior until B1c T2 is classified.
+
+Hypothesis:
+
+- After checkpoint-boundary repair, recovery candidates exist, but raw
+  recovery increases useful-work loss or refill cost because attempts are not
+  scheduled with enough resource and frontend context.
+
+Required counters:
+
+- Attempt accepted, blocked, replayed, cancelled, and later full-flush count.
+- Candidate resource headroom: free-list, ROB tail, RAT, LSU, writeback, and
+  checkpoint read port.
+- Recovery attempt age and branch type.
+- Useful younger ready entries lost or preserved.
+- Refill latency from recovery to fetch request, line response, emitted
+  packet, decode packet, and first commit.
+
+Candidate behavior after attribution:
+
+- Resource-aware backend-only recovery scheduler.
+- Frontend early redirect only after backend recovery is non-regressing.
+
+Promotion target:
+
+- Branch hotspot at least 3 percent faster.
+- CoreMark 1 and CoreMark 10 neutral or faster.
+- No Dhrystone or backend guard regression.
+
+### Workstream C0: Scheduler Criticality Attribution
+
+Start after B1/A1 current trials are classified unless the B1c result shows no
+frontend counter movement.
+
+Hypothesis:
+
+- CoreMark ALU wait pressure is dominated by blocked producer chains, but the
+  correct fix may be select fairness or steering rather than local same-cycle
+  ALU chaining.
+
+Required counters:
+
+- Producer-chain depth histogram for each issued and blocked integer uop.
+- Producer state: not issued, selected this cycle, waiting on ALU, waiting on
+  load, waiting on mul/div, ready-not-selected.
+- Select-lost reason by IQ and FU class.
+- FU utilization and port conflict by cycle.
+- Cross-IQ producer/consumer pairs.
+- Age of oldest ready and oldest not-ready entries per IQ.
+
+Candidate behaviors after attribution:
+
+- Age-aware select fairness.
+- Simple-integer steering across clusters.
+- Registered next-cycle fast-lane wakeup token.
+- Producer criticality priority.
+
+Promotion target:
+
+- `xs_bottleneck_dep_wait_on_alu` falls with commit IPC improvement.
+- CoreMark 10 improves by at least 3 percent.
+- Branch dense, branch hotspot, memory rows, and backend guard rows do not
+  regress.
+
+### Workstream D0: Load-Use Attribution
+
+Start before any Dhrystone-specific optimization.
+
+Hypothesis:
+
+- Dhrystone improvement requires reducing load-use or store-forward wait, not
+  another frontend or ALU-chain tweak.
+
+Required counters:
+
+- Load issue to data latency buckets.
+- Load data to consumer wakeup latency buckets.
+- Store-forward wait, hit, miss, and ambiguity reasons.
+- D-cache port or bank conflict cycles.
+- LSU queue pressure and replay cause.
+- Speculative wakeup emitted, consumed, cancelled, and replayed.
+
+Candidate behaviors after attribution:
+
+- Store-forward timing repair.
+- Speculative load wakeup with replay correctness.
+- D-cache port or banking change only if broad memory rows prove pressure.
+
+Promotion target:
+
+- Dhrystone improves with no CoreMark, branch hotspot, or memory-row
+  regression.
+
+### Workstream E0: Commit And Window Attribution
+
+Start only as attribution until Branch B, A, C, and D have clearer root causes.
+
+Hypothesis:
+
+- Commit-zero is currently a symptom of frontend, branch, scheduler, or memory
+  stalls rather than a direct commit-width limit.
+
+Required counters:
+
+- ROB head uop class and ready state.
+- Ready younger commit slots hidden behind head.
+- ROB, IQ, dispatch queue, rename, and PRF pressure during head-block cycles.
+- Correlation with redirect recovery, load wait, scheduler not-ready, and
+  frontend-zero cycles.
+
+Candidate behaviors after attribution:
+
+- Only implement window or drain changes if E0 proves actual admission or
+  retirement structure pressure independent of the other branches.
+
+## DSE Cadence For The Next Sessions
+
+1. Update and commit this plan.
+2. Implement B1c as the only first behavior trial.
+3. Rebuild DSim. If license conflict occurs, rebuild XSim and use the same
+   plusargs.
+4. Run T1 strict smoke with explicit target-counter expectations.
+5. If T1 fails, fix or revert before running anything longer.
+6. If T1 passes and counters move, run T2 focused six-row.
+7. Classify B1c using the scoring labels in this document.
+8. If B1c is accepted as a candidate, run T3 full 16-row before changing the
+   Stage 2 baseline.
+9. If B1c is DSE-only or rejected, run A1 attribution next, then C0 if A1 does
+   not expose a multi-percent behavior candidate.
+10. Keep every instrumentation slice and every behavior slice in separate
+    commits.
