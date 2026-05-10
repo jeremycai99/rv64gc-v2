@@ -170,6 +170,19 @@ module fetch_frontend_profiler
     integer xs_data_no_emit_frontend_hold_cycles;
     integer xs_data_no_emit_fe_stall_cycles;
     integer xs_data_no_emit_other_cycles;
+    integer xs_data_no_emit_post_ifu_live_cycles;
+    integer xs_data_no_emit_post_ifu_depth_gt1_cycles;
+    integer xs_data_no_emit_wb_depth_gt1_cycles;
+    integer xs_data_no_emit_pktbuf_empty_cycles;
+    integer xs_data_no_emit_pktbuf_nonempty_cycles;
+    integer xs_data_no_emit_pktbuf_full_cycles;
+    integer xs_data_no_emit_owner_live_cycles;
+    integer xs_data_no_emit_owner_not_live_cycles;
+    integer xs_data_no_emit_owner_complete_cycles;
+    integer xs_data_no_emit_dup_post_ifu_depth_gt1_cycles;
+    integer xs_data_no_emit_redirect_post_ifu_depth_gt1_cycles;
+    integer xs_data_no_emit_dup_pktbuf_empty_cycles;
+    integer xs_data_no_emit_redirect_pktbuf_empty_cycles;
     integer xs_dup_suppressed_cycles;
     integer xs_dup_same_owner_cycles;
     integer xs_dup_remainder_cycles;
@@ -381,6 +394,19 @@ module fetch_frontend_profiler
     logic xs_data_no_emit_frontend_hold_c;
     logic xs_data_no_emit_fe_stall_c;
     logic xs_data_no_emit_other_c;
+    logic xs_data_no_emit_post_ifu_live_c;
+    logic xs_data_no_emit_post_ifu_depth_gt1_c;
+    logic xs_data_no_emit_wb_depth_gt1_c;
+    logic xs_data_no_emit_pktbuf_empty_c;
+    logic xs_data_no_emit_pktbuf_nonempty_c;
+    logic xs_data_no_emit_pktbuf_full_c;
+    logic xs_data_no_emit_owner_live_c;
+    logic xs_data_no_emit_owner_not_live_c;
+    logic xs_data_no_emit_owner_complete_c;
+    logic xs_data_no_emit_dup_post_ifu_depth_gt1_c;
+    logic xs_data_no_emit_redirect_post_ifu_depth_gt1_c;
+    logic xs_data_no_emit_dup_pktbuf_empty_c;
+    logic xs_data_no_emit_redirect_pktbuf_empty_c;
     logic xs_dup_same_owner_c;
     logic xs_dup_remainder_c;
     logic xs_dup_owner_not_live_c;
@@ -791,6 +817,46 @@ module fetch_frontend_profiler
         !xs_data_no_emit_redirect_c &&
         !xs_data_no_emit_frontend_hold_c &&
         !xs_data_no_emit_fe_stall_c;
+    assign xs_data_no_emit_post_ifu_live_c =
+        xs_data_present_no_emit_c &&
+        (ftq_count_ifu_to_commit != '0);
+    assign xs_data_no_emit_post_ifu_depth_gt1_c =
+        xs_data_present_no_emit_c &&
+        (ftq_count_ifu_to_commit > (FTQ_IDX_BITS+1)'(1));
+    assign xs_data_no_emit_wb_depth_gt1_c =
+        xs_data_present_no_emit_c &&
+        (ftq_count_ifu_to_wb > (FTQ_IDX_BITS+1)'(1));
+    assign xs_data_no_emit_pktbuf_empty_c =
+        xs_data_present_no_emit_c &&
+        packet_buf_empty;
+    assign xs_data_no_emit_pktbuf_nonempty_c =
+        xs_data_present_no_emit_c &&
+        !packet_buf_empty;
+    assign xs_data_no_emit_pktbuf_full_c =
+        xs_data_present_no_emit_c &&
+        packet_buf_full;
+    assign xs_data_no_emit_owner_live_c =
+        xs_data_present_no_emit_c &&
+        f2_ftq_owner_live_c;
+    assign xs_data_no_emit_owner_not_live_c =
+        xs_data_present_no_emit_c &&
+        f2_work_ftq_valid_c &&
+        !f2_ftq_owner_live_c;
+    assign xs_data_no_emit_owner_complete_c =
+        xs_data_present_no_emit_c &&
+        f2_work_owner_complete_c;
+    assign xs_data_no_emit_dup_post_ifu_depth_gt1_c =
+        xs_data_no_emit_dup_c &&
+        (ftq_count_ifu_to_commit > (FTQ_IDX_BITS+1)'(1));
+    assign xs_data_no_emit_redirect_post_ifu_depth_gt1_c =
+        xs_data_no_emit_redirect_c &&
+        (ftq_count_ifu_to_commit > (FTQ_IDX_BITS+1)'(1));
+    assign xs_data_no_emit_dup_pktbuf_empty_c =
+        xs_data_no_emit_dup_c &&
+        packet_buf_empty;
+    assign xs_data_no_emit_redirect_pktbuf_empty_c =
+        xs_data_no_emit_redirect_c &&
+        packet_buf_empty;
     assign xs_dup_same_owner_c =
         f2_duplicate_suppressed_c &&
         f2_same_owner_continue_c;
@@ -934,6 +1000,19 @@ module fetch_frontend_profiler
             xs_data_no_emit_frontend_hold_cycles <= 0;
             xs_data_no_emit_fe_stall_cycles <= 0;
             xs_data_no_emit_other_cycles  <= 0;
+            xs_data_no_emit_post_ifu_live_cycles <= 0;
+            xs_data_no_emit_post_ifu_depth_gt1_cycles <= 0;
+            xs_data_no_emit_wb_depth_gt1_cycles <= 0;
+            xs_data_no_emit_pktbuf_empty_cycles <= 0;
+            xs_data_no_emit_pktbuf_nonempty_cycles <= 0;
+            xs_data_no_emit_pktbuf_full_cycles <= 0;
+            xs_data_no_emit_owner_live_cycles <= 0;
+            xs_data_no_emit_owner_not_live_cycles <= 0;
+            xs_data_no_emit_owner_complete_cycles <= 0;
+            xs_data_no_emit_dup_post_ifu_depth_gt1_cycles <= 0;
+            xs_data_no_emit_redirect_post_ifu_depth_gt1_cycles <= 0;
+            xs_data_no_emit_dup_pktbuf_empty_cycles <= 0;
+            xs_data_no_emit_redirect_pktbuf_empty_cycles <= 0;
             xs_dup_suppressed_cycles      <= 0;
             xs_dup_same_owner_cycles      <= 0;
             xs_dup_remainder_cycles       <= 0;
@@ -1248,6 +1327,45 @@ module fetch_frontend_profiler
             if (xs_data_no_emit_other_c)
                 xs_data_no_emit_other_cycles <=
                     xs_data_no_emit_other_cycles + 1;
+            if (xs_data_no_emit_post_ifu_live_c)
+                xs_data_no_emit_post_ifu_live_cycles <=
+                    xs_data_no_emit_post_ifu_live_cycles + 1;
+            if (xs_data_no_emit_post_ifu_depth_gt1_c)
+                xs_data_no_emit_post_ifu_depth_gt1_cycles <=
+                    xs_data_no_emit_post_ifu_depth_gt1_cycles + 1;
+            if (xs_data_no_emit_wb_depth_gt1_c)
+                xs_data_no_emit_wb_depth_gt1_cycles <=
+                    xs_data_no_emit_wb_depth_gt1_cycles + 1;
+            if (xs_data_no_emit_pktbuf_empty_c)
+                xs_data_no_emit_pktbuf_empty_cycles <=
+                    xs_data_no_emit_pktbuf_empty_cycles + 1;
+            if (xs_data_no_emit_pktbuf_nonempty_c)
+                xs_data_no_emit_pktbuf_nonempty_cycles <=
+                    xs_data_no_emit_pktbuf_nonempty_cycles + 1;
+            if (xs_data_no_emit_pktbuf_full_c)
+                xs_data_no_emit_pktbuf_full_cycles <=
+                    xs_data_no_emit_pktbuf_full_cycles + 1;
+            if (xs_data_no_emit_owner_live_c)
+                xs_data_no_emit_owner_live_cycles <=
+                    xs_data_no_emit_owner_live_cycles + 1;
+            if (xs_data_no_emit_owner_not_live_c)
+                xs_data_no_emit_owner_not_live_cycles <=
+                    xs_data_no_emit_owner_not_live_cycles + 1;
+            if (xs_data_no_emit_owner_complete_c)
+                xs_data_no_emit_owner_complete_cycles <=
+                    xs_data_no_emit_owner_complete_cycles + 1;
+            if (xs_data_no_emit_dup_post_ifu_depth_gt1_c)
+                xs_data_no_emit_dup_post_ifu_depth_gt1_cycles <=
+                    xs_data_no_emit_dup_post_ifu_depth_gt1_cycles + 1;
+            if (xs_data_no_emit_redirect_post_ifu_depth_gt1_c)
+                xs_data_no_emit_redirect_post_ifu_depth_gt1_cycles <=
+                    xs_data_no_emit_redirect_post_ifu_depth_gt1_cycles + 1;
+            if (xs_data_no_emit_dup_pktbuf_empty_c)
+                xs_data_no_emit_dup_pktbuf_empty_cycles <=
+                    xs_data_no_emit_dup_pktbuf_empty_cycles + 1;
+            if (xs_data_no_emit_redirect_pktbuf_empty_c)
+                xs_data_no_emit_redirect_pktbuf_empty_cycles <=
+                    xs_data_no_emit_redirect_pktbuf_empty_cycles + 1;
             if (xs_data_present_no_emit_c) begin : xs_data_no_emit_top_update
                 int hit_idx;
                 int empty_idx;
@@ -2075,6 +2193,32 @@ module fetch_frontend_profiler
                      xs_data_no_emit_fe_stall_cycles);
             $display("xs data no emit other       : %0d",
                      xs_data_no_emit_other_cycles);
+            $display("xs data no emit post ifu live: %0d",
+                     xs_data_no_emit_post_ifu_live_cycles);
+            $display("xs data no emit post ifu gt1: %0d",
+                     xs_data_no_emit_post_ifu_depth_gt1_cycles);
+            $display("xs data no emit wb gt1      : %0d",
+                     xs_data_no_emit_wb_depth_gt1_cycles);
+            $display("xs data no emit pktbuf empty: %0d",
+                     xs_data_no_emit_pktbuf_empty_cycles);
+            $display("xs data no emit pktbuf nonempty: %0d",
+                     xs_data_no_emit_pktbuf_nonempty_cycles);
+            $display("xs data no emit pktbuf full : %0d",
+                     xs_data_no_emit_pktbuf_full_cycles);
+            $display("xs data no emit owner live  : %0d",
+                     xs_data_no_emit_owner_live_cycles);
+            $display("xs data no emit owner not live: %0d",
+                     xs_data_no_emit_owner_not_live_cycles);
+            $display("xs data no emit owner complete: %0d",
+                     xs_data_no_emit_owner_complete_cycles);
+            $display("xs data no emit dup post ifu gt1: %0d",
+                     xs_data_no_emit_dup_post_ifu_depth_gt1_cycles);
+            $display("xs data no emit redir post ifu gt1: %0d",
+                     xs_data_no_emit_redirect_post_ifu_depth_gt1_cycles);
+            $display("xs data no emit dup pktbuf empty: %0d",
+                     xs_data_no_emit_dup_pktbuf_empty_cycles);
+            $display("xs data no emit redir pktbuf empty: %0d",
+                     xs_data_no_emit_redirect_pktbuf_empty_cycles);
             $display("xs dup suppressed           : %0d",
                      xs_dup_suppressed_cycles);
             $display("xs dup same owner           : %0d",
