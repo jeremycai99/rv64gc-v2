@@ -586,6 +586,15 @@ Execution status:
   hierarchy seam without enabling translation yet.
 - Validation for the PTW-to-L2 integration slice:
   `benchmark_results/stage3_rtl_guard_20260511_ptw_l2_integrated`.
+- Fourth RTL slice completed: `csr_file.sv` now exposes the translation
+  permission state needed by the TLBs (`mstatus.MPRV`, `MPP`, `SUM`, `MXR`).
+  `rv64gc_core_top.sv` instantiates ITLB and DTLB, connects PTW fill outputs
+  into both TLBs, derives the data privilege mode for future MPRV handling, and
+  drives a shared TLB/PTW invalidation pulse on committed `SFENCE.VMA` or
+  `satp` writes. Lookup requests remain tied off, so this slice validates the
+  CSR/PTW/TLB scaffold without enabling virtual-address translation yet.
+- Validation for the CSR/PTW/TLB scaffold slice:
+  `benchmark_results/stage3_rtl_guard_20260511_tlb_scaffold_dsim`.
 
 | Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
 |---|---:|---:|---:|

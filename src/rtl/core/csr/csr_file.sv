@@ -62,7 +62,11 @@ module csr_file
     input  logic        mtip, msip, meip,
     input  logic        stip, ssip, seip,
 
-    // SATP (for MMU)
+    // Privileged translation state
+    output logic        mstatus_mprv,
+    output logic [1:0]  mstatus_mpp,
+    output logic        mstatus_sum,
+    output logic        mstatus_mxr,
     output logic [63:0] satp
 );
 
@@ -132,6 +136,10 @@ module csr_file
     assign sepc        = sepc_r;
     assign priv_mode   = priv_r;
     assign frm_out     = frm_r;
+    assign mstatus_mprv = mstatus_r[17];
+    assign mstatus_mpp = mstatus_r[12:11];
+    assign mstatus_sum = mstatus_r[18];
+    assign mstatus_mxr = mstatus_r[19];
     assign satp        = satp_r;
     assign mcycle_val  = mcycle_r;
     assign minstret_val= minstret_r;

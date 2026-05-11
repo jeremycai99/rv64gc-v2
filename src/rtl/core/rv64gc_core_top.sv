@@ -4821,6 +4821,10 @@ module rv64gc_core_top
     // =========================================================================
     logic [63:0] csr_mcycle_val, csr_minstret_val;
     logic [63:0] csr_satp;
+    logic        csr_mstatus_mprv;
+    logic [1:0]  csr_mstatus_mpp;
+    logic        csr_mstatus_sum;
+    logic        csr_mstatus_mxr;
     logic        fp_fflags_commit_valid;
     logic [4:0]  fp_fflags_commit_bits;
     logic        fp_state_dirty_commit;
@@ -4917,12 +4921,34 @@ module rv64gc_core_top
         .stip               (stip),
         .ssip               (ssip),
         .seip               (seip),
+        .mstatus_mprv       (csr_mstatus_mprv),
+        .mstatus_mpp        (csr_mstatus_mpp),
+        .mstatus_sum        (csr_mstatus_sum),
+        .mstatus_mxr        (csr_mstatus_mxr),
         .satp               (csr_satp)
     );
 
     // =========================================================================
     // 20. PAGE TABLE WALKER
     // =========================================================================
+    logic                    satp_vm_enabled;
+    logic [1:0]              csr_data_priv_mode;
+    logic                    instr_vm_active;
+    logic                    data_vm_active;
+    logic                    sfence_vma_commit;
+    logic                    satp_commit_valid;
+    logic                    translation_tlb_invalidate;
+    logic                    itlb_hit;
+    logic [63:0]             itlb_pa;
+    logic                    itlb_fault;
+    logic [3:0]              itlb_fault_code;
+    logic                    dtlb_hit;
+    logic [63:0]             dtlb_pa;
+    logic                    dtlb_fault;
+    logic [3:0]              dtlb_fault_code;
+    logic                    dtlb_dirty_wb_valid;
+    logic [63:0]             dtlb_dirty_wb_pte_pa;
+    logic [63:0]             dtlb_dirty_wb_pte_value;
     logic                    ptw_dtlb_req_ready;
     logic                    ptw_itlb_req_ready;
     logic                    ptw_dtlb_fill_valid;
@@ -4938,6 +4964,76 @@ module rv64gc_core_top
     logic                    ptw_fault_is_store;
     logic [ROB_IDX_BITS-1:0] ptw_fault_rob_idx;
     logic [63:0]             ptw_fault_va;
+
+    assign satp_vm_enabled = (csr_satp[63:60] == 4'd8) ||
+                             (csr_satp[63:60] == 4'd9);
+    assign csr_data_priv_mode = (csr_priv_mode == PRIV_M && csr_mstatus_mprv)
+                              ? csr_mstatus_mpp
+                              : csr_priv_mode;
+    assign instr_vm_active = satp_vm_enabled && (csr_priv_mode != PRIV_M);
+    assign data_vm_active  = satp_vm_enabled && (csr_data_priv_mode != PRIV_M);
+    assign sfence_vma_commit = (commit_count > 3'd0) &&
+                               commit_out[0].valid &&
+                               rob_head_is_sfence_vma[0];
+    assign satp_commit_valid = csr_commit_valid && (csr_commit_addr == CSR_SATP);
+    assign translation_tlb_invalidate = sfence_vma_commit || satp_commit_valid;
+
+    itlb u_itlb (
+        .clk                 (clk),
+        .rst_n               (rst_n),
+        .lookup_valid_i      (1'b0),
+        .va_i                (64'd0),
+        .priv_i              (csr_priv_mode),
+        .asid_i              (csr_satp[59:44]),
+        .hit_o               (itlb_hit),
+        .pa_o                (itlb_pa),
+        .fault_o             (itlb_fault),
+        .fault_code_o        (itlb_fault_code),
+        .fill_valid_i        (ptw_itlb_fill_valid),
+        .fill_vpn_i          (ptw_fill_vpn),
+        .fill_ppn_i          (ptw_fill_ppn),
+        .fill_asid_i         (ptw_fill_asid),
+        .fill_page_size_i    (ptw_fill_page_size),
+        .fill_perm_i         (ptw_fill_perm),
+        .inv_all_i           (translation_tlb_invalidate),
+        .inv_va_valid_i      (1'b0),
+        .inv_va_i            (64'd0),
+        .inv_asid_valid_i    (1'b0),
+        .inv_asid_i          (16'd0),
+        .flush_i             (1'b0)
+    );
+
+    dtlb u_dtlb (
+        .clk                 (clk),
+        .rst_n               (rst_n),
+        .lookup_valid_i      (1'b0),
+        .va_i                (64'd0),
+        .is_store_i          (1'b0),
+        .priv_i              (csr_data_priv_mode),
+        .asid_i              (csr_satp[59:44]),
+        .sum_i               (csr_mstatus_sum),
+        .mxr_i               (csr_mstatus_mxr),
+        .hit_o               (dtlb_hit),
+        .pa_o                (dtlb_pa),
+        .fault_o             (dtlb_fault),
+        .fault_code_o        (dtlb_fault_code),
+        .fill_valid_i        (ptw_dtlb_fill_valid),
+        .fill_vpn_i          (ptw_fill_vpn),
+        .fill_ppn_i          (ptw_fill_ppn),
+        .fill_asid_i         (ptw_fill_asid),
+        .fill_page_size_i    (ptw_fill_page_size),
+        .fill_perm_i         (ptw_fill_perm),
+        .fill_pte_pa_i       (ptw_fill_pte_pa),
+        .dirty_wb_valid_o    (dtlb_dirty_wb_valid),
+        .dirty_wb_pte_pa_o   (dtlb_dirty_wb_pte_pa),
+        .dirty_wb_pte_value_o(dtlb_dirty_wb_pte_value),
+        .inv_all_i           (translation_tlb_invalidate),
+        .inv_va_valid_i      (1'b0),
+        .inv_va_i            (64'd0),
+        .inv_asid_valid_i    (1'b0),
+        .inv_asid_i          (16'd0),
+        .flush_i             (1'b0)
+    );
 
     ptw u_ptw (
         .clk                 (clk),
@@ -4972,7 +5068,7 @@ module rv64gc_core_top
         .l2_resp_addr_i      (ptw_l2_resp_addr),
         .l2_resp_data_i      (ptw_l2_resp_data),
         .flush_i             (flush_out.valid),
-        .translation_flush_i (1'b0)
+        .translation_flush_i (translation_tlb_invalidate)
     );
 
     // =========================================================================
