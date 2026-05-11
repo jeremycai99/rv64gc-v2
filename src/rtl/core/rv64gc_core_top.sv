@@ -4504,6 +4504,13 @@ module rv64gc_core_top
     logic [63:0] l2_icache_resp_addr;
     logic [511:0] l2_icache_resp_data;
     logic l2_invalidate_busy;
+    logic        ptw_l2_req_valid;
+    logic [63:0] ptw_l2_req_addr;
+    logic        ptw_l2_req_ready;
+    logic        ptw_l2_req_accepted;
+    logic        ptw_l2_resp_valid;
+    logic [63:0] ptw_l2_resp_addr;
+    logic [511:0] ptw_l2_resp_data;
 
     // (pf_l2_* signals are forward-declared near the fetch_top section above.)
 
@@ -4513,6 +4520,8 @@ module rv64gc_core_top
     // Forward the L2's response address to the icache so it can filter
     // those replays by comparing against its own miss_addr_q.
     assign icache_fill_resp_addr = l2_icache_resp_addr;
+    assign ptw_l2_req_valid      = 1'b0;
+    assign ptw_l2_req_addr       = 64'd0;
 
     l2_cache u_l2_cache (
         .clk                (clk),
@@ -4541,6 +4550,14 @@ module rv64gc_core_top
         .prefetch_resp_valid(pf_l2_resp_valid),
         .prefetch_resp_addr (pf_l2_resp_addr),
         .prefetch_resp_data (pf_l2_resp_data),
+        // PTW port (wired in the Sv48 PTW/TLB slice)
+        .ptw_req_valid      (ptw_l2_req_valid),
+        .ptw_req_addr       (ptw_l2_req_addr),
+        .ptw_req_ready      (ptw_l2_req_ready),
+        .ptw_req_accepted   (ptw_l2_req_accepted),
+        .ptw_resp_valid     (ptw_l2_resp_valid),
+        .ptw_resp_addr      (ptw_l2_resp_addr),
+        .ptw_resp_data      (ptw_l2_resp_data),
         // Main memory interface
         .mem_req_valid      (mem_req_valid),
         .mem_req_addr       (mem_req_addr),

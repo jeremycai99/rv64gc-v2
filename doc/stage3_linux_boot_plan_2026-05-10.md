@@ -416,12 +416,12 @@ Promoted validation for this slice:
 - The Stage 3 DS/CM hard guard passes on the rebuilt XSim benchmark snapshot:
   `benchmark_results/stage3_rtl_guard_opensbi_platform_probe_xsim_guard_20260511`.
 
-| Row | Timed cycles | Limit | Metric |
+| Row | Timed cycles | 0.01% max cycles | Metric |
 |---|---:|---:|---:|
-| Dhrystone 100 | `18,082` | `18,161` | `3.147616 DMIPS/MHz` |
-| Dhrystone 300 | `53,360` | `53,469` | `3.199880 DMIPS/MHz` |
-| CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
-| CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
+| Dhrystone 100 | `18,082` | `18,162` | `3.147616 DMIPS/MHz` |
+| Dhrystone 300 | `53,360` | `53,474` | `3.199880 DMIPS/MHz` |
+| CoreMark 1 | `154,184` | `154,248` | `6.485757 CM/MHz` |
+| CoreMark 10 | `1,491,293` | `1,491,483` | `6.705590 CM/MHz` |
 
 DSim benchmark caveat:
 
@@ -557,6 +557,26 @@ Pass criteria:
 - OpenSBI can enter S-mode payload with virtual memory still disabled or with
   simple test page tables before full Linux.
 - If any RTL changed, the full hard RTL modification gate above passes.
+
+Execution status:
+
+- First RTL slice completed: `l2_cache.sv` now has a dedicated read-only PTW
+  source port with `ready`, `accepted`, and 64-byte response routing. The port
+  uses the existing L2 MSHR and response-source machinery (`SRC_PTW = 2'd3`)
+  instead of bypassing the cache hierarchy or adding a simulation-only memory
+  path.
+- `rv64gc_core_top.sv` ties this PTW port off until the walker/TLB slice is
+  connected. This is behavior-neutral for Bare-mode DS/CM and creates the
+  ASIC-style memory-hierarchy seam required by the Sv48 PTW.
+- Validation for this slice:
+  `benchmark_results/stage3_rtl_guard_20260511_l2_ptw_port`.
+
+| Row | Timed cycles | 0.01% max cycles | Metric |
+|---|---:|---:|---:|
+| Dhrystone 100 | `18,082` | `18,162` | `3.147616 DMIPS/MHz` |
+| Dhrystone 300 | `53,360` | `53,474` | `3.199880 DMIPS/MHz` |
+| CoreMark 1 | `154,184` | `154,248` | `6.485757 CM/MHz` |
+| CoreMark 10 | `1,491,293` | `1,491,483` | `6.705590 CM/MHz` |
 
 ### L3: Linux Early Boot
 

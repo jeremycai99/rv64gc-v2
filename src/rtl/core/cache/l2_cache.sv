@@ -38,6 +38,15 @@ module l2_cache
     output logic [63:0] prefetch_resp_addr,
     output logic [511:0] prefetch_resp_data,
 
+    // PTW port (read-only page table walker)
+    input  logic        ptw_req_valid,
+    input  logic [63:0] ptw_req_addr,
+    output logic        ptw_req_ready,
+    output logic        ptw_req_accepted,
+    output logic        ptw_resp_valid,
+    output logic [63:0] ptw_resp_addr,
+    output logic [511:0] ptw_resp_data,
+
     // Main memory interface (sim_memory / external)
     output logic        mem_req_valid,
     output logic [63:0] mem_req_addr,
@@ -63,6 +72,10 @@ module l2_cache
     localparam int INDEX_HI   = LINE_BITS + L2_SET_BITS - 1;    // 17
     localparam int TAG_LO     = LINE_BITS + L2_SET_BITS;         // 18
     localparam int TAG_HI     = 63;
+    localparam logic [1:0] SRC_ICACHE   = 2'd0;
+    localparam logic [1:0] SRC_DCACHE   = 2'd1;
+    localparam logic [1:0] SRC_PREFETCH = 2'd2;
+    localparam logic [1:0] SRC_PTW      = 2'd3;
 
     // =========================================================================
     // Tag + dirty + valid arrays
@@ -90,7 +103,7 @@ module l2_cache
     typedef struct packed {
         logic           valid;
         logic [63:0]    addr;
-        logic [1:0]     source;      // 0=icache, 1=dcache, 2=prefetch
+        logic [1:0]     source;
         mshr_state_e    state;
     } mshr_entry_t;
 
@@ -104,7 +117,7 @@ module l2_cache
         logic           valid;
         logic [63:0]    addr;
         logic [511:0]   data;
-        logic [1:0]     source;    // 0=icache, 1=dcache, 2=prefetch
+        logic [1:0]     source;
     } pipe_entry_t;
 
     pipe_entry_t hit_pipe [0:L2_HIT_LATENCY-1];
@@ -317,7 +330,7 @@ module l2_cache
         arb_addr      = '0;
         arb_we        = 1'b0;
         arb_wdata     = '0;
-        arb_source = 2'd0;
+        arb_source = SRC_ICACHE;
 
         if (inv_state == INV_IDLE) begin
             if (dcache_req_valid) begin
@@ -325,19 +338,25 @@ module l2_cache
                 arb_addr      = dcache_req_addr;
                 arb_we        = dcache_req_we;
                 arb_wdata     = dcache_req_wdata;
-                arb_source    = 2'd1;  // dcache
+                arb_source    = SRC_DCACHE;
+            end else if (ptw_req_valid) begin
+                arb_valid     = 1'b1;
+                arb_addr      = ptw_req_addr;
+                arb_we        = 1'b0;
+                arb_wdata     = '0;
+                arb_source    = SRC_PTW;
             end else if (icache_req_valid) begin
                 arb_valid     = 1'b1;
                 arb_addr      = icache_req_addr;
                 arb_we        = 1'b0;
                 arb_wdata     = '0;
-                arb_source    = 2'd0;  // icache
+                arb_source    = SRC_ICACHE;
             end else if (prefetch_req_valid) begin
                 arb_valid     = 1'b1;
                 arb_addr      = prefetch_req_addr;
                 arb_we        = 1'b0;
                 arb_wdata     = '0;
-                arb_source    = 2'd2;  // prefetch
+                arb_source    = SRC_PREFETCH;
             end
         end
     end
@@ -347,15 +366,24 @@ module l2_cache
     // =========================================================================
     always_comb begin
         dcache_req_ready   = (inv_state == INV_IDLE) && !mshr_full;
-        icache_req_ready   = (inv_state == INV_IDLE) && !mshr_full &&
+        ptw_req_ready      = (inv_state == INV_IDLE) && !mshr_full &&
                              !dcache_req_valid;
+        icache_req_ready   = (inv_state == INV_IDLE) && !mshr_full &&
+                             !dcache_req_valid && !ptw_req_valid;
         prefetch_req_ready = (inv_state == INV_IDLE) && !mshr_full &&
-                             !dcache_req_valid && !icache_req_valid;
+                             !dcache_req_valid && !ptw_req_valid &&
+                             !icache_req_valid;
     end
 
     assign icache_req_accepted =
         arb_valid &&
-        (arb_source == 2'd0) &&
+        (arb_source == SRC_ICACHE) &&
+        !arb_we &&
+        (hit_any || (!mshr_addr_match && mshr_has_free));
+
+    assign ptw_req_accepted =
+        arb_valid &&
+        (arb_source == SRC_PTW) &&
         !arb_we &&
         (hit_any || (!mshr_addr_match && mshr_has_free));
 
@@ -373,7 +401,7 @@ module l2_cache
                 hit_pipe[s].valid     <= 1'b0;
                 hit_pipe[s].addr      <= '0;
                 hit_pipe[s].data      <= '0;
-                hit_pipe[s].source <= 2'd0;
+                hit_pipe[s].source    <= SRC_ICACHE;
             end
         end else begin
             // Stage 0: insert a hit on a fill request (read hit)
@@ -441,60 +469,79 @@ module l2_cache
         (mem_resp_capture && respq_can_accept && !mem_resp_direct);
 
     assign dcache_resp_valid   =
-        (mem_resp_direct && (mem_resp_source == 2'd1)) ||
-        (hit_resp_valid && (hit_resp_source == 2'd1)) ||
-        (respq_deq && (respq_deq_source == 2'd1));
+        (mem_resp_direct && (mem_resp_source == SRC_DCACHE)) ||
+        (hit_resp_valid && (hit_resp_source == SRC_DCACHE)) ||
+        (respq_deq && (respq_deq_source == SRC_DCACHE));
     assign dcache_resp_addr    =
-        (mem_resp_direct && (mem_resp_source == 2'd1)) ?
+        (mem_resp_direct && (mem_resp_source == SRC_DCACHE)) ?
         mshr[mshr_resp_idx].addr :
-        ((hit_resp_valid && (hit_resp_source == 2'd1)) ?
+        ((hit_resp_valid && (hit_resp_source == SRC_DCACHE)) ?
          hit_pipe[L2_HIT_LATENCY-1].addr :
-         ((respq_deq && (respq_deq_source == 2'd1)) ?
+         ((respq_deq && (respq_deq_source == SRC_DCACHE)) ?
           respq_deq_addr : mshr[mshr_resp_idx].addr));
     assign dcache_resp_data    =
-        (mem_resp_direct && (mem_resp_source == 2'd1)) ?
+        (mem_resp_direct && (mem_resp_source == SRC_DCACHE)) ?
         mem_resp_data :
-        ((hit_resp_valid && (hit_resp_source == 2'd1)) ?
+        ((hit_resp_valid && (hit_resp_source == SRC_DCACHE)) ?
          hit_pipe[L2_HIT_LATENCY-1].data :
-         ((respq_deq && (respq_deq_source == 2'd1)) ?
+         ((respq_deq && (respq_deq_source == SRC_DCACHE)) ?
           respq_deq_data : mem_resp_data));
 
     assign icache_resp_valid   =
-        (mem_resp_direct && (mem_resp_source == 2'd0)) ||
-        (hit_resp_valid && (hit_resp_source == 2'd0)) ||
-        (respq_deq && (respq_deq_source == 2'd0));
+        (mem_resp_direct && (mem_resp_source == SRC_ICACHE)) ||
+        (hit_resp_valid && (hit_resp_source == SRC_ICACHE)) ||
+        (respq_deq && (respq_deq_source == SRC_ICACHE));
     assign icache_resp_addr    =
-        (mem_resp_direct && (mem_resp_source == 2'd0)) ?
+        (mem_resp_direct && (mem_resp_source == SRC_ICACHE)) ?
         mshr[mshr_resp_idx].addr :
-        ((hit_resp_valid && (hit_resp_source == 2'd0)) ?
+        ((hit_resp_valid && (hit_resp_source == SRC_ICACHE)) ?
          hit_pipe[L2_HIT_LATENCY-1].addr :
-         ((respq_deq && (respq_deq_source == 2'd0)) ?
+         ((respq_deq && (respq_deq_source == SRC_ICACHE)) ?
           respq_deq_addr : mshr[mshr_resp_idx].addr));
     assign icache_resp_data    =
-        (mem_resp_direct && (mem_resp_source == 2'd0)) ?
+        (mem_resp_direct && (mem_resp_source == SRC_ICACHE)) ?
         mem_resp_data :
-        ((hit_resp_valid && (hit_resp_source == 2'd0)) ?
+        ((hit_resp_valid && (hit_resp_source == SRC_ICACHE)) ?
          hit_pipe[L2_HIT_LATENCY-1].data :
-         ((respq_deq && (respq_deq_source == 2'd0)) ?
+         ((respq_deq && (respq_deq_source == SRC_ICACHE)) ?
           respq_deq_data : mem_resp_data));
 
     assign prefetch_resp_valid =
-        (mem_resp_direct && (mem_resp_source == 2'd2)) ||
-        (hit_resp_valid && (hit_resp_source == 2'd2)) ||
-        (respq_deq && (respq_deq_source == 2'd2));
+        (mem_resp_direct && (mem_resp_source == SRC_PREFETCH)) ||
+        (hit_resp_valid && (hit_resp_source == SRC_PREFETCH)) ||
+        (respq_deq && (respq_deq_source == SRC_PREFETCH));
     assign prefetch_resp_addr  =
-        (mem_resp_direct && (mem_resp_source == 2'd2)) ?
+        (mem_resp_direct && (mem_resp_source == SRC_PREFETCH)) ?
         mshr[mshr_resp_idx].addr :
-        ((hit_resp_valid && (hit_resp_source == 2'd2)) ?
+        ((hit_resp_valid && (hit_resp_source == SRC_PREFETCH)) ?
          hit_pipe[L2_HIT_LATENCY-1].addr :
-         ((respq_deq && (respq_deq_source == 2'd2)) ?
+         ((respq_deq && (respq_deq_source == SRC_PREFETCH)) ?
           respq_deq_addr : mshr[mshr_resp_idx].addr));
     assign prefetch_resp_data  =
-        (mem_resp_direct && (mem_resp_source == 2'd2)) ?
+        (mem_resp_direct && (mem_resp_source == SRC_PREFETCH)) ?
         mem_resp_data :
-        ((hit_resp_valid && (hit_resp_source == 2'd2)) ?
+        ((hit_resp_valid && (hit_resp_source == SRC_PREFETCH)) ?
          hit_pipe[L2_HIT_LATENCY-1].data :
-         ((respq_deq && (respq_deq_source == 2'd2)) ?
+         ((respq_deq && (respq_deq_source == SRC_PREFETCH)) ?
+          respq_deq_data : mem_resp_data));
+
+    assign ptw_resp_valid =
+        (mem_resp_direct && (mem_resp_source == SRC_PTW)) ||
+        (hit_resp_valid && (hit_resp_source == SRC_PTW)) ||
+        (respq_deq && (respq_deq_source == SRC_PTW));
+    assign ptw_resp_addr  =
+        (mem_resp_direct && (mem_resp_source == SRC_PTW)) ?
+        mshr[mshr_resp_idx].addr :
+        ((hit_resp_valid && (hit_resp_source == SRC_PTW)) ?
+         hit_pipe[L2_HIT_LATENCY-1].addr :
+         ((respq_deq && (respq_deq_source == SRC_PTW)) ?
+          respq_deq_addr : mshr[mshr_resp_idx].addr));
+    assign ptw_resp_data  =
+        (mem_resp_direct && (mem_resp_source == SRC_PTW)) ?
+        mem_resp_data :
+        ((hit_resp_valid && (hit_resp_source == SRC_PTW)) ?
+         hit_pipe[L2_HIT_LATENCY-1].data :
+         ((respq_deq && (respq_deq_source == SRC_PTW)) ?
           respq_deq_data : mem_resp_data));
 
     // =========================================================================
@@ -539,7 +586,7 @@ module l2_cache
             for (int i = 0; i < L2_MSHR_DEPTH; i++) begin
                 mshr[i].valid     <= 1'b0;
                 mshr[i].addr      <= '0;
-                mshr[i].source <= 2'd0;
+                mshr[i].source     <= SRC_ICACHE;
                 mshr[i].state     <= MSHR_IDLE;
             end
             inv_state      <= INV_IDLE;
@@ -552,7 +599,7 @@ module l2_cache
             for (int r = 0; r < RESPQ_DEPTH; r++) begin
                 respq_addr[r]   <= '0;
                 respq_data[r]   <= '0;
-                respq_source[r] <= 2'd0;
+                respq_source[r] <= SRC_ICACHE;
             end
         end else begin
 
