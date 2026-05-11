@@ -914,32 +914,13 @@ module rob
                 exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
             end
 
-            // ROB head watchdog: counts cycles the head has been valid
-            // but not ready.  If it saturates, force-ready with a replay
-            // exception so commit can drain past the stuck entry and
-            // trigger a flush.  This recovers from IQ/ROB flush-recovery
-            // bugs where an IQ entry was killed without the corresponding
-            // ROB ready bit being set (the CDB writeback never arrives).
-            // 256 cycles is comfortably longer than any legitimate
-            // long-latency op (DIV ~65 cyc, L2 miss ~50 cyc) but short
-            // enough that Dhrystone's repeated stuck-entry pattern can
-            // still make forward progress.
+            // ROB head watchdog: diagnostic only.  A real core must not
+            // manufacture a replay exception for an arbitrary not-ready head,
+            // because stores and AMOs may already have issued side effects.
             if (valid_r[head_r] && !ready_r[head_r])
                 rob_head_watchdog <= rob_head_watchdog + 12'd1;
             else
                 rob_head_watchdog <= 12'd0;
-
-            if (rob_head_watchdog == 12'd62) begin
-                // 64-cycle timeout: longer than any legit non-DIV op
-                // (L2 miss ~50 is ok because reaching the head happens
-                // after fill resumes). DIV's 65-cycle worst case is
-                // safely above this.
-                // Previous 32-cycle timeout false-tripped on legitimate
-                // CoreMark long-latency paths.
-                ready_r[head_r]                <= 1'b1;
-                has_exc_r[head_r]              <= 1'b1;
-                exc_code_packed[head_r*4 +: 4] <= 4'd15;
-            end
 
             // Commit: advance head, clear valid and instruction-type flags
             for (int i = 0; i < PIPE_WIDTH; i++) begin

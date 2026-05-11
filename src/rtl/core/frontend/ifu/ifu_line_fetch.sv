@@ -109,6 +109,7 @@ module ifu_line_fetch
     logic         icq_deq_current_owner_match_c;
     logic         icq_deq_next_owner_match_c;
     logic         icq_deq_unowned_stale_c;
+    logic         icq_deq_prior_owner_line_c;
     logic         icq_line_matches_work_c;
     logic         icq_deq_stale_c;
     logic         icq_future_capture_c;
@@ -171,11 +172,16 @@ module ifu_line_fetch
         ftq_wb_owner_valid_i &&
         !icq_deq_current_owner_match_c &&
         !icq_deq_next_owner_match_c;
+    assign icq_deq_prior_owner_line_c =
+        icq_deq_current_owner_match_c &&
+        work_line_valid_i &&
+        (icq_deq_line_addr_o < work_line_addr_i);
     assign icq_deq_stale_c =
         icq_deq_valid_o &&
         (!icq_deq_ftq_valid_o ||
          (icq_deq_ftq_epoch_o != current_epoch_i) ||
-         icq_deq_unowned_stale_c);
+         icq_deq_unowned_stale_c ||
+         icq_deq_prior_owner_line_c);
     assign icq_future_capture_c =
         icq_deq_valid_o &&
         !icq_line_matches_work_c &&

@@ -83,76 +83,117 @@ module committed_store_buffer
     // =========================================================================
     // Store-to-load forwarding
     // =========================================================================
-    task automatic forward_lookup(
-        input  logic        req_valid,
-        input  logic [63:0] req_addr,
-        input  logic [1:0]  req_size,
-        output logic        hit,
-        output logic [63:0] data
-    );
-        logic [7:0] req_bmask;
-        logic [7:0] cover_mask;
-        logic [2:0] req_off;
+    logic        fwd_req_valid_arr [0:1];
+    logic [63:0] fwd_req_addr_arr [0:1];
+    logic [1:0]  fwd_req_size_arr [0:1];
+    logic        fwd_hit_arr [0:1];
+    logic [63:0] fwd_data_arr [0:1];
 
-        req_off = req_addr[2:0];
-        case (req_size)
-            2'd0:    req_bmask = 8'h01 << req_off;
-            2'd1:    req_bmask = 8'h03 << req_off;
-            2'd2:    req_bmask = 8'h0F << req_off;
-            default: req_bmask = 8'hFF;
-        endcase
+    assign fwd_req_valid_arr[0] = fwd_valid;
+    assign fwd_req_valid_arr[1] = fwd1_valid;
+    assign fwd_req_addr_arr[0]  = fwd_addr;
+    assign fwd_req_addr_arr[1]  = fwd1_addr;
+    assign fwd_req_size_arr[0]  = fwd_size;
+    assign fwd_req_size_arr[1]  = fwd1_size;
+    assign fwd_hit              = fwd_hit_arr[0];
+    assign fwd1_hit             = fwd_hit_arr[1];
+    assign fwd_data             = fwd_data_arr[0];
+    assign fwd1_data            = fwd_data_arr[1];
 
-        data       = '0;
-        cover_mask = '0;
+    genvar fp;
+    generate
+        for (fp = 0; fp < 2; fp++) begin : gen_forward_lookup
+            always_comb begin
+                logic [7:0] req_bmask;
+                logic [7:0] cover_mask;
+                logic [7:0] enq_bmask;
+                logic [7:0] enq_overlap;
+                logic [7:0] enq_uncovered;
 
-        // Walk oldest to youngest in circular queue order.  Younger matching
-        // stores overwrite older byte positions, while cover_mask records
-        // whether all requested bytes can be supplied from the CSB.
-        for (int step = 0; step < DEPTH; step++) begin
-            if (step < int'(count_r)) begin
-                logic [IDX_BITS-1:0] scan_idx;
-                logic [7:0]          ent_bmask;
-                logic [7:0]          overlap;
-                int                  idx_int;
-
-                idx_int = int'(head_r) + step;
-                if (idx_int >= DEPTH)
-                    idx_int = idx_int - DEPTH;
-                scan_idx = IDX_BITS'(idx_int);
-
-                case (buf_q[scan_idx].size)
-                    2'd0:    ent_bmask = 8'h01 << buf_q[scan_idx].addr[2:0];
-                    2'd1:    ent_bmask = 8'h03 << buf_q[scan_idx].addr[2:0];
-                    2'd2:    ent_bmask = 8'h0F << buf_q[scan_idx].addr[2:0];
-                    default: ent_bmask = 8'hFF;
+                case (fwd_req_size_arr[fp])
+                    2'd0:    req_bmask = 8'h01 << fwd_req_addr_arr[fp][2:0];
+                    2'd1:    req_bmask = 8'h03 << fwd_req_addr_arr[fp][2:0];
+                    2'd2:    req_bmask = 8'h0F << fwd_req_addr_arr[fp][2:0];
+                    default: req_bmask = 8'hFF;
                 endcase
 
-                overlap = (req_valid &&
-                           buf_q[scan_idx].valid &&
-                           (buf_q[scan_idx].addr[63:3] == req_addr[63:3]))
-                        ? (ent_bmask & req_bmask)
-                        : 8'h00;
+                fwd_data_arr[fp] = '0;
+                cover_mask       = '0;
 
+                case (enq_data.size)
+                    2'd0:    enq_bmask = 8'h01 << enq_data.addr[2:0];
+                    2'd1:    enq_bmask = 8'h03 << enq_data.addr[2:0];
+                    2'd2:    enq_bmask = 8'h0F << enq_data.addr[2:0];
+                    default: enq_bmask = 8'hFF;
+                endcase
+
+                enq_overlap = (fwd_req_valid_arr[fp] &&
+                               enq_valid &&
+                               enq_ready &&
+                               (enq_data.addr[63:3] == fwd_req_addr_arr[fp][63:3]))
+                            ? (enq_bmask & req_bmask)
+                            : 8'h00;
+                enq_uncovered = enq_overlap & ~cover_mask;
+
+                // Same-cycle enqueue is the newest committed store.
                 for (int b = 0; b < 8; b++) begin
-                    if (overlap[b] && (b >= int'(buf_q[scan_idx].addr[2:0]))) begin
-                        data[b*8 +: 8] =
-                            buf_q[scan_idx].data[
-                                (b - int'(buf_q[scan_idx].addr[2:0])) * 8 +: 8
+                    if (enq_uncovered[b] &&
+                        (b >= int'(enq_data.addr[2:0]))) begin
+                        fwd_data_arr[fp][b*8 +: 8] =
+                            enq_data.data[
+                                (b - int'(enq_data.addr[2:0])) * 8 +: 8
                             ];
                     end
                 end
+                cover_mask = cover_mask | enq_uncovered;
 
-                cover_mask = cover_mask | overlap;
+                // Walk newest to oldest in circular queue order. The first
+                // matching store for each byte is architecturally latest.
+                for (int step = 0; step < DEPTH; step++) begin
+                    if (step < int'(count_r)) begin
+                        logic [IDX_BITS-1:0] scan_idx;
+                        logic [7:0]          ent_bmask;
+                        logic [7:0]          overlap;
+                        logic [7:0]          uncovered;
+                        int                  idx_int;
+
+                        idx_int = int'(tail_r) - step - 1;
+                        if (idx_int < 0)
+                            idx_int = idx_int + DEPTH;
+                        scan_idx = IDX_BITS'(idx_int);
+
+                        case (buf_q[scan_idx].size)
+                            2'd0:    ent_bmask = 8'h01 << buf_q[scan_idx].addr[2:0];
+                            2'd1:    ent_bmask = 8'h03 << buf_q[scan_idx].addr[2:0];
+                            2'd2:    ent_bmask = 8'h0F << buf_q[scan_idx].addr[2:0];
+                            default: ent_bmask = 8'hFF;
+                        endcase
+
+                        overlap = (fwd_req_valid_arr[fp] &&
+                                   buf_q[scan_idx].valid &&
+                                   (buf_q[scan_idx].addr[63:3] == fwd_req_addr_arr[fp][63:3]))
+                                ? (ent_bmask & req_bmask)
+                                : 8'h00;
+                        uncovered = overlap & ~cover_mask;
+
+                        for (int b = 0; b < 8; b++) begin
+                            if (uncovered[b] &&
+                                (b >= int'(buf_q[scan_idx].addr[2:0]))) begin
+                                fwd_data_arr[fp][b*8 +: 8] =
+                                    buf_q[scan_idx].data[
+                                        (b - int'(buf_q[scan_idx].addr[2:0])) * 8 +: 8
+                                    ];
+                            end
+                        end
+
+                        cover_mask = cover_mask | uncovered;
+                    end
+                end
+
+                fwd_hit_arr[fp] = fwd_req_valid_arr[fp] && (cover_mask == req_bmask);
             end
         end
-
-        hit = req_valid && (cover_mask == req_bmask);
-    endtask
-
-    always_comb begin
-        forward_lookup(fwd_valid,  fwd_addr,  fwd_size,  fwd_hit,  fwd_data);
-        forward_lookup(fwd1_valid, fwd1_addr, fwd1_size, fwd1_hit, fwd1_data);
-    end
+    endgenerate
 
     // =========================================================================
     // Sequential logic

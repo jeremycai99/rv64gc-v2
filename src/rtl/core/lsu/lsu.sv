@@ -149,6 +149,8 @@ module lsu
     logic            amo_load_fill_fire;
     logic            amo_store_ack_fire;
     logic            amo_serial_block;
+    logic            amo_forward_block;
+    logic            amo_flush_kill;
     logic            amo_wait_load_r;
     logic            amo_store_valid_r;
     logic            amo_wb_valid_r;
@@ -310,6 +312,14 @@ module lsu
     logic [63:0] csb_fwd_data;
     logic        csb_fwd_hit_p1;
     logic [63:0] csb_fwd_data_p1;
+    logic        csb_enq_fwd_hit;
+    logic [63:0] csb_enq_fwd_data;
+    logic        csb_enq_fwd_hit_p1;
+    logic [63:0] csb_enq_fwd_data_p1;
+    logic [7:0]  csb_enq_fwd_bmask;
+    logic [7:0]  csb_enq_fwd_req1_bmask;
+    logic [7:0]  csb_enq_fwd_overlap0;
+    logic [7:0]  csb_enq_fwd_overlap1;
     logic        p1_any_fwd_hit;
     logic        p0_sq_order_wait_block;
     logic        p1_sq_order_wait_block;
@@ -814,8 +824,8 @@ module lsu
         .deq_size       (),
         .deq_ack        (csb_deq_ack),
         // Store-to-load forwarding
-        .fwd_valid      (load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
-        .fwd_addr       ((load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
+        .fwd_valid      (load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
+        .fwd_addr       ((load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
                           ? load_eff_addr[0] : 64'd0),
         .fwd_size       (load_issue_data[0].mem_size),
         .fwd_hit        (csb_fwd_hit),
@@ -862,8 +872,77 @@ module lsu
     // yet drained stores).  Any of these hitting means we do NOT send the
     // load to the D-cache (avoids polluting the cache and wasting an MSHR).
     // p0_fwd_hit declared earlier (forward decl)
-    assign p0_fwd_hit = same_cycle_fwd_hit | sq_fwd_hit | csb_fwd_hit;
-    assign p1_any_fwd_hit = sq_fwd_hit_p1 | csb_fwd_hit_p1;
+    always_comb begin
+        case (sq_drain_entry.size)
+            MEM_BYTE:  csb_enq_fwd_bmask = 8'h01 << sq_drain_entry.addr[2:0];
+            MEM_HALF:  csb_enq_fwd_bmask = 8'h03 << sq_drain_entry.addr[2:0];
+            MEM_WORD:  csb_enq_fwd_bmask = 8'h0F << sq_drain_entry.addr[2:0];
+            MEM_DWORD: csb_enq_fwd_bmask = 8'hFF;
+            default:   csb_enq_fwd_bmask = 8'h00;
+        endcase
+        case (p1_wait_req_size)
+            MEM_BYTE:  csb_enq_fwd_req1_bmask = 8'h01 << p1_wait_req_addr[2:0];
+            MEM_HALF:  csb_enq_fwd_req1_bmask = 8'h03 << p1_wait_req_addr[2:0];
+            MEM_WORD:  csb_enq_fwd_req1_bmask = 8'h0F << p1_wait_req_addr[2:0];
+            MEM_DWORD: csb_enq_fwd_req1_bmask = 8'hFF;
+            default:   csb_enq_fwd_req1_bmask = 8'h00;
+        endcase
+    end
+
+    assign csb_enq_fwd_overlap0 =
+        (sq_drain_valid && sq_drain_ready &&
+         load_issue_candidate_valid[0] &&
+         !load_addr_misaligned[0] &&
+         !flush_in.valid &&
+         (sq_drain_entry.addr[63:3] == load_eff_addr[0][63:3]))
+            ? (csb_enq_fwd_bmask & load0_byte_mask_dyn)
+            : 8'h00;
+    assign csb_enq_fwd_overlap1 =
+        (sq_drain_valid && sq_drain_ready &&
+         p1_wait_req_valid &&
+         (sq_drain_entry.addr[63:3] == p1_wait_req_addr[63:3]))
+            ? (csb_enq_fwd_bmask & csb_enq_fwd_req1_bmask)
+            : 8'h00;
+
+    assign csb_enq_fwd_hit =
+        load_issue_candidate_valid[0] &&
+        !load_addr_misaligned[0] &&
+        !flush_in.valid &&
+        (csb_enq_fwd_overlap0 == load0_byte_mask_dyn);
+    assign csb_enq_fwd_hit_p1 =
+        p1_wait_req_valid &&
+        (csb_enq_fwd_overlap1 == csb_enq_fwd_req1_bmask);
+
+    always_comb begin
+        csb_enq_fwd_data    = '0;
+        csb_enq_fwd_data_p1 = '0;
+        for (int b = 0; b < 8; b++) begin
+            if (csb_enq_fwd_overlap0[b] &&
+                (b >= int'(sq_drain_entry.addr[2:0]))) begin
+                csb_enq_fwd_data[b*8 +: 8] =
+                    sq_drain_entry.data[
+                        (b - int'(sq_drain_entry.addr[2:0])) * 8 +: 8
+                    ];
+            end
+            if (csb_enq_fwd_overlap1[b] &&
+                (b >= int'(sq_drain_entry.addr[2:0]))) begin
+                csb_enq_fwd_data_p1[b*8 +: 8] =
+                    sq_drain_entry.data[
+                        (b - int'(sq_drain_entry.addr[2:0])) * 8 +: 8
+                    ];
+            end
+        end
+    end
+
+    assign p0_fwd_hit =
+        same_cycle_fwd_hit |
+        sq_fwd_hit |
+        csb_enq_fwd_hit |
+        csb_fwd_hit;
+    assign p1_any_fwd_hit =
+        sq_fwd_hit_p1 |
+        csb_enq_fwd_hit_p1 |
+        csb_fwd_hit_p1;
     assign p0_sq_order_wait_block =
         sq_fwd_wait_data_missing || sq_fwd_wait_addr_unknown;
     assign p1_sq_order_wait_block =
@@ -943,21 +1022,33 @@ module lsu
         !load_addr_mmio[0] &&
         !flush_in.valid;
     assign amo_load_issue_fire = amo_issue_fire &&
-                                 (load_issue_data[0].amo_op != AMO_SC);
+                                 (load_issue_data[0].amo_op != AMO_SC) &&
+                                 dcache_load_req_valid[0];
     assign amo_sc_issue_fire   = amo_issue_fire &&
                                  (load_issue_data[0].amo_op == AMO_SC);
 
+    assign amo_forward_block =
+        sta_older_than_load0 |
+        sq_fwd_wait |
+        sq_fwd_hit |
+        sq_fwd_partial |
+        csb_enq_fwd_hit |
+        csb_fwd_hit |
+        same_cycle_fwd_partial;
+    assign amo_flush_kill = flush_in.valid && flush_in.full_flush;
+
     assign load_issue_suppress[0] =
         load_issue_candidate_valid[0] &&
-        ~load_addr_misaligned[0] &&
-        ~flush_in.valid &&
-        (p0_sq_order_wait_block || same_cycle_sta_wait0 ||
-         fwd_hold_blocked || mmio_load0_block ||
-         amo_busy ||
-         (load_issue_data[0].is_amo &&
-          ((load_issue_data[0].rob_idx != rob_head) ||
-           amo_serial_block ||
-           load_addr_mmio[0])));
+        (flush_in.valid ||
+         (!load_addr_misaligned[0] &&
+          (p0_sq_order_wait_block || same_cycle_sta_wait0 ||
+           fwd_hold_blocked || mmio_load0_block ||
+           amo_busy ||
+           (load_issue_data[0].is_amo &&
+            ((load_issue_data[0].rob_idx != rob_head) ||
+             amo_serial_block ||
+             amo_forward_block ||
+             load_addr_mmio[0])))));
 
 `ifndef SYNTHESIS
     bit sim_allow_same_line_dual_load;
@@ -1170,11 +1261,12 @@ module lsu
 
     assign load_issue_suppress[1] =
         load_issue_candidate_valid[1] &&
-        (amo_busy ||
+        (flush_in.valid ||
+         amo_busy ||
          load_issue_data[1].is_amo ||
          (load_issue_candidate_valid[0] && load_issue_data[0].is_amo) ||
          p1_retry_valid_r ||
-         (!load_addr_misaligned[1] && !flush_in.valid && !p1_retry_valid_r &&
+         (!load_addr_misaligned[1] && !p1_retry_valid_r &&
           (p1_sq_order_wait_block || sq_fwd_partial_p1 || p1_fwd_blocked ||
            same_cycle_sta_wait1 || lq_p1_issue_block || mmio_load1_block)));
 
@@ -1484,6 +1576,8 @@ module lsu
                         fwd_raw = same_cycle_fwd_data;
                     else if (sq_fwd_hit)
                         fwd_raw = sq_fwd_data;
+                    else if (csb_enq_fwd_hit)
+                        fwd_raw = csb_enq_fwd_data;
                     else
                         fwd_raw = csb_fwd_data;
                 end else begin
@@ -1517,7 +1611,9 @@ module lsu
         logic [63:0] p1_fwd_shifted;
 
         p1_fwd_shifted =
-            (sq_fwd_hit_p1 ? sq_fwd_data_p1 : csb_fwd_data_p1)
+            (sq_fwd_hit_p1 ? sq_fwd_data_p1
+                            : (csb_enq_fwd_hit_p1 ? csb_enq_fwd_data_p1
+                                                   : csb_fwd_data_p1))
             >> ({3'b0, p1_eff_addr[2:0]} * 4'd8);
         case (p1_eff_data.mem_size)
             MEM_BYTE: p1_extracted_fwd = p1_eff_data.is_unsigned
@@ -1676,11 +1772,12 @@ module lsu
             lr_valid_r          <= 1'b0;
             lr_addr_r           <= 64'd0;
             lr_size_r           <= MEM_DWORD;
-        end else if (flush_in.valid) begin
+        end else if (amo_flush_kill) begin
             amo_wait_load_r     <= 1'b0;
             amo_store_valid_r   <= 1'b0;
             amo_wb_valid_r      <= 1'b0;
-            lr_valid_r          <= 1'b0;
+            if (flush_in.full_flush)
+                lr_valid_r <= 1'b0;
         end else begin
             if (amo_wb_valid_r)
                 amo_wb_valid_r <= 1'b0;
@@ -2246,7 +2343,8 @@ module lsu
             // Capture ANY same-cycle load writeback (fwd OR misalign)
             // to eliminate all same-cycle CDB loops from load port 0.
             fwd_hold_valid_r   <= load_issue_valid[0] && !flush_in.valid
-                                  && (p0_fwd_hit || load_addr_misaligned[0]);
+                                  && ((p0_fwd_hit && !load_issue_data[0].is_amo) ||
+                                      load_addr_misaligned[0]);
             fwd_hold_is_exc_r  <= load_addr_misaligned[0];
             fwd_hold_rob_idx_r <= load_issue_data[0].rob_idx;
             fwd_hold_pdst_r    <= load_issue_data[0].pdst;

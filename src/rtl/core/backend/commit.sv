@@ -221,8 +221,14 @@ module commit
                 if (head_is_store[i]) store_cnt = store_cnt + 3'd1;
                 if (head_is_load[i])  load_cnt = load_cnt  + 3'd1;
 
+                if (is_serializing[i]) begin
+                    scan_stopped = 1'b1;
+                    if (head_is_mret[i] || head_is_sret[i]) begin
+                        found_ret = 1'b1;
+                    end
+                end
                 // Check for mispredict
-                if (head_is_control[i] && head_branch_mispredict[i]) begin
+                else if (head_is_control[i] && head_branch_mispredict[i]) begin
                     found_mispredict = 1'b1;
                     misp_slot = i[2:0];
                 end

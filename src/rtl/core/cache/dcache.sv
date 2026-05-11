@@ -807,14 +807,11 @@ module dcache
     // =========================================================================
     // Store ACK
     // =========================================================================
-    // Write-allocate store miss: if the store misses AND we can allocate
-    // an MSHR for the line, we allocate a fill and HOLD the store (no ack)
-    // until the fill completes.  Once the fill installs the line, the
-    // store re-issues from the CSB and hits, at which point we ack.
-    //
-    // An MSHR must be free to allocate a store-miss fill; if no MSHR is
-    // available, the store is also ack'd (silently dropped) to keep the
-    // CSB moving.  This is a bring-up compromise.
+    // Write-allocate store miss: if the store misses, allocate or merge an
+    // MSHR for the line and HOLD the store in the CSB until the line is
+    // resident or the fill install merges the current store.  A store miss
+    // must never be acknowledged only because its MSHR was allocated, since a
+    // later line fill can otherwise overwrite the store data.
 
     logic s1_st_can_allocate_mshr;
     assign s1_st_can_allocate_mshr = s1_st_valid && !st_cache_hit &&
@@ -822,18 +819,9 @@ module dcache
                                      !invalidate_all &&
                                      !fill_done_avail;
 
-    // A store waiting for a pending fill (either just-allocated or already
-    // in flight to the same line): do NOT ack yet.
-    logic s1_st_miss_accepted;
-    assign s1_st_miss_accepted = s1_st_valid && !st_cache_hit &&
-                                  !invalidate_all &&
-                                  !fill_done_avail &&
-                                  (s1_st_can_allocate_mshr || mshr_st_match_hit);
-
     logic s1_st_waiting_for_fill;
     assign s1_st_waiting_for_fill = s1_st_valid && !st_cache_hit &&
-                                    !s1_st_miss_accepted &&
-                                    (s1_st_can_allocate_mshr || mshr_st_match_hit);
+                                    !invalidate_all;
 
     // Completion is resolved in S1, one cycle after the CSB presents a store
     // on store_req_*.  Only acknowledge the CSB when its current head is still
@@ -843,7 +831,7 @@ module dcache
     assign store_ack_s1 =
         s1_st_valid &&
         (fill_done_store_merge ||
-         (!fill_done_avail && !s1_st_waiting_for_fill));
+         (!fill_done_avail && !invalidate_all && st_cache_hit));
 
     assign store_ack_matches_head =
         store_ack_s1 &&

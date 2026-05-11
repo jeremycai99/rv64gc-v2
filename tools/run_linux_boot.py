@@ -21,6 +21,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAIL_PATTERNS = [
+    "ERROR:",
     "Kernel panic",
     "Oops",
     "BUG:",
@@ -87,11 +88,10 @@ def run_cmd(cmd: list[str], cwd: Path, log_path: Path | None) -> int:
         proc = subprocess.run(
             cmd,
             cwd=cwd,
-            stdout=subprocess.PIPE,
+            stdout=log,
             stderr=subprocess.STDOUT,
             text=True,
         )
-        log.write(proc.stdout)
     return proc.returncode
 
 
@@ -143,10 +143,9 @@ def milestone_reached(combined: str, milestone: dict[str, Any]) -> bool:
 
 
 def classify_milestones(uart_text: str, sim_text: str) -> list[dict[str, str]]:
-    combined = uart_text + "\n" + sim_text
     reached: list[dict[str, str]] = []
     for milestone in MILESTONES:
-        if milestone_reached(combined, milestone):
+        if milestone_reached(uart_text, milestone):
             reached.append(
                 {
                     "id": str(milestone["id"]),
@@ -216,6 +215,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--build-sim", action="store_true", help="Build Stage 3 DSim platform image.")
     parser.add_argument("--run", action="store_true", help="Run the simulator image.")
     parser.add_argument(
+        "--simulator",
+        choices=("dsim", "xsim"),
+        default="dsim",
+        help="Simulator backend for the Stage 3 platform run.",
+    )
+    parser.add_argument(
         "--build-script",
         type=Path,
         default=REPO_ROOT / "sw" / "linux_boot" / "build_linux_boot.sh",
@@ -243,6 +248,12 @@ def main(argv: list[str] | None = None) -> int:
         help="DSim work directory for the Stage 3 platform image.",
     )
     parser.add_argument("--sim-image-name", default="tb_linux_image")
+    parser.add_argument(
+        "--xsim-work-dir",
+        type=Path,
+        default=REPO_ROOT / "xsim_linux_parallel",
+    )
+    parser.add_argument("--xsim-snapshot-name", default="tb_linux_sim")
     parser.add_argument(
         "--run-dir",
         type=Path,
@@ -272,6 +283,18 @@ def main(argv: list[str] | None = None) -> int:
         "--no-trace-trap",
         action="store_true",
         help="Do not request trap/return trace messages from tb_linux.",
+    )
+    parser.add_argument(
+        "--boot-hartid",
+        type=lambda value: int(value, 0),
+        default=0,
+        help="Hart ID passed in a0 by the simulation platform boot stage.",
+    )
+    parser.add_argument(
+        "--dtb-addr",
+        type=lambda value: int(value, 0),
+        default=None,
+        help="FDT pointer passed in a1 by the simulation platform boot stage.",
     )
     parser.add_argument("--smoke-check", action="store_true")
     parser.add_argument("--uart-log", type=Path, default=None)
@@ -307,8 +330,12 @@ def main(argv: list[str] | None = None) -> int:
 
     build_log = run_dir / "build.log"
     if args.build_sim:
+        sim_build_script = REPO_ROOT / (
+            "build_xsim_linux.sh" if args.simulator == "xsim"
+            else "build_dsim_linux.sh"
+        )
         sim_build_rc = run_cmd(
-            ["bash", str(REPO_ROOT / "build_dsim_linux.sh")],
+            ["bash", str(sim_build_script)],
             REPO_ROOT,
             run_dir / "sim_build.log",
         )
@@ -369,8 +396,10 @@ def main(argv: list[str] | None = None) -> int:
     image = args.image if args.image.is_absolute() else REPO_ROOT / args.image
     sim_image = args.sim_image if args.sim_image.is_absolute() else REPO_ROOT / args.sim_image
     sim_work_dir = args.sim_work_dir if args.sim_work_dir.is_absolute() else REPO_ROOT / args.sim_work_dir
+    xsim_work_dir = args.xsim_work_dir if args.xsim_work_dir.is_absolute() else REPO_ROOT / args.xsim_work_dir
+    xsim_snapshot = xsim_work_dir / "xsim.dir" / args.xsim_snapshot_name
     uart_log = args.uart_log or (run_dir / "uart.log")
-    sim_log = run_dir / "dsim.log"
+    sim_log = run_dir / ("xsim.log" if args.simulator == "xsim" else "dsim.log")
 
     if not image.exists():
         summarize(
@@ -387,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         return 2
-    if not sim_image.exists():
+    if args.simulator == "dsim" and not sim_image.exists():
         summarize(
             run_dir,
             {
@@ -402,45 +431,96 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         return 2
+    if args.simulator == "xsim" and not xsim_snapshot.exists():
+        summarize(
+            run_dir,
+            {
+                "status": "BLOCKED",
+                "reason": f"Stage 3 XSim snapshot not built yet: {xsim_snapshot}",
+                "image": str(image),
+                "uart_log": str(uart_log),
+                "sim_log": str(sim_log),
+                "target_milestone": args.target_milestone,
+                "last_milestone": "",
+                "milestones_reached": [],
+            },
+        )
+        return 2
 
-    raw_cmd = [
-        "dsim",
-        "-work",
-        str(sim_work_dir),
-        "-image",
-        args.sim_image_name,
-        f"+MEMFILE={image}",
-        f"+MAX_CYCLES={args.max_cycles}",
-        f"+UART_LOGFILE={uart_log}",
-    ]
+    raw_plusargs = [f"+UART_LOGFILE={uart_log}"]
+    if args.dtb_addr is None:
+        args.dtb_addr = {
+            "smoke": 0,
+            "opensbi": 0x8018_0000,
+            "linux": 0x8600_0000,
+            "all": 0x8600_0000,
+        }[args.build_mode]
+    raw_plusargs.append(f"+BOOT_HARTID={args.boot_hartid:x}")
+    raw_plusargs.append(f"+DTB_ADDR={args.dtb_addr:x}")
     if args.smoke_check:
-        raw_cmd.append("+UART_SMOKE_CHECK")
+        raw_plusargs.append("+UART_SMOKE_CHECK")
+    if args.pass_pattern:
+        raw_plusargs.append(
+            f"+UART_PASS_PATTERN={args.pass_pattern.replace(' ', '_')}"
+        )
+    elif args.target_milestone:
+        patterns = MILESTONE_BY_ID[args.target_milestone]["patterns"]
+        raw_plusargs.append(
+            f"+UART_PASS_PATTERN={patterns[-1].replace(' ', '_')}"
+        )
     if not args.no_status and args.status_interval > 0:
-        raw_cmd.append("+STATUS")
-        raw_cmd.append(f"+STATUS_INTERVAL={args.status_interval}")
+        raw_plusargs.append("+STATUS")
+        raw_plusargs.append(f"+STATUS_INTERVAL={args.status_interval}")
     if not args.no_trace_trap:
-        raw_cmd.append("+LINUX_TRACE_TRAP")
+        raw_plusargs.append("+LINUX_TRACE_TRAP")
     for plusarg in args.sim_plusarg:
-        raw_cmd.append(plusarg if plusarg.startswith("+") else f"+{plusarg}")
-    shell_lines = [
-        "set -euo pipefail",
-        ': "${DSIM_HOME:=$HOME/AltairDSim/2026}"',
-        'if [[ -n "${DSIM_HOME:-}" && -f "$DSIM_HOME/shell_activate.bash" ]]; then',
-        "  set +u",
-        '  source "$DSIM_HOME/shell_activate.bash" >/dev/null',
-        "  set -u",
-        "fi",
-        'if [[ -z "${DSIM_LICENSE:-}" ]]; then',
-        '  if [[ -f "$HOME/metrics-ca/dsim-license.json" ]]; then',
-        '    export DSIM_LICENSE="$HOME/metrics-ca/dsim-license.json"',
-        '  elif [[ -f "$HOME/.metrics-ca/dsim-license.json" ]]; then',
-        '    export DSIM_LICENSE="$HOME/.metrics-ca/dsim-license.json"',
-        "  fi",
-        "fi",
-        shlex.join(raw_cmd),
-    ]
-    cmd = ["bash", "-lc", "\n".join(shell_lines)]
-    rc = run_cmd(cmd, REPO_ROOT, sim_log)
+        raw_plusargs.append(plusarg if plusarg.startswith("+") else f"+{plusarg}")
+
+    if args.simulator == "dsim":
+        raw_cmd = [
+            "dsim",
+            "-work",
+            str(sim_work_dir),
+            "-image",
+            args.sim_image_name,
+            f"+MEMFILE={image}",
+            f"+MAX_CYCLES={args.max_cycles}",
+            *raw_plusargs,
+        ]
+        shell_lines = [
+            "set -euo pipefail",
+            ': "${DSIM_HOME:=$HOME/AltairDSim/2026}"',
+            'if [[ -n "${DSIM_HOME:-}" && -f "$DSIM_HOME/shell_activate.bash" ]]; then',
+            "  set +u",
+            '  source "$DSIM_HOME/shell_activate.bash" >/dev/null',
+            "  set -u",
+            "fi",
+            'if [[ -z "${DSIM_LICENSE:-}" ]]; then',
+            '  if [[ -f "$HOME/metrics-ca/dsim-license.json" ]]; then',
+            '    export DSIM_LICENSE="$HOME/metrics-ca/dsim-license.json"',
+            '  elif [[ -f "$HOME/.metrics-ca/dsim-license.json" ]]; then',
+            '    export DSIM_LICENSE="$HOME/.metrics-ca/dsim-license.json"',
+            "  fi",
+            "fi",
+            shlex.join(raw_cmd),
+        ]
+        cmd = ["bash", "-lc", "\n".join(shell_lines)]
+    else:
+        xsim_runner_log = run_dir / "xsim_runner.log"
+        raw_cmd = [
+            "bash",
+            str(REPO_ROOT / "run_xsim_linux.sh"),
+            str(image),
+            str(args.max_cycles),
+            *raw_plusargs,
+        ]
+        shell_lines = [
+            "set -euo pipefail",
+            f"export XSIM_LOGFILE={shlex.quote(str(sim_log))}",
+            f"{shlex.join(raw_cmd)} > {shlex.quote(str(xsim_runner_log))} 2>&1",
+        ]
+        cmd = ["bash", "-lc", "\n".join(shell_lines)]
+    rc = run_cmd(cmd, REPO_ROOT, sim_log if args.simulator == "dsim" else None)
     uart_text = read_text(uart_log)
     sim_text = read_text(sim_log)
     classification = classify_log(

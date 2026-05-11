@@ -1671,6 +1671,7 @@ module rv64gc_core_top
     logic        fpu_req_valid_r;
     logic        fpu_out_valid;
     logic        fpu_unsupported;
+    logic        div_busy;
     logic        div_valid_out;
     logic        div_hold_valid_r;
     logic [2:0]  csr_frm;
@@ -1978,12 +1979,14 @@ module rv64gc_core_top
     // their ROB entry reaches the head so older CSR writes are visible.
 	    assign iq2_issue_suppress_s[0] =
 	        iq2_issue_candidate_valid_s[0] &&
-	        (((iq2_issue_data_s[0].fu_type == FU_CSR) &&
-	          (iq2_issue_data_s[0].rob_idx != rob_head_idx)) ||
-	         fpu_req_valid_r ||
-	         fpu_out_valid ||
-	         div_valid_out ||
-	         div_hold_valid_r);
+         (((iq2_issue_data_s[0].fu_type == FU_CSR) &&
+           (iq2_issue_data_s[0].rob_idx != rob_head_idx)) ||
+          ((iq2_issue_data_s[0].fu_type == FU_DIV) &&
+           div_busy) ||
+          fpu_req_valid_r ||
+          fpu_out_valid ||
+          div_valid_out ||
+          div_hold_valid_r);
 
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
                   .SUPPORT_ENQ_ISSUE_BYPASS(1))
@@ -3216,7 +3219,6 @@ module rv64gc_core_top
     // =========================================================================
     // 13. DIVIDER (shared with ALU3 on IQ2 port 0)
     // =========================================================================
-    logic        div_busy;
     logic [63:0] div_result;
     logic        div_issue;
     assign div_issue =
@@ -4239,7 +4241,7 @@ module rv64gc_core_top
     // A10..A16 — classification counters for CoreMark's ordering_violations.
     // Monitoring-only (no DUT effect).  Distinguishes legitimate RAW hazards
     // from artifacts (stale-executed, post-flush, burst retries) and
-    // measures how often the ROB watchdog converts a replay to a full_flush.
+    // measures ROB head timeout diagnostic hits.
     // -----------------------------------------------------------------------
     integer sva_cnt_viol_any_flush;
     integer sva_cnt_viol_post_flush;
@@ -4322,7 +4324,7 @@ module rv64gc_core_top
         $display("  [A12] violations in burst (<5 cyc):    %0d", sva_cnt_viol_burst);
         $display("  [A13] same rob_idx repeated (<20 cyc): %0d", sva_cnt_viol_same_rob);
         $display("  [A14] viol followed by mispred(<20cyc):%0d", sva_cnt_viol_then_mispred);
-        $display("  [A15] watchdog fires (force-exc 15):   %0d", sva_cnt_watchdog_fire);
+        $display("  [A15] head-timeout diagnostic hits:    %0d", sva_cnt_watchdog_fire);
         $display("  [A16] watchdog fires post-replay(<100):%0d", sva_cnt_watchdog_post_replay);
     end
     // =========================================================================
