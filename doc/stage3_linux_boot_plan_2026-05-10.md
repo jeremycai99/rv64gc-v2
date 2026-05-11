@@ -614,6 +614,17 @@ Execution status:
   unchanged.
 - Validation for the DTLB issue-suppression contract slice:
   `benchmark_results/stage3_rtl_guard_20260511_lsu_dtlb_suppress_contract`.
+- Seventh RTL slice completed: `rob.sv` now carries an exception `tval`
+  alongside the exception cause, and exposes a generic sideband exception
+  write port for long-latency units. `rv64gc_core_top.sv` connects DTLB PTW
+  faults into that sideband so data page faults can mark the precise ROB entry
+  ready with `EXC_LOAD_PAGE_FAULT` or `EXC_STORE_PAGE_FAULT` and the faulting
+  virtual address. Commit now forwards the ROB exception `tval` into
+  `csr_file.sv` for `mtval` or `stval`. Instruction page faults still need the
+  fetch-side integration path because the current PTW does not yet receive an
+  instruction ROB index.
+- Validation for the PTW-to-ROB fault sideband slice:
+  `benchmark_results/stage3_rtl_guard_20260511_ptw_rob_fault_sideband`.
 
 | Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
 |---|---:|---:|---:|

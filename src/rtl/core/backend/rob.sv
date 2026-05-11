@@ -74,6 +74,13 @@ module rob
     input  logic [1:0]               load_wb_has_exception_r,
     input  logic [3:0]               load_wb_exc_code_r [0:1],
 
+    // Sideband exception write: used by long-latency walkers or units that
+    // discover an exception after issue without producing a normal CDB result.
+    input  logic                              sideband_exc_valid,
+    input  logic [ROB_IDX_BITS-1:0]           sideband_exc_rob_idx,
+    input  logic [3:0]                        sideband_exc_code,
+    input  logic [63:0]                       sideband_exc_tval,
+
     // Memory ordering violation: a younger load executed before an older
     // store with overlapping bytes was visible.  Mark the violating load
     // ready with the special replay exception (exc_code=15) so commit
@@ -98,6 +105,7 @@ module rob
     output logic [63:0]                       head_pc [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_has_exception,
     output logic [3:0]                        head_exc_code [0:PIPE_WIDTH-1],
+    output logic [63:0]                       head_exc_tval [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_is_branch,
     output logic [2:0]                       head_bpu_type [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_is_store,
@@ -214,6 +222,7 @@ module rob
     reg [64*ROB_DEPTH-1:0]       pc_packed;
     reg [ROB_DEPTH-1:0]          has_exc_r;
     reg [4*ROB_DEPTH-1:0]        exc_code_packed;
+    reg [64*ROB_DEPTH-1:0]       exc_tval_packed;
     reg [ROB_DEPTH-1:0]          is_branch_r;
     reg [2:0]                    bpu_type_r [0:ROB_DEPTH-1];
     reg [ROB_DEPTH-1:0]          is_store_r;
@@ -498,6 +507,7 @@ module rob
             head_pc[i]               = pc_packed[head_idx_w[i]*64 +: 64];
             head_has_exception[i]    = has_exc_r[head_idx_w[i]];
             head_exc_code[i]         = exc_code_packed[head_idx_w[i]*4 +: 4];
+            head_exc_tval[i]         = exc_tval_packed[head_idx_w[i]*64 +: 64];
             head_is_branch[i]        = is_branch_r[head_idx_w[i]];
             head_bpu_type[i]         = bpu_type_r[head_idx_w[i]];
             head_is_store[i]         = is_store_r[head_idx_w[i]];
@@ -628,6 +638,7 @@ module rob
             /* verilator lint_off WIDTHCONCAT */
             pc_packed            <= '0;
             exc_code_packed      <= '0;
+            exc_tval_packed      <= '0;
             branch_target_packed <= '0;
             branch_taken_target_packed <= '0;
             csr_addr_packed      <= '0;
@@ -664,6 +675,7 @@ module rob
             branch_mispredict_r  <= '0;
             csr_we_r             <= '0;
             for (int i = 0; i < ROB_DEPTH; i++) csr_op_r[i] <= 2'd0;
+            exc_tval_packed      <= '0;
         end else if (flush_valid) begin
             // Partial flush (checkpoint restore)
             for (int i = 0; i < ROB_DEPTH; i++) begin
@@ -689,6 +701,7 @@ module rob
                     is_div_r[i]        <= 1'b0;
                     is_bru_r[i]        <= 1'b0;
                     has_exc_r[i]       <= 1'b0;
+                    exc_tval_packed[i*64 +: 64] <= 64'd0;
                     branch_taken_r[i]      <= 1'b0;
                     branch_mispredict_r[i] <= 1'b0;
                     csr_we_r[i]            <= 1'b0;
@@ -721,6 +734,7 @@ module rob
                     is_mul_r[head_idx_w[i]]     <= 1'b0;
                     is_div_r[head_idx_w[i]]     <= 1'b0;
                     is_bru_r[head_idx_w[i]]     <= 1'b0;
+                    exc_tval_packed[head_idx_w[i]*64 +: 64] <= 64'd0;
                     fp_fflags_packed[head_idx_w[i]*5 +: 5] <= 5'd0;
                 end
             end
@@ -745,6 +759,7 @@ module rob
                     if (wb_has_exception[i]) begin
                         has_exc_r[wb_idx[i]] <= 1'b1;
                         exc_code_packed[wb_idx[i]*4 +: 4] <= wb_exc_code[i];
+                        exc_tval_packed[wb_idx[i]*64 +: 64] <= 64'd0;
                     end
                     if (!branch_mispredict_r[wb_idx[i]]) begin
                         branch_taken_r[wb_idx[i]]                <= wb_branch_taken[i];
@@ -785,8 +800,16 @@ module rob
                     if (load_wb_has_exception_r[lw]) begin
                         has_exc_r[load_wb_idx_r[lw]] <= 1'b1;
                         exc_code_packed[load_wb_idx_r[lw]*4 +: 4] <= load_wb_exc_code_r[lw];
+                        exc_tval_packed[load_wb_idx_r[lw]*64 +: 64] <= 64'd0;
                     end
                 end
+            end
+
+            if (sideband_exc_valid) begin
+                ready_r[sideband_exc_rob_idx] <= 1'b1;
+                has_exc_r[sideband_exc_rob_idx] <= 1'b1;
+                exc_code_packed[sideband_exc_rob_idx*4 +: 4] <= sideband_exc_code;
+                exc_tval_packed[sideband_exc_rob_idx*64 +: 64] <= sideband_exc_tval;
             end
 
             // Ordering violation: see comment in normal-path block below.
@@ -794,6 +817,7 @@ module rob
                 ready_r[ordering_violation_rob_idx]                <= 1'b1;
                 has_exc_r[ordering_violation_rob_idx]              <= 1'b1;
                 exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+                exc_tval_packed[ordering_violation_rob_idx*64 +: 64] <= 64'd0;
             end
 
             if (flush_clear_branch_mispredict &&
@@ -815,6 +839,7 @@ module rob
                     pc_packed[ai_w[i]*64 +: 64]       <= alloc_pc[i];
                     has_exc_r[ai_w[i]]                <= alloc_has_exception[i];
                     exc_code_packed[ai_w[i]*4 +: 4]   <= alloc_exc_code[i];
+                    exc_tval_packed[ai_w[i]*64 +: 64] <= 64'd0;
                     is_branch_r[ai_w[i]]      <= alloc_is_branch[i];
                     bpu_type_r[ai_w[i]]       <= alloc_bpu_type[i];
                     is_store_r[ai_w[i]]       <= alloc_is_store[i];
@@ -858,6 +883,7 @@ module rob
                     if (wb_has_exception[i]) begin
                         has_exc_r[wb_idx[i]] <= 1'b1;
                         exc_code_packed[wb_idx[i]*4 +: 4] <= wb_exc_code[i];
+                        exc_tval_packed[wb_idx[i]*64 +: 64] <= 64'd0;
                     end
                     if (!branch_mispredict_r[wb_idx[i]]) begin
                         branch_taken_r[wb_idx[i]]                <= wb_branch_taken[i];
@@ -899,8 +925,16 @@ module rob
                     if (load_wb_has_exception_r[lw]) begin
                         has_exc_r[load_wb_idx_r[lw]] <= 1'b1;
                         exc_code_packed[load_wb_idx_r[lw]*4 +: 4] <= load_wb_exc_code_r[lw];
+                        exc_tval_packed[load_wb_idx_r[lw]*64 +: 64] <= 64'd0;
                     end
                 end
+            end
+
+            if (sideband_exc_valid) begin
+                ready_r[sideband_exc_rob_idx] <= 1'b1;
+                has_exc_r[sideband_exc_rob_idx] <= 1'b1;
+                exc_code_packed[sideband_exc_rob_idx*4 +: 4] <= sideband_exc_code;
+                exc_tval_packed[sideband_exc_rob_idx*64 +: 64] <= sideband_exc_tval;
             end
 
             // Ordering violation: mark the violating load as ready, flag it
@@ -912,6 +946,7 @@ module rob
                 ready_r[ordering_violation_rob_idx]                <= 1'b1;
                 has_exc_r[ordering_violation_rob_idx]              <= 1'b1;
                 exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+                exc_tval_packed[ordering_violation_rob_idx*64 +: 64] <= 64'd0;
             end
 
             // ROB head watchdog: diagnostic only.  A real core must not
@@ -945,6 +980,7 @@ module rob
                     is_mul_r[head_idx_w[i]]     <= 1'b0;
                     is_div_r[head_idx_w[i]]     <= 1'b0;
                     is_bru_r[head_idx_w[i]]     <= 1'b0;
+                    exc_tval_packed[head_idx_w[i]*64 +: 64] <= 64'd0;
                     fp_fflags_packed[head_idx_w[i]*5 +: 5] <= 5'd0;
                 end
             end

@@ -511,6 +511,7 @@ module rv64gc_core_top
     logic [63:0]             rob_head_pc          [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_has_exception;
     logic [3:0]              rob_head_exc_code    [0:PIPE_WIDTH-1];
+    logic [63:0]             rob_head_exc_tval    [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_is_branch;
     logic [2:0]              rob_head_bpu_type [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_is_store;
@@ -1444,6 +1445,10 @@ module rv64gc_core_top
     logic [ROB_IDX_BITS-1:0]  lsu_violation_rob_idx;
     logic                     replay_valid;
     logic [ROB_IDX_BITS-1:0]  replay_rob_idx_from;
+    logic                     rob_sideband_exc_valid;
+    logic [ROB_IDX_BITS-1:0]  rob_sideband_exc_rob_idx;
+    logic [3:0]               rob_sideband_exc_code;
+    logic [63:0]              rob_sideband_exc_tval;
     // LSU-driven per-port load issue suppression (consumed by the load IQ
     // before the LSU instantiation below).
     logic [1:0]               lsu_load_issue_suppress_raw;
@@ -1505,6 +1510,10 @@ module rv64gc_core_top
         .load_wb_idx_r          (load_wb_rob_idx_r),
         .load_wb_has_exception_r (load_wb_has_exception_r),
         .load_wb_exc_code_r     (load_wb_exc_code_r),
+        .sideband_exc_valid     (rob_sideband_exc_valid),
+        .sideband_exc_rob_idx   (rob_sideband_exc_rob_idx),
+        .sideband_exc_code      (rob_sideband_exc_code),
+        .sideband_exc_tval      (rob_sideband_exc_tval),
         .ordering_violation_valid   (lsu_ordering_violation),
         .ordering_violation_rob_idx (lsu_violation_rob_idx),
         .replay_valid               (replay_valid),
@@ -1515,6 +1524,7 @@ module rv64gc_core_top
         .head_pc                (rob_head_pc),
         .head_has_exception     (rob_head_has_exception),
         .head_exc_code          (rob_head_exc_code),
+        .head_exc_tval          (rob_head_exc_tval),
         .head_is_branch         (rob_head_is_branch),
         .head_bpu_type          (rob_head_bpu_type),
         .head_is_store          (rob_head_is_store),
@@ -4893,7 +4903,7 @@ module rv64gc_core_top
                     trap_valid  = 1'b1;
                     trap_cause  = {60'd0, rob_head_exc_code[i]};
                     trap_pc     = rob_head_pc[i];
-                    trap_val    = 64'd0;
+                    trap_val    = rob_head_exc_tval[i];
                 end
             end
             // Check for interrupt
@@ -4988,6 +4998,13 @@ module rv64gc_core_top
     logic                    ptw_fault_is_store;
     logic [ROB_IDX_BITS-1:0] ptw_fault_rob_idx;
     logic [63:0]             ptw_fault_va;
+
+    assign rob_sideband_exc_valid =
+        ptw_fault_valid && !ptw_fault_is_itlb;
+    assign rob_sideband_exc_rob_idx = ptw_fault_rob_idx;
+    assign rob_sideband_exc_code =
+        ptw_fault_is_store ? EXC_STORE_PAGE_FAULT : EXC_LOAD_PAGE_FAULT;
+    assign rob_sideband_exc_tval = ptw_fault_va;
 
     assign satp_vm_enabled = (csr_satp[63:60] == 4'd8) ||
                              (csr_satp[63:60] == 4'd9);
