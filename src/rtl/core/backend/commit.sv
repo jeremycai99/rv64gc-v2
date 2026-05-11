@@ -6,6 +6,7 @@
 */
 module commit
     import rv64gc_pkg::*;
+    import isa_pkg::*;
     import uarch_pkg::*;
 (
     input  logic clk,
@@ -247,6 +248,19 @@ module commit
     // Take interrupt if pending and no exception/mispredict/return this cycle,
     // and no serializing op at head being committed.
     wire serializing_at_head = (scan_count > 3'd0) && is_serializing[0];
+    wire vm_state_csr_commit =
+        (scan_count > 3'd0) &&
+        head_is_csr[0] &&
+        head_csr_we[0] &&
+        !head_has_exception[0] &&
+        ((head_csr_addr[0] == CSR_SATP) ||
+         (head_csr_addr[0] == CSR_MSTATUS) ||
+         (head_csr_addr[0] == CSR_SSTATUS));
+    wire sfence_vma_commit =
+        (scan_count > 3'd0) &&
+        head_is_sfence_vma[0] &&
+        !head_has_exception[0];
+    wire vm_serial_redirect = vm_state_csr_commit || sfence_vma_commit;
     wire take_interrupt = irq_pending &&
                           !found_exception &&
                           !found_mispredict &&
@@ -350,6 +364,14 @@ module commit
                 flush_out.redirect_pc = mepc;
             else
                 flush_out.redirect_pc = sepc;
+        end else if (vm_serial_redirect) begin
+            // SATP/status writes and SFENCE.VMA change the translation
+            // contract seen by younger memory operations.  Retire the
+            // side effect, then refetch the next instruction under the new
+            // VM state instead of letting pre-commit younger work survive.
+            flush_out.valid       = 1'b1;
+            flush_out.full_flush  = 1'b1;
+            flush_out.redirect_pc = head_pc[0] + 64'd4;
         end else if (take_interrupt) begin
             // Interrupt: full flush, redirect to interrupt vector
             flush_out.valid       = 1'b1;

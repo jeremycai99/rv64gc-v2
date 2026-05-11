@@ -666,6 +666,29 @@ Execution status:
   claiming functional data-MMU completion.
 - Validation for the data-VM activation slice:
   `benchmark_results/stage3_rtl_guard_20260511_data_vm_active`.
+- Twelfth RTL slice completed: commit now treats VM-state CSR writes
+  (`satp`, `mstatus`, `sstatus`) and `sfence.vma` as translation
+  serialization redirects. The first directed Sv48 data-translation smoke
+  showed why this is required: without the redirect, a younger load after
+  `csrw satp` and `csrw mstatus` issued before those CSRs committed and used
+  the old Bare-mode address. The fix retires the serializing side effect, then
+  full-flushes and refetches at `pc + 4` so younger memory operations execute
+  under the committed VM contract.
+- Directed data-side Sv48 proof added:
+  `tests/asm/vm_data_sv48_smoke.S` with manifest
+  `tests/benchmarks/stage3_vm_smoke.json`. The test keeps fetch in M-mode
+  physical addressing, uses `MPRV` with `MPP=S` to force S-mode LSU
+  translation, maps virtual `0x9000` to physical `0x80008000` through a
+  four-level Sv48 page table, validates a translated load, performs a
+  translated store, clears `MPRV`, and confirms the backing physical line
+  changed.
+- Validation for the CSR/VM serialization and data-side Sv48 smoke slice:
+  `benchmark_results/stage3_vm_data_smoke_20260511_csr_flush` passed with
+  `tohost=1`, `mcycle=88`, and `minstret=69`.
+- DS/CM regression validation for the CSR/VM serialization slice:
+  `benchmark_results/stage3_rtl_guard_20260511_vm_csr_serial_redirect`.
+  The hard metric gate passed with the same preserved metrics as the prior
+  data-VM activation slice.
 
 | Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
@@ -807,9 +830,12 @@ harness policy:
 - v2 now has real RV64GC F/D execution in core RTL, with DSim FP smoke passing
   and DS/CM performance preserved.
 - v2 now has the Sv48 MMU/PTW/TLB scaffold, L2 PTW source port, data-side
-  PTW and DTLB fault sidebands, LSU PA mux setup, and data-side VM activation
-  wired into the LSU. Directed VM data-translation proof, fetch/ITLB
-  translation, and instruction page-fault handling are still open.
+  PTW and DTLB fault sidebands, LSU PA mux setup, data-side VM activation
+  wired into the LSU, a commit-time VM serialization redirect for relevant CSR
+  writes and `sfence.vma`, and a passing directed Sv48 LSU load/store
+  translation smoke. Fetch/ITLB translation, instruction page-fault handling,
+  broader privileged/MMU directed tests, and dirty PTE memory writeback remain
+  open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
