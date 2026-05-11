@@ -4520,8 +4520,6 @@ module rv64gc_core_top
     // Forward the L2's response address to the icache so it can filter
     // those replays by comparing against its own miss_addr_q.
     assign icache_fill_resp_addr = l2_icache_resp_addr;
-    assign ptw_l2_req_valid      = 1'b0;
-    assign ptw_l2_req_addr       = 64'd0;
 
     l2_cache u_l2_cache (
         .clk                (clk),
@@ -4923,7 +4921,62 @@ module rv64gc_core_top
     );
 
     // =========================================================================
-    // STA writeback to ROB (store address completion)
+    // 20. PAGE TABLE WALKER
+    // =========================================================================
+    logic                    ptw_dtlb_req_ready;
+    logic                    ptw_itlb_req_ready;
+    logic                    ptw_dtlb_fill_valid;
+    logic                    ptw_itlb_fill_valid;
+    logic [35:0]             ptw_fill_vpn;
+    logic [43:0]             ptw_fill_ppn;
+    logic [15:0]             ptw_fill_asid;
+    logic [1:0]              ptw_fill_page_size;
+    logic [7:0]              ptw_fill_perm;
+    logic [63:0]             ptw_fill_pte_pa;
+    logic                    ptw_fault_valid;
+    logic                    ptw_fault_is_itlb;
+    logic                    ptw_fault_is_store;
+    logic [ROB_IDX_BITS-1:0] ptw_fault_rob_idx;
+    logic [63:0]             ptw_fault_va;
+
+    ptw u_ptw (
+        .clk                 (clk),
+        .rst_n               (rst_n),
+        .satp_i              (csr_satp),
+        .dtlb_req_valid_i    (1'b0),
+        .dtlb_req_va_i       (64'd0),
+        .dtlb_req_rob_idx_i  ('0),
+        .dtlb_req_is_store_i (1'b0),
+        .dtlb_req_ready_o    (ptw_dtlb_req_ready),
+        .itlb_req_valid_i    (1'b0),
+        .itlb_req_va_i       (64'd0),
+        .itlb_req_ready_o    (ptw_itlb_req_ready),
+        .dtlb_fill_valid_o   (ptw_dtlb_fill_valid),
+        .itlb_fill_valid_o   (ptw_itlb_fill_valid),
+        .fill_vpn_o          (ptw_fill_vpn),
+        .fill_ppn_o          (ptw_fill_ppn),
+        .fill_asid_o         (ptw_fill_asid),
+        .fill_page_size_o    (ptw_fill_page_size),
+        .fill_perm_o         (ptw_fill_perm),
+        .fill_pte_pa_o       (ptw_fill_pte_pa),
+        .fault_valid_o       (ptw_fault_valid),
+        .fault_is_itlb_o     (ptw_fault_is_itlb),
+        .fault_is_store_o    (ptw_fault_is_store),
+        .fault_rob_idx_o     (ptw_fault_rob_idx),
+        .fault_va_o          (ptw_fault_va),
+        .l2_req_valid_o      (ptw_l2_req_valid),
+        .l2_req_addr_o       (ptw_l2_req_addr),
+        .l2_req_ready_i      (ptw_l2_req_ready),
+        .l2_req_accepted_i   (ptw_l2_req_accepted),
+        .l2_resp_valid_i     (ptw_l2_resp_valid),
+        .l2_resp_addr_i      (ptw_l2_resp_addr),
+        .l2_resp_data_i      (ptw_l2_resp_data),
+        .flush_i             (flush_out.valid),
+        .translation_flush_i (1'b0)
+    );
+
+    // =========================================================================
+    // 21. STA writeback to ROB (store address completion)
     // =========================================================================
     // The STA writeback marks the store as "ready" in the ROB.
     // This is handled via the CDB or a side channel. For now we use a

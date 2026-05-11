@@ -578,6 +578,12 @@ Execution status:
   L2 PTW port.
 - Validation for the standalone MMU module slice:
   `benchmark_results/stage3_rtl_guard_20260511_mmu_modules`.
+- Third RTL slice completed: `rv64gc_core_top.sv` now instantiates the shared
+  PTW and connects it to the L2 PTW source port. ITLB/DTLB miss request inputs
+  remain tied off, so this validates elaboration and the PTW/L2 memory
+  hierarchy seam without enabling translation yet.
+- Validation for the PTW-to-L2 integration slice:
+  `benchmark_results/stage3_rtl_guard_20260511_ptw_l2_integrated`.
 
 | Row | Timed cycles | 0.01% max cycles | Metric |
 |---|---:|---:|---:|
