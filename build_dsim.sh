@@ -162,6 +162,9 @@ dsim -sv +define+SIMULATION +acc+rwb "${DSIM_SVA_ARGS[@]}" \
      src/rtl/core/lsu/load_queue.sv \
      src/rtl/core/lsu/committed_store_buffer.sv \
      src/rtl/core/lsu/lsu.sv \
+     src/rtl/core/mmu/itlb.sv \
+     src/rtl/core/mmu/dtlb.sv \
+     src/rtl/core/mmu/ptw.sv \
      src/rtl/core/cache/dcache_tag_ram.sv \
      src/rtl/core/cache/dcache_data_ram.sv \
      src/rtl/core/cache/dcache.sv \

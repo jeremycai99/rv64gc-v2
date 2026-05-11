@@ -139,6 +139,9 @@ xvlog --sv --relax -d SIMULATION -d XSIM \
       "$P/src/rtl/core/lsu/load_queue.sv" \
       "$P/src/rtl/core/lsu/committed_store_buffer.sv" \
       "$P/src/rtl/core/lsu/lsu.sv" \
+      "$P/src/rtl/core/mmu/itlb.sv" \
+      "$P/src/rtl/core/mmu/dtlb.sv" \
+      "$P/src/rtl/core/mmu/ptw.sv" \
       "$P/src/rtl/core/cache/dcache_tag_ram.sv" \
       "$P/src/rtl/core/cache/dcache_data_ram.sv" \
       "$P/src/rtl/core/cache/dcache.sv" \

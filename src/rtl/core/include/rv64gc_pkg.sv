@@ -86,6 +86,12 @@ package rv64gc_pkg;
     localparam int CSB_IDX_BITS   = $clog2(CSB_DEPTH);   // 5
 
     // =========================================================================
+    // Translation lookaside buffers
+    // =========================================================================
+    localparam int ITLB_DEPTH     = 16;
+    localparam int DTLB_DEPTH     = 32;
+
+    // =========================================================================
     // Functional units
     // =========================================================================
     localparam int NUM_ALU        = 3;

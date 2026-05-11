@@ -570,6 +570,14 @@ Execution status:
   ASIC-style memory-hierarchy seam required by the Sv48 PTW.
 - Validation for this slice:
   `benchmark_results/stage3_rtl_guard_20260511_l2_ptw_port`.
+- Second RTL slice completed: `itlb.sv`, `dtlb.sv`, and `ptw.sv` were added
+  under `src/rtl/core/mmu/` and included in all DSim/XSim build scripts. They
+  are intentionally uninstantiated until the next fetch/LSU integration slice.
+  The shared PTW supports Sv48 and Sv39 walks, canonical-address checks, page
+  faults, superpage alignment checks, and cache-line PTE extraction through the
+  L2 PTW port.
+- Validation for the standalone MMU module slice:
+  `benchmark_results/stage3_rtl_guard_20260511_mmu_modules`.
 
 | Row | Timed cycles | 0.01% max cycles | Metric |
 |---|---:|---:|---:|
