@@ -72,6 +72,21 @@ module lsu
     output logic [ROB_IDX_BITS-1:0] violation_rob_idx,
     output logic [1:0] load_issue_suppress,
 
+    // DTLB sideband. Current top-level integration keeps data_vm_active_i low
+    // until the translated data path is enabled.
+    input logic data_vm_active_i,
+    input logic dtlb_hit_i,
+    input logic [63:0] dtlb_pa_i,
+    input logic dtlb_fault_i,
+    input logic [3:0] dtlb_fault_code_i,
+    output logic dtlb_lookup_valid_o,
+    output logic [63:0] dtlb_lookup_va_o,
+    output logic dtlb_lookup_is_store_o,
+    output logic dtlb_miss_valid_o,
+    output logic [63:0] dtlb_miss_va_o,
+    output logic [ROB_IDX_BITS-1:0] dtlb_miss_rob_idx_o,
+    output logic dtlb_miss_is_store_o,
+
     // D-cache interface
     output logic [1:0] dcache_load_req_valid,
     output logic [63:0] dcache_load_req_addr [0:1],
@@ -238,6 +253,36 @@ module lsu
          (sta_eff_addr < (PLIC_BASE + PLIC_SIZE))) ||
         ((sta_eff_addr >= UART_BASE) &&
          (sta_eff_addr < (UART_BASE + UART_SIZE)));
+
+    // =========================================================================
+    // DTLB lookup scaffold
+    // =========================================================================
+    logic dtlb_lookup_sel_store;
+    logic dtlb_lookup_sel_load0;
+    logic [ROB_IDX_BITS-1:0] dtlb_lookup_rob_idx;
+
+    assign dtlb_lookup_sel_store =
+        sta_issue_valid &&
+        !sta_addr_misaligned &&
+        !flush_in.valid;
+    assign dtlb_lookup_sel_load0 =
+        !dtlb_lookup_sel_store &&
+        load_issue_candidate_valid[0] &&
+        !load_addr_misaligned[0] &&
+        !flush_in.valid;
+    assign dtlb_lookup_valid_o =
+        data_vm_active_i &&
+        (dtlb_lookup_sel_store || dtlb_lookup_sel_load0);
+    assign dtlb_lookup_va_o =
+        dtlb_lookup_sel_store ? sta_eff_addr : load_eff_addr[0];
+    assign dtlb_lookup_is_store_o = dtlb_lookup_sel_store;
+    assign dtlb_lookup_rob_idx =
+        dtlb_lookup_sel_store ? sta_issue_data.rob_idx : load_issue_data[0].rob_idx;
+    assign dtlb_miss_valid_o =
+        dtlb_lookup_valid_o && !dtlb_hit_i && !dtlb_fault_i;
+    assign dtlb_miss_va_o = dtlb_lookup_va_o;
+    assign dtlb_miss_rob_idx_o = dtlb_lookup_rob_idx;
+    assign dtlb_miss_is_store_o = dtlb_lookup_is_store_o;
 
     // =========================================================================
     // Store data: byte mask generation

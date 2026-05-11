@@ -595,6 +595,14 @@ Execution status:
   CSR/PTW/TLB scaffold without enabling virtual-address translation yet.
 - Validation for the CSR/PTW/TLB scaffold slice:
   `benchmark_results/stage3_rtl_guard_20260511_tlb_scaffold_dsim`.
+- Fifth RTL slice completed: `lsu.sv` now exposes a DTLB sideband interface
+  for data-translation lookup and PTW miss requests. `rv64gc_core_top.sv`
+  connects that sideband into the instantiated DTLB/PTW chain, but keeps
+  `data_vm_active_i` tied low until the translated data-cache/MMIO address path
+  is ready. This creates the LSU-to-DTLB/PTW seam without changing Bare-mode
+  memory behavior.
+- Validation for the disabled LSU DTLB sideband slice:
+  `benchmark_results/stage3_rtl_guard_20260511_lsu_dtlb_sideband`.
 
 | Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
 |---|---:|---:|---:|

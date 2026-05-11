@@ -4337,6 +4337,17 @@ module rv64gc_core_top
     logic [2:0] sq_alloc_count;
     logic [ROB_IDX_BITS-1:0] lq_alloc_rob_idx [0:PIPE_WIDTH-1];
     logic [ROB_IDX_BITS-1:0] sq_alloc_rob_idx [0:PIPE_WIDTH-1];
+    logic                    dtlb_lookup_valid;
+    logic [63:0]             dtlb_lookup_va;
+    logic                    dtlb_lookup_is_store;
+    logic                    dtlb_miss_valid;
+    logic [63:0]             dtlb_miss_va;
+    logic [ROB_IDX_BITS-1:0] dtlb_miss_rob_idx;
+    logic                    dtlb_miss_is_store;
+    logic                    dtlb_hit;
+    logic [63:0]             dtlb_pa;
+    logic                    dtlb_fault;
+    logic [3:0]              dtlb_fault_code;
 
     always_comb begin
         lq_alloc_count = 3'd0;
@@ -4418,6 +4429,19 @@ module rv64gc_core_top
         .ordering_violation     (lsu_ordering_violation),
         .load_issue_suppress    (lsu_load_issue_suppress_raw),
         .violation_rob_idx      (lsu_violation_rob_idx),
+        // DTLB sideband, held disabled until data translation is promoted
+        .data_vm_active_i       (1'b0),
+        .dtlb_hit_i             (dtlb_hit),
+        .dtlb_pa_i              (dtlb_pa),
+        .dtlb_fault_i           (dtlb_fault),
+        .dtlb_fault_code_i      (dtlb_fault_code),
+        .dtlb_lookup_valid_o    (dtlb_lookup_valid),
+        .dtlb_lookup_va_o       (dtlb_lookup_va),
+        .dtlb_lookup_is_store_o (dtlb_lookup_is_store),
+        .dtlb_miss_valid_o      (dtlb_miss_valid),
+        .dtlb_miss_va_o         (dtlb_miss_va),
+        .dtlb_miss_rob_idx_o    (dtlb_miss_rob_idx),
+        .dtlb_miss_is_store_o   (dtlb_miss_is_store),
         // D-cache interface
         .dcache_load_req_valid  (dc_load_req_valid),
         .dcache_load_req_addr   (dc_load_req_addr),
@@ -4942,10 +4966,6 @@ module rv64gc_core_top
     logic [63:0]             itlb_pa;
     logic                    itlb_fault;
     logic [3:0]              itlb_fault_code;
-    logic                    dtlb_hit;
-    logic [63:0]             dtlb_pa;
-    logic                    dtlb_fault;
-    logic [3:0]              dtlb_fault_code;
     logic                    dtlb_dirty_wb_valid;
     logic [63:0]             dtlb_dirty_wb_pte_pa;
     logic [63:0]             dtlb_dirty_wb_pte_value;
@@ -5006,9 +5026,9 @@ module rv64gc_core_top
     dtlb u_dtlb (
         .clk                 (clk),
         .rst_n               (rst_n),
-        .lookup_valid_i      (1'b0),
-        .va_i                (64'd0),
-        .is_store_i          (1'b0),
+        .lookup_valid_i      (dtlb_lookup_valid),
+        .va_i                (dtlb_lookup_va),
+        .is_store_i          (dtlb_lookup_is_store),
         .priv_i              (csr_data_priv_mode),
         .asid_i              (csr_satp[59:44]),
         .sum_i               (csr_mstatus_sum),
@@ -5039,10 +5059,10 @@ module rv64gc_core_top
         .clk                 (clk),
         .rst_n               (rst_n),
         .satp_i              (csr_satp),
-        .dtlb_req_valid_i    (1'b0),
-        .dtlb_req_va_i       (64'd0),
-        .dtlb_req_rob_idx_i  ('0),
-        .dtlb_req_is_store_i (1'b0),
+        .dtlb_req_valid_i    (dtlb_miss_valid),
+        .dtlb_req_va_i       (dtlb_miss_va),
+        .dtlb_req_rob_idx_i  (dtlb_miss_rob_idx),
+        .dtlb_req_is_store_i (dtlb_miss_is_store),
         .dtlb_req_ready_o    (ptw_dtlb_req_ready),
         .itlb_req_valid_i    (1'b0),
         .itlb_req_va_i       (64'd0),
