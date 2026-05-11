@@ -205,15 +205,15 @@ What v2 should not copy:
   completion,
 - PowerShell-specific runner structure as the primary v2 flow.
 
-Immediate methodology adjustment for v2:
+Implemented methodology adjustment for v2:
 
-- Extend `tools/run_linux_boot.py` to classify the milestone table above and
+- `tools/run_linux_boot.py` classifies the milestone table above and can
   report the last reached milestone on timeout.
-- Extend the Linux simulation status path to dump the same kind of actionable
+- The Linux simulation status path can dump the same kind of actionable
   state v1 used: committed PC, privilege mode, trap cause, `satp`, interrupt
   CSRs, outstanding load/store or MMIO request, `mtime`, `mtimecmp`, and UART
   state.
-- Treat `/init` handoff and `BOOT OK` as separate pass levels. This prevents a
+- `/init` handoff and `BOOT OK` are separate pass levels. This prevents a
   kernel boot from being mistaken for a complete userspace milestone.
 - Keep the DS/CM hard gate before and after any RTL changes made while chasing
   Linux progress.
@@ -242,6 +242,13 @@ What exists now:
   the four-row DS/CM gate before any Stage 3 RTL promotion.
 - `tools/run_linux_boot.py` builds and later runs Linux-platform images through
   UART/log milestones rather than `tohost`.
+- `tools/run_linux_boot.py` now classifies staged boot milestones:
+  M-mode UART smoke, OpenSBI banner, OpenSBI platform probe, Linux early
+  console, RISC-V clocksource, NS16550 UART driver bind, kernel image free,
+  `/init` handoff, and final `BOOT OK`.
+- `tb_linux.sv` supports opt-in `+STATUS` snapshots with PC, privilege, `satp`,
+  timer, interrupt, MMIO, ROB, and UART counter state. This is simulation
+  boundary visibility only; it does not add Linux-specific logic to the core.
 - `sw/linux_boot/` contains the Sv48 DTS, minimal initramfs source, M-mode UART
   smoke source, linker script, and Linux/OpenSBI build wrapper.
 - The M-mode smoke image builds to `build/linux_boot/m_mode_uart_smoke.hex`.
@@ -331,6 +338,23 @@ OpenSBI status after RV64GC/FPU integration:
 - XSim can compile the FP-enabled design, but its FP smoke conversion result
   has not been promoted as authority yet. Use DSim for the current FP signoff
   until the XSim `FCVT` mismatch is separately root-caused.
+
+Current v1-methodology runner slice:
+
+- M-mode UART smoke passes through the milestone classifier:
+  `linux_boot_results/stage3_runner_milestone_smoke_20260510`.
+- A short timeout sanity run emits `[LINUX_STATUS]` snapshots with PC,
+  privilege, `satp`, timer, interrupt, MMIO, ROB, and UART counter state.
+- `build_dsim_linux.sh` passes after the status snapshot addition.
+- The Stage 3 DS/CM hard guard still passes:
+  `benchmark_results/stage3_rtl_guard_stage3_linux_runner_status_20260510`.
+
+| Row | Timed cycles | Limit | Metric |
+|---|---:|---:|---:|
+| Dhrystone 100 | `18,155` | `18,161` | `3.134960 DMIPS/MHz` |
+| Dhrystone 300 | `53,440` | `53,469` | `3.195090 DMIPS/MHz` |
+| CoreMark 1 | `154,185` | `154,233` | `6.485715 CM/MHz` |
+| CoreMark 10 | `1,491,294` | `1,491,334` | `6.705586 CM/MHz` |
 
 ## Stage 3 Architecture Direction
 
@@ -541,17 +565,18 @@ sw/linux_boot/build_linux_boot.sh --smoke
 sw/linux_boot/build_linux_boot.sh --opensbi
 python3 tools/run_linux_boot.py --build --build-mode smoke
 python3 tools/run_linux_boot.py --build-sim --build --build-mode smoke --run \
-  --pass-pattern "RV64GC-V2 STAGE3 UART OK" --smoke-check
-python3 tools/run_linux_boot.py --build --build-mode opensbi --run \
-  --pass-pattern "OpenSBI"
+  --smoke-check --target-milestone m_mode_uart_smoke
+python3 tools/run_linux_boot.py --build --build-mode opensbi --run
 python3 tools/run_linux_boot.py --build --build-mode linux
 ```
 
 The Linux runner can now run the M-mode UART smoke and has a dedicated OpenSBI
-banner mode. RV64GC/FPU support is integrated and guarded against DS/CM
-regression. Full Linux remains blocked until the OpenSBI platform wait is
-resolved, larger image loading is validated, and Sv48 translation is
-implemented.
+banner mode. It records reached milestones and the last reached milestone in
+`summary.json` and `summary.md`, so a timeout now reports the exact boot level
+instead of only `PASS` or `TIMEOUT`. RV64GC/FPU support is integrated and
+guarded against DS/CM regression. Full Linux remains blocked until the OpenSBI
+platform wait is resolved, larger image loading is validated, and Sv48
+translation is implemented.
 
 ## Near-Term Non-Goals
 

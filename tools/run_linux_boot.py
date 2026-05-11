@@ -28,6 +28,55 @@ FAIL_PATTERNS = [
     "trap loop",
     "fatal",
 ]
+MILESTONES = [
+    {
+        "id": "m_mode_uart_smoke",
+        "label": "M-mode UART smoke",
+        "patterns": ["RV64GC-V2 STAGE3 UART OK"],
+    },
+    {
+        "id": "opensbi_banner",
+        "label": "OpenSBI banner",
+        "patterns": ["OpenSBI"],
+    },
+    {
+        "id": "opensbi_platform_probe",
+        "label": "OpenSBI platform probe",
+        "patterns": ["Platform Name", "Platform HART Count", "Boot HART ID"],
+    },
+    {
+        "id": "linux_early_console",
+        "label": "Linux early console",
+        "patterns": ["Linux version", "earlycon:"],
+    },
+    {
+        "id": "riscv_clocksource",
+        "label": "RISC-V clocksource",
+        "patterns": ["clocksource: riscv_clocksource"],
+    },
+    {
+        "id": "uart_driver",
+        "label": "NS16550 UART driver",
+        "patterns": ["10000000.serial: ttyS0", "ttyS0 at MMIO"],
+    },
+    {
+        "id": "freeing_kernel_image",
+        "label": "Freeing unused kernel image",
+        "patterns": ["Freeing unused kernel image"],
+    },
+    {
+        "id": "init_handoff",
+        "label": "Initramfs handoff",
+        "patterns": ["Run /init as init process"],
+    },
+    {
+        "id": "boot_ok",
+        "label": "Initramfs BOOT OK",
+        "patterns": ["BOOT OK"],
+    },
+]
+MILESTONE_IDS = [str(milestone["id"]) for milestone in MILESTONES]
+MILESTONE_BY_ID = {str(milestone["id"]): milestone for milestone in MILESTONES}
 
 
 def run_cmd(cmd: list[str], cwd: Path, log_path: Path | None) -> int:
@@ -58,6 +107,11 @@ def summarize(run_dir: Path, payload: dict[str, Any]) -> None:
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    reached = payload.get("milestones_reached") or []
+    milestone_lines = [
+        f"| {item.get('id', '')} | {item.get('label', '')} |"
+        for item in reached
+    ]
     md = [
         "# Stage 3 Linux Boot Run",
         "",
@@ -65,22 +119,90 @@ def summarize(run_dir: Path, payload: dict[str, Any]) -> None:
         f"- Image: `{payload.get('image', '')}`",
         f"- UART log: `{payload.get('uart_log', '')}`",
         f"- Simulator log: `{payload.get('sim_log', '')}`",
+        f"- Target milestone: `{payload.get('target_milestone', '')}`",
+        f"- Last milestone: `{payload.get('last_milestone', '')}`",
         f"- Reason: {payload.get('reason', '')}",
         "",
     ]
+    if milestone_lines:
+        md.extend(
+            [
+                "## Reached Milestones",
+                "",
+                "| ID | Label |",
+                "|---|---|",
+                *milestone_lines,
+                "",
+            ]
+        )
     (run_dir / "summary.md").write_text("\n".join(md), encoding="utf-8")
 
 
-def classify_log(uart_text: str, sim_text: str, pass_pattern: str) -> tuple[str, str]:
+def milestone_reached(combined: str, milestone: dict[str, Any]) -> bool:
+    return any(pattern in combined for pattern in milestone["patterns"])
+
+
+def classify_milestones(uart_text: str, sim_text: str) -> list[dict[str, str]]:
     combined = uart_text + "\n" + sim_text
-    if pass_pattern and pass_pattern in combined:
-        return "PASS", f"matched pass pattern: {pass_pattern}"
+    reached: list[dict[str, str]] = []
+    for milestone in MILESTONES:
+        if milestone_reached(combined, milestone):
+            reached.append(
+                {
+                    "id": str(milestone["id"]),
+                    "label": str(milestone["label"]),
+                }
+            )
+    return reached
+
+
+def classify_log(
+    uart_text: str,
+    sim_text: str,
+    pass_pattern: str | None,
+    target_milestone: str,
+) -> dict[str, Any]:
+    combined = uart_text + "\n" + sim_text
+    reached = classify_milestones(uart_text, sim_text)
+    reached_ids = {item["id"] for item in reached}
+    last_milestone = reached[-1]["id"] if reached else ""
+
     for pattern in FAIL_PATTERNS:
         if pattern in combined:
-            return "FAIL", f"matched failure pattern: {pattern}"
+            return {
+                "status": "FAIL",
+                "reason": f"matched failure pattern: {pattern}",
+                "milestones_reached": reached,
+                "last_milestone": last_milestone,
+            }
+    if pass_pattern and pass_pattern in combined:
+        return {
+            "status": "PASS",
+            "reason": f"matched pass pattern: {pass_pattern}",
+            "milestones_reached": reached,
+            "last_milestone": last_milestone,
+        }
+    if target_milestone in reached_ids:
+        label = MILESTONE_BY_ID[target_milestone]["label"]
+        return {
+            "status": "PASS",
+            "reason": f"reached target milestone: {label}",
+            "milestones_reached": reached,
+            "last_milestone": last_milestone,
+        }
     if "TIMEOUT" in combined:
-        return "TIMEOUT", "simulator reported timeout"
-    return "INCOMPLETE", "pass pattern not found"
+        return {
+            "status": "TIMEOUT",
+            "reason": "simulator reported timeout",
+            "milestones_reached": reached,
+            "last_milestone": last_milestone,
+        }
+    return {
+        "status": "INCOMPLETE",
+        "reason": f"target milestone not reached: {target_milestone}",
+        "milestones_reached": reached,
+        "last_milestone": last_milestone,
+    }
 
 
 def default_run_dir() -> Path:
@@ -129,6 +251,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--max-cycles", type=int, default=50_000_000)
     parser.add_argument("--pass-pattern", default=None)
+    parser.add_argument(
+        "--target-milestone",
+        choices=MILESTONE_IDS,
+        default=None,
+        help="Milestone required for PASS when --pass-pattern is not supplied.",
+    )
+    parser.add_argument(
+        "--no-status",
+        action="store_true",
+        help="Do not request periodic Linux platform status snapshots.",
+    )
+    parser.add_argument(
+        "--status-interval",
+        type=int,
+        default=1_000_000,
+        help="Cycle interval for +STATUS snapshots when enabled.",
+    )
+    parser.add_argument(
+        "--no-trace-trap",
+        action="store_true",
+        help="Do not request trap/return trace messages from tb_linux.",
+    )
     parser.add_argument("--smoke-check", action="store_true")
     parser.add_argument("--uart-log", type=Path, default=None)
     parser.add_argument(
@@ -148,13 +292,13 @@ def main(argv: list[str] | None = None) -> int:
         }[args.build_mode]
         args.image = REPO_ROOT / "build" / "linux_boot" / image_name
 
-    if args.pass_pattern is None:
-        if args.smoke_check:
-            args.pass_pattern = "RV64GC-V2 STAGE3 UART OK"
+    if args.target_milestone is None:
+        if args.smoke_check or args.build_mode == "smoke":
+            args.target_milestone = "m_mode_uart_smoke"
         elif args.build_mode == "opensbi":
-            args.pass_pattern = "OpenSBI"
+            args.target_milestone = "opensbi_banner"
         else:
-            args.pass_pattern = "BOOT OK"
+            args.target_milestone = "boot_ok"
 
     run_dir = args.run_dir or default_run_dir()
     if not run_dir.is_absolute():
@@ -177,6 +321,9 @@ def main(argv: list[str] | None = None) -> int:
                     "image": str(args.image),
                     "uart_log": "",
                     "sim_log": "",
+                    "target_milestone": args.target_milestone,
+                    "last_milestone": "",
+                    "milestones_reached": [],
                 },
             )
             return sim_build_rc
@@ -196,6 +343,9 @@ def main(argv: list[str] | None = None) -> int:
                     "image": str(args.image),
                     "uart_log": "",
                     "sim_log": "",
+                    "target_milestone": args.target_milestone,
+                    "last_milestone": "",
+                    "milestones_reached": [],
                 },
             )
             return build_rc
@@ -209,6 +359,9 @@ def main(argv: list[str] | None = None) -> int:
                 "image": str(args.image),
                 "uart_log": "",
                 "sim_log": "",
+                "target_milestone": args.target_milestone,
+                "last_milestone": "",
+                "milestones_reached": [],
             },
         )
         return 0
@@ -228,6 +381,9 @@ def main(argv: list[str] | None = None) -> int:
                 "image": str(image),
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
+                "target_milestone": args.target_milestone,
+                "last_milestone": "",
+                "milestones_reached": [],
             },
         )
         return 2
@@ -240,6 +396,9 @@ def main(argv: list[str] | None = None) -> int:
                 "image": str(image),
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
+                "target_milestone": args.target_milestone,
+                "last_milestone": "",
+                "milestones_reached": [],
             },
         )
         return 2
@@ -256,6 +415,11 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if args.smoke_check:
         raw_cmd.append("+UART_SMOKE_CHECK")
+    if not args.no_status and args.status_interval > 0:
+        raw_cmd.append("+STATUS")
+        raw_cmd.append(f"+STATUS_INTERVAL={args.status_interval}")
+    if not args.no_trace_trap:
+        raw_cmd.append("+LINUX_TRACE_TRAP")
     for plusarg in args.sim_plusarg:
         raw_cmd.append(plusarg if plusarg.startswith("+") else f"+{plusarg}")
     shell_lines = [
@@ -279,7 +443,14 @@ def main(argv: list[str] | None = None) -> int:
     rc = run_cmd(cmd, REPO_ROOT, sim_log)
     uart_text = read_text(uart_log)
     sim_text = read_text(sim_log)
-    status, reason = classify_log(uart_text, sim_text, args.pass_pattern)
+    classification = classify_log(
+        uart_text,
+        sim_text,
+        args.pass_pattern,
+        args.target_milestone,
+    )
+    status = str(classification["status"])
+    reason = str(classification["reason"])
     if rc != 0 and status == "INCOMPLETE":
         status = "FAIL"
         reason = f"simulator exit code {rc}"
@@ -293,6 +464,11 @@ def main(argv: list[str] | None = None) -> int:
             "uart_log": str(uart_log),
             "sim_log": str(sim_log),
             "sim_returncode": rc,
+            "target_milestone": args.target_milestone,
+            "last_milestone": classification.get("last_milestone", ""),
+            "milestones_reached": classification.get("milestones_reached", []),
+            "pass_pattern": args.pass_pattern or "",
+            "status_interval": 0 if args.no_status else args.status_interval,
         },
     )
     return 0 if status == "PASS" else 1

@@ -139,6 +139,8 @@ module tb_linux;
     logic [63:0] linux_trace_line;
     integer linux_trace_l2_en;
     integer linux_trace_trap_en;
+    integer status_en;
+    integer status_interval;
     logic [63:0] mem_read_addr_r;
     logic        mem_read_pending_r;
     string uart_log_path;
@@ -163,14 +165,18 @@ module tb_linux;
         linux_trace_line = 64'd0;
         linux_trace_l2_en = 0;
         linux_trace_trap_en = 0;
+        status_en = 0;
+        status_interval = 1000000;
         uart_log_path = "";
         smoke_pattern = "RV64GC-V2 STAGE3 UART OK";
 
         void'($value$plusargs("MAX_CYCLES=%d", max_cycles));
+        void'($value$plusargs("STATUS_INTERVAL=%d", status_interval));
         void'($value$plusargs("UART_STDOUT=%d", uart_stdout_en));
         if ($value$plusargs("UART_LOGFILE=%s", uart_log_path)) begin
             uart_log_fd = $fopen(uart_log_path, "w");
         end
+        status_en = $test$plusargs("STATUS") ? 1 : 0;
         smoke_check_en = $test$plusargs("UART_SMOKE_CHECK") ? 1 : 0;
         linux_trace_mmio_en = $test$plusargs("LINUX_TRACE_MMIO") ? 1 : 0;
         if ($value$plusargs("LINUX_TRACE_LOAD_PC=%h", linux_trace_load_pc))
@@ -497,9 +503,37 @@ module tb_linux;
                 end
             end
 
-            if (sim_cycle > 0 && (sim_cycle % 10000) == 0) begin
-                $display("... cycle %0d  mcycle=%0d minstret=%0d",
-                         sim_cycle, perf_mcycle, perf_minstret);
+            if ((status_en != 0) && (status_interval > 0) &&
+                (sim_cycle > 0) && ((sim_cycle % status_interval) == 0)) begin
+                $display("[LINUX_STATUS] cyc=%0d mcycle=%0d minstret=%0d priv=%0d satp=%016h last_pc=%016h last_commit_cyc=%0d commit_count=%0d rob_empty=%0b rob_head=%0d rob_tail=%0d rob_free=%0d trap=%0b trap_cause=%016h trap_val=%016h irq_pending=%0b irq_cause=%016h mtip=%0b msip=%0b time=%016h timecmp=%016h mmio_req=%0b mmio_wait=%0b mmio_we=%0b mmio_addr=%016h mmio_count=%0d uart_rd=%0d uart_wr=%0d",
+                         sim_cycle,
+                         perf_mcycle,
+                         perf_minstret,
+                         u_core.csr_priv_mode,
+                         u_core.csr_satp,
+                         last_commit_pc,
+                         last_commit_cycle,
+                         last_commit_count,
+                         u_core.rob_empty,
+                         u_core.rob_head_idx,
+                         u_core.rob_tail_idx,
+                         u_core.rob_free_count,
+                         u_core.trap_valid,
+                         u_core.trap_cause,
+                         u_core.trap_val,
+                         u_core.csr_irq_pending,
+                         u_core.csr_irq_cause,
+                         mtip,
+                         msip,
+                         time_val,
+                         u_mmio.u_clint.mtimecmp_r,
+                         u_core.u_lsu.mmio_req_valid_r,
+                         u_core.u_lsu.mmio_wait_resp_r,
+                         u_core.u_lsu.mmio_req_we_r,
+                         u_core.u_lsu.mmio_req_addr_r,
+                         mmio_req_count,
+                         mmio_uart_rd_count,
+                         mmio_uart_wr_count);
             end
 
             if (sim_cycle >= max_cycles) begin
