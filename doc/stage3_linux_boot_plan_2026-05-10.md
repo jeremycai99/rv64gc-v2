@@ -128,6 +128,95 @@ v1 status caveat:
 - The archived v1 boot logs show useful progress into S-mode Linux, but also
   long stalls after entering high kernel virtual addresses. Treat v1 as a map
   of required components, not as a known-good implementation to clone.
+- The strongest archived v1 console logs reach Linux user-space handoff:
+  `Run /init as init process`. They do not show the final `BOOT OK` line from
+  the tiny initramfs. For v2, `/init` handoff and `BOOT OK` are separate
+  milestones.
+
+### v1 Full Linux Methodology Reference
+
+The v1 full Linux flow is the right starting methodology for v2 because it
+used a real firmware/kernel/initramfs stack instead of a benchmark image:
+
+1. Build a tiny static initramfs `/init`.
+   - v1 used a small C init program built with `riscv64-linux-gnu-gcc -static`
+     and configured through Linux `CONFIG_INITRAMFS_SOURCE`.
+   - The init program printed an early boot marker before more complex device
+     setup. v2 should keep this early marker and make `BOOT OK` the final
+     Stage 3 userspace milestone.
+2. Build a reduced single-core Linux kernel.
+   - v1 started from defconfig, disabled SMP/modules/network/USB and optional
+     ISA extensions that were not part of the target, kept MMU support, early
+     console, SBI, timer, and initramfs support, then built `Image`.
+   - v2 should follow the same reduction discipline, but keep the target ISA
+     aligned with current RTL: `rv64imafdc_zicsr_zifencei`, ABI `lp64d`, and
+     Sv48 as the primary target.
+3. Compile a simple mainline DTB.
+   - v1's mainline DTS used DRAM at `0x80000000`, CLINT at `0x02000000`, and a
+     polling NS16550A UART at `0x10000000`.
+   - The useful v1 DTS shape is the `rv64gc_mainline.dts` style, not the older
+     HTIF or LupIO variants.
+4. Build OpenSBI generic `fw_payload.elf`.
+   - v1 used `FW_TEXT_START=0x80000000`, `FW_PAYLOAD_OFFSET=0x200000`, and
+     `FW_PAYLOAD_FDT_ADDR=0x86000000`.
+   - v2 should keep those addresses unless the memory map changes, so reset,
+     firmware, kernel payload, and DTB placement stay easy to compare.
+5. Convert the firmware payload to the simulator memory format.
+   - v1 converted `fw_payload.elf` to a hex image for the simulator.
+   - v2 should keep this as an artifact-producing build step under
+     `build/linux_boot/`, with source/config files tracked and large generated
+     artifacts left out of git.
+6. Run with two independent evidence streams.
+   - v1 kept a UART console log for Linux-visible progress and a simulator
+     status log for internal PC, privilege, CSR, trap, MMU, load/store, timer,
+     and platform state.
+   - v2 should preserve this split. UART proves software-visible progress;
+     simulator status explains stalls and pipeline/platform failures.
+
+v2 milestone order should be:
+
+| Milestone | Evidence source | Why it matters |
+|---|---|---|
+| OpenSBI banner | UART log | Firmware image, reset PC, UART MMIO, and basic M-mode execution work |
+| OpenSBI platform probe | UART plus simulator status | CLINT/timer and platform DTB data are plausible |
+| Linux early console | UART log | OpenSBI entered S-mode payload and Linux can print early |
+| `clocksource: riscv_clocksource` | UART log | timer and SBI time path are far enough for Linux timekeeping |
+| `10000000.serial: ttyS0` | UART log | normal UART driver is bound after earlycon |
+| `Freeing unused kernel image` | UART log | kernel init progressed beyond early memory setup |
+| `Run /init as init process` | UART log | initramfs handoff happened |
+| `BOOT OK` | UART log or syscon poweroff | v2 Stage 3 userspace pass milestone |
+
+What v2 should copy from v1 methodology:
+
+- the OpenSBI generic payload flow,
+- the minimal Linux config discipline,
+- the Sv48 mainline DTS shape with DRAM, CLINT, and NS16550A UART,
+- the small static initramfs with an early marker,
+- the dual log model: UART console plus simulator status/deadlock trace,
+- periodic status snapshots with enough architectural state to root cause a
+  stall without re-running blindly.
+
+What v2 should not copy:
+
+- HTIF or a `tohost` DTB node as the Linux completion mechanism,
+- fixed `+TOHOST_ADDR` pass/fail handling for Linux,
+- old LupIO devices before the simpler UART/CLINT path is fully working,
+- direct testbench snooping of core-internal pipeline state for functional
+  completion,
+- PowerShell-specific runner structure as the primary v2 flow.
+
+Immediate methodology adjustment for v2:
+
+- Extend `tools/run_linux_boot.py` to classify the milestone table above and
+  report the last reached milestone on timeout.
+- Extend the Linux simulation status path to dump the same kind of actionable
+  state v1 used: committed PC, privilege mode, trap cause, `satp`, interrupt
+  CSRs, outstanding load/store or MMIO request, `mtime`, `mtimecmp`, and UART
+  state.
+- Treat `/init` handoff and `BOOT OK` as separate pass levels. This prevents a
+  kernel boot from being mistaken for a complete userspace milestone.
+- Keep the DS/CM hard gate before and after any RTL changes made while chasing
+  Linux progress.
 
 ## Current v2 Starting Point
 
