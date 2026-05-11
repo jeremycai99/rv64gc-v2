@@ -19,6 +19,7 @@ module lsu
     input logic [1:0] load_issue_candidate_valid,
     input logic [1:0] load_issue_valid,
     input iq_entry_t load_issue_data [0:1],
+    input logic sta_issue_candidate_valid,
     input logic sta_issue_valid,
     input iq_entry_t sta_issue_data,
     input logic std_issue_valid,
@@ -71,6 +72,7 @@ module lsu
     output logic ordering_violation,
     output logic [ROB_IDX_BITS-1:0] violation_rob_idx,
     output logic [1:0] load_issue_suppress,
+    output logic sta_issue_suppress,
 
     // DTLB sideband. Current top-level integration keeps data_vm_active_i low
     // until the translated data path is enabled.
@@ -259,10 +261,14 @@ module lsu
     // =========================================================================
     logic dtlb_lookup_sel_store;
     logic dtlb_lookup_sel_load0;
+    logic dtlb_lookup_miss;
+    logic sta_tlb_miss;
+    logic load0_tlb_miss;
+    logic load1_tlb_wait;
     logic [ROB_IDX_BITS-1:0] dtlb_lookup_rob_idx;
 
     assign dtlb_lookup_sel_store =
-        sta_issue_valid &&
+        sta_issue_candidate_valid &&
         !sta_addr_misaligned &&
         !flush_in.valid;
     assign dtlb_lookup_sel_load0 =
@@ -278,11 +284,28 @@ module lsu
     assign dtlb_lookup_is_store_o = dtlb_lookup_sel_store;
     assign dtlb_lookup_rob_idx =
         dtlb_lookup_sel_store ? sta_issue_data.rob_idx : load_issue_data[0].rob_idx;
-    assign dtlb_miss_valid_o =
+    assign dtlb_lookup_miss =
         dtlb_lookup_valid_o && !dtlb_hit_i && !dtlb_fault_i;
+    assign sta_tlb_miss =
+        data_vm_active_i &&
+        dtlb_lookup_sel_store &&
+        !dtlb_hit_i &&
+        !dtlb_fault_i;
+    assign load0_tlb_miss =
+        data_vm_active_i &&
+        dtlb_lookup_sel_load0 &&
+        !dtlb_hit_i &&
+        !dtlb_fault_i;
+    assign load1_tlb_wait =
+        data_vm_active_i &&
+        load_issue_candidate_valid[1] &&
+        !load_addr_misaligned[1] &&
+        !flush_in.valid;
+    assign dtlb_miss_valid_o = dtlb_lookup_miss;
     assign dtlb_miss_va_o = dtlb_lookup_va_o;
     assign dtlb_miss_rob_idx_o = dtlb_lookup_rob_idx;
     assign dtlb_miss_is_store_o = dtlb_lookup_is_store_o;
+    assign sta_issue_suppress = sta_tlb_miss;
 
     // =========================================================================
     // Store data: byte mask generation
@@ -1085,6 +1108,7 @@ module lsu
     assign load_issue_suppress[0] =
         load_issue_candidate_valid[0] &&
         (flush_in.valid ||
+         load0_tlb_miss ||
          (!load_addr_misaligned[0] &&
           (p0_sq_order_wait_block || same_cycle_sta_wait0 ||
            fwd_hold_blocked || mmio_load0_block ||
@@ -1307,6 +1331,7 @@ module lsu
     assign load_issue_suppress[1] =
         load_issue_candidate_valid[1] &&
         (flush_in.valid ||
+         load1_tlb_wait ||
          amo_busy ||
          load_issue_data[1].is_amo ||
          (load_issue_candidate_valid[0] && load_issue_data[0].is_amo) ||

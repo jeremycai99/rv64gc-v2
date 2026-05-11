@@ -1448,6 +1448,7 @@ module rv64gc_core_top
     // before the LSU instantiation below).
     logic [1:0]               lsu_load_issue_suppress_raw;
     logic [1:0]               lsu_load_issue_suppress;
+    logic [0:0]               lsu_sta_issue_suppress;
     // D-cache fill snoop (produced by dcache, consumed by LSU instantiated
     // earlier in the file).
     logic        dc_fill_snoop_valid;
@@ -1695,6 +1696,7 @@ module rv64gc_core_top
     logic [1:0]  iq_store_issue_valid;
     iq_entry_t   iq_store_issue_data [0:1];
     // Single-issue wrapper signals for store IQ (NUM_SELECT=1)
+    logic [0:0]  iq_store_issue_candidate_valid_s;
     logic [0:0]  iq_store_issue_valid_s;
     iq_entry_t   iq_store_issue_data_s [0:0];
 
@@ -2093,7 +2095,7 @@ module rv64gc_core_top
         .load_wb_wk_valid1(load_wb_valid_live[1] && (load_wb_pdst[1] != '0)),
         .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
-        .issue_candidate_valid(),
+        .issue_candidate_valid(iq_store_issue_candidate_valid_s),
         .issue_valid     (iq_store_issue_valid_s),
         .issue_data      (iq_store_issue_data_s),
         .older_probe_valid(iq_load_issue_candidate_valid),
@@ -2103,7 +2105,7 @@ module rv64gc_core_top
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .issue_suppress  ('0),
+        .issue_suppress  (lsu_sta_issue_suppress),
         .enq_issue_bypass_enable(1'b0),
         .enq_issue_bypass_alu_only(1'b0),
         .occupancy       (iq_store_occ)
@@ -4377,6 +4379,7 @@ module rv64gc_core_top
         .load_issue_candidate_valid(iq_load_issue_candidate_valid),
         .load_issue_valid       (iq_load_issue_valid),
         .load_issue_data        (iq_load_issue_data),
+        .sta_issue_candidate_valid(iq_store_issue_candidate_valid_s[0]),
         .sta_issue_valid        (routed_sta_valid),
         .sta_issue_data         (routed_sta_data),
         .std_issue_valid        (routed_std_valid),
@@ -4428,6 +4431,7 @@ module rv64gc_core_top
         // Ordering violation
         .ordering_violation     (lsu_ordering_violation),
         .load_issue_suppress    (lsu_load_issue_suppress_raw),
+        .sta_issue_suppress     (lsu_sta_issue_suppress[0]),
         .violation_rob_idx      (lsu_violation_rob_idx),
         // DTLB sideband, held disabled until data translation is promoted
         .data_vm_active_i       (1'b0),

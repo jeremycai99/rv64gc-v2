@@ -603,6 +603,17 @@ Execution status:
   memory behavior.
 - Validation for the disabled LSU DTLB sideband slice:
   `benchmark_results/stage3_rtl_guard_20260511_lsu_dtlb_sideband`.
+- Sixth RTL slice completed: the load/store issue contract is now
+  DTLB-miss-aware while data translation remains disabled. `lsu.sv` consumes
+  the STA issue candidate separately from final STA issue valid, so a future
+  store-address DTLB miss can suppress the store IQ entry without forming a
+  ready/valid loop or marking the store address complete. Load port 0 now has
+  a DTLB-miss suppression hook, and load port 1 is held when data VM is active
+  until a second translated load path is deliberately added. `data_vm_active_i`
+  remains tied low in `rv64gc_core_top.sv`, so Bare-mode memory behavior is
+  unchanged.
+- Validation for the DTLB issue-suppression contract slice:
+  `benchmark_results/stage3_rtl_guard_20260511_lsu_dtlb_suppress_contract`.
 
 | Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
 |---|---:|---:|---:|
