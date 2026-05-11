@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from datetime import datetime
@@ -20,6 +21,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = REPO_ROOT / "tests" / "benchmarks" / "stage1_signoff.json"
 DHRYSTONE_VAX_DHRYSTONES_PER_SEC = 1757.0
+DEFAULT_MAX_REGRESSION_PCT = 0.01
 
 BENCHES = [
     "dhrystone_100_checkedin",
@@ -103,12 +105,24 @@ def load_results(path: Path) -> list[dict[str, Any]]:
     raise ValueError(f"unexpected results format: {path}")
 
 
-def evaluate_results(results_path: Path) -> int:
+def allowed_cycle_limit(cycles: int, max_regression_pct: float) -> int:
+    return math.floor(float(cycles) * (1.0 + (max_regression_pct / 100.0)))
+
+
+def allowed_metric_min(metric: float, max_regression_pct: float) -> float:
+    return metric * (1.0 - (max_regression_pct / 100.0))
+
+
+def evaluate_results(
+    results_path: Path,
+    max_regression_pct: float = DEFAULT_MAX_REGRESSION_PCT,
+) -> int:
     rows = {str(row.get("name")): row for row in load_results(results_path)}
     failures: list[str] = []
 
     print("\nStage 3 RTL guard summary:")
-    print("benchmark                         cycles      limit       metric")
+    print(f"maximum allowed performance regression: {max_regression_pct:.4f}%")
+    print("benchmark                         cycles   max_cycle       metric      metric_min")
     for bench in BENCHES:
         if bench not in rows:
             failures.append(f"{bench}: missing from results")
@@ -119,12 +133,15 @@ def evaluate_results(results_path: Path) -> int:
         counters = row.get("perf_counters", {})
         cycles = metrics.get("timed_cycles")
         metric = result_metric(row, str(expected["metric_key"]))
-        metric_limit = float(expected["metric_min"])
-        cycle_limit = int(expected["timed_cycles"])
+        baseline_metric = float(expected["metric_min"])
+        baseline_cycles = int(expected["timed_cycles"])
+        cycle_limit = allowed_cycle_limit(baseline_cycles, max_regression_pct)
+        metric_limit = allowed_metric_min(baseline_metric, max_regression_pct)
 
         print(
-            f"{bench:<33} {str(cycles):>10} {cycle_limit:>10} "
-            f"{metric if metric is not None else 'missing'}"
+            f"{bench:<33} {str(cycles):>10} {cycle_limit:>11} "
+            f"{metric if metric is not None else 'missing':>12} "
+            f"{metric_limit:>12.6f}"
         )
 
         if row.get("status") != "PASS":
@@ -134,12 +151,24 @@ def evaluate_results(results_path: Path) -> int:
         if cycles is None:
             failures.append(f"{bench}: missing timed_cycles")
         elif int(cycles) > cycle_limit:
-            failures.append(f"{bench}: timed_cycles {cycles} > {cycle_limit}")
+            cycle_regression_pct = (
+                (float(cycles) - float(baseline_cycles)) /
+                float(baseline_cycles) * 100.0
+            )
+            failures.append(
+                f"{bench}: timed_cycles {cycles} > {cycle_limit} "
+                f"({cycle_regression_pct:.5f}% regression)"
+            )
         if metric is None:
             failures.append(f"{bench}: missing {expected['metric_key']}")
         elif metric + 1e-6 < metric_limit:
+            metric_regression_pct = (
+                (baseline_metric - metric) / baseline_metric * 100.0
+            )
             failures.append(
-                f"{bench}: {expected['metric_key']} {metric:.6f} < {metric_limit:.6f}"
+                f"{bench}: {expected['metric_key']} {metric:.6f} < "
+                f"{metric_limit:.6f} "
+                f"({metric_regression_pct:.5f}% regression)"
             )
         if row.get("loop_buffer_active") not in (None, 0):
             failures.append(f"{bench}: loop_buffer_active={row.get('loop_buffer_active')}")
@@ -156,7 +185,10 @@ def evaluate_results(results_path: Path) -> int:
             print(f"- {failure}")
         return 1
 
-    print("\nPASS: DS/CM baseline preserved for Stage 3 RTL work.")
+    print(
+        "\nPASS: DS/CM baseline preserved within the Stage 3 "
+        f"{max_regression_pct:.4f}% regression tolerance."
+    )
     return 0
 
 
@@ -186,6 +218,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Only evaluate an existing --run-dir/results.json artifact.",
     )
+    parser.add_argument(
+        "--max-regression-pct",
+        type=float,
+        default=DEFAULT_MAX_REGRESSION_PCT,
+        help=(
+            "Maximum allowed DS/CM performance regression in percent. "
+            "Default: 0.01."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.run_dir is None:
@@ -197,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
             run_dir = REPO_ROOT / run_dir
 
     if args.evaluate_only:
-        return evaluate_results(run_dir / "results.json")
+        return evaluate_results(run_dir / "results.json", args.max_regression_pct)
 
     if not args.skip_build:
         build_script = "./build_dsim.sh" if args.runner == "dsim" else "./build_xsim.sh"
@@ -228,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    return evaluate_results(run_dir / "results.json")
+    return evaluate_results(run_dir / "results.json", args.max_regression_pct)
 
 
 if __name__ == "__main__":

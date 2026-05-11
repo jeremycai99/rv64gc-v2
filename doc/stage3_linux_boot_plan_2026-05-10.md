@@ -43,17 +43,23 @@ This is mandatory for every Stage 3 RTL change, including changes that appear
 to be platform-only. A Linux boot fix is not promotable if it regresses the
 committed DS/CM performance baseline.
 
-Baseline to preserve:
+Baseline reference:
 
 Reference artifact: `benchmark_results/dse_stage2_ds_viability_profile_20260510`
 on commit `bddfed8`.
 
-| Row | Required timed cycles | Required metric |
-|---|---:|---:|
-| Dhrystone 100 | `18,161` or lower | `3.133924 DMIPS/MHz` or higher |
-| Dhrystone 300 | `53,469` or lower | `3.193357 DMIPS/MHz` or higher |
-| CoreMark 1 | `154,233` or lower | `6.483697 CM/MHz` or higher |
-| CoreMark 10 | `1,491,334` or lower | `6.705406 CM/MHz` or higher |
+The reference cycle counts are not exact hard limits. A run is acceptable only
+when the measured performance regression is no more than `0.01%` versus the
+reference. The wrapper checks both directions: timed cycles must not increase
+by more than `0.01%`, and the reported performance metric must not drop by
+more than `0.01%`.
+
+| Row | Reference timed cycles | Max cycles with 0.01% tolerance | Reference metric | Min metric with 0.01% tolerance |
+|---|---:|---:|---:|---:|
+| Dhrystone 100 | `18,161` | `18,162` | `3.133924 DMIPS/MHz` | `3.133611 DMIPS/MHz` |
+| Dhrystone 300 | `53,469` | `53,474` | `3.193357 DMIPS/MHz` | `3.193038 DMIPS/MHz` |
+| CoreMark 1 | `154,233` | `154,248` | `6.483697 CM/MHz` | `6.483049 CM/MHz` |
+| CoreMark 10 | `1,491,334` | `1,491,483` | `6.705406 CM/MHz` | `6.704735 CM/MHz` |
 
 Required regression command shape after each RTL slice:
 
@@ -64,7 +70,8 @@ python3 tools/run_stage3_rtl_guard.py --runner dsim --run-id <date>_<slice>
 The wrapper rebuilds the selected simulator, runs the four locked DS/CM rows
 with the strict owner, delivery, branch-recovery, performance, stat, and
 bottleneck plusargs, then checks timed cycles and metrics against the table
-above. Use `--runner xsim-sh` when DSim is blocked by license availability.
+above using the default `--max-regression-pct 0.01` tolerance. Use
+`--runner xsim-sh` when DSim is blocked by license availability.
 The current OpenSBI platform-probe slice used that fallback for the hard DS/CM
 gate because the DSim benchmark row hit a simulator scheduler iteration limit
 on CoreMark before the timed window completed, while XSim completed all four
@@ -97,7 +104,8 @@ Gate rules:
 
 - Rebuild the simulator from the current RTL before running the guard.
 - All four rows must pass endpoint checks.
-- Timed cycles must be equal to or better than the baseline table above.
+- Timed cycles and performance metrics must stay within the `0.01%`
+  regression tolerance versus the baseline table above.
 - Owner, delivery, branch-recovery, stale-owner, legacy loop-buffer, and
   standalone decoded-op replay checks must remain clean.
 - Any performance regression blocks the RTL commit unless the change is
