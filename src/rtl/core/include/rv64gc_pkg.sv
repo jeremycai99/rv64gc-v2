@@ -33,6 +33,8 @@ package rv64gc_pkg;
     localparam int INT_PRF_DEPTH  = 160;
     localparam int PHYS_REG_BITS  = 8;   // $clog2(160) <= 8
     localparam int FP_PRF_DEPTH   = 96;
+    localparam int PHYS_TAG_COUNT = 1 << PHYS_REG_BITS;
+    localparam int FP_PHYS_BASE   = INT_PRF_DEPTH;
 
     // =========================================================================
     // Reorder buffer

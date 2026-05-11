@@ -100,13 +100,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--build-mode",
-        choices=("smoke", "linux", "all"),
+        choices=("smoke", "opensbi", "linux", "all"),
         default="smoke",
     )
     parser.add_argument(
         "--image",
         type=Path,
-        default=REPO_ROOT / "build" / "linux_boot" / "m_mode_uart_smoke.hex",
+        default=None,
     )
     parser.add_argument(
         "--sim-image",
@@ -128,10 +128,33 @@ def main(argv: list[str] | None = None) -> int:
         help="Output directory. Defaults to linux_boot_results/stage3_<timestamp>.",
     )
     parser.add_argument("--max-cycles", type=int, default=50_000_000)
-    parser.add_argument("--pass-pattern", default="BOOT OK")
+    parser.add_argument("--pass-pattern", default=None)
     parser.add_argument("--smoke-check", action="store_true")
     parser.add_argument("--uart-log", type=Path, default=None)
+    parser.add_argument(
+        "--sim-plusarg",
+        action="append",
+        default=[],
+        help="Additional simulator plusarg. Accepts either NAME or +NAME.",
+    )
     args = parser.parse_args(argv)
+
+    if args.image is None:
+        image_name = {
+            "smoke": "m_mode_uart_smoke.hex",
+            "opensbi": "fw_payload_opensbi_banner.hex",
+            "linux": "fw_payload.hex",
+            "all": "fw_payload.hex",
+        }[args.build_mode]
+        args.image = REPO_ROOT / "build" / "linux_boot" / image_name
+
+    if args.pass_pattern is None:
+        if args.smoke_check:
+            args.pass_pattern = "RV64GC-V2 STAGE3 UART OK"
+        elif args.build_mode == "opensbi":
+            args.pass_pattern = "OpenSBI"
+        else:
+            args.pass_pattern = "BOOT OK"
 
     run_dir = args.run_dir or default_run_dir()
     if not run_dir.is_absolute():
@@ -233,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if args.smoke_check:
         raw_cmd.append("+UART_SMOKE_CHECK")
+    for plusarg in args.sim_plusarg:
+        raw_cmd.append(plusarg if plusarg.startswith("+") else f"+{plusarg}")
     shell_lines = [
         "set -euo pipefail",
         ': "${DSIM_HOME:=$HOME/AltairDSim/2026}"',

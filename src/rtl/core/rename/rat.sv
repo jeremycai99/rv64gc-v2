@@ -6,15 +6,19 @@
 */
 module rat
     import rv64gc_pkg::*;
-(
+#(
+    parameter bit PROTECT_ZERO = 1'b1
+)(
     input logic clk,
     input logic rst_n,
 
-    // 6-wide source read (rs1/rs2 lookup)
+    // 4-wide source read (rs1/rs2/rs3 lookup)
     input logic [ARCH_REG_BITS-1:0] rs1_arch [0:PIPE_WIDTH-1],
     input logic [ARCH_REG_BITS-1:0] rs2_arch [0:PIPE_WIDTH-1],
+    input logic [ARCH_REG_BITS-1:0] rs3_arch [0:PIPE_WIDTH-1],
     output logic [PHYS_REG_BITS-1:0] rs1_phys [0:PIPE_WIDTH-1],
     output logic [PHYS_REG_BITS-1:0] rs2_phys [0:PIPE_WIDTH-1],
+    output logic [PHYS_REG_BITS-1:0] rs3_phys [0:PIPE_WIDTH-1],
 
     // 6-wide destination write (rename result)
     input logic [PIPE_WIDTH-1:0] wr_en,
@@ -58,7 +62,7 @@ module rat
     logic [PHYS_REG_BITS-1:0] ckpt_table [0:NUM_CHECKPOINTS-1][0:31];
 
     // -------------------------------------------------------------------------
-    // Intra-group bypass for rs1, rs2, and old_phys
+    // Intra-group bypass for rs1, rs2, rs3, and old_phys
     //
     // For slot i, start with the table value, then check slots 0..i-1.
     // The latest matching write (highest j < i) wins.
@@ -68,6 +72,7 @@ module rat
             // Base table lookup
             rs1_phys[i] = rat_table[rs1_arch[i]];
             rs2_phys[i] = rat_table[rs2_arch[i]];
+            rs3_phys[i] = rat_table[rs3_arch[i]];
             old_phys[i] = rat_table[wr_arch[i]];
 
             // Scan earlier slots for bypass
@@ -77,6 +82,9 @@ module rat
                 end
                 if (wr_en[j] && (wr_arch[j] == rs2_arch[i])) begin
                     rs2_phys[i] = wr_phys[j];
+                end
+                if (wr_en[j] && (wr_arch[j] == rs3_arch[i])) begin
+                    rs3_phys[i] = wr_phys[j];
                 end
                 if (wr_en[j] && (wr_arch[j] == wr_arch[i])) begin
                     old_phys[i] = wr_phys[j];
@@ -102,7 +110,8 @@ module rat
                 rat_table[i] <= committed_rat[i];
             end
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (commit_wr_en[i] && (commit_arch[i] != '0)) begin
+                if (commit_wr_en[i] &&
+                    (!PROTECT_ZERO || (commit_arch[i] != '0))) begin
                     rat_table[commit_arch[i]] <= commit_phys[i];
                 end
             end
@@ -116,7 +125,8 @@ module rat
         end else begin
             // Normal rename writes, guard x0
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (wr_en[i] && (wr_arch[i] != '0)) begin
+                if (wr_en[i] &&
+                    (!PROTECT_ZERO || (wr_arch[i] != '0))) begin
                     rat_table[wr_arch[i]] <= wr_phys[i];
                 end
             end
@@ -134,7 +144,8 @@ module rat
             end
         end else begin
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (commit_wr_en[i] && (commit_arch[i] != '0)) begin
+                if (commit_wr_en[i] &&
+                    (!PROTECT_ZERO || (commit_arch[i] != '0))) begin
                     committed_rat[commit_arch[i]] <= commit_phys[i];
                 end
             end
@@ -157,7 +168,8 @@ module rat
             end
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if ((3'(i) < ckpt_save_slot) &&
-                    wr_en[i] && (wr_arch[i] != '0)) begin
+                    wr_en[i] &&
+                    (!PROTECT_ZERO || (wr_arch[i] != '0))) begin
                     ckpt_table[ckpt_save_id][wr_arch[i]] <= wr_phys[i];
                 end
             end

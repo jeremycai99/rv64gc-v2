@@ -6,7 +6,10 @@
 */
 module free_list
     import rv64gc_pkg::*;
-(
+#(
+    parameter int PRF_DEPTH = INT_PRF_DEPTH,
+    parameter bit PROTECT_ZERO = 1'b1
+)(
     input logic clk,
     input logic rst_n,
 
@@ -22,6 +25,7 @@ module free_list
 
     // Commit pdst (new dest preg, to mark in-use in committed bitmap)
     input logic [PIPE_WIDTH-1:0]          commit_wr_valid,
+    input logic [ARCH_REG_BITS-1:0]       commit_arch [0:PIPE_WIDTH-1],
     input logic [PHYS_REG_BITS-1:0]       commit_pdst [0:PIPE_WIDTH-1],
 
     // Checkpoint save
@@ -38,23 +42,25 @@ module free_list
     // -------------------------------------------------------------------------
     // Free bitmap: bit i = 1 means physical register i is free
     // -------------------------------------------------------------------------
-    logic [INT_PRF_DEPTH-1:0] free_bitmap;
+    logic [PRF_DEPTH-1:0] free_bitmap;
 
     // Initial state constant: regs 0-31 in use, 32-255 free
-    localparam logic [INT_PRF_DEPTH-1:0] INIT_BITMAP = {{(INT_PRF_DEPTH - ARCH_REGS){1'b1}}, {ARCH_REGS{1'b0}}};
+    localparam logic [PRF_DEPTH-1:0] INIT_BITMAP =
+        {{(PRF_DEPTH - ARCH_REGS){1'b1}}, {ARCH_REGS{1'b0}}};
 
     // -------------------------------------------------------------------------
     // Committed free bitmap: tracks which pregs are free in the committed
     // architectural state.  Updated on every commit cycle.
     // On full flush the speculative bitmap is restored from this.
     // -------------------------------------------------------------------------
-    logic [INT_PRF_DEPTH-1:0] committed_bitmap;
+    logic [PRF_DEPTH-1:0] committed_bitmap;
+    logic [PHYS_REG_BITS-1:0] committed_map [0:ARCH_REGS-1];
 
     // -------------------------------------------------------------------------
     // Checkpoint storage
     // -------------------------------------------------------------------------
-    logic [INT_PRF_DEPTH-1:0] ckpt_bitmap [0:NUM_CHECKPOINTS-1];
-    logic [INT_PRF_DEPTH-1:0] ckpt_committed_bitmap [0:NUM_CHECKPOINTS-1];
+    logic [PRF_DEPTH-1:0] ckpt_bitmap [0:NUM_CHECKPOINTS-1];
+    logic [PRF_DEPTH-1:0] ckpt_committed_bitmap [0:NUM_CHECKPOINTS-1];
 
     // -------------------------------------------------------------------------
     // Cascading priority encoder for allocation
@@ -62,7 +68,7 @@ module free_list
     // Each stage finds the lowest set bit in a working bitmap, records it,
     // then clears that bit for the next stage.
     // -------------------------------------------------------------------------
-    logic [INT_PRF_DEPTH-1:0] work_bitmap [0:PIPE_WIDTH];
+    logic [PRF_DEPTH-1:0] work_bitmap [0:PIPE_WIDTH];
     logic [PHYS_REG_BITS-1:0] found_idx [0:PIPE_WIDTH-1];
     logic found_valid [0:PIPE_WIDTH-1];
 
@@ -80,7 +86,7 @@ module free_list
             if (work_bitmap[i] != '0) begin
                 found_valid[i] = 1'b1;
                 found_idx[i]   = '0;
-                for (int b = 0; b < INT_PRF_DEPTH; b++) begin
+                for (int b = 0; b < PRF_DEPTH; b++) begin
                     if (work_bitmap[i][b]) begin
                         found_idx[i] = PHYS_REG_BITS'(b);
                         break;
@@ -90,24 +96,44 @@ module free_list
 
             // Clear the found bit for the next stage
             if (found_valid[i]) begin
-                work_bitmap[i+1] = work_bitmap[i] & ~(INT_PRF_DEPTH'(1) << found_idx[i]);
+                work_bitmap[i+1] = work_bitmap[i] & ~(PRF_DEPTH'(1) << found_idx[i]);
             end else begin
                 work_bitmap[i+1] = work_bitmap[i];
             end
         end
     end
 
-    logic [INT_PRF_DEPTH-1:0] committed_bitmap_next;
-    logic [INT_PRF_DEPTH-1:0] ckpt_save_bitmap_next;
+    logic [PHYS_REG_BITS-1:0] committed_map_next [0:ARCH_REGS-1];
+    logic [PIPE_WIDTH-1:0] commit_release_valid;
+    logic [PHYS_REG_BITS-1:0] commit_release_preg [0:PIPE_WIDTH-1];
+    logic [PRF_DEPTH-1:0] committed_bitmap_next;
+    logic [PRF_DEPTH-1:0] ckpt_save_bitmap_next;
 
     always_comb begin
-        committed_bitmap_next = committed_bitmap;
+        for (int a = 0; a < ARCH_REGS; a++) begin
+            committed_map_next[a] = committed_map[a];
+        end
+        commit_release_valid = '0;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
-                committed_bitmap_next[release_preg[i]] = 1'b1;
+            commit_release_preg[i] = '0;
+        end
+
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if (commit_wr_valid[i] &&
+                (!PROTECT_ZERO || (commit_arch[i] != '0))) begin
+                commit_release_valid[i] = 1'b1;
+                commit_release_preg[i] = committed_map_next[commit_arch[i]];
+                committed_map_next[commit_arch[i]] = commit_pdst[i];
             end
-            if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
-                committed_bitmap_next[commit_pdst[i]] = 1'b0;
+        end
+
+        committed_bitmap_next = '1;
+        if (PROTECT_ZERO) begin
+            committed_bitmap_next[0] = 1'b0;
+        end
+        for (int a = 0; a < ARCH_REGS; a++) begin
+            if (!PROTECT_ZERO || (committed_map_next[a] != '0)) begin
+                committed_bitmap_next[committed_map_next[a]] = 1'b0;
             end
         end
     end
@@ -120,10 +146,12 @@ module free_list
             end
         end
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
+            if ((3'(i) < release_count) &&
+                (!PROTECT_ZERO || (release_preg[i] != '0))) begin
                 ckpt_save_bitmap_next[release_preg[i]] = 1'b1;
             end
-            if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
+            if (commit_wr_valid[i] &&
+                (!PROTECT_ZERO || (commit_pdst[i] != '0))) begin
                 ckpt_save_bitmap_next[commit_pdst[i]] = 1'b0;
             end
         end
@@ -131,7 +159,7 @@ module free_list
 
     always_comb begin
         free_count = '0;
-        for (int b = 0; b < INT_PRF_DEPTH; b++) begin
+        for (int b = 0; b < PRF_DEPTH; b++) begin
             if (free_bitmap[b]) begin
                 free_count = free_count + {{PHYS_REG_BITS{1'b0}}, 1'b1};
             end
@@ -180,8 +208,8 @@ module free_list
             stat_release_count <= 0;
             stat_flush_count   <= 0;
             stat_commit_count  <= 0;
-            stat_free_min      <= INT_PRF_DEPTH;
-            stat_committed_min <= INT_PRF_DEPTH;
+            stat_free_min      <= PRF_DEPTH;
+            stat_committed_min <= PRF_DEPTH;
         end else begin
             leak_cyc <= leak_cyc + 1;
 
@@ -189,7 +217,8 @@ module free_list
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (found_valid[i] && (3'(i) < alloc_req_count))
                     stat_alloc_count   <= stat_alloc_count + 1;
-                if ((3'(i) < release_count) && (release_preg[i] != '0))
+                if ((3'(i) < release_count) &&
+                    (!PROTECT_ZERO || (release_preg[i] != '0)))
                     stat_release_count <= stat_release_count + 1;
                 if (commit_wr_valid[i] && (commit_pdst[i] != '0))
                     stat_commit_count  <= stat_commit_count + 1;
@@ -200,7 +229,7 @@ module free_list
             if (stat_dump_en && ((leak_cyc % 10000) == 9999)) begin
                 stat_free_now      = 0;
                 stat_committed_now = 0;
-                for (int b = 0; b < INT_PRF_DEPTH; b++) begin
+                for (int b = 0; b < PRF_DEPTH; b++) begin
                     if (free_bitmap[b])      stat_free_now      = stat_free_now + 1;
                     if (committed_bitmap[b]) stat_committed_now = stat_committed_now + 1;
                 end
@@ -222,9 +251,9 @@ module free_list
         $display("Total commits:  %0d", stat_commit_count);
         $display("Total flushes:  %0d", stat_flush_count);
         $display("Min free_bitmap popcount (samples): %0d (of %0d)",
-            stat_free_min, INT_PRF_DEPTH);
+            stat_free_min, PRF_DEPTH);
         $display("Min committed_bitmap popcount (samples): %0d (expected: %0d)",
-            stat_committed_min, INT_PRF_DEPTH - ARCH_REGS);
+            stat_committed_min, PRF_DEPTH - ARCH_REGS);
     end
 `endif
 
@@ -244,8 +273,8 @@ module free_list
             free_bitmap <= committed_bitmap_next;
 `ifdef SIMULATION
             if (trace_leak_en)
-                $display("[FL_FREE_FLUSH] cyc=%0d restore<=committed_bitmap  rel_cnt=%0d  +same_cycle_apply",
-                    leak_cyc, release_count);
+                $display("[FL_FREE_FLUSH] cyc=%0d restore<=committed_bitmap +same_cycle_apply",
+                    leak_cyc);
 `endif
         end else if (ckpt_restore) begin
             free_bitmap <= ckpt_bitmap[ckpt_restore_id] |
@@ -266,12 +295,14 @@ module free_list
 `endif
                 end
                 // Releases: set bits back to free (never release p0)
-                if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
+                if ((3'(i) < release_count) &&
+                    (!PROTECT_ZERO || (release_preg[i] != '0))) begin
                     free_bitmap[release_preg[i]] <= 1'b1;
 `ifdef SIMULATION
                     if (trace_leak_en)
                         $display("[FL_FREE_REL] cyc=%0d slot=%0d pdst=%0d was=%0b flush=0 cmt_wr=%0b cmt_pdst=%0d rel_cnt=%0d",
-                            leak_cyc, i, release_preg[i], free_bitmap[release_preg[i]],
+                            leak_cyc, i, release_preg[i],
+                            free_bitmap[release_preg[i]],
                             commit_wr_valid[i], commit_pdst[i], release_count);
 `endif
                 end
@@ -285,20 +316,29 @@ module free_list
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             committed_bitmap <= INIT_BITMAP;
+            for (int a = 0; a < ARCH_REGS; a++) begin
+                committed_map[a] <= PHYS_REG_BITS'(a);
+            end
         end else begin
             committed_bitmap <= committed_bitmap_next;
+            for (int a = 0; a < ARCH_REGS; a++) begin
+                committed_map[a] <= committed_map_next[a];
+            end
 `ifdef SIMULATION
             if (trace_leak_en) begin
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
-                    if ((3'(i) < release_count) && (release_preg[i] != '0)) begin
-                        $display("[CB_REL] cyc=%0d slot=%0d pdst=%0d was=%0b cmt_wr=%0b cmt_pdst=%0d rel_cnt=%0d",
-                            leak_cyc, i, release_preg[i], committed_bitmap[release_preg[i]],
-                            commit_wr_valid[i], commit_pdst[i], release_count);
+                    if (commit_release_valid[i] &&
+                        (!PROTECT_ZERO || (commit_release_preg[i] != '0))) begin
+                        $display("[CB_REL] cyc=%0d slot=%0d pdst=%0d was=%0b cmt_wr=%0b cmt_pdst=%0d",
+                            leak_cyc, i, commit_release_preg[i],
+                            committed_bitmap[commit_release_preg[i]],
+                            commit_wr_valid[i], commit_pdst[i]);
                     end
-                    if (commit_wr_valid[i] && (commit_pdst[i] != '0)) begin
-                        $display("[CB_CMT] cyc=%0d slot=%0d pdst=%0d was=%0b rel=%0d rel_cnt=%0d",
+                    if (commit_wr_valid[i] &&
+                        (!PROTECT_ZERO || (commit_pdst[i] != '0))) begin
+                        $display("[CB_CMT] cyc=%0d slot=%0d pdst=%0d was=%0b rel=%0d",
                             leak_cyc, i, commit_pdst[i], committed_bitmap[commit_pdst[i]],
-                            release_preg[i], release_count);
+                            commit_release_preg[i]);
                     end
                 end
             end

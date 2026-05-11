@@ -23,6 +23,9 @@ module csr_file
     input  logic [11:0] write_addr,
     input  logic [63:0] write_data,
     input  logic [1:0]  write_op,       // csr_op_e: 0=RW, 1=RS, 2=RC
+    input  logic        fflags_acc_valid_i,
+    input  logic [4:0]  fflags_acc_bits_i,
+    input  logic        fp_state_dirty_i,
 
     // Trap interface (from commit)
     input  logic        trap_valid,
@@ -41,6 +44,7 @@ module csr_file
     output logic [63:0] mepc,
     output logic [63:0] sepc,
     output logic [1:0]  priv_mode,
+    output logic [2:0]  frm_out,
 
     // Interrupt outputs
     output logic        irq_pending,
@@ -75,12 +79,13 @@ module csr_file
         (64'h3 << 13) | (64'h1 << 8)  | (64'h1 << 6)  | (64'h1 << 5)  |
         (64'h1 << 1);
 
-    // misa: RV64IMAFDC + S + U
+    // misa: implemented Stage 3 contract, RV64G(C) + S + U.
     localparam logic [63:0] MISA_VAL =
         (64'h2 << 62)  |   // MXL = 2 (RV64)
         (64'h1 << 0)   |   // A – Atomics
-        (64'h1 << 3)   |   // D – Double FP
-        (64'h1 << 5)   |   // F – Single FP
+        (64'h1 << 2)   |   // C – Compressed
+        (64'h1 << 3)   |   // D – Double-precision FP
+        (64'h1 << 5)   |   // F – Single-precision FP
         (64'h1 << 8)   |   // I – Integer
         (64'h1 << 12)  |   // M – Multiply
         (64'h1 << 18)  |   // S – Supervisor
@@ -126,6 +131,7 @@ module csr_file
     assign mepc        = mepc_r;
     assign sepc        = sepc_r;
     assign priv_mode   = priv_r;
+    assign frm_out     = frm_r;
     assign satp        = satp_r;
     assign mcycle_val  = mcycle_r;
     assign minstret_val= minstret_r;
@@ -433,8 +439,13 @@ module csr_file
                 priv_r        <= mstatus_r[8] ? PRIV_S : PRIV_U;
                 mstatus_r[17] <= 1'b0;                        // clear MPRV
                 mstatus_r[8]  <= 1'b0;                        // SPP = U
-            end else if (write_valid) begin
-                case (write_addr)
+            end else begin
+                if (fp_state_dirty_i)
+                    mstatus_r[14:13] <= 2'b11;
+                if (fflags_acc_valid_i)
+                    fflags_r <= fflags_r | fflags_acc_bits_i;
+                if (write_valid) begin
+                    case (write_addr)
                     CSR_FFLAGS: begin
                         fflags_r        <= csr_op_fflags[4:0];
                         mstatus_r[14:13]<= 2'b11;
@@ -494,7 +505,8 @@ module csr_file
                     CSR_INSTRET:     minstret_r   <= ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((minstret_r) | (write_data)) : (write_op == 2'd2) ? ((minstret_r) & ~(write_data)) : (minstret_r));
                     // read-only: misa, mhartid, mvendorid, marchid, mimpid
                     default: ;
-                endcase
+                    endcase
+                end
             end
         end
     end

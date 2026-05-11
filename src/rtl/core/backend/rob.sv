@@ -16,6 +16,8 @@ module rob
     output logic [ROB_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],  // allocated ROB indices
     output logic                    alloc_ready,     // can accept alloc_count entries
     input  logic [PIPE_WIDTH-1:0]   alloc_ready_now, // entries complete at rename
+    input  logic [PIPE_WIDTH-1:0]   alloc_has_exception,
+    input  logic [3:0]              alloc_exc_code [0:PIPE_WIDTH-1],
     // Data to write at allocation time (per-entry fields)
     input  logic [63:0]             alloc_pc [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   alloc_is_branch,
@@ -31,6 +33,7 @@ module rob
     input  logic [PIPE_WIDTH-1:0]   alloc_is_ecall,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_wfi,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_fused,
+    input  logic [PIPE_WIDTH-1:0]   alloc_is_fp_instr,
     // Sub-classification of the head-stall "other" bucket
     // (perf-instr only; sim-only path uses these arrays).
     input  logic [PIPE_WIDTH-1:0]   alloc_is_mul,
@@ -53,6 +56,8 @@ module rob
     input  logic [11:0]                       wb_csr_addr [0:CDB_WIDTH-1],
     input  logic [63:0]                       wb_csr_wdata [0:CDB_WIDTH-1],
     input  logic [1:0]                        wb_csr_op [0:CDB_WIDTH-1],
+    input  logic [CDB_WIDTH-1:0]              wb_fp_fflags_valid,
+    input  logic [4:0]                        wb_fp_fflags [0:CDB_WIDTH-1],
 
     // STA sideband writeback (marks store ROB entry as ready, no data)
     input  logic                              sta_wb_valid,
@@ -106,6 +111,7 @@ module rob
     output logic [PIPE_WIDTH-1:0]             head_is_ecall,
     output logic [PIPE_WIDTH-1:0]             head_is_wfi,
     output logic [PIPE_WIDTH-1:0]             head_is_fused,
+    output logic [PIPE_WIDTH-1:0]             head_is_fp_instr,
     output logic [PIPE_WIDTH-1:0]             head_branch_taken,
     output logic [63:0]                       head_branch_target [0:PIPE_WIDTH-1],
     output logic [63:0]                       head_branch_taken_target [0:PIPE_WIDTH-1],
@@ -114,6 +120,7 @@ module rob
     output logic [63:0]                       head_csr_wdata [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_csr_we,
     output logic [1:0]                        head_csr_op [0:PIPE_WIDTH-1],
+    output logic [4:0]                        head_fp_fflags [0:PIPE_WIDTH-1],
 
     // Commit acknowledgment: advance head pointer
     input  logic [2:0]              commit_count,    // 0..6 entries committed this cycle
@@ -220,6 +227,7 @@ module rob
     reg [ROB_DEPTH-1:0]          is_ecall_r;
     reg [ROB_DEPTH-1:0]          is_wfi_r;
     reg [ROB_DEPTH-1:0]          is_fused_r;
+    reg [ROB_DEPTH-1:0]          is_fp_instr_r;
     // Per-uop FU-type tags used only by SIMULATION head-stall
     // sub-classification (decompose the "other" bucket into
     // mul/div/csr/bru/unknown).  Not used by functional logic.
@@ -234,6 +242,7 @@ module rob
     reg [64*ROB_DEPTH-1:0]       csr_wdata_packed;
     reg [ROB_DEPTH-1:0]          csr_we_r;
     reg [1:0]                    csr_op_r [0:ROB_DEPTH-1];
+    reg [5*ROB_DEPTH-1:0]        fp_fflags_packed;
 
     // Same-cycle ready bypass into commit for simple writebacks.
     //
@@ -502,6 +511,7 @@ module rob
             head_is_ecall[i]         = is_ecall_r[head_idx_w[i]];
             head_is_wfi[i]           = is_wfi_r[head_idx_w[i]];
             head_is_fused[i]         = is_fused_r[head_idx_w[i]];
+            head_is_fp_instr[i]      = is_fp_instr_r[head_idx_w[i]];
             head_branch_taken[i]     = branch_taken_r[head_idx_w[i]];
             head_branch_target[i]    = branch_target_packed[head_idx_w[i]*64 +: 64];
             head_branch_taken_target[i] =
@@ -511,6 +521,7 @@ module rob
             head_csr_wdata[i]        = csr_wdata_packed[head_idx_w[i]*64 +: 64];
             head_csr_we[i]           = csr_we_r[head_idx_w[i]];
             head_csr_op[i]           = csr_op_r[head_idx_w[i]];
+            head_fp_fflags[i]        = fp_fflags_packed[head_idx_w[i]*5 +: 5];
         end
     end
 
@@ -605,6 +616,7 @@ module rob
             is_ecall_r       <= '0;
             is_wfi_r         <= '0;
             is_fused_r       <= '0;
+            is_fp_instr_r    <= '0;
             is_mul_r         <= '0;
             is_div_r         <= '0;
             is_bru_r         <= '0;
@@ -612,6 +624,7 @@ module rob
             branch_mispredict_r  <= '0;
             csr_we_r             <= '0;
             for (int i = 0; i < ROB_DEPTH; i++) csr_op_r[i] <= 2'd0;
+            fp_fflags_packed     <= '0;
             /* verilator lint_off WIDTHCONCAT */
             pc_packed            <= '0;
             exc_code_packed      <= '0;
@@ -619,6 +632,7 @@ module rob
             branch_taken_target_packed <= '0;
             csr_addr_packed      <= '0;
             csr_wdata_packed     <= '0;
+            fp_fflags_packed     <= '0;
             /* verilator lint_on WIDTHCONCAT */
         end else if (flush_valid && flush_full) begin
             head_r   <= '0;
@@ -642,6 +656,7 @@ module rob
             is_ecall_r       <= '0;
             is_wfi_r         <= '0;
             is_fused_r       <= '0;
+            is_fp_instr_r    <= '0;
             is_mul_r         <= '0;
             is_div_r         <= '0;
             is_bru_r         <= '0;
@@ -669,6 +684,7 @@ module rob
                     is_ecall_r[i]      <= 1'b0;
                     is_wfi_r[i]        <= 1'b0;
                     is_fused_r[i]      <= 1'b0;
+                    is_fp_instr_r[i]   <= 1'b0;
                     is_mul_r[i]        <= 1'b0;
                     is_div_r[i]        <= 1'b0;
                     is_bru_r[i]        <= 1'b0;
@@ -677,6 +693,7 @@ module rob
                     branch_mispredict_r[i] <= 1'b0;
                     csr_we_r[i]            <= 1'b0;
                     csr_op_r[i]            <= 2'd0;
+                    fp_fflags_packed[i*5 +: 5] <= 5'd0;
                 end
             end
             tail_r <= flush_rob_tail;
@@ -700,9 +717,11 @@ module rob
                     is_ecall_r[head_idx_w[i]]   <= 1'b0;
                     is_wfi_r[head_idx_w[i]]     <= 1'b0;
                     is_fused_r[head_idx_w[i]]   <= 1'b0;
+                    is_fp_instr_r[head_idx_w[i]] <= 1'b0;
                     is_mul_r[head_idx_w[i]]     <= 1'b0;
                     is_div_r[head_idx_w[i]]     <= 1'b0;
                     is_bru_r[head_idx_w[i]]     <= 1'b0;
+                    fp_fflags_packed[head_idx_w[i]*5 +: 5] <= 5'd0;
                 end
             end
             if (commit_count > 0)
@@ -738,6 +757,11 @@ module rob
                     csr_addr_packed[wb_idx[i]*12 +: 12]     <= wb_csr_addr[i];
                     csr_wdata_packed[wb_idx[i]*64 +: 64]    <= wb_csr_wdata[i];
                     csr_op_r[wb_idx[i]]                     <= wb_csr_op[i];
+                    if (wb_fp_fflags_valid[i]) begin
+                        fp_fflags_packed[wb_idx[i]*5 +: 5] <=
+                            fp_fflags_packed[wb_idx[i]*5 +: 5] |
+                            wb_fp_fflags[i];
+                    end
                 end
             end
 
@@ -789,8 +813,8 @@ module rob
                     store_addr_done_r[ai_w[i]] <= 1'b0;
                     store_data_done_r[ai_w[i]] <= 1'b0;
                     pc_packed[ai_w[i]*64 +: 64]       <= alloc_pc[i];
-                    has_exc_r[ai_w[i]]                <= 1'b0;
-                    exc_code_packed[ai_w[i]*4 +: 4]   <= 4'd0;
+                    has_exc_r[ai_w[i]]                <= alloc_has_exception[i];
+                    exc_code_packed[ai_w[i]*4 +: 4]   <= alloc_exc_code[i];
                     is_branch_r[ai_w[i]]      <= alloc_is_branch[i];
                     bpu_type_r[ai_w[i]]       <= alloc_bpu_type[i];
                     is_store_r[ai_w[i]]       <= alloc_is_store[i];
@@ -804,6 +828,7 @@ module rob
                     is_ecall_r[ai_w[i]]       <= alloc_is_ecall[i];
                     is_wfi_r[ai_w[i]]         <= alloc_is_wfi[i];
                     is_fused_r[ai_w[i]]       <= alloc_is_fused[i];
+                    is_fp_instr_r[ai_w[i]]    <= alloc_is_fp_instr[i];
                     is_mul_r[ai_w[i]]         <= alloc_is_mul[i];
                     is_div_r[ai_w[i]]         <= alloc_is_div[i];
                     is_bru_r[ai_w[i]]         <= alloc_is_bru[i];
@@ -815,6 +840,7 @@ module rob
                     csr_addr_packed[ai_w[i]*12 +: 12]   <= 12'd0;
                     csr_wdata_packed[ai_w[i]*64 +: 64]  <= 64'd0;
                     csr_op_r[ai_w[i]]             <= 2'd0;
+                    fp_fflags_packed[ai_w[i]*5 +: 5] <= 5'd0;
                 end
             end
             if (alloc_count > 0)
@@ -844,6 +870,11 @@ module rob
                     csr_addr_packed[wb_idx[i]*12 +: 12]     <= wb_csr_addr[i];
                     csr_wdata_packed[wb_idx[i]*64 +: 64]    <= wb_csr_wdata[i];
                     csr_op_r[wb_idx[i]]                     <= wb_csr_op[i];
+                    if (wb_fp_fflags_valid[i]) begin
+                        fp_fflags_packed[wb_idx[i]*5 +: 5] <=
+                            fp_fflags_packed[wb_idx[i]*5 +: 5] |
+                            wb_fp_fflags[i];
+                    end
                 end
             end
 
@@ -929,9 +960,11 @@ module rob
                     is_ecall_r[head_idx_w[i]]   <= 1'b0;
                     is_wfi_r[head_idx_w[i]]     <= 1'b0;
                     is_fused_r[head_idx_w[i]]   <= 1'b0;
+                    is_fp_instr_r[head_idx_w[i]] <= 1'b0;
                     is_mul_r[head_idx_w[i]]     <= 1'b0;
                     is_div_r[head_idx_w[i]]     <= 1'b0;
                     is_bru_r[head_idx_w[i]]     <= 1'b0;
+                    fp_fflags_packed[head_idx_w[i]*5 +: 5] <= 5'd0;
                 end
             end
             if (commit_count > 0)

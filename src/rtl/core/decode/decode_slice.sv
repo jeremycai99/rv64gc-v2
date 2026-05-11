@@ -7,6 +7,7 @@
 module decode_slice
     import rv64gc_pkg::*;
     import isa_pkg::*;
+    import fpu_pkg::*;
     import uarch_pkg::*;
 (
     input  logic [31:0]   insn,
@@ -23,7 +24,9 @@ module decode_slice
     wire [2:0]  funct3  = insn[14:12];
     wire [4:0]  rs1_f   = insn[19:15];
     wire [4:0]  rs2_f   = insn[24:20];
+    wire [4:0]  rs3_f   = insn[31:27];
     wire [6:0]  funct7  = insn[31:25];
+    wire [1:0]  fp_fmt2_f = insn[26:25];
     wire [11:0] funct12 = insn[31:20];
 
     // ---------------------------------------------------------------
@@ -47,9 +50,11 @@ module decode_slice
         decoded.insn           = insn;
         decoded.rs1_arch       = rs1_f;
         decoded.rs2_arch       = rs2_f;
+        decoded.rs3_arch       = rs3_f;
         decoded.rd_arch        = rd_f;
         decoded.rs1_valid      = 1'b0;
         decoded.rs2_valid      = 1'b0;
+        decoded.rs3_valid      = 1'b0;
         decoded.rd_valid       = 1'b0;
         decoded.imm            = 64'd0;
         decoded.fu_type        = FU_ALU;
@@ -83,6 +88,20 @@ module decode_slice
         decoded.amo_op         = 5'd0;
         decoded.amo_aq         = 1'b0;
         decoded.amo_rl         = 1'b0;
+        decoded.is_fp_op       = 1'b0;
+        decoded.rs1_is_fp      = 1'b0;
+        decoded.rs2_is_fp      = 1'b0;
+        decoded.rs3_is_fp      = 1'b0;
+        decoded.rd_is_fp       = 1'b0;
+        decoded.fp_fmt         = FP_FMT_D;
+        decoded.fp_dst_fmt     = FP_FMT_D;
+        decoded.fp_int_fmt     = FP_INT_FMT_64;
+        decoded.fp_rm          = FP_RM_RNE;
+        decoded.fp_pipe        = FPU_PIPE_MISC;
+        decoded.fp_op          = FPU_OP_NONE;
+        decoded.fp_op_mod      = 1'b0;
+        decoded.fp_misc_op     = FP_MISC_SGNJ;
+        decoded.fmv_op         = FMV_D_FROM_X;
         decoded.is_rvc         = is_rvc;
         decoded.bp_taken       = 1'b0;
         decoded.bp_target      = 64'd0;
@@ -233,21 +252,12 @@ module decode_slice
                     end
                 endcase
                 if (!decoded.has_exception) begin
-                    if (insn[31:27] == AMO_LR) begin
-                        decoded.fu_type   = FU_LOAD;
-                        decoded.rs1_valid = 1'b1;
-                        decoded.rd_valid  = 1'b1;
-                        decoded.is_load   = 1'b1;
-                        decoded.rs2_valid = 1'b0;
-                        decoded.is_amo    = 1'b1;
-                    end else begin
-                        decoded.fu_type   = FU_STA;
-                        decoded.rs1_valid = 1'b1;
-                        decoded.rs2_valid = 1'b1;
-                        decoded.rd_valid  = 1'b1;
-                        decoded.is_store  = 1'b1;
-                        decoded.is_amo    = 1'b1;
-                    end
+                    decoded.fu_type   = FU_LOAD;
+                    decoded.rs1_valid = 1'b1;
+                    decoded.rs2_valid = (insn[31:27] != AMO_LR);
+                    decoded.rd_valid  = 1'b1;
+                    decoded.is_load   = 1'b1;
+                    decoded.is_amo    = 1'b1;
                 end
             end
 
@@ -258,12 +268,22 @@ module decode_slice
                 decoded.fu_type   = FU_LOAD;
                 decoded.rs1_valid = 1'b1;
                 decoded.rd_valid  = 1'b1;
+                decoded.rd_is_fp   = 1'b1;
                 decoded.is_load   = 1'b1;
                 decoded.imm       = imm_i;
                 decoded.use_imm   = 1'b1;
                 case (funct3)
-                    F3_LW:   decoded.mem_size = MEM_WORD;
-                    F3_LD:   decoded.mem_size = MEM_DWORD;
+                    F3_LW: begin
+                        decoded.mem_size   = MEM_WORD;
+                        decoded.is_unsigned = 1'b1;
+                        decoded.fp_fmt     = FP_FMT_S;
+                        decoded.fp_dst_fmt = FP_FMT_S;
+                    end
+                    F3_LD: begin
+                        decoded.mem_size   = MEM_DWORD;
+                        decoded.fp_fmt     = FP_FMT_D;
+                        decoded.fp_dst_fmt = FP_FMT_D;
+                    end
                     default: begin
                         decoded.has_exception = 1'b1;
                         decoded.exc_code      = EXC_ILLEGAL_INSN;
@@ -278,12 +298,21 @@ module decode_slice
                 decoded.fu_type   = FU_STA;
                 decoded.rs1_valid = 1'b1;
                 decoded.rs2_valid = 1'b1;
+                decoded.rs2_is_fp  = 1'b1;
                 decoded.is_store  = 1'b1;
                 decoded.imm       = imm_s;
                 decoded.use_imm   = 1'b1;
                 case (funct3)
-                    F3_SW:   decoded.mem_size = MEM_WORD;
-                    F3_SD:   decoded.mem_size = MEM_DWORD;
+                    F3_SW: begin
+                        decoded.mem_size   = MEM_WORD;
+                        decoded.fp_fmt     = FP_FMT_S;
+                        decoded.fp_dst_fmt = FP_FMT_S;
+                    end
+                    F3_SD: begin
+                        decoded.mem_size   = MEM_DWORD;
+                        decoded.fp_fmt     = FP_FMT_D;
+                        decoded.fp_dst_fmt = FP_FMT_D;
+                    end
                     default: begin
                         decoded.has_exception = 1'b1;
                         decoded.exc_code      = EXC_ILLEGAL_INSN;
@@ -699,12 +728,319 @@ module decode_slice
             end
 
             // =============================================================
-            // FP opcodes: pass through as illegal for now (FPU decode TBD)
+            // Floating point scalar instructions
             // =============================================================
-            OP_FP, OP_FMADD, OP_FMSUB, OP_FNMSUB, OP_FNMADD: begin
-                // FP instructions decoded as illegal until FPU decode is added
-                decoded.has_exception = 1'b1;
-                decoded.exc_code      = EXC_ILLEGAL_INSN;
+            OP_FP: begin
+                decoded.fu_type  = FU_ALU;
+                decoded.is_fp_op = 1'b1;
+                decoded.fp_rm    = fp_rm_e'(funct3);
+                case (funct7)
+                    F7_FADD_S, F7_FADD_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs2_valid  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rs2_is_fp  = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_FMA;
+                        decoded.fp_op      = FPU_OP_ADD;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FADD_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                    end
+                    F7_FSUB_S, F7_FSUB_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs2_valid  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rs2_is_fp  = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_FMA;
+                        decoded.fp_op      = FPU_OP_ADD;
+                        decoded.fp_op_mod  = 1'b1;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FSUB_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                    end
+                    F7_FMUL_S, F7_FMUL_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs2_valid  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rs2_is_fp  = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_FMA;
+                        decoded.fp_op      = FPU_OP_MUL;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FMUL_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                    end
+                    F7_FDIV_S, F7_FDIV_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs2_valid  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rs2_is_fp  = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_DIVSQRT;
+                        decoded.fp_op      = FPU_OP_DIV;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FDIV_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                    end
+                    F7_FSQRT_S, F7_FSQRT_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_DIVSQRT;
+                        decoded.fp_op      = FPU_OP_SQRT;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FSQRT_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                        if (rs2_f != FP_RS2_ZERO) begin
+                            decoded.has_exception = 1'b1;
+                            decoded.exc_code      = EXC_ILLEGAL_INSN;
+                        end
+                    end
+                    F7_FSGNJ_S, F7_FSGNJ_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs2_valid  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rs2_is_fp  = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_MISC;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FSGNJ_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                        decoded.fp_op      = FPU_OP_SGNJ;
+                        case (funct3)
+                            F3_FSGNJ:  decoded.fp_misc_op = FP_MISC_SGNJ;
+                            F3_FSGNJN: decoded.fp_misc_op = FP_MISC_SGNJN;
+                            F3_FSGNJX: decoded.fp_misc_op = FP_MISC_SGNJX;
+                            default: begin
+                                decoded.has_exception = 1'b1;
+                                decoded.exc_code      = EXC_ILLEGAL_INSN;
+                            end
+                        endcase
+                    end
+                    F7_FMINMAX_S, F7_FMINMAX_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs2_valid  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rs2_is_fp  = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_MISC;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FMINMAX_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                        decoded.fp_op      = FPU_OP_MINMAX;
+                        case (funct3)
+                            F3_FMIN: decoded.fp_misc_op = FP_MISC_MIN;
+                            F3_FMAX: decoded.fp_misc_op = FP_MISC_MAX;
+                            default: begin
+                                decoded.has_exception = 1'b1;
+                                decoded.exc_code      = EXC_ILLEGAL_INSN;
+                            end
+                        endcase
+                    end
+                    F7_FCMP_S, F7_FCMP_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs2_valid  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rs2_is_fp  = 1'b1;
+                        decoded.rd_is_fp   = 1'b0;
+                        decoded.fp_pipe    = FPU_PIPE_MISC;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FCMP_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                        decoded.fp_op      = FPU_OP_CMP;
+                        case (funct3)
+                            F3_FEQ: decoded.fp_misc_op = FP_MISC_EQ;
+                            F3_FLT: decoded.fp_misc_op = FP_MISC_LT;
+                            F3_FLE: decoded.fp_misc_op = FP_MISC_LE;
+                            default: begin
+                                decoded.has_exception = 1'b1;
+                                decoded.exc_code      = EXC_ILLEGAL_INSN;
+                            end
+                        endcase
+                    end
+                    F7_FMV_X_W, F7_FMV_X_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.fp_fmt     =
+                            (funct7 == F7_FMV_X_D) ? FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                        if ((rs2_f == FP_RS2_ZERO) &&
+                            (funct3 == F3_FMV)) begin
+                            decoded.rd_valid = 1'b1;
+                            decoded.fp_pipe  = FPU_PIPE_FMV;
+                            decoded.fmv_op   =
+                                (funct7 == F7_FMV_X_D) ?
+                                FMV_X_FROM_D : FMV_X_FROM_W;
+                        end else if ((rs2_f == FP_RS2_ZERO) &&
+                                     (funct3 == F3_FCLASS)) begin
+                            decoded.rd_valid  = 1'b1;
+                            decoded.fp_pipe   = FPU_PIPE_MISC;
+                            decoded.fp_op     = FPU_OP_CLASSIFY;
+                            decoded.fp_misc_op = FP_MISC_CLASS;
+                        end else begin
+                            decoded.has_exception = 1'b1;
+                            decoded.exc_code      = EXC_ILLEGAL_INSN;
+                        end
+                    end
+                    F7_FMV_W_X, F7_FMV_D_X: begin
+                        if ((rs2_f == FP_RS2_ZERO) &&
+                            (funct3 == F3_FMV)) begin
+                            decoded.rs1_valid = 1'b1;
+                            decoded.rd_valid  = 1'b1;
+                            decoded.rd_is_fp  = 1'b1;
+                            decoded.fp_pipe   = FPU_PIPE_FMV;
+                            decoded.fp_fmt    =
+                                (funct7 == F7_FMV_D_X) ?
+                                FP_FMT_D : FP_FMT_S;
+                            decoded.fp_dst_fmt = decoded.fp_fmt;
+                            decoded.fmv_op =
+                                (funct7 == F7_FMV_D_X) ?
+                                FMV_D_FROM_X : FMV_W_FROM_X;
+                        end else begin
+                            decoded.has_exception = 1'b1;
+                            decoded.exc_code      = EXC_ILLEGAL_INSN;
+                        end
+                    end
+                    F7_FCVT_S_D: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_CONV;
+                        decoded.fp_op      = FPU_OP_F2F;
+                        decoded.fp_fmt     = FP_FMT_D;
+                        decoded.fp_dst_fmt = FP_FMT_S;
+                        if (rs2_f != FP_RS2_D) begin
+                            decoded.has_exception = 1'b1;
+                            decoded.exc_code      = EXC_ILLEGAL_INSN;
+                        end
+                    end
+                    F7_FCVT_D_S: begin
+                        decoded.rs1_valid  = 1'b1;
+                        decoded.rs1_is_fp  = 1'b1;
+                        decoded.rd_valid   = 1'b1;
+                        decoded.rd_is_fp   = 1'b1;
+                        decoded.fp_pipe    = FPU_PIPE_CONV;
+                        decoded.fp_op      = FPU_OP_F2F;
+                        decoded.fp_fmt     = FP_FMT_S;
+                        decoded.fp_dst_fmt = FP_FMT_D;
+                        if (rs2_f != FP_RS2_S) begin
+                            decoded.has_exception = 1'b1;
+                            decoded.exc_code      = EXC_ILLEGAL_INSN;
+                        end
+                    end
+                    F7_FCVT_TO_INT_S, F7_FCVT_TO_INT_D: begin
+                        decoded.rs1_valid = 1'b1;
+                        decoded.rs1_is_fp = 1'b1;
+                        decoded.rd_valid  = 1'b1;
+                        decoded.rd_is_fp  = 1'b0;
+                        decoded.fp_pipe   = FPU_PIPE_CONV;
+                        decoded.fp_op     = FPU_OP_F2I;
+                        decoded.fp_fmt    =
+                            (funct7 == F7_FCVT_TO_INT_D) ?
+                            FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                        case (rs2_f)
+                            FP_RS2_W: decoded.fp_int_fmt = FP_INT_FMT_32;
+                            FP_RS2_WU: begin
+                                decoded.fp_int_fmt = FP_INT_FMT_32;
+                                decoded.fp_op_mod  = 1'b1;
+                            end
+                            FP_RS2_L: decoded.fp_int_fmt = FP_INT_FMT_64;
+                            FP_RS2_LU: begin
+                                decoded.fp_int_fmt = FP_INT_FMT_64;
+                                decoded.fp_op_mod  = 1'b1;
+                            end
+                            default: begin
+                                decoded.has_exception = 1'b1;
+                                decoded.exc_code      = EXC_ILLEGAL_INSN;
+                            end
+                        endcase
+                    end
+                    F7_FCVT_FROM_INT_S, F7_FCVT_FROM_INT_D: begin
+                        decoded.rs1_valid = 1'b1;
+                        decoded.rd_valid  = 1'b1;
+                        decoded.rd_is_fp  = 1'b1;
+                        decoded.fp_pipe   = FPU_PIPE_CONV;
+                        decoded.fp_op     = FPU_OP_I2F;
+                        decoded.fp_fmt    =
+                            (funct7 == F7_FCVT_FROM_INT_D) ?
+                            FP_FMT_D : FP_FMT_S;
+                        decoded.fp_dst_fmt = decoded.fp_fmt;
+                        case (rs2_f)
+                            FP_RS2_W: decoded.fp_int_fmt = FP_INT_FMT_32;
+                            FP_RS2_WU: begin
+                                decoded.fp_int_fmt = FP_INT_FMT_32;
+                                decoded.fp_op_mod  = 1'b1;
+                            end
+                            FP_RS2_L: decoded.fp_int_fmt = FP_INT_FMT_64;
+                            FP_RS2_LU: begin
+                                decoded.fp_int_fmt = FP_INT_FMT_64;
+                                decoded.fp_op_mod  = 1'b1;
+                            end
+                            default: begin
+                                decoded.has_exception = 1'b1;
+                                decoded.exc_code      = EXC_ILLEGAL_INSN;
+                            end
+                        endcase
+                    end
+                    default: begin
+                        decoded.has_exception = 1'b1;
+                        decoded.exc_code      = EXC_ILLEGAL_INSN;
+                    end
+                endcase
+            end
+
+            OP_FMADD, OP_FMSUB, OP_FNMSUB, OP_FNMADD: begin
+                decoded.fu_type   = FU_ALU;
+                decoded.is_fp_op  = 1'b1;
+                decoded.rs1_valid = 1'b1;
+                decoded.rs2_valid = 1'b1;
+                decoded.rs3_valid = 1'b1;
+                decoded.rd_valid  = 1'b1;
+                decoded.rs1_is_fp = 1'b1;
+                decoded.rs2_is_fp = 1'b1;
+                decoded.rs3_is_fp = 1'b1;
+                decoded.rd_is_fp  = 1'b1;
+                decoded.fp_pipe   = FPU_PIPE_FMA;
+                decoded.fp_rm     = fp_rm_e'(funct3);
+                case (fp_fmt2_f)
+                    2'b00: decoded.fp_fmt = FP_FMT_S;
+                    2'b01: decoded.fp_fmt = FP_FMT_D;
+                    default: begin
+                        decoded.has_exception = 1'b1;
+                        decoded.exc_code      = EXC_ILLEGAL_INSN;
+                    end
+                endcase
+                decoded.fp_dst_fmt = decoded.fp_fmt;
+                case (opcode)
+                    OP_FMADD: begin
+                        decoded.fp_op     = FPU_OP_FMADD;
+                        decoded.fp_op_mod = 1'b0;
+                    end
+                    OP_FMSUB: begin
+                        decoded.fp_op     = FPU_OP_FMADD;
+                        decoded.fp_op_mod = 1'b1;
+                    end
+                    OP_FNMSUB: begin
+                        decoded.fp_op     = FPU_OP_FNMSUB;
+                        decoded.fp_op_mod = 1'b0;
+                    end
+                    default: begin
+                        decoded.fp_op     = FPU_OP_FNMSUB;
+                        decoded.fp_op_mod = 1'b1;
+                    end
+                endcase
             end
 
             // =============================================================
@@ -719,7 +1055,7 @@ module decode_slice
         // ---------------------------------------------------------------
         // rd == x0 suppression (writes to x0 are discarded)
         // ---------------------------------------------------------------
-        if (rd_f == 5'd0)
+        if ((rd_f == 5'd0) && !decoded.rd_is_fp)
             decoded.rd_valid = 1'b0;
 
         // Phantom-release fix: stores/branches have bits[11:7]=imm[4:0];

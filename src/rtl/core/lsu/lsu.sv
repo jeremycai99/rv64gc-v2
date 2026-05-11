@@ -9,6 +9,7 @@
 
 module lsu
     import rv64gc_pkg::*;
+    import isa_pkg::*;
     import uarch_pkg::*;
 (
     input logic clk,
@@ -25,6 +26,7 @@ module lsu
 
     // PRF read data (from regfile)
     input logic [63:0] load_rs1 [0:1],
+    input logic [63:0] load_rs2 [0:1],
     input logic [63:0] sta_rs1,
     input logic [63:0] std_rs2,
 
@@ -33,6 +35,7 @@ module lsu
     output logic [ROB_IDX_BITS-1:0] load_wb_rob_idx [0:1],
     output logic [PHYS_REG_BITS-1:0] load_wb_pdst [0:1],
     output logic [63:0] load_wb_data [0:1],
+    output mem_size_e load_wb_mem_size [0:1],
     output logic [1:0] load_wb_has_exception,
     output logic [3:0] load_wb_exc_code [0:1],
 
@@ -137,6 +140,28 @@ module lsu
     logic            mmio_load0_launch;
     logic            mmio_load1_launch;
     logic            mmio_load_wb_fire;
+    logic            lmb_any_valid;
+    logic            amo_busy;
+    logic            amo_issue_fire;
+    logic            amo_load_issue_fire;
+    logic            amo_sc_issue_fire;
+    logic            amo_load_hit_fire;
+    logic            amo_load_fill_fire;
+    logic            amo_store_ack_fire;
+    logic            amo_serial_block;
+    logic            amo_wait_load_r;
+    logic            amo_store_valid_r;
+    logic            amo_wb_valid_r;
+    iq_entry_t       amo_data_r;
+    logic [63:0]     amo_addr_r;
+    logic [63:0]     amo_rs2_r;
+    logic [63:0]     amo_old_value_r;
+    logic [63:0]     amo_store_data_r;
+    logic [7:0]      amo_store_mask_r;
+    logic [ROB_IDX_BITS-1:0]  amo_wb_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] amo_wb_pdst_r;
+    logic [LQ_IDX_BITS-1:0]   amo_wb_lq_idx_r;
+    logic [63:0]              amo_wb_data_r;
 
     // =========================================================================
     // Load AGU: effective address computation (x2)
@@ -672,6 +697,7 @@ module lsu
             load_eff_addr_r[1]    <= p1_eff_addr;
             load_nocache_r[0]     <= load_issue_valid[0] &
                                      (load_addr_misaligned[0] | load_addr_mmio[0] |
+                                      load_issue_data[0].is_amo |
                                       p0_fwd_hit |
                                       sq_fwd_partial | flush_in.valid);
             load_nocache_r[1]     <= p1_eff_valid & p1_eff_nocache;
@@ -813,10 +839,18 @@ module lsu
         ((csb_deq_addr >= UART_BASE) &&
          (csb_deq_addr < (UART_BASE + UART_SIZE)));
 
-    assign dcache_store_req_valid     = csb_deq_valid & ~csb_deq_mmio;
-    assign dcache_store_req_addr      = csb_deq_addr;
-    assign dcache_store_req_data      = csb_deq_data;
-    assign dcache_store_req_byte_mask = csb_deq_byte_mask;
+    assign dcache_store_req_valid     = amo_store_valid_r
+                                      ? 1'b1
+                                      : (csb_deq_valid & ~csb_deq_mmio);
+    assign dcache_store_req_addr      = amo_store_valid_r
+                                      ? amo_addr_r
+                                      : csb_deq_addr;
+    assign dcache_store_req_data      = amo_store_valid_r
+                                      ? amo_store_data_r
+                                      : csb_deq_data;
+    assign dcache_store_req_byte_mask = amo_store_valid_r
+                                      ? amo_store_mask_r
+                                      : csb_deq_byte_mask;
 
     // =========================================================================
     // D-cache load request generation
@@ -868,7 +902,8 @@ module lsu
     assign p0_dcache_hit_valid = !flush_in.valid
                                && dcache_load_resp_valid[0]
                                && load_issue_valid_r[0]
-                               && !load_nocache_r[0];
+                               && !load_nocache_r[0]
+                               && !load_issue_data_r[0].is_amo;
     assign p1_normal_wb_valid  = (load_issue_valid[1] && load_addr_misaligned[1] && !flush_in.valid)
                                || (!flush_in.valid
                                    && dcache_load_resp_valid[1]
@@ -876,7 +911,9 @@ module lsu
                                    && !load_nocache_r[1]);
     assign p0_fwd_spill_to_p1  = fwd_hold_valid_r && p0_dcache_hit_valid && !p1_normal_wb_valid;
     assign fwd_hold_blocked    = fwd_hold_valid_r && p0_dcache_hit_valid && p1_normal_wb_valid;
-    assign lmb_wb_port_free    = !p0_dcache_hit_valid && !fwd_hold_valid_r;
+    assign lmb_wb_port_free    = !p0_dcache_hit_valid &&
+                                  !fwd_hold_valid_r &&
+                                  !amo_wb_valid_r;
     assign p1_fast_fwd_fire    =
         sim_p1_fast_fwd_enable &&
         p1_eff_valid &&
@@ -889,12 +926,38 @@ module lsu
         !p0_fwd_spill_to_p1 &&
         !p1_fwd_hold_valid_r;
 
+    assign amo_busy = amo_wait_load_r | amo_store_valid_r | amo_wb_valid_r;
+    assign amo_serial_block =
+        amo_busy |
+        csb_deq_valid |
+        lmb_any_valid |
+        (load_issue_valid_r != 2'b00) |
+        (load_issue_valid_rr != 2'b00) |
+        p1_retry_valid_r |
+        fwd_hold_valid_r |
+        p1_fwd_hold_valid_r;
+    assign amo_issue_fire =
+        load_issue_valid[0] &&
+        load_issue_data[0].is_amo &&
+        !load_addr_misaligned[0] &&
+        !load_addr_mmio[0] &&
+        !flush_in.valid;
+    assign amo_load_issue_fire = amo_issue_fire &&
+                                 (load_issue_data[0].amo_op != AMO_SC);
+    assign amo_sc_issue_fire   = amo_issue_fire &&
+                                 (load_issue_data[0].amo_op == AMO_SC);
+
     assign load_issue_suppress[0] =
         load_issue_candidate_valid[0] &&
         ~load_addr_misaligned[0] &&
         ~flush_in.valid &&
         (p0_sq_order_wait_block || same_cycle_sta_wait0 ||
-         fwd_hold_blocked || mmio_load0_block);
+         fwd_hold_blocked || mmio_load0_block ||
+         amo_busy ||
+         (load_issue_data[0].is_amo &&
+          ((load_issue_data[0].rob_idx != rob_head) ||
+           amo_serial_block ||
+           load_addr_mmio[0])));
 
 `ifndef SYNTHESIS
     bit sim_allow_same_line_dual_load;
@@ -1107,7 +1170,10 @@ module lsu
 
     assign load_issue_suppress[1] =
         load_issue_candidate_valid[1] &&
-        (p1_retry_valid_r ||
+        (amo_busy ||
+         load_issue_data[1].is_amo ||
+         (load_issue_candidate_valid[0] && load_issue_data[0].is_amo) ||
+         p1_retry_valid_r ||
          (!load_addr_misaligned[1] && !flush_in.valid && !p1_retry_valid_r &&
           (p1_sq_order_wait_block || sq_fwd_partial_p1 || p1_fwd_blocked ||
            same_cycle_sta_wait1 || lq_p1_issue_block || mmio_load1_block)));
@@ -1358,7 +1424,8 @@ module lsu
         end
     end
 
-    assign csb_deq_ack = csb_deq_mmio ? mmio_store_resp_fire_r : dcache_store_ack;
+    assign csb_deq_ack = csb_deq_mmio ? mmio_store_resp_fire_r
+                         : (amo_store_valid_r ? 1'b0 : dcache_store_ack);
 
     assign dcache_load_req_valid[0] = load_issue_valid[0]
                                     & ~load_addr_misaligned[0]
@@ -1366,6 +1433,8 @@ module lsu
                                     & ~p0_fwd_hit
                                     & ~sq_fwd_partial
                                     & ~same_cycle_fwd_partial
+                                    & ~(load_issue_data[0].is_amo &&
+                                        (load_issue_data[0].amo_op == AMO_SC))
                                     & ~flush_in.valid;
     assign dcache_load_req_addr[0]  = load_eff_addr[0];
     assign dcache_load_req_size[0]  = load_issue_data[0].mem_size;
@@ -1381,9 +1450,11 @@ module lsu
     assign dcache_load_req_size[1]  = p1_eff_data.mem_size;
     assign dcache_load_req_is_unsigned[1] = p1_eff_data.is_unsigned;
 
-    assign spec_wakeup_valid[0] = dcache_load_req_valid[0];
+    assign spec_wakeup_valid[0] = dcache_load_req_valid[0] &
+                                  ~load_issue_data[0].is_amo;
     assign spec_wakeup_tag[0]   = load_issue_data[0].pdst;
-    assign spec_wakeup_valid[1] = dcache_load_req_valid[1];
+    assign spec_wakeup_valid[1] = dcache_load_req_valid[1] &
+                                  ~p1_eff_data.is_amo;
     assign spec_wakeup_tag[1]   = p1_eff_data.pdst;
 
     // =========================================================================
@@ -1463,6 +1534,214 @@ module lsu
     end
 
     // =========================================================================
+    // Atomic memory operations
+    // =========================================================================
+    // AMOs are serialized at the load issue boundary and execute through a
+    // small non-speculative read modify write engine.  The load side reads the
+    // old value, this block computes the updated value, the store side writes
+    // it back to D-cache, then the old value or SC status writes back to rd.
+    logic        lr_valid_r;
+    logic [63:0] lr_addr_r;
+    logic [1:0]  lr_size_r;
+    logic        lr_store_clear;
+    logic        amo_sc_success;
+    logic [63:0] amo_fill_dword;
+    logic [63:0] amo_fill_shifted;
+    logic [63:0] amo_fill_extracted;
+    logic [63:0] amo_load_value;
+    logic [31:0] amo_old_word;
+    logic [31:0] amo_rs2_word;
+    logic [31:0] amo_new_word;
+    logic signed [31:0] amo_old_word_s;
+    logic signed [31:0] amo_rs2_word_s;
+    logic signed [63:0] amo_old_dword_s;
+    logic signed [63:0] amo_rs2_dword_s;
+    logic [63:0] amo_new_dword;
+    logic [63:0] amo_store_data_calc;
+    logic [7:0]  amo_store_mask_calc;
+    logic [63:0] amo_sc_store_data_calc;
+    logic [7:0]  amo_sc_store_mask_calc;
+
+    assign amo_load_hit_fire =
+        amo_wait_load_r &&
+        dcache_load_resp_valid[0] &&
+        load_issue_valid_r[0] &&
+        load_issue_data_r[0].is_amo;
+    assign amo_load_fill_fire =
+        amo_wait_load_r &&
+        !amo_load_hit_fire &&
+        dcache_fill_valid &&
+        (amo_addr_r[63:LINE_BITS] == dcache_fill_addr[63:LINE_BITS]);
+    assign amo_store_ack_fire = amo_store_valid_r && dcache_store_ack;
+    assign amo_sc_success =
+        lr_valid_r &&
+        (lr_addr_r[63:2] == load_eff_addr[0][63:2]) &&
+        (lr_size_r == load_issue_data[0].mem_size);
+    assign lr_store_clear =
+        lr_valid_r &&
+        dcache_store_req_valid &&
+        dcache_store_ack &&
+        (dcache_store_req_addr[63:2] == lr_addr_r[63:2]);
+
+    always_comb begin
+        amo_fill_dword   = dcache_fill_data[{amo_addr_r[5:3], 3'b000} * 8 +: 64];
+        amo_fill_shifted = amo_fill_dword >> ({3'b0, amo_addr_r[2:0]} * 4'd8);
+        case (amo_data_r.mem_size)
+            MEM_WORD:  amo_fill_extracted = {{32{amo_fill_shifted[31]}}, amo_fill_shifted[31:0]};
+            default:   amo_fill_extracted = amo_fill_shifted;
+        endcase
+    end
+
+    assign amo_load_value = amo_load_hit_fire ? load_extracted_dc[0] : amo_fill_extracted;
+    assign amo_old_word   = amo_load_value[31:0];
+    assign amo_rs2_word   = amo_rs2_r[31:0];
+    assign amo_old_word_s = amo_old_word;
+    assign amo_rs2_word_s = amo_rs2_word;
+    assign amo_old_dword_s = amo_load_value;
+    assign amo_rs2_dword_s = amo_rs2_r;
+
+    always_comb begin
+        amo_new_word = amo_rs2_word;
+        case (amo_data_r.amo_op)
+            AMO_SWAP: amo_new_word = amo_rs2_word;
+            AMO_ADD:  amo_new_word = amo_old_word + amo_rs2_word;
+            AMO_XOR:  amo_new_word = amo_old_word ^ amo_rs2_word;
+            AMO_AND:  amo_new_word = amo_old_word & amo_rs2_word;
+            AMO_OR:   amo_new_word = amo_old_word | amo_rs2_word;
+            AMO_MIN:  amo_new_word = (amo_old_word_s < amo_rs2_word_s) ? amo_old_word : amo_rs2_word;
+            AMO_MAX:  amo_new_word = (amo_old_word_s > amo_rs2_word_s) ? amo_old_word : amo_rs2_word;
+            AMO_MINU: amo_new_word = (amo_old_word < amo_rs2_word) ? amo_old_word : amo_rs2_word;
+            AMO_MAXU: amo_new_word = (amo_old_word > amo_rs2_word) ? amo_old_word : amo_rs2_word;
+            default:  amo_new_word = amo_rs2_word;
+        endcase
+    end
+
+    always_comb begin
+        amo_new_dword = amo_rs2_r;
+        case (amo_data_r.amo_op)
+            AMO_SWAP: amo_new_dword = amo_rs2_r;
+            AMO_ADD:  amo_new_dword = amo_load_value + amo_rs2_r;
+            AMO_XOR:  amo_new_dword = amo_load_value ^ amo_rs2_r;
+            AMO_AND:  amo_new_dword = amo_load_value & amo_rs2_r;
+            AMO_OR:   amo_new_dword = amo_load_value | amo_rs2_r;
+            AMO_MIN:  amo_new_dword = (amo_old_dword_s < amo_rs2_dword_s) ? amo_load_value : amo_rs2_r;
+            AMO_MAX:  amo_new_dword = (amo_old_dword_s > amo_rs2_dword_s) ? amo_load_value : amo_rs2_r;
+            AMO_MINU: amo_new_dword = (amo_load_value < amo_rs2_r) ? amo_load_value : amo_rs2_r;
+            AMO_MAXU: amo_new_dword = (amo_load_value > amo_rs2_r) ? amo_load_value : amo_rs2_r;
+            default:  amo_new_dword = amo_rs2_r;
+        endcase
+    end
+
+    always_comb begin
+        case (amo_data_r.mem_size)
+            MEM_WORD: begin
+                amo_store_data_calc = {32'd0, amo_new_word};
+                amo_store_mask_calc = 8'h0F;
+            end
+            default: begin
+                amo_store_data_calc = amo_new_dword;
+                amo_store_mask_calc = 8'hFF;
+            end
+        endcase
+    end
+
+    always_comb begin
+        case (load_issue_data[0].mem_size)
+            MEM_WORD: begin
+                amo_sc_store_data_calc = {32'd0, load_rs2[0][31:0]};
+                amo_sc_store_mask_calc = 8'h0F;
+            end
+            default: begin
+                amo_sc_store_data_calc = load_rs2[0];
+                amo_sc_store_mask_calc = 8'hFF;
+            end
+        endcase
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            amo_wait_load_r     <= 1'b0;
+            amo_store_valid_r   <= 1'b0;
+            amo_wb_valid_r      <= 1'b0;
+            amo_data_r          <= '0;
+            amo_addr_r          <= 64'd0;
+            amo_rs2_r           <= 64'd0;
+            amo_old_value_r     <= 64'd0;
+            amo_store_data_r    <= 64'd0;
+            amo_store_mask_r    <= 8'd0;
+            amo_wb_rob_idx_r    <= '0;
+            amo_wb_pdst_r       <= '0;
+            amo_wb_lq_idx_r     <= '0;
+            amo_wb_data_r       <= 64'd0;
+            lr_valid_r          <= 1'b0;
+            lr_addr_r           <= 64'd0;
+            lr_size_r           <= MEM_DWORD;
+        end else if (flush_in.valid) begin
+            amo_wait_load_r     <= 1'b0;
+            amo_store_valid_r   <= 1'b0;
+            amo_wb_valid_r      <= 1'b0;
+            lr_valid_r          <= 1'b0;
+        end else begin
+            if (amo_wb_valid_r)
+                amo_wb_valid_r <= 1'b0;
+
+            if (lr_store_clear)
+                lr_valid_r <= 1'b0;
+
+            if (amo_store_ack_fire) begin
+                amo_store_valid_r <= 1'b0;
+                amo_wb_valid_r    <= 1'b1;
+                amo_wb_rob_idx_r  <= amo_data_r.rob_idx;
+                amo_wb_pdst_r     <= amo_data_r.pdst;
+                amo_wb_lq_idx_r   <= amo_data_r.lq_idx;
+                amo_wb_data_r     <= (amo_data_r.amo_op == AMO_SC) ? 64'd0 : amo_old_value_r;
+            end
+
+            if (amo_load_hit_fire || amo_load_fill_fire) begin
+                amo_wait_load_r <= 1'b0;
+                amo_old_value_r <= amo_load_value;
+                if (amo_data_r.amo_op == AMO_LR) begin
+                    lr_valid_r       <= 1'b1;
+                    lr_addr_r        <= amo_addr_r;
+                    lr_size_r        <= amo_data_r.mem_size;
+                    amo_wb_valid_r   <= 1'b1;
+                    amo_wb_rob_idx_r <= amo_data_r.rob_idx;
+                    amo_wb_pdst_r    <= amo_data_r.pdst;
+                    amo_wb_lq_idx_r  <= amo_data_r.lq_idx;
+                    amo_wb_data_r    <= amo_load_value;
+                end else begin
+                    amo_store_valid_r <= 1'b1;
+                    amo_store_data_r  <= amo_store_data_calc;
+                    amo_store_mask_r  <= amo_store_mask_calc;
+                end
+            end
+
+            if (amo_sc_issue_fire) begin
+                amo_data_r <= load_issue_data[0];
+                amo_addr_r <= load_eff_addr[0];
+                amo_rs2_r  <= load_rs2[0];
+                lr_valid_r <= 1'b0;
+                if (amo_sc_success) begin
+                    amo_store_valid_r <= 1'b1;
+                    amo_store_data_r  <= amo_sc_store_data_calc;
+                    amo_store_mask_r  <= amo_sc_store_mask_calc;
+                end else begin
+                    amo_wb_valid_r   <= 1'b1;
+                    amo_wb_rob_idx_r <= load_issue_data[0].rob_idx;
+                    amo_wb_pdst_r    <= load_issue_data[0].pdst;
+                    amo_wb_lq_idx_r  <= load_issue_data[0].lq_idx;
+                    amo_wb_data_r    <= 64'd1;
+                end
+            end else if (amo_load_issue_fire) begin
+                amo_wait_load_r <= 1'b1;
+                amo_data_r      <= load_issue_data[0];
+                amo_addr_r      <= load_eff_addr[0];
+                amo_rs2_r       <= load_rs2[0];
+            end
+        end
+    end
+
+    // =========================================================================
     // Load Miss Buffer (LMB)
     // =========================================================================
     // When a load misses the D-cache, the cache currently never generates a
@@ -1534,10 +1813,12 @@ module lsu
     assign p0_miss_detect = !flush_in.valid
                           & load_issue_valid_r[0]
                           & ~load_nocache_r[0]
+                          & ~load_issue_data_r[0].is_amo
                           & ~dcache_load_resp_valid[0];
     assign p1_miss_detect = !flush_in.valid
                           & load_issue_valid_r[1]
                           & ~load_nocache_r[1]
+                          & ~load_issue_data_r[1].is_amo
                           & ~dcache_load_resp_valid[1];
 
     // D-cache can install a line before the two-cycle load-miss detection
@@ -1634,7 +1915,10 @@ module lsu
         lmb_match_idx = '0;
         lmb_ready_any = 1'b0;
         lmb_ready_idx = '0;
+        lmb_any_valid = 1'b0;
         for (int i = 0; i < LMB_DEPTH; i++) begin
+            if (lmb[i].valid)
+                lmb_any_valid = 1'b1;
             lmb_fill_match[i] = lmb[i].valid
                               & !lmb[i].ready
                               & dcache_fill_valid
@@ -1925,12 +2209,14 @@ module lsu
     logic [ROB_IDX_BITS-1:0] fwd_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] fwd_hold_pdst_r;
     logic [63:0] fwd_hold_data_r;
+    mem_size_e fwd_hold_mem_size_r;
     logic [LQ_IDX_BITS-1:0] fwd_hold_lq_idx_r;
 
     logic fwd_hold_is_exc_r;
     logic [ROB_IDX_BITS-1:0] p1_fwd_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] p1_fwd_hold_pdst_r;
     logic [63:0] p1_fwd_hold_data_r;
+    mem_size_e p1_fwd_hold_mem_size_r;
 
     // Port-1 misalign-exception hold register (mirrors the port-0 fwd_hold
     // pattern). Original same-cycle path at the writeback mux was a
@@ -1949,6 +2235,7 @@ module lsu
         if (!rst_n || flush_in.valid) begin
             fwd_hold_valid_r  <= 1'b0;
             fwd_hold_is_exc_r <= 1'b0;
+            fwd_hold_mem_size_r <= MEM_DWORD;
         end else if (fwd_hold_blocked) begin
             // Retain the delayed port-0 forward/misalign result until a load
             // CDB slot can accept it.  Dropping this skid entry leaves the
@@ -1964,6 +2251,7 @@ module lsu
             fwd_hold_rob_idx_r <= load_issue_data[0].rob_idx;
             fwd_hold_pdst_r    <= load_issue_data[0].pdst;
             fwd_hold_data_r    <= load_addr_misaligned[0] ? 64'd0 : load_extracted_fwd[0];
+            fwd_hold_mem_size_r <= load_issue_data[0].mem_size;
             fwd_hold_lq_idx_r  <= load_issue_data[0].lq_idx;
         end
     end
@@ -1990,6 +2278,7 @@ module lsu
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || flush_in.valid) begin
             p1_fwd_hold_valid_r <= 1'b0;
+            p1_fwd_hold_mem_size_r <= MEM_DWORD;
         end else begin
             if (p1_fwd_hold_valid_r &&
                 !(p1_misalign_hold_valid_r ||
@@ -2011,6 +2300,7 @@ module lsu
                 p1_fwd_hold_rob_idx_r <= p1_eff_data.rob_idx;
                 p1_fwd_hold_pdst_r    <= p1_eff_data.pdst;
                 p1_fwd_hold_data_r    <= p1_extracted_fwd;
+                p1_fwd_hold_mem_size_r <= p1_eff_data.mem_size;
             end
         end
     end
@@ -2036,6 +2326,8 @@ module lsu
         // Default LQ index selector (drives lq_result_idx_sel)
         lq_result_idx_sel = '0;
         mmio_load_wb_fire = 1'b0;
+        load_wb_mem_size[0] = MEM_DWORD;
+        load_wb_mem_size[1] = MEM_DWORD;
 
         // Port 0 — no same-cycle paths.  Misalign + fwd both go through
         // the hold register (1-cycle delayed) to eliminate CDB loops.
@@ -2046,12 +2338,21 @@ module lsu
             load_wb_data[0]          = '0;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
+        end else if (amo_wb_valid_r) begin
+            load_wb_valid[0]         = 1'b1;
+            load_wb_rob_idx[0]       = amo_wb_rob_idx_r;
+            load_wb_pdst[0]          = amo_wb_pdst_r;
+            load_wb_data[0]          = amo_wb_data_r;
+            load_wb_has_exception[0] = 1'b0;
+            load_wb_exc_code[0]      = '0;
+            lq_result_idx_sel        = amo_wb_lq_idx_r;
         end else if (p0_dcache_hit_valid) begin
             // D-cache hit response — 1 cycle after issue.
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = load_issue_data_r[0].rob_idx;
             load_wb_pdst[0]          = load_issue_data_r[0].pdst;
             load_wb_data[0]          = load_extracted_dc[0];
+            load_wb_mem_size[0]      = load_issue_data_r[0].mem_size;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = load_issue_data_r[0].lq_idx;
@@ -2060,6 +2361,7 @@ module lsu
             load_wb_rob_idx[0]       = fwd_hold_rob_idx_r;
             load_wb_pdst[0]          = fwd_hold_pdst_r;
             load_wb_data[0]          = fwd_hold_data_r;
+            load_wb_mem_size[0]      = fwd_hold_mem_size_r;
             load_wb_has_exception[0] = fwd_hold_is_exc_r;
             load_wb_exc_code[0]      = fwd_hold_is_exc_r ? 4'd4 : 4'd0;
             lq_result_idx_sel        = fwd_hold_lq_idx_r;
@@ -2069,6 +2371,7 @@ module lsu
             load_wb_rob_idx[0]       = lmb[lmb_match_idx].rob_idx;
             load_wb_pdst[0]          = lmb[lmb_match_idx].pdst;
             load_wb_data[0]          = lmb_extracted;
+            load_wb_mem_size[0]      = mem_size_e'(lmb[lmb_match_idx].size);
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = lmb[lmb_match_idx].lq_idx;
@@ -2079,6 +2382,7 @@ module lsu
             load_wb_rob_idx[0]       = lmb[lmb_ready_idx].rob_idx;
             load_wb_pdst[0]          = lmb[lmb_ready_idx].pdst;
             load_wb_data[0]          = lmb[lmb_ready_idx].data;
+            load_wb_mem_size[0]      = mem_size_e'(lmb[lmb_ready_idx].size);
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = lmb[lmb_ready_idx].lq_idx;
@@ -2087,6 +2391,7 @@ module lsu
             load_wb_rob_idx[0]       = mmio_resp_load_data_r.rob_idx;
             load_wb_pdst[0]          = mmio_resp_load_data_r.pdst;
             load_wb_data[0]          = mmio_resp_ext;
+            load_wb_mem_size[0]      = mmio_resp_load_data_r.mem_size;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
             lq_result_idx_sel        = mmio_resp_load_data_r.lq_idx;
@@ -2121,6 +2426,7 @@ module lsu
             load_wb_rob_idx[1]       = load_issue_data_r[1].rob_idx;
             load_wb_pdst[1]          = load_issue_data_r[1].pdst;
             load_wb_data[1]          = load_extracted_dc[1];
+            load_wb_mem_size[1]      = load_issue_data_r[1].mem_size;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
         end else if (p1_fast_fwd_fire) begin
@@ -2128,6 +2434,7 @@ module lsu
             load_wb_rob_idx[1]       = p1_eff_data.rob_idx;
             load_wb_pdst[1]          = p1_eff_data.pdst;
             load_wb_data[1]          = p1_extracted_fwd;
+            load_wb_mem_size[1]      = p1_eff_data.mem_size;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
         end else if (p0_fwd_spill_to_p1) begin
@@ -2135,6 +2442,7 @@ module lsu
             load_wb_rob_idx[1]       = fwd_hold_rob_idx_r;
             load_wb_pdst[1]          = fwd_hold_pdst_r;
             load_wb_data[1]          = fwd_hold_data_r;
+            load_wb_mem_size[1]      = fwd_hold_mem_size_r;
             load_wb_has_exception[1] = fwd_hold_is_exc_r;
             load_wb_exc_code[1]      = fwd_hold_is_exc_r ? 4'd4 : 4'd0;
         end else if (p1_fwd_hold_valid_r) begin
@@ -2142,6 +2450,7 @@ module lsu
             load_wb_rob_idx[1]       = p1_fwd_hold_rob_idx_r;
             load_wb_pdst[1]          = p1_fwd_hold_pdst_r;
             load_wb_data[1]          = p1_fwd_hold_data_r;
+            load_wb_mem_size[1]      = p1_fwd_hold_mem_size_r;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
         end else begin

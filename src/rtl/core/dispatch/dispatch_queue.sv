@@ -212,16 +212,19 @@ module dispatch_queue
     //   FU_MUL  -> IQ1 (MUL shares IQ1 port 0)
     //   FU_DIV  -> IQ2 (DIV shares IQ2 port 0)
     //   FU_CSR  -> IQ2 (CSR shares IQ2 port 0)
+    //   FP ops  -> IQ2 (serialized FPU lane shares IQ2 port 0)
     //   FU_ALU  -> round-robin across IQ0/IQ1/IQ2
     // =========================================================================
     logic [1:0] rr_target [0:PIPE_WIDTH-1];
     logic [1:0] rr_next;
     // Pre-read fu_type from int FIFO for IQ routing decisions
     fu_type_e   int_fifo_fu [0:PIPE_WIDTH-1];
+    logic       int_fifo_is_fp [0:PIPE_WIDTH-1];
 
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             int_fifo_fu[i] = int_fifo[int_rd_addr[i]].base.fu_type;
+            int_fifo_is_fp[i] = int_fifo[int_rd_addr[i]].base.is_fp_op;
         end
     end
 
@@ -250,21 +253,25 @@ module dispatch_queue
                 ok = 1'b0;
                 tgt = 2'd0;
 
-                // Force specific IQs for non-ALU functional units
-                case (int_fifo_fu[i])
-                    FU_BRU: begin
-                        tgt = 2'd0;  // IQ0 only
-                        ok = (iq_used[0] < 2'd2) && !iq_full[0];
-                    end
-                    FU_MUL: begin
-                        tgt = 2'd1;  // IQ1 only
-                        ok = (iq_used[1] < 2'd2) && !iq_full[1];
-                    end
-                    FU_DIV, FU_CSR: begin
-                        tgt = 2'd2;  // IQ2 only
-                        ok = (iq_used[2] < 2'd2) && !iq_full[2];
-                    end
-                    default: begin
+                // Force specific IQs for non-ALU functional units.
+                if (int_fifo_is_fp[i]) begin
+                    tgt = 2'd2;
+                    ok = (iq_used[2] < 2'd2) && !iq_full[2];
+                end else begin
+                    case (int_fifo_fu[i])
+                        FU_BRU: begin
+                            tgt = 2'd0;  // IQ0 only
+                            ok = (iq_used[0] < 2'd2) && !iq_full[0];
+                        end
+                        FU_MUL: begin
+                            tgt = 2'd1;  // IQ1 only
+                            ok = (iq_used[1] < 2'd2) && !iq_full[1];
+                        end
+                        FU_DIV, FU_CSR: begin
+                            tgt = 2'd2;  // IQ2 only
+                            ok = (iq_used[2] < 2'd2) && !iq_full[2];
+                        end
+                        default: begin
                         // ALU: pick the least-loaded IQ that can accept this op.
                         // Effective occupancy = current count + in-flight enqueues
                         // this cycle (iq_used[]).  IQ0 is dual-issue (drains 2/cycle);
@@ -299,8 +306,9 @@ module dispatch_queue
                         end
                         // rr_cur kept for backward compat; no longer dominant.
                         rr_cur = (rr_cur == 2'(NUM_INT_IQS-1)) ? 2'd0 : rr_cur + 2'd1;
-                    end
-                endcase
+                        end
+                    endcase
+                end
 
                 if (ok) begin
                     rr_target[i] = tgt;

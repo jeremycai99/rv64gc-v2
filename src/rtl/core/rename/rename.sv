@@ -47,7 +47,7 @@ module rename
     input  logic                    sq_full,
 
     // PRF ready table (which physical registers have been written)
-    input  logic [INT_PRF_DEPTH-1:0] preg_ready_table,
+    input  logic [PHYS_TAG_COUNT-1:0] preg_ready_table,
 
     // Flush (from commit)
     input  flush_t flush_in,
@@ -56,6 +56,7 @@ module rename
     input  logic [2:0]               commit_count,
     input  logic [PHYS_REG_BITS-1:0] commit_old_pdst [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]    commit_rd_valid,
+    input  logic [PIPE_WIDTH-1:0]    commit_is_fp_dst,
     input  logic [4:0]               commit_rd_arch  [0:PIPE_WIDTH-1],
     input  logic [PHYS_REG_BITS-1:0] commit_pdst     [0:PIPE_WIDTH-1],
     // Checkpoint release from commit
@@ -105,16 +106,23 @@ module rename
     // =========================================================================
     localparam logic [PHYS_REG_BITS:0] RECOVERY_FREE_HEADROOM =
         (PHYS_REG_BITS+1)'(INT_FREE_LIST_DEPTH - (8 * PIPE_WIDTH));
+    localparam logic [PHYS_REG_BITS:0] FP_RECOVERY_FREE_HEADROOM =
+        (PHYS_REG_BITS+1)'(FP_FREE_LIST_DEPTH - (8 * PIPE_WIDTH));
     localparam int BACKEND_THROTTLE_WIDTH = 2;
 
     logic [2:0] fl_req_count;
     logic [PHYS_REG_BITS-1:0] fl_alloc_preg [0:PIPE_WIDTH-1];
     logic [2:0] fl_avail_count;
     logic [PHYS_REG_BITS:0] fl_free_count;
+    logic [2:0] fp_fl_req_count;
+    logic [PHYS_REG_BITS-1:0] fp_fl_alloc_preg [0:PIPE_WIDTH-1];
+    logic [2:0] fp_fl_avail_count;
+    logic [PHYS_REG_BITS:0] fp_fl_free_count;
     assign free_preg_count = fl_free_count;
 
     // Map each slot to its position in the free list allocation sequence
     logic [2:0] fl_slot_idx [0:PIPE_WIDTH-1];
+    logic [2:0] fp_fl_slot_idx [0:PIPE_WIDTH-1];
 
     // =========================================================================
     // Checkpoint signals
@@ -138,32 +146,56 @@ module rename
     // =========================================================================
     logic [ARCH_REG_BITS-1:0] rat_rs1_arch [0:PIPE_WIDTH-1];
     logic [ARCH_REG_BITS-1:0] rat_rs2_arch [0:PIPE_WIDTH-1];
+    logic [ARCH_REG_BITS-1:0] rat_rs3_arch [0:PIPE_WIDTH-1];
     logic [PHYS_REG_BITS-1:0] rat_rs1_phys [0:PIPE_WIDTH-1];
     logic [PHYS_REG_BITS-1:0] rat_rs2_phys [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] rat_rs3_phys [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] fp_rat_rs1_phys [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] fp_rat_rs2_phys [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] fp_rat_rs3_phys [0:PIPE_WIDTH-1];
 
     logic [PIPE_WIDTH-1:0]    rat_wr_en;
+    logic [PIPE_WIDTH-1:0]    fp_rat_wr_en;
     logic [ARCH_REG_BITS-1:0] rat_wr_arch [0:PIPE_WIDTH-1];
+    logic [ARCH_REG_BITS-1:0] fp_rat_wr_arch [0:PIPE_WIDTH-1];
     // verilator lint_off UNOPTFLAT
     // rat_wr_phys feeds into RAT which outputs rat_rs1_phys, which feeds back
     // into rat_wr_phys for move-eliminated slots.  This is a valid cascading
     // dependency (slot i depends on slot j < i), not a true combinational loop.
     logic [PHYS_REG_BITS-1:0] rat_wr_phys [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] fp_rat_wr_phys [0:PIPE_WIDTH-1];
     // verilator lint_on UNOPTFLAT
     logic [PHYS_REG_BITS-1:0] rat_old_phys [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] fp_rat_old_phys [0:PIPE_WIDTH-1];
 
     // =========================================================================
     // Free list release: count how many valid old_pdst from commit
     // =========================================================================
     logic [2:0]               fl_release_count;
     logic [PHYS_REG_BITS-1:0] fl_release_preg [0:PIPE_WIDTH-1];
+    logic [2:0]               fp_fl_release_count;
+    logic [PHYS_REG_BITS-1:0] fp_fl_release_preg [0:PIPE_WIDTH-1];
 
     // =========================================================================
     // Commit write-enable for CRAT and committed free-list bitmap
     // =========================================================================
     logic [PIPE_WIDTH-1:0] crat_wr_en;
+    logic [PIPE_WIDTH-1:0] fp_crat_wr_en;
+    logic [PHYS_REG_BITS-1:0] commit_pdst_local [0:PIPE_WIDTH-1];
+    logic [PHYS_REG_BITS-1:0] fp_commit_pdst_local [0:PIPE_WIDTH-1];
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            crat_wr_en[i] = commit_rd_valid[i] && (3'(i) < commit_count);
+            crat_wr_en[i] =
+                commit_rd_valid[i] && (3'(i) < commit_count) &&
+                !commit_is_fp_dst[i];
+            fp_crat_wr_en[i] =
+                commit_rd_valid[i] && (3'(i) < commit_count) &&
+                commit_is_fp_dst[i];
+            commit_pdst_local[i] =
+                commit_is_fp_dst[i] ? '0 : commit_pdst[i];
+            fp_commit_pdst_local[i] =
+                commit_is_fp_dst[i] ?
+                    (commit_pdst[i] - PHYS_REG_BITS'(FP_PHYS_BASE)) : '0;
         end
     end
 
@@ -186,6 +218,7 @@ module rename
 
     // Cumulative resource counters at each slot boundary (prefix sums)
     logic [2:0] preg_consumed_before [0:PIPE_WIDTH];
+    logic [2:0] fp_preg_consumed_before [0:PIPE_WIDTH];
     logic [2:0] rob_consumed_before  [0:PIPE_WIDTH];
     logic       ckpt_consumed_before [0:PIPE_WIDTH];
 
@@ -240,15 +273,43 @@ module rename
         .rst_n        (rst_n),
         .rs1_arch     (rat_rs1_arch),
         .rs2_arch     (rat_rs2_arch),
+        .rs3_arch     (rat_rs3_arch),
         .rs1_phys     (rat_rs1_phys),
         .rs2_phys     (rat_rs2_phys),
+        .rs3_phys     (rat_rs3_phys),
         .wr_en        (rat_wr_en),
         .wr_arch      (rat_wr_arch),
         .wr_phys      (rat_wr_phys),
         .old_phys     (rat_old_phys),
         .commit_wr_en (crat_wr_en),
         .commit_arch  (commit_rd_arch),
-        .commit_phys  (commit_pdst),
+        .commit_phys  (commit_pdst_local),
+        .ckpt_save    (ckpt_save_valid),
+        .ckpt_save_id (ckpt_save_id),
+        .ckpt_save_slot(ckpt_branch_slot),
+        .ckpt_restore (do_ckpt_restore),
+        .ckpt_restore_id (flush_in.checkpoint_id),
+        .flush        (do_flush)
+    );
+
+    rat #(
+        .PROTECT_ZERO (1'b0)
+    ) u_fp_rat (
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .rs1_arch     (rat_rs1_arch),
+        .rs2_arch     (rat_rs2_arch),
+        .rs3_arch     (rat_rs3_arch),
+        .rs1_phys     (fp_rat_rs1_phys),
+        .rs2_phys     (fp_rat_rs2_phys),
+        .rs3_phys     (fp_rat_rs3_phys),
+        .wr_en        (fp_rat_wr_en),
+        .wr_arch      (fp_rat_wr_arch),
+        .wr_phys      (fp_rat_wr_phys),
+        .old_phys     (fp_rat_old_phys),
+        .commit_wr_en (fp_crat_wr_en),
+        .commit_arch  (commit_rd_arch),
+        .commit_phys  (fp_commit_pdst_local),
         .ckpt_save    (ckpt_save_valid),
         .ckpt_save_id (ckpt_save_id),
         .ckpt_save_slot(ckpt_branch_slot),
@@ -267,10 +328,34 @@ module rename
         .release_count    (fl_release_count),
         .release_preg     (fl_release_preg),
         .commit_wr_valid  (crat_wr_en),
-        .commit_pdst      (commit_pdst),
+        .commit_arch      (commit_rd_arch),
+        .commit_pdst      (commit_pdst_local),
         .ckpt_save        (ckpt_save_valid),
         .ckpt_save_id     (ckpt_save_id),
         .ckpt_save_alloc_count(preg_consumed_before[ckpt_branch_slot]),
+        .ckpt_restore     (do_ckpt_restore),
+        .ckpt_restore_id  (flush_in.checkpoint_id),
+        .flush            (do_flush)
+    );
+
+    free_list #(
+        .PRF_DEPTH    (FP_PRF_DEPTH),
+        .PROTECT_ZERO (1'b0)
+    ) u_fp_free_list (
+        .clk              (clk),
+        .rst_n            (rst_n),
+        .alloc_req_count  (fp_fl_req_count),
+        .alloc_preg       (fp_fl_alloc_preg),
+        .alloc_avail_count(fp_fl_avail_count),
+        .free_count       (fp_fl_free_count),
+        .release_count    (fp_fl_release_count),
+        .release_preg     (fp_fl_release_preg),
+        .commit_wr_valid  (fp_crat_wr_en),
+        .commit_arch      (commit_rd_arch),
+        .commit_pdst      (fp_commit_pdst_local),
+        .ckpt_save        (ckpt_save_valid),
+        .ckpt_save_id     (ckpt_save_id),
+        .ckpt_save_alloc_count(fp_preg_consumed_before[ckpt_branch_slot]),
         .ckpt_restore     (do_ckpt_restore),
         .ckpt_restore_id  (flush_in.checkpoint_id),
         .flush            (do_flush)
@@ -300,13 +385,21 @@ module rename
     // =========================================================================
     always_comb begin
         fl_release_count = '0;
+        fp_fl_release_count = '0;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            fl_release_preg[i] = (commit_rd_valid[i] && (3'(i) < commit_count))
-                                 ? commit_old_pdst[i] : '0;
+            fl_release_preg[i] = '0;
+            fp_fl_release_preg[i] = '0;
         end
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             if (commit_rd_valid[i] && (3'(i) < commit_count)) begin
-                fl_release_count = 3'(i + 1);
+                if (commit_is_fp_dst[i]) begin
+                    fp_fl_release_preg[fp_fl_release_count] =
+                        commit_old_pdst[i] - PHYS_REG_BITS'(FP_PHYS_BASE);
+                    fp_fl_release_count = fp_fl_release_count + 3'd1;
+                end else begin
+                    fl_release_preg[fl_release_count] = commit_old_pdst[i];
+                    fl_release_count = fl_release_count + 3'd1;
+                end
             end
         end
     end
@@ -370,7 +463,9 @@ module rename
 
             if (work_valid[i] && work_insn[i].rd_valid &&
                 work_insn[i].rd_arch != 5'd0 &&
-                work_insn[i].fu_type == FU_ALU) begin
+                work_insn[i].fu_type == FU_ALU &&
+                !work_insn[i].rd_is_fp &&
+                !work_insn[i].is_fp_op) begin
 
                 // Keep move elimination disabled: aliasing a destination to
                 // an arbitrary source physical register needs lifetime/refcount
@@ -399,7 +494,8 @@ module rename
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             slot_needs_preg[i] = work_valid[i] && work_insn[i].rd_valid &&
-                                 (work_insn[i].rd_arch != 5'd0) &&
+                                 (work_insn[i].rd_is_fp ||
+                                  (work_insn[i].rd_arch != 5'd0)) &&
                                  !is_move_elim[i] && !is_zero_elim[i];
 
             slot_needs_lq[i]   = work_valid[i] && work_insn[i].is_load;
@@ -465,9 +561,13 @@ module rename
     // =========================================================================
     always_comb begin
         fl_req_count = '0;
+        fp_fl_req_count = '0;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             if (slot_needs_preg[i] && slot_can_advance_sp[i]) begin
-                fl_req_count = fl_req_count + 3'd1;
+                if (work_insn[i].rd_is_fp)
+                    fp_fl_req_count = fp_fl_req_count + 3'd1;
+                else
+                    fl_req_count = fl_req_count + 3'd1;
             end
         end
     end
@@ -479,12 +579,18 @@ module rename
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             fl_slot_idx[i] = '0;
+            fp_fl_slot_idx[i] = '0;
         end
         fl_slot_idx[0] = '0;
+        fp_fl_slot_idx[0] = '0;
         for (int i = 1; i < PIPE_WIDTH; i++) begin
             fl_slot_idx[i] = fl_slot_idx[i-1];
+            fp_fl_slot_idx[i] = fp_fl_slot_idx[i-1];
             if (slot_needs_preg[i-1] && slot_can_advance_sp[i-1]) begin
-                fl_slot_idx[i] = fl_slot_idx[i-1] + 3'd1;
+                if (work_insn[i-1].rd_is_fp)
+                    fp_fl_slot_idx[i] = fp_fl_slot_idx[i-1] + 3'd1;
+                else
+                    fl_slot_idx[i] = fl_slot_idx[i-1] + 3'd1;
             end
         end
     end
@@ -502,6 +608,7 @@ module rename
     // =========================================================================
     always_comb begin
         preg_consumed_before[0] = '0;
+        fp_preg_consumed_before[0] = '0;
         rob_consumed_before[0]  = '0;
         ckpt_consumed_before[0] = 1'b0;
         in_order_open[0]        = 1'b1;
@@ -512,7 +619,10 @@ module rename
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             has_preg[i] = 1'b1;
             if (work_valid[i] && slot_needs_preg[i]) begin
-                has_preg[i] = (fl_slot_idx[i] < fl_avail_count);
+                if (work_insn[i].rd_is_fp)
+                    has_preg[i] = (fp_fl_slot_idx[i] < fp_fl_avail_count);
+                else
+                    has_preg[i] = (fl_slot_idx[i] < fl_avail_count);
             end
 
             slot_can_advance[i] = slot_can_advance_sp[i] &&
@@ -520,6 +630,7 @@ module rename
                                   has_preg[i];
 
             preg_consumed_before[i+1] = preg_consumed_before[i];
+            fp_preg_consumed_before[i+1] = fp_preg_consumed_before[i];
             rob_consumed_before[i+1]  = rob_consumed_before[i];
             ckpt_consumed_before[i+1] = ckpt_consumed_before[i];
             in_order_open[i+1]        = in_order_open[i];
@@ -530,7 +641,13 @@ module rename
 
             if (slot_can_advance[i]) begin
                 if (slot_needs_preg[i]) begin
-                    preg_consumed_before[i+1] = preg_consumed_before[i] + 3'd1;
+                    if (work_insn[i].rd_is_fp) begin
+                        fp_preg_consumed_before[i+1] =
+                            fp_preg_consumed_before[i] + 3'd1;
+                    end else begin
+                        preg_consumed_before[i+1] =
+                            preg_consumed_before[i] + 3'd1;
+                    end
                 end
                 rob_consumed_before[i+1] = rob_consumed_before[i] + 3'd1;
                 if (slot_needs_ckpt[i]) begin
@@ -572,22 +689,33 @@ module rename
             // Source lookups
             rat_rs1_arch[i] = work_insn[i].rs1_arch;
             rat_rs2_arch[i] = work_insn[i].rs2_arch;
+            rat_rs3_arch[i] = work_insn[i].rs3_arch;
 
             // Destination writes: only for advancing slots with valid rd
             rat_wr_en[i]   = 1'b0;
+            fp_rat_wr_en[i] = 1'b0;
             rat_wr_arch[i] = work_insn[i].rd_arch;
+            fp_rat_wr_arch[i] = work_insn[i].rd_arch;
             rat_wr_phys[i] = '0;
+            fp_rat_wr_phys[i] = '0;
 
             if (slot_can_advance[i] && work_insn[i].rd_valid &&
-                work_insn[i].rd_arch != 5'd0) begin
-                rat_wr_en[i] = 1'b1;
-
-                if (is_zero_elim[i]) begin
-                    rat_wr_phys[i] = {PHYS_REG_BITS{1'b0}};
-                end else if (is_move_elim[i]) begin
-                    rat_wr_phys[i] = rat_rs1_phys[i];
+                (work_insn[i].rd_is_fp ||
+                 (work_insn[i].rd_arch != 5'd0))) begin
+                if (work_insn[i].rd_is_fp) begin
+                    fp_rat_wr_en[i] = 1'b1;
+                    fp_rat_wr_phys[i] =
+                        fp_fl_alloc_preg[fp_fl_slot_idx[i]];
                 end else begin
-                    rat_wr_phys[i] = fl_alloc_preg[fl_slot_idx[i]];
+                    rat_wr_en[i] = 1'b1;
+
+                    if (is_zero_elim[i]) begin
+                        rat_wr_phys[i] = {PHYS_REG_BITS{1'b0}};
+                    end else if (is_move_elim[i]) begin
+                        rat_wr_phys[i] = rat_rs1_phys[i];
+                    end else begin
+                        rat_wr_phys[i] = fl_alloc_preg[fl_slot_idx[i]];
+                    end
                 end
             end
         end
@@ -636,36 +764,96 @@ module rename
                 ren_insn[out_dest[i]].base = work_insn[i];
 
                 // Physical register mappings
-                ren_insn[out_dest[i]].rs1_phys = rat_rs1_phys[i];
-                ren_insn[out_dest[i]].rs2_phys = rat_rs2_phys[i];
+                if (work_insn[i].rs1_is_fp) begin
+                    ren_insn[out_dest[i]].rs1_phys =
+                        PHYS_REG_BITS'(FP_PHYS_BASE) + fp_rat_rs1_phys[i];
+                end else begin
+                    ren_insn[out_dest[i]].rs1_phys = rat_rs1_phys[i];
+                end
+                if (work_insn[i].rs2_is_fp) begin
+                    ren_insn[out_dest[i]].rs2_phys =
+                        PHYS_REG_BITS'(FP_PHYS_BASE) + fp_rat_rs2_phys[i];
+                end else begin
+                    ren_insn[out_dest[i]].rs2_phys = rat_rs2_phys[i];
+                end
+                if (work_insn[i].rs3_is_fp) begin
+                    ren_insn[out_dest[i]].rs3_phys =
+                        PHYS_REG_BITS'(FP_PHYS_BASE) + fp_rat_rs3_phys[i];
+                end else begin
+                    ren_insn[out_dest[i]].rs3_phys = rat_rs3_phys[i];
+                end
+                if (!work_insn[i].rs1_valid ||
+                    (!work_insn[i].rs1_is_fp &&
+                     (work_insn[i].rs1_arch == 5'd0))) begin
+                    ren_insn[out_dest[i]].rs1_phys = '0;
+                end
+                if (!work_insn[i].rs2_valid ||
+                    (!work_insn[i].rs2_is_fp &&
+                     (work_insn[i].rs2_arch == 5'd0))) begin
+                    ren_insn[out_dest[i]].rs2_phys = '0;
+                end
+                if (!work_insn[i].rs3_valid ||
+                    (!work_insn[i].rs3_is_fp &&
+                     (work_insn[i].rs3_arch == 5'd0))) begin
+                    ren_insn[out_dest[i]].rs3_phys = '0;
+                end
 
                 // Destination physical register
-                if (work_insn[i].rd_valid && work_insn[i].rd_arch != 5'd0) begin
-                    if (is_zero_elim[i]) begin
-                        ren_insn[out_dest[i]].pdst = {PHYS_REG_BITS{1'b0}};
-                    end else if (is_move_elim[i]) begin
-                        ren_insn[out_dest[i]].pdst = rat_rs1_phys[i];
+                if (work_insn[i].rd_valid &&
+                    (work_insn[i].rd_is_fp ||
+                     (work_insn[i].rd_arch != 5'd0))) begin
+                    if (work_insn[i].rd_is_fp) begin
+                        ren_insn[out_dest[i]].pdst =
+                            PHYS_REG_BITS'(FP_PHYS_BASE) +
+                            fp_fl_alloc_preg[fp_fl_slot_idx[i]];
                     end else begin
-                        ren_insn[out_dest[i]].pdst = fl_alloc_preg[fl_slot_idx[i]];
+                        if (is_zero_elim[i]) begin
+                            ren_insn[out_dest[i]].pdst = {PHYS_REG_BITS{1'b0}};
+                        end else if (is_move_elim[i]) begin
+                            ren_insn[out_dest[i]].pdst = rat_rs1_phys[i];
+                        end else begin
+                            ren_insn[out_dest[i]].pdst =
+                                fl_alloc_preg[fl_slot_idx[i]];
+                        end
                     end
                 end else begin
                     ren_insn[out_dest[i]].pdst = '0;
                 end
 
                 // Old physical destination (for free list release at commit)
-                ren_insn[out_dest[i]].old_pdst = rat_old_phys[i];
+                if (work_insn[i].rd_is_fp) begin
+                    ren_insn[out_dest[i]].old_pdst =
+                        PHYS_REG_BITS'(FP_PHYS_BASE) + fp_rat_old_phys[i];
+                end else begin
+                    ren_insn[out_dest[i]].old_pdst = rat_old_phys[i];
+                end
 
                 // Source readiness from PRF ready table
-                if (work_insn[i].rs1_valid && work_insn[i].rs1_arch != 5'd0) begin
-                    ren_insn[out_dest[i]].rs1_ready = preg_ready_table[rat_rs1_phys[i]];
+                if (work_insn[i].rs1_valid &&
+                    (work_insn[i].rs1_is_fp ||
+                     (work_insn[i].rs1_arch != 5'd0))) begin
+                    ren_insn[out_dest[i]].rs1_ready =
+                        preg_ready_table[ren_insn[out_dest[i]].rs1_phys];
                 end else begin
                     ren_insn[out_dest[i]].rs1_ready = 1'b1;
                 end
 
-                if (work_insn[i].rs2_valid && work_insn[i].rs2_arch != 5'd0) begin
-                    ren_insn[out_dest[i]].rs2_ready = preg_ready_table[rat_rs2_phys[i]];
+                if (work_insn[i].rs2_valid &&
+                    (work_insn[i].rs2_is_fp ||
+                     (work_insn[i].rs2_arch != 5'd0))) begin
+                    ren_insn[out_dest[i]].rs2_ready =
+                        preg_ready_table[ren_insn[out_dest[i]].rs2_phys];
                 end else begin
                     ren_insn[out_dest[i]].rs2_ready = 1'b1;
+                end
+
+                if (work_insn[i].rs3_valid &&
+                    (work_insn[i].rs3_is_fp ||
+                     (work_insn[i].rs3_arch != 5'd0))) begin
+                    ren_insn[out_dest[i]].rs3_ready =
+                        preg_ready_table[ren_insn[out_dest[i]].rs3_phys];
+                end else begin
+                    ren_insn[out_dest[i]].rs3_ready = 1'b1;
                 end
 
                 // Intra-batch dependency: if an earlier slot in this batch
@@ -675,15 +863,29 @@ module rename
                 // a new physical register, so the existing mapping is already valid.
                 for (int j = 0; j < i; j++) begin
                     if (slot_can_advance[j] && work_insn[j].rd_valid &&
-                        work_insn[j].rd_arch != 5'd0 &&
+                        (work_insn[j].rd_is_fp ||
+                         (work_insn[j].rd_arch != 5'd0)) &&
                         !is_zero_elim[j] && !is_move_elim[j]) begin
-                        if (work_insn[i].rs1_valid && work_insn[i].rs1_arch != 5'd0 &&
-                            rat_rs1_phys[i] == rat_wr_phys[j]) begin
+                        if (work_insn[i].rs1_valid &&
+                            (work_insn[i].rs1_is_fp ||
+                             (work_insn[i].rs1_arch != 5'd0)) &&
+                            (work_insn[i].rs1_is_fp == work_insn[j].rd_is_fp) &&
+                            (work_insn[i].rs1_arch == work_insn[j].rd_arch)) begin
                             ren_insn[out_dest[i]].rs1_ready = 1'b0;
                         end
-                        if (work_insn[i].rs2_valid && work_insn[i].rs2_arch != 5'd0 &&
-                            rat_rs2_phys[i] == rat_wr_phys[j]) begin
+                        if (work_insn[i].rs2_valid &&
+                            (work_insn[i].rs2_is_fp ||
+                             (work_insn[i].rs2_arch != 5'd0)) &&
+                            (work_insn[i].rs2_is_fp == work_insn[j].rd_is_fp) &&
+                            (work_insn[i].rs2_arch == work_insn[j].rd_arch)) begin
                             ren_insn[out_dest[i]].rs2_ready = 1'b0;
+                        end
+                        if (work_insn[i].rs3_valid &&
+                            (work_insn[i].rs3_is_fp ||
+                             (work_insn[i].rs3_arch != 5'd0)) &&
+                            (work_insn[i].rs3_is_fp == work_insn[j].rd_is_fp) &&
+                            (work_insn[i].rs3_arch == work_insn[j].rd_arch)) begin
+                            ren_insn[out_dest[i]].rs3_ready = 1'b0;
                         end
                     end
                 end
@@ -692,6 +894,7 @@ module rename
                 if (is_move_elim[i] || is_zero_elim[i]) begin
                     ren_insn[out_dest[i]].rs1_ready = 1'b1;
                     ren_insn[out_dest[i]].rs2_ready = 1'b1;
+                    ren_insn[out_dest[i]].rs3_ready = 1'b1;
                 end
 
                 // Flag eliminated instructions for the core top-level
@@ -748,6 +951,7 @@ module rename
     always_comb begin
         recovery_resources_ok_c =
             (fl_free_count >= RECOVERY_FREE_HEADROOM) &&
+            (fp_fl_free_count >= FP_RECOVERY_FREE_HEADROOM) &&
             rob_alloc_ready &&
             !dq_full &&
             !lq_full &&

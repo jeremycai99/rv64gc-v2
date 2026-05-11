@@ -109,7 +109,7 @@ Useful v1 assets:
 | v1 asset | What to reuse | What to change for v2 |
 |---|---|---|
 | `sw/build_mainline_linux.sh` | Linux plus OpenSBI build flow, initramfs creation, DTB compile, `fw_payload.elf` image generation | Move to a v2 `sw/` or `tools/linux_boot/` flow with reproducible output paths and no WSL/PowerShell assumption |
-| `sw/dts/rv64gc_mainline.dts` | Simple single-core Linux device tree with DRAM at `0x80000000`, CLINT, and NS16550A UART at `0x10000000` | Start with `mmu-type = "riscv,sv39"` for v2 unless Sv48 is fully implemented and verified |
+| `sw/dts/rv64gc_mainline.dts` | Simple single-core Linux device tree with DRAM at `0x80000000`, CLINT, and NS16550A UART at `0x10000000` | Use `mmu-type = "riscv,sv48"` as the primary Linux target, with Sv39 retained as a directed-test fallback |
 | `sw/initramfs/mainline/init.c` | Tiny initramfs milestone that prints `BOOT OK` | Keep the milestone idea, but terminate through UART/log matching or platform poweroff, not `tohost` |
 | `src/rtl/platform/clint.sv`, `plic.sv`, `uart_16550.sv` | Concrete platform-device implementation references | Port deliberately under `src/rtl/platform/` with clean core memory-bus/MMIO boundaries |
 | `src/rtl/core/mmu/{itlb,dtlb,ptw}.sv` | Translation architecture reference | Re-evaluate before porting; v2 backend/frontend contracts differ and need a clean integration plan |
@@ -136,6 +136,7 @@ v1 status caveat:
 | Core boundary | `rv64gc_core_top.sv` exposes memory request/response, interrupt inputs, and `time_val`; no fixed `tohost` port | Good ASIC-style boundary to preserve |
 | Reset | frontend reset vector is `0x80000000` | Compatible with OpenSBI `FW_TEXT_START=0x80000000` |
 | Privilege CSRs | `csr_file.sv` has M/S privilege state, delegation CSRs, `satp`, traps, `mret`, `sret`, interrupt inputs | Needs privileged validation under OpenSBI before Linux |
+| RV64GC ISA | Integer, atomics, compressed, and now F/D floating point are integrated in the core RTL and advertised through `misa` | Keep FP support in the ASIC-style core datapath; do not emulate FP in the testbench |
 | MMU | `src/rtl/core/mmu/` is empty; caches use physical addresses | Linux cannot boot until instruction/data translation and page faults are implemented |
 | Platform devices | L0 `tb_linux` now has an uncached MMIO path, polling UART, and CLINT timer/software interrupt block; PLIC is only a reserved zero-response range | Linux needs OpenSBI validation, larger memory, and real external interrupt behavior before enabling more devices |
 | Simulation memory | `sim_memory.sv` is a 2 MB byte-addressed RAM loaded by `$readmemh` | Linux needs much larger DRAM and an image loader that can handle OpenSBI plus kernel payload |
@@ -152,9 +153,13 @@ What exists now:
   the four-row DS/CM gate before any Stage 3 RTL promotion.
 - `tools/run_linux_boot.py` builds and later runs Linux-platform images through
   UART/log milestones rather than `tohost`.
-- `sw/linux_boot/` contains the Sv39 DTS, minimal initramfs source, M-mode UART
+- `sw/linux_boot/` contains the Sv48 DTS, minimal initramfs source, M-mode UART
   smoke source, linker script, and Linux/OpenSBI build wrapper.
 - The M-mode smoke image builds to `build/linux_boot/m_mode_uart_smoke.hex`.
+- The OpenSBI banner image builds to
+  `build/linux_boot/fw_payload_opensbi_banner.hex` using a tiny S-mode hang
+  payload. This isolates M-mode firmware and platform probing from the later
+  Linux/MMU problem.
 
 Current L0 RTL slice:
 
@@ -190,6 +195,54 @@ Resolved L0 blocker:
   lanes on writes. This keeps the device model suitable for OpenSBI rather
   than only for the current UART smoke.
 
+Current RV64GC/FPU slice:
+
+- v1's FPnew-based out-of-shell FPU has been integrated as real core RTL:
+  FP decode, FP rename/RAT/free-list state, FP physical register file,
+  serialized FPU issue path, FP CDB writeback, FP load/store data movement,
+  NaN boxing for `FLW`, and CSR `fflags`/`frm`/FS dirty plumbing.
+- The core now advertises RV64GC through `misa` (`A`, `C`, `D`, `F`, `I`,
+  `M`, `S`, `U`). The Linux DTS and OpenSBI build flow use
+  `rv64imafdc_zicsr_zifencei` with `lp64d`.
+- The L2/I-cache fill interface now has an accepted handshake. The I-cache
+  holds a fill request until L2 accepts either a miss allocation or hit replay,
+  then stops retrying. This removed duplicate L2 fill traffic exposed by the
+  corrected L2 response queue and preserved the DS/CM performance gate.
+- DSim builds default to `-no-sva` because DSim's SVA finalization path can
+  hang on the bound frontend assertions and FPnew common-cell assertions. The
+  procedural strict owner, delivery, branch-recovery, performance, stat, and
+  bottleneck checkers remain enabled by plusarg in the guard runs.
+
+Validation for this slice:
+
+- DSim FP smoke `tests/asm/rv64ufd_fp_smoke.S` passes:
+  `PASS at cycle 95`, `mcycle=55`, `minstret=63`. Covered operations include
+  `FMV.D.X`, `FMV.X.D`, `FADD.D`, `FMUL.D`, `FSD`, `FLD`, `FLW` NaN boxing,
+  `FCVT.L.D`, and `FCVT.D.L`.
+- Stage 3 DS/CM hard guard passed after the FPU and L2 accepted-handshake
+  slice:
+  `benchmark_results/stage3_rtl_guard_rv64gc_fpu_guard_icfill_accept_20260510`.
+
+| Row | Timed cycles | Limit | Metric |
+|---|---:|---:|---:|
+| Dhrystone 100 | `18,155` | `18,161` | `3.134960 DMIPS/MHz` |
+| Dhrystone 300 | `53,440` | `53,469` | `3.195090 DMIPS/MHz` |
+| CoreMark 1 | `154,185` | `154,233` | `6.485715 CM/MHz` |
+| CoreMark 10 | `1,491,294` | `1,491,334` | `6.705586 CM/MHz` |
+
+OpenSBI status after RV64GC/FPU integration:
+
+- `linux_boot_results/stage3_rv64gc_fpu_opensbi_1m_final_20260510` reaches the
+  1M-cycle cap with no illegal-instruction or FPU wedge evidence. It retires
+  `2,155,026` instructions, with the ROB empty at timeout and no architectural
+  ordering assertion failures.
+- Last symbolized committed PC is in OpenSBI `sbi_math.c:17`; the debug state
+  shows an outstanding platform MMIO request rather than an FP pipeline hold.
+  The next blocker is still platform/privileged bring-up, not the FPU datapath.
+- XSim can compile the FP-enabled design, but its FP smoke conversion result
+  has not been promoted as authority yet. Use DSim for the current FP signoff
+  until the XSim `FCVT` mismatch is separately root-caused.
+
 ## Stage 3 Architecture Direction
 
 ### Platform Shape
@@ -211,20 +264,27 @@ PLIC, block device, or LupIO device until the RTL/sim platform supports it.
 
 Initial software image:
 
-1. Build a minimal Linux kernel with:
+1. Build an OpenSBI-only banner image:
+   - OpenSBI generic platform,
+   - `FW_TEXT_START=0x80000000`,
+   - `FW_FDT_PATH=<rv64gc-v2 DTB>`,
+   - tiny S-mode hang payload,
+   - FDT and payload addresses kept inside the current 2 MB smoke memory.
+2. Build a minimal Linux kernel with:
    - `CONFIG_SMP=n`,
    - `CONFIG_MMU=y`,
+   - `CONFIG_PGTABLE_LEVELS=4`,
    - `CONFIG_RISCV_ISA_V=n`,
    - no modules,
    - initramfs embedded,
    - early console enabled.
-2. Build OpenSBI generic firmware:
+3. Build OpenSBI generic firmware for Linux:
    - `FW_TEXT_START=0x80000000`,
    - `FW_PAYLOAD_PATH=<Linux Image>`,
    - `FW_FDT_PATH=<rv64gc-v2 DTB>`,
    - `FW_PAYLOAD_OFFSET=0x200000`,
    - DTB placed at a stable high DRAM address such as `0x86000000`.
-3. Load `fw_payload.elf` or a generated memory image into simulated DRAM.
+4. Load `fw_payload.elf` or a generated memory image into simulated DRAM.
 
 Initial kernel command line:
 
@@ -285,21 +345,26 @@ Pass criteria:
 
 ### L2: MMU Bring-Up
 
-Goal: support Sv39 instruction and data translation well enough for S-mode
-Linux entry.
+Goal: support Sv48 instruction and data translation well enough for S-mode
+Linux entry, with Sv39 retained as a compatibility and directed-test subset.
 
 Tasks:
 
 - Implement or port ITLB, DTLB, and PTW under v2 frontend/LSU contracts.
-- Support `satp` mode Bare and Sv39 first.
+- Support `satp` mode Bare, Sv48, and Sv39.
+- Walk four Sv48 levels and three Sv39 levels through one parameterized PTW.
+- Enforce Sv48 canonical virtual addresses by sign extension from bit 47.
 - Implement page fault causes and `stval`/`mtval` behavior needed by Linux.
 - Handle `sfence.vma` as a serializing TLB flush.
 - Add translation-aware instruction fetch and load/store exception paths.
 
 Pass criteria:
 
-- Bare-metal Sv39 page-table smoke passes for fetch, load, store, execute
-  permission, user/supervisor permission, and page-fault cases.
+- Bare-metal Sv48 page-table smoke passes for fetch, load, store, execute
+  permission, user/supervisor permission, superpage, canonical-address, and
+  page-fault cases.
+- The same directed page-table suite has Sv39 coverage for the shared PTW/TLB
+  subset.
 - OpenSBI can enter S-mode payload with virtual memory still disabled or with
   simple test page tables before full Linux.
 - If any RTL changed, the full hard RTL modification gate above passes.
@@ -375,7 +440,8 @@ Pass criteria:
    M-mode UART smoke path using the existing hex memory loader.
 4. Validate CLINT timer/software interrupt behavior under OpenSBI and reach the
    OpenSBI banner.
-5. Implement Sv39 MMU/PTW/TLB and privileged regression tests.
+5. Implement Sv48 MMU/PTW/TLB and privileged regression tests, keeping Sv39 as
+   a fallback mode.
 6. Boot minimal Linux to early console.
 7. Boot to initramfs `BOOT OK`.
 
@@ -383,15 +449,20 @@ Current Stage 3 scaffold commands:
 
 ```bash
 sw/linux_boot/build_linux_boot.sh --smoke
+sw/linux_boot/build_linux_boot.sh --opensbi
 python3 tools/run_linux_boot.py --build --build-mode smoke
 python3 tools/run_linux_boot.py --build-sim --build --build-mode smoke --run \
   --pass-pattern "RV64GC-V2 STAGE3 UART OK" --smoke-check
+python3 tools/run_linux_boot.py --build --build-mode opensbi --run \
+  --pass-pattern "OpenSBI"
 python3 tools/run_linux_boot.py --build --build-mode linux
 ```
 
-The Linux runner can now run the M-mode UART smoke. Full Linux remains blocked
-until OpenSBI image loading, privileged timer behavior, and Sv39 translation
-are implemented.
+The Linux runner can now run the M-mode UART smoke and has a dedicated OpenSBI
+banner mode. RV64GC/FPU support is integrated and guarded against DS/CM
+regression. Full Linux remains blocked until the OpenSBI platform wait is
+resolved, larger image loading is validated, and Sv48 translation is
+implemented.
 
 ## Near-Term Non-Goals
 
@@ -406,7 +477,7 @@ are implemented.
 
 | Question | Default decision |
 |---|---|
-| Sv39 or Sv48 first? | Sv39 first. v1 tried Sv48 in one DTS, but v2 should start with the smallest Linux-supported translation mode. |
+| Sv39 or Sv48 first? | Sv48 first for the Linux signoff target. Sv39 remains a directed-test and compatibility subset. |
 | UART or SBI console first? | UART first for Linux visibility; SBI console is useful during OpenSBI but should still write through platform UART. |
 | CLINT or ACLINT? | CLINT is acceptable for first boot because v1 already used it; ACLINT can replace it later if we want newer platform naming. |
 | ELF loader or hex only? | Add ELF/binary loading in the runner or memory model. Keep byte-hex compatibility for existing tests. |
@@ -424,12 +495,14 @@ support, not benchmark harness policy:
 - v2 has the right clean core boundary for ASIC-style Linux bring-up.
 - v2 now has an L0 UART/CLINT platform path for early M-mode smoke and OpenSBI
   bring-up.
-- v2 does not yet have the MMU/PTW/TLB path Linux requires.
+- v2 now has real RV64GC F/D execution in core RTL, with DSim FP smoke passing
+  and DS/CM performance preserved.
+- v2 does not yet have the Sv48 MMU/PTW/TLB path Linux requires.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated OpenSBI timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
 The next Stage 3 implementation should move from the L0 M-mode UART smoke to
-OpenSBI banner bring-up, then add Sv39 MMU/PTW/TLB support before attempting a
+OpenSBI banner bring-up, then add Sv48 MMU/PTW/TLB support before attempting a
 full Linux kernel boot.

@@ -9,6 +9,7 @@
 package uarch_pkg;
 
     import rv64gc_pkg::*;
+    import fpu_pkg::*;
 
     // =========================================================================
     // Functional unit type (3 bits)
@@ -137,9 +138,11 @@ package uarch_pkg;
         // Source/destination registers
         logic [4:0]         rs1_arch;
         logic [4:0]         rs2_arch;
+        logic [4:0]         rs3_arch;
         logic [4:0]         rd_arch;
         logic               rs1_valid;
         logic               rs2_valid;
+        logic               rs3_valid;
         logic               rd_valid;
         // Immediate
         logic [63:0]        imm;
@@ -176,6 +179,20 @@ package uarch_pkg;
         logic [4:0]         amo_op;         // AMO funct5
         logic               amo_aq;
         logic               amo_rl;
+        logic               is_fp_op;
+        logic               rs1_is_fp;
+        logic               rs2_is_fp;
+        logic               rs3_is_fp;
+        logic               rd_is_fp;
+        fp_fmt_e            fp_fmt;
+        fp_fmt_e            fp_dst_fmt;
+        fp_int_fmt_e        fp_int_fmt;
+        fp_rm_e             fp_rm;
+        fpu_pipe_e          fp_pipe;
+        fpu_op_e            fp_op;
+        logic               fp_op_mod;
+        fpu_misc_op_e       fp_misc_op;
+        fmv_op_e            fmv_op;
         logic               is_rvc;
         // Branch prediction info (filled by fetch)
         logic               bp_taken;
@@ -261,9 +278,12 @@ package uarch_pkg;
     // Renamed instruction (output of rename stage)
     // Padded to 448 bits (7x64) to avoid Verilator struct-array misalignment.
     // =========================================================================
-    localparam int RENAMED_INSN_PAD_BITS = 448 - ($bits(decoded_insn_t) +
-        ROB_IDX_BITS + (4 * PHYS_REG_BITS) + 2 + CHECKPOINT_BITS + 1 +
-        SQ_IDX_BITS + LQ_IDX_BITS);
+    localparam int RENAMED_INSN_PAYLOAD_BITS = $bits(decoded_insn_t) +
+        ROB_IDX_BITS + (5 * PHYS_REG_BITS) + 3 + CHECKPOINT_BITS + 1 +
+        SQ_IDX_BITS + LQ_IDX_BITS;
+    localparam int RENAMED_INSN_PAD_BITS =
+        (640 > RENAMED_INSN_PAYLOAD_BITS) ?
+        (640 - RENAMED_INSN_PAYLOAD_BITS) : 1;
 
     typedef struct packed {
         logic [RENAMED_INSN_PAD_BITS-1:0] _pad;
@@ -273,8 +293,10 @@ package uarch_pkg;
         logic [PHYS_REG_BITS-1:0]       rs2_phys;
         logic [PHYS_REG_BITS-1:0]       pdst;
         logic [PHYS_REG_BITS-1:0]       old_pdst;
+        logic [PHYS_REG_BITS-1:0]       rs3_phys;
         logic                           rs1_ready;
         logic                           rs2_ready;
+        logic                           rs3_ready;
         logic [CHECKPOINT_BITS-1:0]     checkpoint_id;
         logic                           uses_checkpoint;
         logic [SQ_IDX_BITS-1:0]         sq_idx;
@@ -319,14 +341,16 @@ package uarch_pkg;
     // the BRU path.
     // =========================================================================
     typedef struct packed {
-        logic [53:0]                    _pad;           // 54 bits -> 330+54 = 384
+        logic [127:0]                   _pad;
         logic                           valid;
         logic [ROB_IDX_BITS-1:0]        rob_idx;
         logic [PHYS_REG_BITS-1:0]       pdst;
         logic [PHYS_REG_BITS-1:0]       rs1_phys;
         logic [PHYS_REG_BITS-1:0]       rs2_phys;
+        logic [PHYS_REG_BITS-1:0]       rs3_phys;
         logic                           rs1_ready;
         logic                           rs2_ready;
+        logic                           rs3_ready;
         logic [63:0]                    imm;
         fu_type_e                       fu_type;
         alu_op_e                        alu_op;
@@ -355,6 +379,20 @@ package uarch_pkg;
         logic [4:0]                     amo_op;
         logic                           amo_aq;
         logic                           amo_rl;
+        logic                           is_fp_op;
+        logic                           rs1_is_fp;
+        logic                           rs2_is_fp;
+        logic                           rs3_is_fp;
+        logic                           rd_is_fp;
+        fp_fmt_e                        fp_fmt;
+        fp_fmt_e                        fp_dst_fmt;
+        fp_int_fmt_e                    fp_int_fmt;
+        fp_rm_e                         fp_rm;
+        fpu_pipe_e                      fp_pipe;
+        fpu_op_e                        fp_op;
+        logic                           fp_op_mod;
+        fpu_misc_op_e                   fp_misc_op;
+        fmv_op_e                        fmv_op;
         logic                           is_rvc;
         // Checkpoint / LSQ indices
         logic [CHECKPOINT_BITS-1:0]     checkpoint_id;
@@ -428,6 +466,7 @@ package uarch_pkg;
         logic [PHYS_REG_BITS-1:0]       old_pdst;
         logic [4:0]                     rd_arch;
         logic                           rd_valid;
+        logic                           rd_is_fp;
         logic                           bp_owner;
         logic [63:0]                    bp_lookup_pc;
         logic [4:0]                     bp_ras_tos;

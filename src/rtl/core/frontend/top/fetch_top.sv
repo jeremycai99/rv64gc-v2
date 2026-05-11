@@ -70,6 +70,7 @@ module fetch_top
     // Memory interface (I-cache to L2)
     output logic        icache_fill_req_valid,
     output logic [63:0] icache_fill_req_addr,
+    input  logic        icache_fill_req_accepted,
     input  logic        icache_fill_resp_valid,
     input  logic [63:0] icache_fill_resp_addr,
     input  logic [511:0] icache_fill_resp_data,
@@ -465,6 +466,7 @@ module fetch_top
         .nlpb_aux_hit_o         (nlpb_aux_hit_comb),
         .icache_fill_req_valid  (icache_fill_req_valid),
         .icache_fill_req_addr   (icache_fill_req_addr),
+        .icache_fill_req_accepted(icache_fill_req_accepted),
         .icache_fill_resp_valid (icache_fill_resp_valid),
         .icache_fill_resp_addr  (icache_fill_resp_addr),
         .icache_fill_resp_data  (icache_fill_resp_data),

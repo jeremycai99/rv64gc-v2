@@ -7,6 +7,9 @@ case "${1:-}" in
     --smoke|"")
         MODE="smoke"
         ;;
+    --opensbi)
+        MODE="opensbi"
+        ;;
     --linux)
         MODE="linux"
         ;;
@@ -17,7 +20,7 @@ case "${1:-}" in
         MODE="clean"
         ;;
     *)
-        echo "usage: $0 [--smoke|--linux|--all|--clean]" >&2
+        echo "usage: $0 [--smoke|--opensbi|--linux|--all|--clean]" >&2
         exit 2
         ;;
 esac
@@ -31,7 +34,15 @@ LINUX_DIR="${LINUX_DIR:-$PROJ_DIR/../rv64gc-v1/sw/linux}"
 OPENSBI_DIR="${OPENSBI_DIR:-$PROJ_DIR/../rv64gc-v1/sw/opensbi}"
 CROSS_ELF="${CROSS_ELF:-riscv64-unknown-elf-}"
 CROSS_LINUX="${CROSS_LINUX:-riscv64-linux-gnu-}"
-SMOKE_MARCH="${SMOKE_MARCH:-rv64gc_zicsr_zifencei}"
+OPENSBI_CROSS="${OPENSBI_CROSS:-$CROSS_LINUX}"
+SMOKE_MARCH="${SMOKE_MARCH:-rv64imafdc_zicsr_zifencei}"
+SMOKE_MABI="${SMOKE_MABI:-lp64d}"
+OPENSBI_MARCH="${OPENSBI_MARCH:-rv64imafdc_zicsr_zifencei}"
+OPENSBI_MABI="${OPENSBI_MABI:-lp64d}"
+OPENSBI_PAYLOAD_OFFSET="${OPENSBI_PAYLOAD_OFFSET:-0x100000}"
+OPENSBI_FDT_ADDR="${OPENSBI_FDT_ADDR:-0x80180000}"
+LINUX_PAYLOAD_OFFSET="${LINUX_PAYLOAD_OFFSET:-0x200000}"
+LINUX_FDT_ADDR="${LINUX_FDT_ADDR:-0x86000000}"
 NPROC="${NPROC:-$(nproc)}"
 
 need_tool() {
@@ -39,6 +50,15 @@ need_tool() {
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "ERROR: required tool not found: $tool" >&2
         exit 1
+    fi
+}
+
+prepare_opensbi_tree() {
+    if [[ -d "$OPENSBI_DIR/scripts/Kconfiglib" ]]; then
+        chmod u+x "$OPENSBI_DIR"/scripts/Kconfiglib/*.py 2>/dev/null || true
+    fi
+    if [[ -d "$OPENSBI_DIR/scripts" ]]; then
+        chmod u+x "$OPENSBI_DIR"/scripts/*.sh 2>/dev/null || true
     fi
 }
 
@@ -60,7 +80,7 @@ build_smoke() {
 
     "${CROSS_ELF}gcc" \
         -nostdlib -nostartfiles -ffreestanding \
-        -march="$SMOKE_MARCH" -mabi=lp64d \
+        -march="$SMOKE_MARCH" -mabi="$SMOKE_MABI" \
         -Wl,--build-id=none \
         -T "$SW_DIR/link.ld" \
         "$SW_DIR/m_mode_uart_smoke.S" \
@@ -71,6 +91,65 @@ build_smoke() {
         --objdump "${CROSS_ELF}objdump"
     echo "M-mode UART smoke ELF: $elf"
     echo "M-mode UART smoke HEX: $hex"
+}
+
+build_smode_hang_payload() {
+    mkdir -p "$OUT_DIR"
+    need_tool "${CROSS_ELF}gcc"
+    need_tool "${CROSS_ELF}objcopy"
+
+    local elf="$OUT_DIR/s_mode_hang.elf"
+    local bin="$OUT_DIR/s_mode_hang.bin"
+
+    "${CROSS_ELF}gcc" \
+        -nostdlib -nostartfiles -ffreestanding \
+        -march="$SMOKE_MARCH" -mabi="$SMOKE_MABI" \
+        -Wl,--build-id=none \
+        -Wl,-Ttext=0x0 \
+        "$SW_DIR/s_mode_hang.S" \
+        -o "$elf"
+
+    "${CROSS_ELF}objcopy" -O binary "$elf" "$bin"
+    echo "S-mode hang payload ELF: $elf"
+    echo "S-mode hang payload BIN: $bin ($(wc -c < "$bin") bytes)"
+}
+
+build_opensbi_banner() {
+    if [[ ! -d "$OPENSBI_DIR" ]]; then
+        echo "ERROR: OpenSBI tree not found: $OPENSBI_DIR" >&2
+        exit 1
+    fi
+
+    need_tool "${OPENSBI_CROSS}gcc"
+    need_tool "${OPENSBI_CROSS}objcopy"
+    need_tool "${OPENSBI_CROSS}objdump"
+    prepare_opensbi_tree
+
+    build_dtb
+    build_smode_hang_payload
+
+    local opensbi_build_dir="$OUT_DIR/opensbi_banner_build"
+    local payload_bin="$OUT_DIR/s_mode_hang.bin"
+
+    rm -rf "$opensbi_build_dir"
+    make -C "$OPENSBI_DIR" O="$opensbi_build_dir" CROSS_COMPILE="$OPENSBI_CROSS" PLATFORM=generic \
+        PLATFORM_RISCV_ISA="$OPENSBI_MARCH" \
+        PLATFORM_RISCV_ABI="$OPENSBI_MABI" \
+        FW_PAYLOAD_PATH="$payload_bin" \
+        FW_FDT_PATH="$DTB" \
+        FW_TEXT_START=0x80000000 \
+        FW_PAYLOAD_OFFSET="$OPENSBI_PAYLOAD_OFFSET" \
+        FW_PAYLOAD_FDT_ADDR="$OPENSBI_FDT_ADDR" \
+        -j"$NPROC"
+
+    local opensbi_elf="$opensbi_build_dir/platform/generic/firmware/fw_payload.elf"
+    cp "$opensbi_elf" "$OUT_DIR/fw_payload_opensbi_banner.elf"
+    "${OPENSBI_CROSS}objcopy" -O binary "$opensbi_elf" "$OUT_DIR/fw_payload_opensbi_banner.bin"
+    python3 "$PROJ_DIR/scripts/elf2hex.py" "$opensbi_elf" "$OUT_DIR/fw_payload_opensbi_banner.hex" \
+        --objcopy "${OPENSBI_CROSS}objcopy" \
+        --objdump "${OPENSBI_CROSS}objdump"
+    echo "OpenSBI banner ELF: $OUT_DIR/fw_payload_opensbi_banner.elf"
+    echo "OpenSBI banner HEX: $OUT_DIR/fw_payload_opensbi_banner.hex"
 }
 
 build_linux() {
@@ -105,6 +184,7 @@ CONFIG_MODULES=n
 CONFIG_PRINTK=y
 CONFIG_MMU=y
 CONFIG_RELOCATABLE=y
+CONFIG_PGTABLE_LEVELS=4
 CONFIG_RISCV_ISA_C=y
 CONFIG_RISCV_ISA_V=n
 CONFIG_RISCV_ISA_ZBB=n
@@ -144,20 +224,25 @@ SIMCFG
     make -C "$LINUX_DIR" ARCH=riscv CROSS_COMPILE="$CROSS_LINUX" -j"$NPROC" Image
 
     local kernel_image="$LINUX_DIR/arch/riscv/boot/Image"
-    make -C "$OPENSBI_DIR" CROSS_COMPILE="$CROSS_LINUX" PLATFORM=generic \
+    local opensbi_build_dir="$OUT_DIR/opensbi_linux_build"
+    prepare_opensbi_tree
+    rm -rf "$opensbi_build_dir"
+    make -C "$OPENSBI_DIR" O="$opensbi_build_dir" CROSS_COMPILE="$OPENSBI_CROSS" PLATFORM=generic \
+        PLATFORM_RISCV_ISA="$OPENSBI_MARCH" \
+        PLATFORM_RISCV_ABI="$OPENSBI_MABI" \
         FW_PAYLOAD_PATH="$kernel_image" \
         FW_FDT_PATH="$DTB" \
         FW_TEXT_START=0x80000000 \
-        FW_PAYLOAD_OFFSET=0x200000 \
-        FW_PAYLOAD_FDT_ADDR=0x86000000 \
+        FW_PAYLOAD_OFFSET="$LINUX_PAYLOAD_OFFSET" \
+        FW_PAYLOAD_FDT_ADDR="$LINUX_FDT_ADDR" \
         -j"$NPROC"
 
-    local opensbi_elf="$OPENSBI_DIR/build/platform/generic/firmware/fw_payload.elf"
+    local opensbi_elf="$opensbi_build_dir/platform/generic/firmware/fw_payload.elf"
     cp "$opensbi_elf" "$OUT_DIR/fw_payload.elf"
-    "${CROSS_LINUX}objcopy" -O binary "$opensbi_elf" "$OUT_DIR/fw_payload.bin"
+    "${OPENSBI_CROSS}objcopy" -O binary "$opensbi_elf" "$OUT_DIR/fw_payload.bin"
     python3 "$PROJ_DIR/scripts/elf2hex.py" "$opensbi_elf" "$OUT_DIR/fw_payload.hex" \
-        --objcopy "${CROSS_LINUX}objcopy" \
-        --objdump "${CROSS_LINUX}objdump"
+        --objcopy "${OPENSBI_CROSS}objcopy" \
+        --objdump "${OPENSBI_CROSS}objdump"
     echo "OpenSBI payload ELF: $OUT_DIR/fw_payload.elf"
     echo "OpenSBI payload HEX: $OUT_DIR/fw_payload.hex"
 }
@@ -169,6 +254,10 @@ fi
 
 if [[ "$MODE" == "smoke" || "$MODE" == "all" ]]; then
     build_smoke
+fi
+
+if [[ "$MODE" == "opensbi" || "$MODE" == "all" ]]; then
+    build_opensbi_banner
 fi
 
 if [[ "$MODE" == "linux" || "$MODE" == "all" ]]; then

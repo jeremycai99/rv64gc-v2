@@ -50,11 +50,36 @@ P="$PROJ_ROOT"
 # --relax            allow non-strict LRM constructs (matches Windows .bat)
 # -d SIMULATION      enables defensive ifdef resets in int_prf / cache RAMs
 # (run from PARALLEL_PARENT so work lib lands at PARALLEL_PARENT/xsim.dir/work/)
-xvlog --sv --relax -d SIMULATION \
+xvlog --sv --relax -d SIMULATION -d XSIM \
+      -i "$P/external/cvfpu-src/src/common_cells/include" \
       "$P/src/rtl/core/include/rv64gc_pkg.sv" \
       "$P/src/rtl/core/include/isa_pkg.sv" \
+      "$P/src/rtl/core/include/fpu_pkg.sv" \
       "$P/src/rtl/core/include/uarch_pkg.sv" \
       "$P/src/rtl/sim/mem_if_pkg.sv" \
+      "$P/external/cvfpu-src/src/common_cells/src/cf_math_pkg.sv" \
+      "$P/external/cvfpu-src/src/common_cells/src/lzc.sv" \
+      "$P/external/cvfpu-src/src/common_cells/src/rr_arb_tree.sv" \
+      "$P/external/cvfpu-src/src/fpu_div_sqrt_mvp/hdl/defs_div_sqrt_mvp.sv" \
+      "$P/external/cvfpu-src/src/fpu_div_sqrt_mvp/hdl/iteration_div_sqrt_mvp.sv" \
+      "$P/external/cvfpu-src/src/fpu_div_sqrt_mvp/hdl/control_mvp.sv" \
+      "$P/external/cvfpu-src/src/fpu_div_sqrt_mvp/hdl/norm_div_sqrt_mvp.sv" \
+      "$P/external/cvfpu-src/src/fpu_div_sqrt_mvp/hdl/preprocess_mvp.sv" \
+      "$P/external/cvfpu-src/src/fpu_div_sqrt_mvp/hdl/nrbd_nrsc_mvp.sv" \
+      "$P/external/cvfpu-src/src/fpu_div_sqrt_mvp/hdl/div_sqrt_top_mvp.sv" \
+      "$P/external/cvfpu-src/src/fpu_div_sqrt_mvp/hdl/div_sqrt_mvp_wrapper.sv" \
+      "$P/external/cvfpu-src/src/fpnew_pkg.sv" \
+      "$P/external/cvfpu-src/src/fpnew_cast_multi.sv" \
+      "$P/external/cvfpu-src/src/fpnew_classifier.sv" \
+      "$P/external/cvfpu-src/src/fpnew_divsqrt_multi.sv" \
+      "$P/external/cvfpu-src/src/fpnew_fma.sv" \
+      "$P/external/cvfpu-src/src/fpnew_fma_multi.sv" \
+      "$P/external/cvfpu-src/src/fpnew_noncomp.sv" \
+      "$P/external/cvfpu-src/src/fpnew_opgroup_block.sv" \
+      "$P/external/cvfpu-src/src/fpnew_opgroup_fmt_slice.sv" \
+      "$P/external/cvfpu-src/src/fpnew_opgroup_multifmt_slice.sv" \
+      "$P/external/cvfpu-src/src/fpnew_rounding.sv" \
+      "$P/external/cvfpu-src/src/fpnew_top.sv" \
       "$P/src/rtl/core/frontend/instr/rvc_decompress.sv" \
       "$P/src/rtl/core/frontend/instr/rvc_expander.sv" \
       "$P/src/rtl/core/frontend/instr/predecode.sv" \
@@ -98,10 +123,15 @@ xvlog --sv --relax -d SIMULATION \
       "$P/src/rtl/core/issue/wakeup_network.sv" \
       "$P/src/rtl/core/issue/issue_queue.sv" \
       "$P/src/rtl/core/execute/alu.sv" \
+      "$P/src/rtl/core/execute/fmv_unit.sv" \
+      "$P/src/rtl/core/execute/fpu_misc.sv" \
+      "$P/src/rtl/core/execute/fpu_fpnew_wrapper.sv" \
+      "$P/src/rtl/core/execute/fpu_top.sv" \
       "$P/src/rtl/core/execute/bru.sv" \
       "$P/src/rtl/core/execute/multiplier.sv" \
       "$P/src/rtl/core/execute/divider.sv" \
       "$P/src/rtl/core/regfile/int_prf.sv" \
+      "$P/src/rtl/core/regfile/fp_prf.sv" \
       "$P/src/rtl/core/bypass_network.sv" \
       "$P/src/rtl/core/backend/rob.sv" \
       "$P/src/rtl/core/backend/commit.sv" \

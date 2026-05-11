@@ -19,6 +19,7 @@ module icache
     // Fill from L2 (miss handling)
     output logic         fill_req_valid,
     output logic [63:0]  fill_req_addr,  // line-aligned
+    input  logic         fill_req_accepted,
     input  logic         fill_resp_valid,
     input  logic [63:0]  fill_resp_addr, // line-aligned, used to filter stale L2 hit-pipe replays
     input  logic [511:0] fill_resp_data,
@@ -229,18 +230,18 @@ module icache
         end
     end
 
-    // Find an MSHR that needs the fill request held to L2.
-    // Keep asserting fill_req_valid every cycle until the fill arrives
-    // (the old FSM held it in ST_WAIT_FILL). The L2 has no req_ready
-    // handshake on the icache port, so a single-cycle pulse can be
-    // lost if the L2 arbiter is busy with dcache that cycle.
+    // Find an MSHR that needs a fill request accepted by L2.
+    // The request is held until L2 confirms that it either allocated a miss
+    // or accepted a hit replay. This avoids duplicate fill traffic while still
+    // retrying same-line requests that are blocked behind another source.
     logic ic_mshr_need_req;
     logic ic_mshr_req_idx;
     always_comb begin
         ic_mshr_need_req = 1'b0;
         ic_mshr_req_idx  = 1'b0;
         for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
-            if (ic_mshr_valid[m] && !ic_mshr_fill_done[m] && !ic_mshr_need_req) begin
+            if (ic_mshr_valid[m] && !ic_mshr_req_sent[m] &&
+                !ic_mshr_fill_done[m] && !ic_mshr_need_req) begin
                 ic_mshr_need_req = 1'b1;
                 ic_mshr_req_idx  = m[0];
             end
@@ -339,8 +340,8 @@ module icache
                 ic_mshr_fill_done[ic_mshr_free_idx] <= 1'b0;
             end
 
-            // 2. Mark fill request as sent
-            if (ic_mshr_need_req) begin
+            // 2. Mark fill request as sent after L2 accepts ownership.
+            if (fill_req_valid && fill_req_accepted) begin
                 ic_mshr_req_sent[ic_mshr_req_idx] <= 1'b1;
             end
 

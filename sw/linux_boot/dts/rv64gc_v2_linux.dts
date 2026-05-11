@@ -21,7 +21,7 @@
             reg = <0>;
             compatible = "riscv";
             riscv,isa = "rv64imafdc_zicsr_zifencei";
-            mmu-type = "riscv,sv39";
+            mmu-type = "riscv,sv48";
             status = "okay";
 
             cpu0_intc: interrupt-controller {

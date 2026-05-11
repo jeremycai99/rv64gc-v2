@@ -50,7 +50,7 @@ module issue_queue
 
     // PRF ready table: lets enqueue see "already-broadcast" producers even
     // when the entry arrives several cycles after the CDB pulse.
-    input  logic [INT_PRF_DEPTH-1:0] preg_ready_table,
+    input  logic [PHYS_TAG_COUNT-1:0] preg_ready_table,
 
     // Issue output (NUM_SELECT ports)
     // issue_candidate_valid is the oldest-ready selection before suppression.
@@ -95,12 +95,15 @@ module issue_queue
     logic [DEPTH-1:0]              entry_valid;
     logic [PHYS_REG_BITS-1:0]     rs1_phys_r   [0:DEPTH-1];
     logic [PHYS_REG_BITS-1:0]     rs2_phys_r   [0:DEPTH-1];
+    logic [PHYS_REG_BITS-1:0]     rs3_phys_r   [0:DEPTH-1];
     logic [ROB_IDX_BITS-1:0]      rob_idx_r    [0:DEPTH-1];
     logic [2:0]                   fu_type_r    [0:DEPTH-1];  // for port restriction
     logic [DEPTH-1:0]             src1_ready;
     logic [DEPTH-1:0]             src2_ready;
+    logic [DEPTH-1:0]             src3_ready;
     logic [DEPTH-1:0]             src1_spec;     // rs1 was woken speculatively
     logic [DEPTH-1:0]             src2_spec;     // rs2 was woken speculatively
+    logic [DEPTH-1:0]             src3_spec;     // rs3 was woken speculatively
     // Store payload as flat bit vectors to avoid Verilator packed-struct
     // array misalignment.  Cast to/from iq_entry_t at write/read boundaries.
     logic [PW-1:0]                payload_r    [0:DEPTH-1];
@@ -162,46 +165,62 @@ module issue_queue
     // =====================================================================
     logic [DEPTH-1:0] next_src1_ready;
     logic [DEPTH-1:0] next_src2_ready;
+    logic [DEPTH-1:0] next_src3_ready;
     logic [DEPTH-1:0] next_src1_spec;
     logic [DEPTH-1:0] next_src2_spec;
+    logic [DEPTH-1:0] next_src3_spec;
     // Latched spec wakeup: written into src1_ready / src1_spec at the next
     // clock edge.  These are NOT visible to the same-cycle eligibility scan.
     logic [DEPTH-1:0] spec_set_src1;
     logic [DEPTH-1:0] spec_set_src2;
+    logic [DEPTH-1:0] spec_set_src3;
 
     // Per-entry CDB match signals (declared outside the always_comb)
     logic [DEPTH-1:0] rs1_cdb_hit;
     logic [DEPTH-1:0] rs2_cdb_hit;
+    logic [DEPTH-1:0] rs3_cdb_hit;
 
     // Per-entry spec-cancel match (combinational, used by both paths)
     logic [DEPTH-1:0] spec_cancel_rs1;
     logic [DEPTH-1:0] spec_cancel_rs2;
+    logic [DEPTH-1:0] spec_cancel_rs3;
     logic [NUM_ENQUEUE-1:0] enq_s1_rdy;
     logic [NUM_ENQUEUE-1:0] enq_s2_rdy;
+    logic [NUM_ENQUEUE-1:0] enq_s3_rdy;
     logic [NUM_ENQUEUE-1:0] enq_s1_wakeup_hit;
     logic [NUM_ENQUEUE-1:0] enq_s2_wakeup_hit;
+    logic [NUM_ENQUEUE-1:0] enq_s3_wakeup_hit;
     logic [NUM_ENQUEUE-1:0] enq_s1_spec_match;
     logic [NUM_ENQUEUE-1:0] enq_s2_spec_match;
+    logic [NUM_ENQUEUE-1:0] enq_s3_spec_match;
     logic [NUM_ENQUEUE-1:0] enq_s1_spec_cancel;
     logic [NUM_ENQUEUE-1:0] enq_s2_spec_cancel;
+    logic [NUM_ENQUEUE-1:0] enq_s3_spec_cancel;
     logic [NUM_ENQUEUE-1:0] enq_s1_spec_wakeup;
     logic [NUM_ENQUEUE-1:0] enq_s2_spec_wakeup;
+    logic [NUM_ENQUEUE-1:0] enq_s3_spec_wakeup;
     logic [NUM_ENQUEUE-1:0] enq_s1_spec_cancelled;
     logic [NUM_ENQUEUE-1:0] enq_s2_spec_cancelled;
+    logic [NUM_ENQUEUE-1:0] enq_s3_spec_cancelled;
 
     always_comb begin
         next_src1_ready = src1_ready;
         next_src2_ready = src2_ready;
+        next_src3_ready = src3_ready;
         next_src1_spec  = src1_spec;
         next_src2_spec  = src2_spec;
+        next_src3_spec  = src3_spec;
 
         for (int e = 0; e < DEPTH; e++) begin
             rs1_cdb_hit[e]     = 1'b0;
             rs2_cdb_hit[e]     = 1'b0;
+            rs3_cdb_hit[e]     = 1'b0;
             spec_set_src1[e]   = 1'b0;
             spec_set_src2[e]   = 1'b0;
+            spec_set_src3[e]   = 1'b0;
             spec_cancel_rs1[e] = 1'b0;
             spec_cancel_rs2[e] = 1'b0;
+            spec_cancel_rs3[e] = 1'b0;
         end
 
         for (int e = 0; e < DEPTH; e++) begin
@@ -211,6 +230,8 @@ module issue_queue
                     rs1_cdb_hit[e] = 1'b1;
                 if (cdb_valid[c] && (cdb_tag[c] == rs2_phys_r[e]))
                     rs2_cdb_hit[e] = 1'b1;
+                if (cdb_valid[c] && (cdb_tag[c] == rs3_phys_r[e]))
+                    rs3_cdb_hit[e] = 1'b1;
             end
 
             if (entry_valid[e]) begin
@@ -223,6 +244,10 @@ module issue_queue
                 if (rs2_cdb_hit[e] && !src2_ready[e]) begin
                     next_src2_ready[e] = 1'b1;
                     next_src2_spec[e]  = 1'b0;
+                end
+                if (rs3_cdb_hit[e] && !src3_ready[e]) begin
+                    next_src3_ready[e] = 1'b1;
+                    next_src3_spec[e]  = 1'b0;
                 end
 
                 // -- Definitive load writeback wakeup (Stage 2: loads off CDB)
@@ -243,6 +268,12 @@ module issue_queue
                     next_src2_ready[e] = 1'b1;
                     next_src2_spec[e]  = 1'b0;
                 end
+                if (!src3_ready[e] && !rs3_cdb_hit[e] &&
+                    ((load_wb_wk_valid0 && (load_wb_wk_tag0 == rs3_phys_r[e])) ||
+                     (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs3_phys_r[e])))) begin
+                    next_src3_ready[e] = 1'b1;
+                    next_src3_spec[e]  = 1'b0;
+                end
 
                 // -- Speculative wakeup (load request issue, 1 cycle pre-CDB) --
                 // LATCHED only: do NOT override next_src1_ready.  The
@@ -258,6 +289,11 @@ module issue_queue
                      (spec_wk_valid1 && (spec_wk_tag1 == rs2_phys_r[e]))) &&
                     !src2_ready[e] && !rs2_cdb_hit[e]) begin
                     spec_set_src2[e] = 1'b1;
+                end
+                if (((spec_wk_valid && (spec_wk_tag == rs3_phys_r[e])) ||
+                     (spec_wk_valid1 && (spec_wk_tag1 == rs3_phys_r[e]))) &&
+                    !src3_ready[e] && !rs3_cdb_hit[e]) begin
+                    spec_set_src3[e] = 1'b1;
                 end
 
                 // -- Speculative cancel (cache miss) --
@@ -279,6 +315,13 @@ module issue_queue
                     next_src2_spec[e]  = 1'b0;
                     spec_cancel_rs2[e] = 1'b1;
                 end
+                if (((spec_cancel_valid && (spec_cancel_tag == rs3_phys_r[e])) ||
+                     (spec_cancel_valid1 && (spec_cancel_tag1 == rs3_phys_r[e]))) &&
+                    src3_spec[e] && !rs3_cdb_hit[e]) begin
+                    next_src3_ready[e] = 1'b0;
+                    next_src3_spec[e]  = 1'b0;
+                    spec_cancel_rs3[e] = 1'b1;
+                end
             end
         end
     end
@@ -292,7 +335,8 @@ module issue_queue
 
     always_comb begin
         for (int e = 0; e < DEPTH; e++) begin
-            eligible[e] = entry_valid[e] & next_src1_ready[e] & next_src2_ready[e];
+            eligible[e] = entry_valid[e] & next_src1_ready[e] &
+                          next_src2_ready[e] & next_src3_ready[e];
             if (PORT0_ONLY_FU != 0 && fu_type_r[e] == PORT0_ONLY_FU[2:0])
                 eligible_port1[e] = 1'b0;
             else
@@ -428,12 +472,14 @@ module issue_queue
                 issue_data[p] = enq_data[issue_enq_lane[p]];
                 issue_data[p].rs1_ready = enq_s1_rdy[issue_enq_lane[p]];
                 issue_data[p].rs2_ready = enq_s2_rdy[issue_enq_lane[p]];
+                issue_data[p].rs3_ready = enq_s3_rdy[issue_enq_lane[p]];
             end else begin
                 issue_data[p]  = iq_entry_t'(payload_r[sel_idx[p]]);
                 // Override ready flags with wakeup results so downstream sees
                 // correct readiness even on the issue cycle.
                 issue_data[p].rs1_ready = next_src1_ready[sel_idx[p]];
                 issue_data[p].rs2_ready = next_src2_ready[sel_idx[p]];
+                issue_data[p].rs3_ready = next_src3_ready[sel_idx[p]];
             end
         end
     end
@@ -493,14 +539,16 @@ module issue_queue
     end
 
 `ifdef SIMULATION
-    generate
-        for (genvar q = 0; q < NUM_ENQUEUE; q++) begin : gen_sva_enq_has_free
-            assert property (@(posedge clk) disable iff (!rst_n || (flush_valid && flush_full))
-                enq_valid[q] |-> free_found[q]
-            ) else $error("[SVA IQ_ENQ_NO_FREE] enq lane=%0d has no free slot count=%0d valid=%b",
-                          q, count_r, entry_valid);
+    always_ff @(posedge clk) begin
+        if (rst_n && !(flush_valid && flush_full)) begin
+            for (int q = 0; q < NUM_ENQUEUE; q++) begin
+                if (enq_valid[q] && !free_found[q]) begin
+                    $error("[SVA IQ_ENQ_NO_FREE] enq lane=%0d has no free slot count=%0d valid=%b",
+                           q, count_r, entry_valid);
+                end
+            end
         end
-    endgenerate
+    end
 `endif
 
     // =====================================================================
@@ -575,29 +623,41 @@ module issue_queue
         for (int q = 0; q < NUM_ENQUEUE; q++) begin
             enq_s1_rdy[q] = enq_data[q].rs1_ready;
             enq_s2_rdy[q] = enq_data[q].rs2_ready;
+            enq_s3_rdy[q] = enq_data[q].rs3_ready;
             enq_s1_wakeup_hit[q] = 1'b0;
             enq_s2_wakeup_hit[q] = 1'b0;
+            enq_s3_wakeup_hit[q] = 1'b0;
             enq_s1_spec_match[q] =
                 (spec_wk_valid && (spec_wk_tag == enq_data[q].rs1_phys)) ||
                 (spec_wk_valid1 && (spec_wk_tag1 == enq_data[q].rs1_phys));
             enq_s2_spec_match[q] =
                 (spec_wk_valid && (spec_wk_tag == enq_data[q].rs2_phys)) ||
                 (spec_wk_valid1 && (spec_wk_tag1 == enq_data[q].rs2_phys));
+            enq_s3_spec_match[q] =
+                (spec_wk_valid && (spec_wk_tag == enq_data[q].rs3_phys)) ||
+                (spec_wk_valid1 && (spec_wk_tag1 == enq_data[q].rs3_phys));
             enq_s1_spec_cancel[q] =
                 (spec_cancel_valid && (spec_cancel_tag == enq_data[q].rs1_phys)) ||
                 (spec_cancel_valid1 && (spec_cancel_tag1 == enq_data[q].rs1_phys));
             enq_s2_spec_cancel[q] =
                 (spec_cancel_valid && (spec_cancel_tag == enq_data[q].rs2_phys)) ||
                 (spec_cancel_valid1 && (spec_cancel_tag1 == enq_data[q].rs2_phys));
+            enq_s3_spec_cancel[q] =
+                (spec_cancel_valid && (spec_cancel_tag == enq_data[q].rs3_phys)) ||
+                (spec_cancel_valid1 && (spec_cancel_tag1 == enq_data[q].rs3_phys));
             enq_s1_spec_wakeup[q] = 1'b0;
             enq_s2_spec_wakeup[q] = 1'b0;
+            enq_s3_spec_wakeup[q] = 1'b0;
             enq_s1_spec_cancelled[q] = 1'b0;
             enq_s2_spec_cancelled[q] = 1'b0;
+            enq_s3_spec_cancelled[q] = 1'b0;
             // preg_ready_table snoop (covers older broadcasts)
             if (preg_ready_table[enq_data[q].rs1_phys])
                 enq_s1_rdy[q] = 1'b1;
             if (preg_ready_table[enq_data[q].rs2_phys])
                 enq_s2_rdy[q] = 1'b1;
+            if (preg_ready_table[enq_data[q].rs3_phys])
+                enq_s3_rdy[q] = 1'b1;
             // Check CDB for source match (override ready to 1)
             for (int c = 0; c < CDB_WIDTH; c++) begin
                 if (cdb_valid[c]) begin
@@ -608,6 +668,10 @@ module issue_queue
                     if (cdb_tag[c] == enq_data[q].rs2_phys) begin
                         enq_s2_rdy[q] = 1'b1;
                         enq_s2_wakeup_hit[q] = 1'b1;
+                    end
+                    if (cdb_tag[c] == enq_data[q].rs3_phys) begin
+                        enq_s3_rdy[q] = 1'b1;
+                        enq_s3_wakeup_hit[q] = 1'b1;
                     end
                 end
             end
@@ -623,6 +687,10 @@ module issue_queue
                     enq_s2_rdy[q] = 1'b1;
                     enq_s2_wakeup_hit[q] = 1'b1;
                 end
+                if (load_wb_wk_tag0 == enq_data[q].rs3_phys) begin
+                    enq_s3_rdy[q] = 1'b1;
+                    enq_s3_wakeup_hit[q] = 1'b1;
+                end
             end
             if (load_wb_wk_valid1) begin
                 if (load_wb_wk_tag1 == enq_data[q].rs1_phys) begin
@@ -632,6 +700,10 @@ module issue_queue
                 if (load_wb_wk_tag1 == enq_data[q].rs2_phys) begin
                     enq_s2_rdy[q] = 1'b1;
                     enq_s2_wakeup_hit[q] = 1'b1;
+                end
+                if (load_wb_wk_tag1 == enq_data[q].rs3_phys) begin
+                    enq_s3_rdy[q] = 1'b1;
+                    enq_s3_wakeup_hit[q] = 1'b1;
                 end
             end
             // Speculative load wakeup for a newly allocated entry.  This does
@@ -648,6 +720,12 @@ module issue_queue
                     enq_s2_spec_cancelled[q] = 1'b1;
                 else
                     enq_s2_spec_wakeup[q] = 1'b1;
+            end
+            if (enq_s3_spec_match[q] && !enq_s3_rdy[q]) begin
+                if (enq_s3_spec_cancel[q])
+                    enq_s3_spec_cancelled[q] = 1'b1;
+                else
+                    enq_s3_spec_wakeup[q] = 1'b1;
             end
         end
     end
@@ -685,6 +763,7 @@ module issue_queue
                 enq_valid[q] &&
                 enq_s1_rdy[q] &&
                 enq_s2_rdy[q] &&
+                enq_s3_rdy[q] &&
                 !flush_valid;
             enq_ready_candidate[q] =
                 enq_ready_for_bypass[q] &&
@@ -710,13 +789,18 @@ module issue_queue
             enq_wakeup_hit[q] =
                 enq_valid[q] &&
                 ((enq_s1_wakeup_hit[q] && !enq_data[q].rs1_ready) ||
-                 (enq_s2_wakeup_hit[q] && !enq_data[q].rs2_ready));
+                 (enq_s2_wakeup_hit[q] && !enq_data[q].rs2_ready) ||
+                 (enq_s3_wakeup_hit[q] && !enq_data[q].rs3_ready));
             enq_spec_wakeup[q] =
                 enq_valid[q] &&
-                (enq_s1_spec_wakeup[q] || enq_s2_spec_wakeup[q]);
+                (enq_s1_spec_wakeup[q] ||
+                 enq_s2_spec_wakeup[q] ||
+                 enq_s3_spec_wakeup[q]);
             enq_spec_cancelled[q] =
                 enq_valid[q] &&
-                (enq_s1_spec_cancelled[q] || enq_s2_spec_cancelled[q]);
+                (enq_s1_spec_cancelled[q] ||
+                 enq_s2_spec_cancelled[q] ||
+                 enq_s3_spec_cancelled[q]);
         end
     end
 
@@ -726,6 +810,7 @@ module issue_queue
                 enq_valid[q] &&
                 enq_s1_rdy[q] &&
                 enq_s2_rdy[q] &&
+                enq_s3_rdy[q] &&
                 !enq_ready_issued_bypass[q] &&
                 !flush_valid;
             enq_bypass_suppressed[q] =
@@ -739,11 +824,13 @@ module issue_queue
     // =====================================================================
     logic [DEPTH-1:0] do_spec1;
     logic [DEPTH-1:0] do_spec2;
+    logic [DEPTH-1:0] do_spec3;
 
     always_comb begin
         for (int e = 0; e < DEPTH; e++) begin
             do_spec1[e] = spec_set_src1[e] & ~spec_cancel_rs1[e];
             do_spec2[e] = spec_set_src2[e] & ~spec_cancel_rs2[e];
+            do_spec3[e] = spec_set_src3[e] & ~spec_cancel_rs3[e];
         end
     end
 
@@ -755,8 +842,10 @@ module issue_queue
             entry_valid <= '0;
             src1_ready  <= '0;
             src2_ready  <= '0;
+            src3_ready  <= '0;
             src1_spec   <= '0;
             src2_spec   <= '0;
+            src3_spec   <= '0;
             count_r     <= '0;
         end else begin
             // ---- Wakeup: update ready / spec bits for all entries ----
@@ -771,8 +860,10 @@ module issue_queue
             for (int e = 0; e < DEPTH; e++) begin
                 src1_ready[e] <= next_src1_ready[e] | do_spec1[e];
                 src2_ready[e] <= next_src2_ready[e] | do_spec2[e];
+                src3_ready[e] <= next_src3_ready[e] | do_spec3[e];
                 src1_spec[e]  <= next_src1_spec[e]  | do_spec1[e];
                 src2_spec[e]  <= next_src2_spec[e]  | do_spec2[e];
+                src3_spec[e]  <= next_src3_spec[e]  | do_spec3[e];
             end
 
             // ---- Issue: invalidate selected entries ----
@@ -783,8 +874,10 @@ module issue_queue
                     entry_valid[sel_idx[p]] <= 1'b0;
                     src1_ready[sel_idx[p]]  <= 1'b0;
                     src2_ready[sel_idx[p]]  <= 1'b0;
+                    src3_ready[sel_idx[p]]  <= 1'b0;
                     src1_spec[sel_idx[p]]   <= 1'b0;
                     src2_spec[sel_idx[p]]   <= 1'b0;
+                    src3_spec[sel_idx[p]]   <= 1'b0;
                 end
             end
 
@@ -804,12 +897,15 @@ module issue_queue
                     payload_r[free_idx[q]]   <= PW'(enq_data[q]);
                     rs1_phys_r[free_idx[q]]  <= enq_data[q].rs1_phys;
                     rs2_phys_r[free_idx[q]]  <= enq_data[q].rs2_phys;
+                    rs3_phys_r[free_idx[q]]  <= enq_data[q].rs3_phys;
                     rob_idx_r[free_idx[q]]   <= enq_data[q].rob_idx;
                     fu_type_r[free_idx[q]]   <= enq_data[q].fu_type;
                     src1_ready[free_idx[q]]  <= enq_s1_rdy[q] | enq_s1_spec_wakeup[q];
                     src2_ready[free_idx[q]]  <= enq_s2_rdy[q] | enq_s2_spec_wakeup[q];
+                    src3_ready[free_idx[q]]  <= enq_s3_rdy[q] | enq_s3_spec_wakeup[q];
                     src1_spec[free_idx[q]]   <= enq_s1_spec_wakeup[q];
                     src2_spec[free_idx[q]]   <= enq_s2_spec_wakeup[q];
+                    src3_spec[free_idx[q]]   <= enq_s3_spec_wakeup[q];
                 end
             end
 
@@ -820,8 +916,10 @@ module issue_queue
                         entry_valid[e] <= 1'b0;
                         src1_ready[e]  <= 1'b0;
                         src2_ready[e]  <= 1'b0;
+                        src3_ready[e]  <= 1'b0;
                         src1_spec[e]   <= 1'b0;
                         src2_spec[e]   <= 1'b0;
+                        src3_spec[e]   <= 1'b0;
                     end
                 end
             end

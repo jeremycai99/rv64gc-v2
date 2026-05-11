@@ -25,6 +25,7 @@ module l2_cache
     input  logic        icache_req_valid,
     input  logic [63:0] icache_req_addr,
     output logic        icache_req_ready,
+    output logic        icache_req_accepted,
     output logic        icache_resp_valid,
     output logic [63:0] icache_resp_addr,
     output logic [511:0] icache_resp_data,
@@ -158,6 +159,29 @@ module l2_cache
     // Memory response routing
     logic [4:0]  mshr_resp_idx;
     logic        mshr_resp_found;
+
+    // Miss responses are queued separately from the hit pipeline. This avoids
+    // dropping an L2 hit response when an unrelated memory fill returns in the
+    // same cycle as the hit pipe tail.
+    localparam int RESPQ_DEPTH = 4;
+    logic [2:0]   respq_count_q;
+    logic [63:0]  respq_addr   [0:RESPQ_DEPTH-1];
+    logic [511:0] respq_data   [0:RESPQ_DEPTH-1];
+    logic [1:0]   respq_source [0:RESPQ_DEPTH-1];
+    logic         hit_resp_valid;
+    logic [1:0]   hit_resp_source;
+    logic         respq_deq;
+    logic [2:0]   respq_deq_idx;
+    logic [63:0]  respq_deq_addr;
+    logic [511:0] respq_deq_data;
+    logic [1:0]   respq_deq_source;
+    logic         respq_enq;
+    logic         respq_can_accept;
+    logic         mem_resp_capture;
+    logic         mem_resp_direct;
+    logic [1:0]   mem_resp_source;
+    logic         hit_resp_collision_enq;
+    logic         respq_mem_source_pending;
 
     // PLRU helpers
     logic [2:0] plru_victim;
@@ -329,6 +353,12 @@ module l2_cache
                              !dcache_req_valid && !icache_req_valid;
     end
 
+    assign icache_req_accepted =
+        arb_valid &&
+        (arb_source == 2'd0) &&
+        !arb_we &&
+        (hit_any || (!mshr_addr_match && mshr_has_free));
+
     // =========================================================================
     // Invalidate busy
     // =========================================================================
@@ -362,20 +392,110 @@ module l2_cache
     // =========================================================================
     // Hit response outputs (end of 8-stage pipe)
     // =========================================================================
-    assign dcache_resp_valid   = hit_pipe[L2_HIT_LATENCY-1].valid &&
-                                 (hit_pipe[L2_HIT_LATENCY-1].source == 2'd1);
-    assign dcache_resp_addr    = hit_pipe[L2_HIT_LATENCY-1].addr;
-    assign dcache_resp_data    = hit_pipe[L2_HIT_LATENCY-1].data;
+    assign hit_resp_valid       = hit_pipe[L2_HIT_LATENCY-1].valid;
+    assign hit_resp_source      = hit_pipe[L2_HIT_LATENCY-1].source;
 
-    assign icache_resp_valid   = hit_pipe[L2_HIT_LATENCY-1].valid &&
-                                 (hit_pipe[L2_HIT_LATENCY-1].source == 2'd0);
-    assign icache_resp_addr    = hit_pipe[L2_HIT_LATENCY-1].addr;
-    assign icache_resp_data    = hit_pipe[L2_HIT_LATENCY-1].data;
+    always_comb begin
+        respq_deq        = 1'b0;
+        respq_deq_idx    = 3'd0;
+        respq_deq_addr   = respq_addr[0];
+        respq_deq_data   = respq_data[0];
+        respq_deq_source = respq_source[0];
+        for (int r = 0; r < RESPQ_DEPTH; r++) begin
+            if ((3'(r) < respq_count_q) && !respq_deq &&
+                (!hit_resp_valid || (respq_source[r] != hit_resp_source))) begin
+                respq_deq        = 1'b1;
+                respq_deq_idx    = 3'(r);
+                respq_deq_addr   = respq_addr[r];
+                respq_deq_data   = respq_data[r];
+                respq_deq_source = respq_source[r];
+            end
+        end
+    end
 
-    assign prefetch_resp_valid = hit_pipe[L2_HIT_LATENCY-1].valid &&
-                                 (hit_pipe[L2_HIT_LATENCY-1].source == 2'd2);
-    assign prefetch_resp_addr  = hit_pipe[L2_HIT_LATENCY-1].addr;
-    assign prefetch_resp_data  = hit_pipe[L2_HIT_LATENCY-1].data;
+    assign respq_can_accept    = (respq_count_q != 3'(RESPQ_DEPTH)) ||
+                                 respq_deq;
+    assign mem_resp_capture    = mem_resp_valid && mshr_resp_found &&
+                                 !inv_wb_pending;
+    assign mem_resp_source     = mshr[mshr_resp_idx].source;
+
+    always_comb begin
+        respq_mem_source_pending = 1'b0;
+        for (int r = 0; r < RESPQ_DEPTH; r++) begin
+            if ((3'(r) < respq_count_q) &&
+                (respq_source[r] == mem_resp_source)) begin
+                respq_mem_source_pending = 1'b1;
+            end
+        end
+    end
+
+    assign mem_resp_direct     = mem_resp_capture &&
+                                 respq_can_accept &&
+                                 !respq_mem_source_pending;
+    assign hit_resp_collision_enq =
+        mem_resp_direct &&
+        hit_resp_valid &&
+        (hit_resp_source == mem_resp_source);
+    assign respq_enq           =
+        (hit_resp_collision_enq && respq_can_accept) ||
+        (mem_resp_capture && respq_can_accept && !mem_resp_direct);
+
+    assign dcache_resp_valid   =
+        (mem_resp_direct && (mem_resp_source == 2'd1)) ||
+        (hit_resp_valid && (hit_resp_source == 2'd1)) ||
+        (respq_deq && (respq_deq_source == 2'd1));
+    assign dcache_resp_addr    =
+        (mem_resp_direct && (mem_resp_source == 2'd1)) ?
+        mshr[mshr_resp_idx].addr :
+        ((hit_resp_valid && (hit_resp_source == 2'd1)) ?
+         hit_pipe[L2_HIT_LATENCY-1].addr :
+         ((respq_deq && (respq_deq_source == 2'd1)) ?
+          respq_deq_addr : mshr[mshr_resp_idx].addr));
+    assign dcache_resp_data    =
+        (mem_resp_direct && (mem_resp_source == 2'd1)) ?
+        mem_resp_data :
+        ((hit_resp_valid && (hit_resp_source == 2'd1)) ?
+         hit_pipe[L2_HIT_LATENCY-1].data :
+         ((respq_deq && (respq_deq_source == 2'd1)) ?
+          respq_deq_data : mem_resp_data));
+
+    assign icache_resp_valid   =
+        (mem_resp_direct && (mem_resp_source == 2'd0)) ||
+        (hit_resp_valid && (hit_resp_source == 2'd0)) ||
+        (respq_deq && (respq_deq_source == 2'd0));
+    assign icache_resp_addr    =
+        (mem_resp_direct && (mem_resp_source == 2'd0)) ?
+        mshr[mshr_resp_idx].addr :
+        ((hit_resp_valid && (hit_resp_source == 2'd0)) ?
+         hit_pipe[L2_HIT_LATENCY-1].addr :
+         ((respq_deq && (respq_deq_source == 2'd0)) ?
+          respq_deq_addr : mshr[mshr_resp_idx].addr));
+    assign icache_resp_data    =
+        (mem_resp_direct && (mem_resp_source == 2'd0)) ?
+        mem_resp_data :
+        ((hit_resp_valid && (hit_resp_source == 2'd0)) ?
+         hit_pipe[L2_HIT_LATENCY-1].data :
+         ((respq_deq && (respq_deq_source == 2'd0)) ?
+          respq_deq_data : mem_resp_data));
+
+    assign prefetch_resp_valid =
+        (mem_resp_direct && (mem_resp_source == 2'd2)) ||
+        (hit_resp_valid && (hit_resp_source == 2'd2)) ||
+        (respq_deq && (respq_deq_source == 2'd2));
+    assign prefetch_resp_addr  =
+        (mem_resp_direct && (mem_resp_source == 2'd2)) ?
+        mshr[mshr_resp_idx].addr :
+        ((hit_resp_valid && (hit_resp_source == 2'd2)) ?
+         hit_pipe[L2_HIT_LATENCY-1].addr :
+         ((respq_deq && (respq_deq_source == 2'd2)) ?
+          respq_deq_addr : mshr[mshr_resp_idx].addr));
+    assign prefetch_resp_data  =
+        (mem_resp_direct && (mem_resp_source == 2'd2)) ?
+        mem_resp_data :
+        ((hit_resp_valid && (hit_resp_source == 2'd2)) ?
+         hit_pipe[L2_HIT_LATENCY-1].data :
+         ((respq_deq && (respq_deq_source == 2'd2)) ?
+          respq_deq_data : mem_resp_data));
 
     // =========================================================================
     // Memory request mux: MSHR issue vs invalidation writeback
@@ -392,7 +512,7 @@ module l2_cache
             mem_req_addr  = inv_wb_addr;
             mem_req_we    = 1'b1;
             mem_req_wdata = inv_wb_data;
-        end else if (mshr_has_issue) begin
+        end else if (mshr_has_issue && respq_can_accept) begin
             // MSHR fill or writeback request
             mem_req_valid = 1'b1;
             mem_req_addr  = mshr[mshr_issue_idx].addr;
@@ -428,7 +548,57 @@ module l2_cache
             inv_wb_addr    <= '0;
             inv_wb_data    <= '0;
             inv_wb_pending <= 1'b0;
+            respq_count_q  <= 3'd0;
+            for (int r = 0; r < RESPQ_DEPTH; r++) begin
+                respq_addr[r]   <= '0;
+                respq_data[r]   <= '0;
+                respq_source[r] <= 2'd0;
+            end
         end else begin
+
+            // ------------------------------------------------------------------
+            // 0. Drain and enqueue queued miss responses
+            // ------------------------------------------------------------------
+            if (respq_deq) begin
+                for (int r = 0; r < RESPQ_DEPTH - 1; r++) begin
+                    if ((3'(r) >= respq_deq_idx) &&
+                        (3'(r) < (respq_count_q - 3'd1))) begin
+                        respq_addr[r]   <= respq_addr[r + 1];
+                        respq_data[r]   <= respq_data[r + 1];
+                        respq_source[r] <= respq_source[r + 1];
+                    end
+                end
+            end
+
+            if (respq_enq) begin
+                if (respq_deq) begin
+                    respq_addr[respq_count_q - 3'd1]   <=
+                        hit_resp_collision_enq ? hit_pipe[L2_HIT_LATENCY-1].addr :
+                        mshr[mshr_resp_idx].addr;
+                    respq_data[respq_count_q - 3'd1]   <=
+                        hit_resp_collision_enq ? hit_pipe[L2_HIT_LATENCY-1].data :
+                        mem_resp_data;
+                    respq_source[respq_count_q - 3'd1] <=
+                        hit_resp_collision_enq ? hit_resp_source :
+                        mshr[mshr_resp_idx].source;
+                end else begin
+                    respq_addr[respq_count_q]   <=
+                        hit_resp_collision_enq ? hit_pipe[L2_HIT_LATENCY-1].addr :
+                        mshr[mshr_resp_idx].addr;
+                    respq_data[respq_count_q]   <=
+                        hit_resp_collision_enq ? hit_pipe[L2_HIT_LATENCY-1].data :
+                        mem_resp_data;
+                    respq_source[respq_count_q] <=
+                        hit_resp_collision_enq ? hit_resp_source :
+                        mshr[mshr_resp_idx].source;
+                end
+            end
+
+            case ({respq_enq, respq_deq})
+                2'b01: respq_count_q <= respq_count_q - 3'd1;
+                2'b10: respq_count_q <= respq_count_q + 3'd1;
+                default: respq_count_q <= respq_count_q;
+            endcase
 
             // ------------------------------------------------------------------
             // 1. Handle incoming arbitrated request
@@ -504,7 +674,8 @@ module l2_cache
             // ------------------------------------------------------------------
             // 2. Advance MSHR: issue pending request to memory
             // ------------------------------------------------------------------
-            if (mshr_has_issue && mem_req_ready && !inv_wb_pending) begin
+            if (mshr_has_issue && respq_can_accept && mem_req_ready &&
+                !inv_wb_pending) begin
                 mshr[mshr_issue_idx].state <= MSHR_WAIT_MEM;
             end
 
@@ -512,7 +683,7 @@ module l2_cache
             // 3. Handle memory response: fill L2, send resp via MSHR pipe
             //    (response is returned immediately, not through hit_pipe)
             // ------------------------------------------------------------------
-            if (mem_resp_valid && mshr_resp_found && !inv_wb_pending) begin
+            if (mem_resp_capture && respq_can_accept) begin
                 // Determine set/tag from MSHR address
                 begin
                     logic [L2_SET_BITS-1:0] fill_set;
@@ -575,14 +746,6 @@ module l2_cache
                         end
                         plru_state[fill_set] <= _fns;
                     end
-
-                    // Deliver response through a single-cycle bypass
-                    // (insert directly into the last pipe stage so it arrives
-                    //  next cycle — simplification for bringup)
-                    hit_pipe[L2_HIT_LATENCY-1].valid     <= 1'b1;
-                    hit_pipe[L2_HIT_LATENCY-1].addr      <= mshr[mshr_resp_idx].addr;
-                    hit_pipe[L2_HIT_LATENCY-1].data      <= mem_resp_data;
-                    hit_pipe[L2_HIT_LATENCY-1].source <= mshr[mshr_resp_idx].source;
 
                     // Deallocate MSHR
                     mshr[mshr_resp_idx].valid <= 1'b0;

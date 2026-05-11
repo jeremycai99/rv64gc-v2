@@ -145,6 +145,7 @@ module pred_checker
     logic [63:0] static_ctl_target_c;
     logic [2:0]  static_ctl_type_c;
     logic [2:0]  bp_truncated_count_c;
+    logic        consume_remainder_terminal_c;
 
     always_comb begin
         ftq_pred_ctl_valid_o      = 1'b0;
@@ -585,8 +586,13 @@ module pred_checker
         end
     end
 
+    assign consume_remainder_terminal_c =
+        consume_remainder_i &&
+        bp_branch_found_o &&
+        bp_taken_o &&
+        !subgroup_split_before_ctl_o;
     assign owner_complete_o =
-        !consume_remainder_i &&
+        (!consume_remainder_i || consume_remainder_terminal_c) &&
         !redirect_without_owner_successor_i &&
         !same_owner_continue_o &&
         (!straddle_detected_i ||

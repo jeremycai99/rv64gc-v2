@@ -70,6 +70,7 @@ module ifu_line_fetch
 
     output logic                          icache_fill_req_valid,
     output logic [63:0]                   icache_fill_req_addr,
+    input  logic                          icache_fill_req_accepted,
     input  logic                          icache_fill_resp_valid,
     input  logic [63:0]                   icache_fill_resp_addr,
     input  logic [511:0]                  icache_fill_resp_data,
@@ -238,6 +239,7 @@ module ifu_line_fetch
         .resp_hit       (ic_resp_hit_comb),
         .fill_req_valid (icache_fill_req_valid),
         .fill_req_addr  (icache_fill_req_addr),
+        .fill_req_accepted(icache_fill_req_accepted),
         .fill_resp_valid(icache_fill_resp_valid),
         .fill_resp_addr (icache_fill_resp_addr),
         .fill_resp_data (icache_fill_resp_data),

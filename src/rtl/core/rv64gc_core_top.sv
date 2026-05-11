@@ -8,6 +8,7 @@ module rv64gc_core_top
     import rv64gc_pkg::*;
     import isa_pkg::*;
     import uarch_pkg::*;
+    import fpu_pkg::*;
 (
     input  logic        clk,
     input  logic        rst_n,
@@ -82,8 +83,8 @@ module rv64gc_core_top
     // =========================================================================
     // PRF Ready Table
     // =========================================================================
-    logic [INT_PRF_DEPTH-1:0] preg_ready_table;
-    logic [INT_PRF_DEPTH-1:0] preg_ready_table_comb;
+    logic [PHYS_TAG_COUNT-1:0] preg_ready_table;
+    logic [PHYS_TAG_COUNT-1:0] preg_ready_table_comb;
 
     // =========================================================================
     // CDB signals (CDB_WIDTH=4 wakeup broadcast buses: ALU0,ALU1,ALU2,ALU3/DIV)
@@ -106,6 +107,8 @@ module rv64gc_core_top
     logic [11:0]              cdb_csr_addr     [0:CDB_WIDTH-1];
     logic [63:0]              cdb_csr_wdata    [0:CDB_WIDTH-1];
     logic [1:0]               cdb_csr_op       [0:CDB_WIDTH-1];
+    logic [CDB_WIDTH-1:0]     cdb_fp_fflags_valid;
+    logic [4:0]               cdb_fp_fflags    [0:CDB_WIDTH-1];
 
     // =========================================================================
     // Load writeback signals (separate from CDB wakeup broadcast)
@@ -119,6 +122,7 @@ module rv64gc_core_top
     logic [PHYS_REG_BITS-1:0] load_wb_pdst  [0:1];
     logic [ROB_IDX_BITS-1:0]  load_wb_rob_idx [0:1];
     logic [63:0]              load_wb_data  [0:1];
+    mem_size_e                load_wb_mem_size [0:1];
     logic [1:0]               load_wb_has_exception;
     logic [3:0]               load_wb_exc_code [0:1];
 
@@ -151,6 +155,8 @@ module rv64gc_core_top
     logic [11:0]              cdb_csr_addr_r     [0:CDB_WIDTH-1];
     logic [63:0]              cdb_csr_wdata_r    [0:CDB_WIDTH-1];
     logic [1:0]               cdb_csr_op_r       [0:CDB_WIDTH-1];
+    logic [CDB_WIDTH-1:0]     cdb_fp_fflags_valid_r;
+    logic [4:0]               cdb_fp_fflags_r    [0:CDB_WIDTH-1];
 
     // =========================================================================
     // Registered load writeback sideband (1-cycle delay for ROB writeback).
@@ -210,6 +216,7 @@ module rv64gc_core_top
     logic [63:0]         ras_restore_top_addr_fe;
     logic        icache_fill_req_valid;
     logic [63:0] icache_fill_req_addr;
+    logic        l2_icache_req_accepted;
     logic        icache_fill_resp_valid;
     logic [63:0] icache_fill_resp_addr;
     logic [511:0] icache_fill_resp_data;
@@ -374,6 +381,7 @@ module rv64gc_core_top
         .ras_restore_top_addr   (ras_restore_top_addr_fe),
         .icache_fill_req_valid  (icache_fill_req_valid),
         .icache_fill_req_addr   (icache_fill_req_addr),
+        .icache_fill_req_accepted(l2_icache_req_accepted),
         .icache_fill_resp_valid (icache_fill_resp_valid),
         .icache_fill_resp_addr  (icache_fill_resp_addr),
         .icache_fill_resp_data  (icache_fill_resp_data),
@@ -516,6 +524,7 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]   rob_head_is_ecall;
     logic [PIPE_WIDTH-1:0]   rob_head_is_wfi;
     logic [PIPE_WIDTH-1:0]   rob_head_is_fused;
+    logic [PIPE_WIDTH-1:0]   rob_head_is_fp_instr;
     logic [PIPE_WIDTH-1:0]   rob_head_branch_taken;
     logic [63:0]             rob_head_branch_target [0:PIPE_WIDTH-1];
     logic [63:0]             rob_head_branch_taken_target [0:PIPE_WIDTH-1];
@@ -524,6 +533,7 @@ module rv64gc_core_top
     logic [63:0]             rob_head_csr_wdata   [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_csr_we;
     logic [1:0]              rob_head_csr_op      [0:PIPE_WIDTH-1];
+    logic [4:0]              rob_head_fp_fflags   [0:PIPE_WIDTH-1];
 
     // Commit signals
     logic [2:0]              commit_count;
@@ -608,6 +618,7 @@ module rv64gc_core_top
     logic [PHYS_REG_BITS-1:0] rb_head_old_pdst   [0:PIPE_WIDTH-1];
     logic [4:0]               rb_head_rd_arch    [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]    rb_head_rd_valid;
+    logic [PIPE_WIDTH-1:0]    rb_head_rd_is_fp;
     logic [4:0]               rb_head_bp_ras_tos [0:PIPE_WIDTH-1];
     logic [63:0]              rb_head_bp_ras_top [0:PIPE_WIDTH-1];
     logic [1:0]               rb_head_bp_ras_op  [0:PIPE_WIDTH-1];
@@ -634,6 +645,7 @@ module rv64gc_core_top
             rb_head_old_pdst[i]      = rename_buf[idx].old_pdst;
             rb_head_rd_arch[i]       = rename_buf[idx].rd_arch;
             rb_head_rd_valid[i]      = rename_buf[idx].rd_valid;
+            rb_head_rd_is_fp[i]      = rename_buf[idx].rd_is_fp;
             rb_head_bp_owner[i]      = rename_buf[idx].bp_owner;
             rb_head_bp_lookup_pc[i]  = rename_buf[idx].bp_lookup_pc;
             rb_head_bp_ras_tos[i]    = rename_buf[idx].bp_ras_tos;
@@ -660,6 +672,7 @@ module rv64gc_core_top
     // Commit-to-rename signals
     logic [PHYS_REG_BITS-1:0] commit_old_pdst [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]    commit_rd_valid;
+    logic [PIPE_WIDTH-1:0]    commit_is_fp_dst;
     logic [4:0]               commit_rd_arch_w  [0:PIPE_WIDTH-1];
     logic [PHYS_REG_BITS-1:0] commit_pdst_w     [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]    commit_release_cp;
@@ -670,7 +683,15 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0] ren_zero_eliminated;
     // Combined: instruction was eliminated and must not be dispatched
     logic [PIPE_WIDTH-1:0] ren_eliminated;
+    logic [PIPE_WIDTH-1:0] ren_decoded_exception;
+    logic [PIPE_WIDTH-1:0] rob_alloc_ready_now;
     assign ren_eliminated = ren_move_eliminated | ren_zero_eliminated;
+    always_comb begin
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            ren_decoded_exception[i] = ren_insn[i].base.has_exception;
+        end
+    end
+    assign rob_alloc_ready_now = ren_eliminated | ren_decoded_exception;
 
     localparam logic [ROB_IDX_BITS:0] BACKEND_THROTTLE_ROB_ENTER =
         (ROB_IDX_BITS+1)'(16);
@@ -744,6 +765,7 @@ module rv64gc_core_top
         .commit_count     (commit_count),
         .commit_old_pdst  (commit_old_pdst),
         .commit_rd_valid  (commit_rd_valid),
+        .commit_is_fp_dst (commit_is_fp_dst),
         .commit_rd_arch   (commit_rd_arch_w),
         .commit_pdst      (commit_pdst_w),
         .commit_release_cp(commit_release_cp),
@@ -1287,6 +1309,7 @@ module rv64gc_core_top
                     rename_buf[ren_insn[i].rob_idx].old_pdst <= ren_insn[i].old_pdst;
                     rename_buf[ren_insn[i].rob_idx].rd_arch  <= ren_insn[i].base.rd_arch;
                     rename_buf[ren_insn[i].rob_idx].rd_valid <= ren_insn[i].base.rd_valid;
+                    rename_buf[ren_insn[i].rob_idx].rd_is_fp <= ren_insn[i].base.rd_is_fp;
                     rename_buf[ren_insn[i].rob_idx].bp_owner <= ren_insn[i].base.bp_owner;
                     rename_buf[ren_insn[i].rob_idx].bp_lookup_pc <= ren_insn[i].base.bp_lookup_pc;
                     rename_buf[ren_insn[i].rob_idx].bp_ras_tos <= ren_insn[i].base.bp_ras_tos;
@@ -1319,6 +1342,7 @@ module rv64gc_core_top
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             commit_old_pdst[i] = commit_out[i].old_pdst;
             commit_rd_valid[i] = commit_out[i].rd_valid;
+            commit_is_fp_dst[i] = rb_head_rd_is_fp[i];
             commit_rd_arch_w[i] = commit_out[i].rd_arch;
             commit_pdst_w[i]    = commit_out[i].pdst;
         end
@@ -1340,6 +1364,9 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_ecall;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_wfi;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_fused;
+    logic [PIPE_WIDTH-1:0]  rob_alloc_is_fp_instr;
+    logic [PIPE_WIDTH-1:0]  rob_alloc_has_exception;
+    logic [3:0]             rob_alloc_exc_code [0:PIPE_WIDTH-1];
     // Per-uop FU-type tags driven into the ROB to support sub-classification
     // of the SIMULATION-only "other" head-stall bucket (mul/div/bru).
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_mul;
@@ -1393,6 +1420,9 @@ module rv64gc_core_top
             rob_alloc_is_ecall[i]    = ren_insn[i].base.is_ecall;
             rob_alloc_is_wfi[i]      = ren_insn[i].base.is_wfi;
             rob_alloc_is_fused[i]    = ren_insn[i].base.is_fused;
+            rob_alloc_is_fp_instr[i] = ren_insn[i].base.is_fp_op;
+            rob_alloc_has_exception[i] = ren_insn[i].base.has_exception;
+            rob_alloc_exc_code[i]      = ren_insn[i].base.exc_code;
             rob_alloc_is_mul[i]      = ren_insn[i].base.is_mul;
             rob_alloc_is_div[i]      = ren_insn[i].base.is_div;
             rob_alloc_is_bru[i]      = (ren_insn[i].base.fu_type == FU_BRU);
@@ -1430,7 +1460,9 @@ module rv64gc_core_top
         .alloc_count            (ren_count_w),
         .alloc_idx              (rob_alloc_idx),
         .alloc_ready            (rob_alloc_ready),
-        .alloc_ready_now        (ren_eliminated),
+        .alloc_ready_now        (rob_alloc_ready_now),
+        .alloc_has_exception    (rob_alloc_has_exception),
+        .alloc_exc_code         (rob_alloc_exc_code),
         .alloc_pc               (rob_alloc_pc),
         .alloc_is_branch        (rob_alloc_is_branch),
         .alloc_bpu_type         (rob_alloc_bpu_type),
@@ -1445,6 +1477,7 @@ module rv64gc_core_top
         .alloc_is_ecall         (rob_alloc_is_ecall),
         .alloc_is_wfi           (rob_alloc_is_wfi),
         .alloc_is_fused         (rob_alloc_is_fused),
+        .alloc_is_fp_instr      (rob_alloc_is_fp_instr),
         .alloc_is_mul           (rob_alloc_is_mul),
         .alloc_is_div           (rob_alloc_is_div),
         .alloc_is_bru           (rob_alloc_is_bru),
@@ -1461,6 +1494,8 @@ module rv64gc_core_top
         .wb_csr_addr            (cdb_csr_addr_r),
         .wb_csr_wdata           (cdb_csr_wdata_r),
         .wb_csr_op              (cdb_csr_op_r),
+        .wb_fp_fflags_valid     (cdb_fp_fflags_valid_r),
+        .wb_fp_fflags           (cdb_fp_fflags_r),
         .sta_wb_valid           (lsu_sta_wb_valid_r),
         .sta_wb_rob_idx         (lsu_sta_wb_rob_idx_r),
         .std_wb_valid           (lsu_std_wb_valid_r),
@@ -1492,6 +1527,7 @@ module rv64gc_core_top
         .head_is_ecall          (rob_head_is_ecall),
         .head_is_wfi            (rob_head_is_wfi),
         .head_is_fused          (rob_head_is_fused),
+        .head_is_fp_instr       (rob_head_is_fp_instr),
         .head_branch_taken      (rob_head_branch_taken),
         .head_branch_target     (rob_head_branch_target),
         .head_branch_taken_target (rob_head_branch_taken_target),
@@ -1500,6 +1536,7 @@ module rv64gc_core_top
         .head_csr_wdata         (rob_head_csr_wdata),
         .head_csr_we            (rob_head_csr_we),
         .head_csr_op            (rob_head_csr_op),
+        .head_fp_fflags         (rob_head_fp_fflags),
         .commit_count           (commit_count),
         .flush_valid            (flush_out.valid),
         .flush_rob_tail         (flush_out.rob_idx),
@@ -1566,7 +1603,9 @@ module rv64gc_core_top
         end
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            if ((3'(i) < ren_count_w) && !ren_eliminated[i]) begin
+            if ((3'(i) < ren_count_w) &&
+                !ren_eliminated[i] &&
+                !ren_insn[i].base.has_exception) begin
                 dq_enq_data[dq_enq_count] = ren_insn[i];
                 dq_enq_count = dq_enq_count + 3'd1;
             end
@@ -1616,7 +1655,7 @@ module rv64gc_core_top
     logic [0:0]  iq1_issue_valid_s;
     iq_entry_t   iq1_issue_data_s [0:0];
 
-    // --- IQ2: ALU3 + DIV + CSR ---
+    // --- IQ2: ALU3 + DIV + CSR + serialized FPU ---
     logic [1:0]  iq2_enq_valid;
     iq_entry_t   iq2_enq_data [0:1];
     logic        iq2_full;
@@ -1624,8 +1663,17 @@ module rv64gc_core_top
     logic [1:0]  iq2_issue_valid;
     iq_entry_t   iq2_issue_data [0:1];
     // Single-issue wrapper signals for IQ2 (NUM_SELECT=1)
+    logic [0:0]  iq2_issue_candidate_valid_s;
     logic [0:0]  iq2_issue_valid_s;
     iq_entry_t   iq2_issue_data_s [0:0];
+    logic [0:0]  iq2_issue_suppress_s;
+    logic        fpu_ready;
+    logic        fpu_req_valid_r;
+    logic        fpu_out_valid;
+    logic        fpu_unsupported;
+    logic        div_valid_out;
+    logic        div_hold_valid_r;
+    logic [2:0]  csr_frm;
 
     // --- Load IQ ---
     logic [1:0]  iq_load_enq_valid;
@@ -1686,8 +1734,10 @@ module rv64gc_core_top
             dq_iq_entry[s].pdst         = dq_deq_data[s].pdst;
             dq_iq_entry[s].rs1_phys     = dq_deq_data[s].rs1_phys;
             dq_iq_entry[s].rs2_phys     = dq_deq_data[s].rs2_phys;
+            dq_iq_entry[s].rs3_phys     = dq_deq_data[s].rs3_phys;
             dq_iq_entry[s].rs1_ready    = dq_deq_data[s].rs1_ready;
             dq_iq_entry[s].rs2_ready    = dq_deq_data[s].rs2_ready;
+            dq_iq_entry[s].rs3_ready    = dq_deq_data[s].rs3_ready;
             dq_iq_entry[s].imm          = dq_deq_data[s].base.imm;
             dq_iq_entry[s].fu_type      = dq_deq_data[s].base.fu_type;
             dq_iq_entry[s].alu_op       = dq_deq_data[s].base.alu_op;
@@ -1727,6 +1777,20 @@ module rv64gc_core_top
             dq_iq_entry[s].amo_op       = dq_deq_data[s].base.amo_op;
             dq_iq_entry[s].amo_aq       = dq_deq_data[s].base.amo_aq;
             dq_iq_entry[s].amo_rl       = dq_deq_data[s].base.amo_rl;
+            dq_iq_entry[s].is_fp_op     = dq_deq_data[s].base.is_fp_op;
+            dq_iq_entry[s].rs1_is_fp    = dq_deq_data[s].base.rs1_is_fp;
+            dq_iq_entry[s].rs2_is_fp    = dq_deq_data[s].base.rs2_is_fp;
+            dq_iq_entry[s].rs3_is_fp    = dq_deq_data[s].base.rs3_is_fp;
+            dq_iq_entry[s].rd_is_fp     = dq_deq_data[s].base.rd_is_fp;
+            dq_iq_entry[s].fp_fmt       = dq_deq_data[s].base.fp_fmt;
+            dq_iq_entry[s].fp_dst_fmt   = dq_deq_data[s].base.fp_dst_fmt;
+            dq_iq_entry[s].fp_int_fmt   = dq_deq_data[s].base.fp_int_fmt;
+            dq_iq_entry[s].fp_rm        = dq_deq_data[s].base.fp_rm;
+            dq_iq_entry[s].fp_pipe      = dq_deq_data[s].base.fp_pipe;
+            dq_iq_entry[s].fp_op        = dq_deq_data[s].base.fp_op;
+            dq_iq_entry[s].fp_op_mod    = dq_deq_data[s].base.fp_op_mod;
+            dq_iq_entry[s].fp_misc_op   = dq_deq_data[s].base.fp_misc_op;
+            dq_iq_entry[s].fmv_op       = dq_deq_data[s].base.fmv_op;
             dq_iq_entry[s].is_rvc       = dq_deq_data[s].base.is_rvc;
             dq_iq_entry[s].checkpoint_id   = dq_deq_data[s].checkpoint_id;
             dq_iq_entry[s].uses_checkpoint = dq_deq_data[s].uses_checkpoint;
@@ -1910,6 +1974,17 @@ module rv64gc_core_top
     assign iq1_issue_data[0]  = iq1_issue_data_s[0];
     assign iq1_issue_data[1]  = '0;
 
+    // CSR operations read committed CSR state. Keep them resident until
+    // their ROB entry reaches the head so older CSR writes are visible.
+	    assign iq2_issue_suppress_s[0] =
+	        iq2_issue_candidate_valid_s[0] &&
+	        (((iq2_issue_data_s[0].fu_type == FU_CSR) &&
+	          (iq2_issue_data_s[0].rob_idx != rob_head_idx)) ||
+	         fpu_req_valid_r ||
+	         fpu_out_valid ||
+	         div_valid_out ||
+	         div_hold_valid_r);
+
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
                   .SUPPORT_ENQ_ISSUE_BYPASS(1))
     u_iq2 (
@@ -1933,7 +2008,7 @@ module rv64gc_core_top
         .load_wb_wk_valid1(load_wb_valid_live[1] && (load_wb_pdst[1] != '0)),
         .load_wb_wk_tag1  (load_wb_pdst[1]),
         .preg_ready_table(preg_ready_table_comb),
-        .issue_candidate_valid(),
+        .issue_candidate_valid(iq2_issue_candidate_valid_s),
         .issue_valid     (iq2_issue_valid_s),
         .issue_data      (iq2_issue_data_s),
         .older_probe_valid(issueq_probe_none_valid),
@@ -1943,8 +2018,8 @@ module rv64gc_core_top
         .flush_valid     (flush_out.valid),
         .flush_rob_tail  (flush_out.rob_idx),
         .flush_full      (flush_out.full_flush),
-        .issue_suppress  ('0),
-        .enq_issue_bypass_enable(iq_ready_enq_bypass_enable),
+        .issue_suppress  (iq2_issue_suppress_s),
+        .enq_issue_bypass_enable(1'b0),
         .enq_issue_bypass_alu_only(iq_ready_enq_bypass_alu_only),
         .occupancy       (iq2_occ)
     );
@@ -2109,19 +2184,43 @@ module rv64gc_core_top
     //   Planning-doc target of 8R was incorrect; 12R kept to avoid port starvation.
     // =========================================================================
     logic [PHYS_REG_BITS-1:0] prf_raddr [0:11];
+    logic [PHYS_REG_BITS-1:0] int_prf_raddr [0:11];
     logic [63:0]              prf_rdata [0:11];
     logic [PRF_WRITE_PORTS-1:0] prf_wen;
     logic [PHYS_REG_BITS-1:0] prf_waddr [0:PRF_WRITE_PORTS-1];
     logic [63:0]              prf_wdata [0:PRF_WRITE_PORTS-1];
+    logic [6:0]               fp_prf_raddr [0:7];
+    logic [63:0]              fp_prf_rdata [0:7];
+    logic [3:0]               fp_prf_wen;
+    logic [6:0]               fp_prf_waddr [0:3];
+    logic [63:0]              fp_prf_wdata [0:3];
+
+    always_comb begin
+        for (int i = 0; i < 12; i++) begin
+            if (prf_raddr[i] >= PHYS_REG_BITS'(FP_PHYS_BASE))
+                int_prf_raddr[i] = '0;
+            else
+                int_prf_raddr[i] = prf_raddr[i];
+        end
+    end
 
     int_prf u_int_prf (
         .clk   (clk),
         .rst_n (rst_n),
-        .raddr (prf_raddr),
+        .raddr (int_prf_raddr),
         .rdata (prf_rdata),
         .wen   (prf_wen),
         .waddr (prf_waddr),
         .wdata (prf_wdata)
+    );
+
+    fp_prf u_fp_prf (
+        .clk     (clk),
+        .rd_addr (fp_prf_raddr),
+        .rd_data (fp_prf_rdata),
+        .wr_en   (fp_prf_wen),
+        .wr_addr (fp_prf_waddr),
+        .wr_data (fp_prf_wdata)
     );
 
     // =========================================================================
@@ -2145,12 +2244,33 @@ module rv64gc_core_top
     // IQ2 port 0 -> ALU3/DIV
     assign prf_raddr[6] = iq2_issue_data[0].rs1_phys;
     assign prf_raddr[7] = iq2_issue_data[0].rs2_phys;
-    // Load IQ -> Load AGU rs1 x2
+    // Load IQ -> Load AGU rs1 x2.  AMO on load port 0 borrows the
+    // port-1 read slot for rs2; LSU suppresses load port 1 in that cycle.
     assign prf_raddr[8]  = iq_load_issue_data[0].rs1_phys;
-    assign prf_raddr[9]  = iq_load_issue_data[1].rs1_phys;
+    assign prf_raddr[9]  = iq_load_issue_data[0].is_amo
+                          ? iq_load_issue_data[0].rs2_phys
+                          : iq_load_issue_data[1].rs1_phys;
     // Store IQ -> STA rs1, STD rs2 (routed by fu_type)
     assign prf_raddr[10] = routed_sta_data.rs1_phys;
     assign prf_raddr[11] = routed_std_data.rs2_phys;
+
+    always_comb begin
+        for (int i = 0; i < 8; i++) begin
+            fp_prf_raddr[i] = 7'd0;
+        end
+        if (iq2_issue_data[0].rs1_is_fp)
+            fp_prf_raddr[0] =
+                7'(iq2_issue_data[0].rs1_phys - PHYS_REG_BITS'(FP_PHYS_BASE));
+        if (iq2_issue_data[0].rs2_is_fp)
+            fp_prf_raddr[1] =
+                7'(iq2_issue_data[0].rs2_phys - PHYS_REG_BITS'(FP_PHYS_BASE));
+        if (iq2_issue_data[0].rs3_is_fp)
+            fp_prf_raddr[2] =
+                7'(iq2_issue_data[0].rs3_phys - PHYS_REG_BITS'(FP_PHYS_BASE));
+        if (routed_std_data.rs2_is_fp)
+            fp_prf_raddr[3] =
+                7'(routed_std_data.rs2_phys - PHYS_REG_BITS'(FP_PHYS_BASE));
+    end
 
     // =========================================================================
     // 9. BYPASS NETWORK (12 instances, one per operand)
@@ -2247,6 +2367,108 @@ module rv64gc_core_top
         .is_w_op   (iq2_issue_data[0].is_w_op),
         .is_unsigned(iq2_issue_data[0].is_unsigned),
         .result    (alu3_result)
+    );
+
+    // =========================================================================
+	    // 10a. FPU (serialized on IQ2 port 0)
+	    // =========================================================================
+	    logic        fpu_issue;
+	    logic        fpu_valid_in;
+	    iq_entry_t   fpu_req_data_r;
+	    logic [63:0] fpu_req_rs1_data_r;
+	    logic [63:0] fpu_req_rs2_data_r;
+	    logic [63:0] fpu_req_rs3_data_r;
+	    fp_rm_e      fpu_req_rm_r;
+	    logic [63:0] fpu_issue_rs1_data;
+	    logic [63:0] fpu_issue_rs2_data;
+	    logic [63:0] fpu_issue_rs3_data;
+	    fp_rm_e      fpu_issue_rm;
+	    logic [63:0] fpu_rs1_data;
+	    logic [63:0] fpu_rs2_data;
+	    logic [63:0] fpu_rs3_data;
+	    logic [ROB_IDX_BITS-1:0]  fpu_out_rob_idx;
+	    logic [PHYS_REG_BITS-1:0] fpu_out_pdst;
+	    logic [63:0] fpu_out_data;
+	    fp_status_t  fpu_out_status;
+
+	    assign fpu_issue =
+	        iq2_issue_valid[0] && iq2_issue_data[0].is_fp_op;
+	    assign fpu_valid_in = fpu_req_valid_r;
+	    assign fpu_issue_rs1_data =
+	        iq2_issue_data[0].rs1_is_fp ? fp_prf_rdata[0] : bypassed_data[6];
+	    assign fpu_issue_rs2_data =
+	        iq2_issue_data[0].rs2_is_fp ? fp_prf_rdata[1] : bypassed_data[7];
+	    assign fpu_issue_rs3_data =
+	        iq2_issue_data[0].rs3_is_fp ? fp_prf_rdata[2] : 64'd0;
+	    assign fpu_rs1_data = fpu_req_rs1_data_r;
+	    assign fpu_rs2_data = fpu_req_rs2_data_r;
+	    assign fpu_rs3_data = fpu_req_rs3_data_r;
+
+	    always_comb begin
+	        if (iq2_issue_data[0].fp_rm == FP_RM_DYN) begin
+	            case (csr_frm)
+	                3'd0:    fpu_issue_rm = FP_RM_RNE;
+	                3'd1:    fpu_issue_rm = FP_RM_RTZ;
+	                3'd2:    fpu_issue_rm = FP_RM_RDN;
+	                3'd3:    fpu_issue_rm = FP_RM_RUP;
+	                3'd4:    fpu_issue_rm = FP_RM_RMM;
+	                default: fpu_issue_rm = FP_RM_DYN;
+	            endcase
+	        end else begin
+	            fpu_issue_rm = iq2_issue_data[0].fp_rm;
+	        end
+	    end
+
+	    always_ff @(posedge clk or negedge rst_n) begin
+	        if (!rst_n || flush_out.valid) begin
+	            fpu_req_valid_r    <= 1'b0;
+	            fpu_req_data_r     <= '0;
+	            fpu_req_rs1_data_r <= 64'd0;
+	            fpu_req_rs2_data_r <= 64'd0;
+	            fpu_req_rs3_data_r <= 64'd0;
+	            fpu_req_rm_r       <= FP_RM_RNE;
+	        end else begin
+	            if (fpu_req_valid_r && fpu_ready)
+	                fpu_req_valid_r <= 1'b0;
+
+	            if (fpu_issue) begin
+	                fpu_req_valid_r    <= 1'b1;
+	                fpu_req_data_r     <= iq2_issue_data[0];
+	                fpu_req_rs1_data_r <= fpu_issue_rs1_data;
+	                fpu_req_rs2_data_r <= fpu_issue_rs2_data;
+	                fpu_req_rs3_data_r <= fpu_issue_rs3_data;
+	                fpu_req_rm_r       <= fpu_issue_rm;
+	            end
+	        end
+	    end
+
+	    fpu_top u_fpu_top (
+	        .clk_i        (clk),
+	        .rst_ni       (rst_n),
+	        .flush_i      (flush_out.valid),
+	        .valid_i      (fpu_valid_in),
+	        .use_fpnew_i  (1'b1),
+	        .pipe_i       (fpu_req_data_r.fp_pipe),
+	        .op_i         (fpu_req_data_r.fp_op),
+	        .op_mod_i     (fpu_req_data_r.fp_op_mod),
+	        .misc_op_i    (fpu_req_data_r.fp_misc_op),
+	        .fmv_op_i     (fpu_req_data_r.fmv_op),
+	        .src_fmt_i    (fpu_req_data_r.fp_fmt),
+	        .dst_fmt_i    (fpu_req_data_r.fp_dst_fmt),
+	        .int_fmt_i    (fpu_req_data_r.fp_int_fmt),
+	        .rm_i         (fpu_req_rm_r),
+	        .rs1_data_i   (fpu_rs1_data),
+	        .rs2_data_i   (fpu_rs2_data),
+	        .rs3_data_i   (fpu_rs3_data),
+	        .rob_idx_i    (fpu_req_data_r.rob_idx),
+	        .pdst_i       (fpu_req_data_r.pdst),
+	        .ready_o      (fpu_ready),
+	        .out_valid_o  (fpu_out_valid),
+	        .out_rob_idx_o(fpu_out_rob_idx),
+        .out_pdst_o   (fpu_out_pdst),
+        .out_data_o   (fpu_out_data),
+        .out_status_o (fpu_out_status),
+        .unsupported_o(fpu_unsupported)
     );
 
     // =========================================================================
@@ -2995,10 +3217,12 @@ module rv64gc_core_top
     // 13. DIVIDER (shared with ALU3 on IQ2 port 0)
     // =========================================================================
     logic        div_busy;
-    logic        div_valid_out;
     logic [63:0] div_result;
     logic        div_issue;
-    assign div_issue = iq2_issue_valid[0] && (iq2_issue_data[0].fu_type == FU_DIV);
+    assign div_issue =
+        iq2_issue_valid[0] &&
+        !iq2_issue_data[0].is_fp_op &&
+        (iq2_issue_data[0].fu_type == FU_DIV);
 
     // Track ROB idx and pdst for divider (capture at issue, hold until done)
     logic [ROB_IDX_BITS-1:0]  div_rob_idx_r;
@@ -3043,6 +3267,7 @@ module rv64gc_core_top
     logic [ROB_IDX_BITS-1:0]  lsu_load_wb_rob_idx [0:1];
     logic [PHYS_REG_BITS-1:0] lsu_load_wb_pdst    [0:1];
     logic [63:0]              lsu_load_wb_data    [0:1];
+    mem_size_e                lsu_load_wb_mem_size [0:1];
     logic [1:0]               lsu_load_wb_has_exception;
     logic [3:0]               lsu_load_wb_exc_code [0:1];
     logic                     lsu_sta_wb_valid;
@@ -3053,8 +3278,11 @@ module rv64gc_core_top
     // Build the LSU's load_rs1 unpacked-array port using explicit indexing
     // (a packed concat would be silently re-ordered by Verilator).
     logic [63:0] lsu_load_rs1_arr [0:1];
+    logic [63:0] lsu_load_rs2_arr [0:1];
     assign lsu_load_rs1_arr[0] = bypassed_data[8];
     assign lsu_load_rs1_arr[1] = bypassed_data[9];
+    assign lsu_load_rs2_arr[0] = bypassed_data[9];
+    assign lsu_load_rs2_arr[1] = 64'd0;
 
     // ALU0 is used when not BRU
     logic alu0_issue;
@@ -3066,8 +3294,11 @@ module rv64gc_core_top
 
     // ALU3 is used when not DIV
     logic alu3_issue;
-    assign alu3_issue = iq2_issue_valid[0] && (iq2_issue_data[0].fu_type == FU_ALU ||
-                                                iq2_issue_data[0].fu_type == FU_CSR);
+    assign alu3_issue =
+        iq2_issue_valid[0] &&
+        !iq2_issue_data[0].is_fp_op &&
+        ((iq2_issue_data[0].fu_type == FU_ALU) ||
+         (iq2_issue_data[0].fu_type == FU_CSR));
 
     // CDB[0]: ALU0/BRU
     always_comb begin
@@ -3086,6 +3317,8 @@ module rv64gc_core_top
         cdb_csr_addr[0]         = 12'd0;
         cdb_csr_wdata[0]        = 64'd0;
         cdb_csr_op[0]           = 2'd0;
+        cdb_fp_fflags_valid[0]  = 1'b0;
+        cdb_fp_fflags[0]        = 5'd0;
         if (bru_issue) begin
             cdb_data[0] = bru_result;
         end else begin
@@ -3110,6 +3343,8 @@ module rv64gc_core_top
         cdb_csr_addr[1]         = 12'd0;
         cdb_csr_wdata[1]        = 64'd0;
         cdb_csr_op[1]           = 2'd0;
+        cdb_fp_fflags_valid[1]  = 1'b0;
+        cdb_fp_fflags[1]        = 5'd0;
         if (bru1_issue)
             cdb_data[1] = bru1_result;
         else
@@ -3280,23 +3515,34 @@ module rv64gc_core_top
         cdb_csr_addr[2]         = 12'd0;
         cdb_csr_wdata[2]        = 64'd0;
         cdb_csr_op[2]           = 2'd0;
+        cdb_fp_fflags_valid[2]  = 1'b0;
+        cdb_fp_fflags[2]        = 5'd0;
     end
 
     // DIV output hold register (same pattern as MUL hold)
-    logic        div_hold_valid_r;
     logic [ROB_IDX_BITS-1:0]  div_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] div_hold_pdst_r;
     logic [63:0] div_hold_data_r;
+    logic        div_port_busy;
+    logic        div_take_hold;
+    logic        div_take_fresh;
+
+    assign div_port_busy =
+        alu3_issue || fpu_out_valid || fpu_unsupported;
+    assign div_take_hold =
+        div_hold_valid_r && !div_port_busy;
+    assign div_take_fresh =
+        div_valid_out && !div_hold_valid_r && !div_port_busy;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || flush_out.valid) begin
             div_hold_valid_r <= 1'b0;
-        end else if (div_valid_out && alu3_issue) begin
+        end else if (div_valid_out && !div_take_fresh) begin
             div_hold_valid_r   <= 1'b1;
             div_hold_rob_idx_r <= div_rob_idx_r;
             div_hold_pdst_r    <= div_pdst_r;
             div_hold_data_r    <= div_result;
-        end else if (div_hold_valid_r && !alu3_issue) begin
+        end else if (div_take_hold) begin
             div_hold_valid_r <= 1'b0;
         end
     end
@@ -3306,14 +3552,25 @@ module rv64gc_core_top
     logic [PHYS_REG_BITS-1:0] div_eff_pdst;
     logic [63:0] div_eff_data;
 
-    assign div_eff_valid   = div_valid_out || div_hold_valid_r;
-    assign div_eff_rob_idx = div_valid_out ? div_rob_idx_r : div_hold_rob_idx_r;
-    assign div_eff_pdst    = div_valid_out ? div_pdst_r    : div_hold_pdst_r;
-    assign div_eff_data    = div_valid_out ? div_result    : div_hold_data_r;
+    assign div_eff_valid   = div_take_hold || div_take_fresh;
+    assign div_eff_rob_idx = div_take_hold ? div_hold_rob_idx_r : div_rob_idx_r;
+    assign div_eff_pdst    = div_take_hold ? div_hold_pdst_r    : div_pdst_r;
+    assign div_eff_data    = div_take_hold ? div_hold_data_r    : div_result;
 
-    // CDB[3]: ALU3 (same cycle) or DIV (multi-cycle, with hold)
-    always_comb begin
-        if (alu3_issue) begin
+    // CDB[3]: FPU, ALU3 (same cycle), or DIV (multi-cycle, with hold)
+	    always_comb begin
+	        if (fpu_out_valid || fpu_unsupported) begin
+	            cdb_valid[3]         = 1'b1;
+	            cdb_tag[3]           = fpu_unsupported ? fpu_req_data_r.pdst
+	                                                    : fpu_out_pdst;
+	            cdb_rob_idx[3]       = fpu_unsupported ? fpu_req_data_r.rob_idx
+	                                                    : fpu_out_rob_idx;
+	            cdb_data[3]          = fpu_unsupported ? 64'd0 : fpu_out_data;
+            cdb_csr_we[3]        = 1'b0;
+            cdb_csr_addr[3]      = 12'd0;
+            cdb_csr_wdata[3]     = 64'd0;
+            cdb_csr_op[3]        = 2'd0;
+        end else if (alu3_issue) begin
             cdb_valid[3]         = 1'b1;
             cdb_tag[3]           = iq2_issue_data[0].pdst;
             cdb_rob_idx[3]       = iq2_issue_data[0].rob_idx;
@@ -3341,13 +3598,20 @@ module rv64gc_core_top
             cdb_csr_wdata[3]     = 64'd0;
             cdb_csr_op[3]        = 2'd0;
         end
-        cdb_has_exception[3]     = 1'b0;
-        cdb_exc_code[3]          = 4'd0;
+        cdb_has_exception[3]     = fpu_unsupported;
+        cdb_exc_code[3]          = fpu_unsupported ? EXC_ILLEGAL_INSN : 4'd0;
         cdb_is_branch[3]        = 1'b0;
         cdb_branch_taken[3]     = 1'b0;
         cdb_branch_target[3]    = 64'd0;
         cdb_branch_taken_target[3] = 64'd0;
         cdb_branch_mispredict[3] = 1'b0;
+        cdb_fp_fflags_valid[3]  =
+            fpu_out_valid && |{fpu_out_status.nv, fpu_out_status.dz,
+                               fpu_out_status.of, fpu_out_status.uf,
+                               fpu_out_status.nx};
+        cdb_fp_fflags[3]        = {fpu_out_status.nv, fpu_out_status.dz,
+                                   fpu_out_status.of, fpu_out_status.uf,
+                                   fpu_out_status.nx};
     end
 
     // Load writeback: separate from CDB wakeup broadcast (loads use spec_wk)
@@ -3357,12 +3621,14 @@ module rv64gc_core_top
         load_wb_pdst[0]          = lsu_load_wb_pdst[0];
         load_wb_rob_idx[0]       = lsu_load_wb_rob_idx[0];
         load_wb_data[0]          = lsu_load_wb_data[0];
+        load_wb_mem_size[0]      = lsu_load_wb_mem_size[0];
         load_wb_has_exception[0] = lsu_load_wb_has_exception[0];
         load_wb_exc_code[0]      = lsu_load_wb_exc_code[0];
         load_wb_valid[1]         = lsu_load_wb_valid[1];
         load_wb_pdst[1]          = lsu_load_wb_pdst[1];
         load_wb_rob_idx[1]       = lsu_load_wb_rob_idx[1];
         load_wb_data[1]          = lsu_load_wb_data[1];
+        load_wb_mem_size[1]      = lsu_load_wb_mem_size[1];
         load_wb_has_exception[1] = lsu_load_wb_has_exception[1];
         load_wb_exc_code[1]      = lsu_load_wb_exc_code[1];
     end
@@ -3420,6 +3686,7 @@ module rv64gc_core_top
             cdb_branch_taken_r     <= '0;
             cdb_branch_mispredict_r <= '0;
             cdb_csr_we_r           <= '0;
+            cdb_fp_fflags_valid_r  <= '0;
             for (int i = 0; i < CDB_WIDTH; i++) begin
                 cdb_tag_r[i]            <= '0;
                 cdb_data_r[i]           <= '0;
@@ -3430,6 +3697,7 @@ module rv64gc_core_top
                 cdb_csr_addr_r[i]       <= '0;
                 cdb_csr_wdata_r[i]      <= '0;
                 cdb_csr_op_r[i]         <= '0;
+                cdb_fp_fflags_r[i]      <= '0;
             end
         end else begin
             cdb_valid_r            <= cdb_valid_live;
@@ -3438,6 +3706,7 @@ module rv64gc_core_top
             cdb_branch_taken_r     <= cdb_branch_taken;
             cdb_branch_mispredict_r <= cdb_branch_mispredict;
             cdb_csr_we_r           <= cdb_csr_we;
+            cdb_fp_fflags_valid_r  <= cdb_fp_fflags_valid & cdb_valid_live;
             for (int i = 0; i < CDB_WIDTH; i++) begin
                 cdb_tag_r[i]            <= cdb_tag[i];
                 cdb_data_r[i]           <= cdb_data[i];
@@ -3448,6 +3717,7 @@ module rv64gc_core_top
                 cdb_csr_addr_r[i]       <= cdb_csr_addr[i];
                 cdb_csr_wdata_r[i]      <= cdb_csr_wdata[i];
                 cdb_csr_op_r[i]         <= cdb_csr_op[i];
+                cdb_fp_fflags_r[i]      <= cdb_fp_fflags[i];
             end
         end
     end
@@ -3505,29 +3775,69 @@ module rv64gc_core_top
     //   Write[4]: Load 0           (load_wb[0] — separate from CDB broadcast)
     //   Write[5]: Load 1           (load_wb[1] — separate from CDB broadcast)
     // =========================================================================
-    assign prf_wen[0]   = cdb_valid_live[0] && (cdb_tag[0] != '0);
+    assign prf_wen[0]   =
+        cdb_valid_live[0] && (cdb_tag[0] != '0) &&
+        (cdb_tag[0] < PHYS_REG_BITS'(FP_PHYS_BASE));
     assign prf_waddr[0] = cdb_tag[0];
     assign prf_wdata[0] = cdb_data[0];
 
-    assign prf_wen[1]   = cdb_valid_live[1] && (cdb_tag[1] != '0);
+    assign prf_wen[1]   =
+        cdb_valid_live[1] && (cdb_tag[1] != '0) &&
+        (cdb_tag[1] < PHYS_REG_BITS'(FP_PHYS_BASE));
     assign prf_waddr[1] = cdb_tag[1];
     assign prf_wdata[1] = cdb_data[1];
 
-    assign prf_wen[2]   = cdb_valid_live[2] && (cdb_tag[2] != '0);
+    assign prf_wen[2]   =
+        cdb_valid_live[2] && (cdb_tag[2] != '0) &&
+        (cdb_tag[2] < PHYS_REG_BITS'(FP_PHYS_BASE));
     assign prf_waddr[2] = cdb_tag[2];
     assign prf_wdata[2] = cdb_data[2];
 
-    assign prf_wen[3]   = cdb_valid_live[3] && (cdb_tag[3] != '0);
+    assign prf_wen[3]   =
+        cdb_valid_live[3] && (cdb_tag[3] != '0) &&
+        (cdb_tag[3] < PHYS_REG_BITS'(FP_PHYS_BASE));
     assign prf_waddr[3] = cdb_tag[3];
     assign prf_wdata[3] = cdb_data[3];
 
-    assign prf_wen[4]   = load_wb_valid_live[0] && (load_wb_pdst[0] != '0);
+    assign prf_wen[4]   =
+        load_wb_valid_live[0] && (load_wb_pdst[0] != '0) &&
+        (load_wb_pdst[0] < PHYS_REG_BITS'(FP_PHYS_BASE));
     assign prf_waddr[4] = load_wb_pdst[0];
     assign prf_wdata[4] = load_wb_data[0];
 
-    assign prf_wen[5]   = load_wb_valid_live[1] && (load_wb_pdst[1] != '0);
+    assign prf_wen[5]   =
+        load_wb_valid_live[1] && (load_wb_pdst[1] != '0) &&
+        (load_wb_pdst[1] < PHYS_REG_BITS'(FP_PHYS_BASE));
     assign prf_waddr[5] = load_wb_pdst[1];
     assign prf_wdata[5] = load_wb_data[1];
+
+    assign fp_prf_wen[0] =
+        cdb_valid_live[3] &&
+        (cdb_tag[3] >= PHYS_REG_BITS'(FP_PHYS_BASE));
+    assign fp_prf_waddr[0] = 7'(cdb_tag[3] - PHYS_REG_BITS'(FP_PHYS_BASE));
+    assign fp_prf_wdata[0] = cdb_data[3];
+
+    assign fp_prf_wen[1] =
+        load_wb_valid_live[0] &&
+        (load_wb_pdst[0] >= PHYS_REG_BITS'(FP_PHYS_BASE));
+    assign fp_prf_waddr[1] =
+        7'(load_wb_pdst[0] - PHYS_REG_BITS'(FP_PHYS_BASE));
+    assign fp_prf_wdata[1] =
+        (load_wb_mem_size[0] == MEM_WORD) ?
+        {32'hffff_ffff, load_wb_data[0][31:0]} : load_wb_data[0];
+
+    assign fp_prf_wen[2] =
+        load_wb_valid_live[1] &&
+        (load_wb_pdst[1] >= PHYS_REG_BITS'(FP_PHYS_BASE));
+    assign fp_prf_waddr[2] =
+        7'(load_wb_pdst[1] - PHYS_REG_BITS'(FP_PHYS_BASE));
+    assign fp_prf_wdata[2] =
+        (load_wb_mem_size[1] == MEM_WORD) ?
+        {32'hffff_ffff, load_wb_data[1][31:0]} : load_wb_data[1];
+
+    assign fp_prf_wen[3]   = 1'b0;
+    assign fp_prf_waddr[3] = 7'd0;
+    assign fp_prf_wdata[3] = 64'd0;
 
     // =========================================================================
     // Bypass source wiring (4-wide: NUM_BYPASS_SRCS=5)
@@ -3584,13 +3894,13 @@ module rv64gc_core_top
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            preg_ready_table <= {INT_PRF_DEPTH{1'b1}};
+            preg_ready_table <= {PHYS_TAG_COUNT{1'b1}};
         end else if (flush_out.valid && flush_out.full_flush) begin
             // Full flush: reset all pregs to ready.
             // After flush the RAT maps arch regs 0-31 to phys 0-31 (committed
             // state) and the free list marks 32-255 as free. No in-flight
             // writers exist, so every physical register is ready.
-            preg_ready_table <= {INT_PRF_DEPTH{1'b1}};
+            preg_ready_table <= {PHYS_TAG_COUNT{1'b1}};
         end else begin
             // Clear on new rename allocation.
             //
@@ -3710,13 +4020,13 @@ module rv64gc_core_top
     // ("is producer in replay range?").  Written on every rename; flushed
     // to 0 on full_flush (mirrors rename_buf).
     // =========================================================================
-    logic [ROB_IDX_BITS-1:0] pdst_producer_rob [0:INT_PRF_DEPTH-1];
+	    logic [ROB_IDX_BITS-1:0] pdst_producer_rob [0:PHYS_TAG_COUNT-1];
 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
-            for (int p = 0; p < INT_PRF_DEPTH; p++)
-                pdst_producer_rob[p] <= '0;
-        end else begin
+	    always_ff @(posedge clk or negedge rst_n) begin
+	        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
+	            for (int p = 0; p < PHYS_TAG_COUNT; p++)
+	                pdst_producer_rob[p] <= '0;
+	        end else begin
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if ((3'(i) < ren_count_w) &&
                     ren_insn[i].base.rd_valid &&
@@ -3778,60 +4088,47 @@ module rv64gc_core_top
         else        sva_cycle <= sva_cycle + 1;
     end
 
-    // A1 — PLUMBING: replay_valid must be a registered copy of the gated
-    //                lsu_ordering_violation signal from the previous cycle.
-    //                If the gate (!full_flush) is open in cycle N, then
-    //                replay_valid must be high in cycle N+1.
-    property p_replay_valid_registered_from_violation;
-        @(posedge clk) disable iff (!rst_n)
-        (lsu_ordering_violation && !(flush_out.valid && flush_out.full_flush))
-            |=> replay_valid;
-    endproperty
-    a_replay_valid_registered_from_violation:
-        assert property (p_replay_valid_registered_from_violation)
-        else $error("[SVA A1] cyc=%0d replay_valid did NOT follow ordering_violation (prev_viol_rob=%0d)",
-                    sva_cycle, sva_prev_viol_rob);
-
-    // A2 — PLUMBING: replay_rob_idx_from must latch the violation rob_idx.
-    property p_replay_rob_idx_follows_violation;
-        @(posedge clk) disable iff (!rst_n)
-        (lsu_ordering_violation && !(flush_out.valid && flush_out.full_flush))
-            |=> (replay_rob_idx_from == sva_prev_viol_rob);
-    endproperty
-    a_replay_rob_idx_follows_violation:
-        assert property (p_replay_rob_idx_follows_violation)
-        else $error("[SVA A2] cyc=%0d replay_rob_idx_from mismatch got=%0d expected=%0d",
-                    sva_cycle, replay_rob_idx_from, sva_prev_viol_rob);
+    // A1/A2 -- procedural simulation checks. DSim can iterate heavily on
+    // quiet SVA implication properties in long CoreMark runs, so keep the
+    // same one-cycle contracts as clocked checks.
+    always_ff @(posedge clk) begin
+        if (rst_n && sva_prev_violation && !sva_prev_flush_full) begin
+            if (!replay_valid) begin
+                $error("[SVA A1] cyc=%0d replay_valid did NOT follow ordering_violation (prev_viol_rob=%0d)",
+                       sva_cycle, sva_prev_viol_rob);
+            end
+            if (replay_rob_idx_from !== sva_prev_viol_rob) begin
+                $error("[SVA A2] cyc=%0d replay_rob_idx_from mismatch got=%0d expected=%0d",
+                       sva_cycle, replay_rob_idx_from, sva_prev_viol_rob);
+            end
+        end
+    end
 
     // A4 — METADATA: whenever rename produces an advancing rd_valid slot
     //                with a non-zero pdst, pdst_producer_rob[pdst] must hold
-    //                that rob_idx on the following cycle.
-    property p_pdst_producer_rob_tracks_rename;
-        @(posedge clk) disable iff (!rst_n)
-        ((ren_count_w != 0) &&
-         ren_insn[0].base.rd_valid &&
-         (ren_insn[0].pdst != '0) &&
-         !(flush_out.valid && flush_out.full_flush))
-            |=> (pdst_producer_rob[sva_prev_ren0_pdst] == sva_prev_ren0_robidx);
-    endproperty
-    a_pdst_producer_rob_tracks_rename_slot0:
-        assert property (p_pdst_producer_rob_tracks_rename)
-        else $error("[SVA A4] cyc=%0d pdst_producer_rob[%0d] mismatch got=%0d expected=%0d",
-                    sva_cycle, sva_prev_ren0_pdst,
-                    pdst_producer_rob[sva_prev_ren0_pdst],
-                    sva_prev_ren0_robidx);
+    //                that rob_idx on the following cycle. Keep this procedural
+    //                because DSim's SVA engine can iterate heavily on variable
+    //                array-index properties after the FP tag-space widening.
+    always_ff @(posedge clk) begin
+        if (rst_n && sva_prev_ren0_rdvalid &&
+            !(sva_prev_flush_full) &&
+            (pdst_producer_rob[sva_prev_ren0_pdst] !== sva_prev_ren0_robidx)) begin
+            $error("[SVA A4] cyc=%0d pdst_producer_rob[%0d] mismatch got=%0d expected=%0d",
+                   sva_cycle, sva_prev_ren0_pdst,
+                   pdst_producer_rob[sva_prev_ren0_pdst],
+                   sva_prev_ren0_robidx);
+        end
+    end
 
-    // A5 — CORRECTNESS: replay_rob_idx_from should always point at a
-    //                   currently-valid ROB entry (otherwise the replay
-    //                   range is meaningless).  Fires only on replay_valid.
-    property p_replay_target_is_valid_rob_entry;
-        @(posedge clk) disable iff (!rst_n)
-        replay_valid |-> u_rob.valid_r[replay_rob_idx_from];
-    endproperty
-    a_replay_target_is_valid_rob_entry:
-        assert property (p_replay_target_is_valid_rob_entry)
-        else $error("[SVA A5] cyc=%0d replay target rob=%0d is not a valid ROB entry",
-                    sva_cycle, replay_rob_idx_from);
+    // A5 -- replay_rob_idx_from should always point at a currently-valid ROB
+    // entry. Fires only on replay_valid.
+    always_ff @(posedge clk) begin
+        if (rst_n && replay_valid &&
+            !u_rob.valid_r[replay_rob_idx_from]) begin
+            $error("[SVA A5] cyc=%0d replay target rob=%0d is not a valid ROB entry",
+                   sva_cycle, replay_rob_idx_from);
+        end
+    end
 
     // A6 — PHASE-3 CORRECTNESS: on replay_valid, NO instruction whose
     //                            rob_idx is in the replay range may commit
@@ -3864,15 +4161,13 @@ module rv64gc_core_top
         end
     end
 
-    property p_no_commit_in_replay_range;
-        @(posedge clk) disable iff (!rst_n)
-        replay_valid |-> (sva_commit_in_replay == '0);
-    endproperty
-    a_no_commit_in_replay_range:
-        assert property (p_no_commit_in_replay_range)
-        else $error("[SVA A6] cyc=%0d commit tried to retire rob in replay range: mask=%b replay_from=%0d head=%0d tail=%0d",
-                    sva_cycle, sva_commit_in_replay, replay_rob_idx_from,
-                    u_rob.head_r, u_rob.tail_r);
+    always_ff @(posedge clk) begin
+        if (rst_n && replay_valid && (sva_commit_in_replay != '0)) begin
+            $error("[SVA A6] cyc=%0d commit tried to retire rob in replay range: mask=%b replay_from=%0d head=%0d tail=%0d",
+                   sva_cycle, sva_commit_in_replay, replay_rob_idx_from,
+                   u_rob.head_r, u_rob.tail_r);
+        end
+    end
 
     // A7 — PHASE-3 PROGRESS: after a replay_valid pulse, the ROB head
     //                         must either advance (commits happen) or a
@@ -3905,12 +4200,13 @@ module rv64gc_core_top
             end
         end
     end
-    a_replay_progress_bound:
-        assert property (
-            @(posedge clk) disable iff (!rst_n)
-            (sva_replay_armed |-> (sva_replay_stuck_cnt < REPLAY_DEADLOCK_CYC))
-        ) else $error("[SVA A7] cyc=%0d replay stuck %0d cycles without commit or flush (head stayed at %0d)",
-                      sva_cycle, sva_replay_stuck_cnt, sva_head_at_replay);
+    always_ff @(posedge clk) begin
+        if (rst_n && sva_replay_armed &&
+            (sva_replay_stuck_cnt >= REPLAY_DEADLOCK_CYC)) begin
+            $error("[SVA A7] cyc=%0d replay stuck %0d cycles without commit or flush (head stayed at %0d)",
+                   sva_cycle, sva_replay_stuck_cnt, sva_head_at_replay);
+        end
+    end
 
     // -- Event counters (substitute for unsupported cover property) --
     integer sva_cnt_ord_violation;
@@ -4015,13 +4311,6 @@ module rv64gc_core_top
         end
     end
 
-    a_cover_viol_then_flush:
-        cover property (@(posedge clk) disable iff (!rst_n)
-                        lsu_ordering_violation |=> flush_out.valid);
-    a_cover_replay_then_flush:
-        cover property (@(posedge clk) disable iff (!rst_n)
-                        replay_valid |=> flush_out.valid);
-
     final begin
         $display("[SVA SUMMARY]");
         $display("  ordering_violations fired:        %0d", sva_cnt_ord_violation);
@@ -4088,13 +4377,17 @@ module rv64gc_core_top
         // load to read its base register from the speculative-port-1 load —
         // the root cause of the CoreMark divergence bug.
         .load_rs1               (lsu_load_rs1_arr),
+        .load_rs2               (lsu_load_rs2_arr),
         .sta_rs1                (bypassed_data[10]),
-        .std_rs2                (bypassed_data[11]),
+        .std_rs2                (routed_std_data.rs2_is_fp
+                                  ? fp_prf_rdata[3]
+                                  : bypassed_data[11]),
         // Writeback
         .load_wb_valid          (lsu_load_wb_valid),
         .load_wb_rob_idx        (lsu_load_wb_rob_idx),
         .load_wb_pdst           (lsu_load_wb_pdst),
         .load_wb_data           (lsu_load_wb_data),
+        .load_wb_mem_size       (lsu_load_wb_mem_size),
         .load_wb_has_exception  (lsu_load_wb_has_exception),
         .load_wb_exc_code       (lsu_load_wb_exc_code),
         .sta_wb_valid           (lsu_sta_wb_valid),
@@ -4235,6 +4528,7 @@ module rv64gc_core_top
         .icache_req_valid   (icache_fill_req_valid),
         .icache_req_addr    (icache_fill_req_addr),
         .icache_req_ready   (l2_icache_req_ready),
+        .icache_req_accepted(l2_icache_req_accepted),
         .icache_resp_valid  (icache_fill_resp_valid),
         .icache_resp_addr   (l2_icache_resp_addr),
         .icache_resp_data   (icache_fill_resp_data),
@@ -4510,6 +4804,23 @@ module rv64gc_core_top
     // =========================================================================
     logic [63:0] csr_mcycle_val, csr_minstret_val;
     logic [63:0] csr_satp;
+    logic        fp_fflags_commit_valid;
+    logic [4:0]  fp_fflags_commit_bits;
+    logic        fp_state_dirty_commit;
+
+    always_comb begin
+        fp_fflags_commit_bits  = 5'd0;
+        fp_state_dirty_commit  = 1'b0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if (commit_out[i].valid) begin
+                fp_fflags_commit_bits =
+                    fp_fflags_commit_bits | rob_head_fp_fflags[i];
+                fp_state_dirty_commit =
+                    fp_state_dirty_commit | rob_head_is_fp_instr[i];
+            end
+        end
+        fp_fflags_commit_valid = (fp_fflags_commit_bits != 5'd0);
+    end
 
     // Trap signals (from commit flush)
     logic        trap_valid;
@@ -4561,6 +4872,9 @@ module rv64gc_core_top
         .write_addr         (csr_commit_addr),
         .write_data         (csr_commit_wdata),
         .write_op           (csr_commit_op),
+        .fflags_acc_valid_i (fp_fflags_commit_valid),
+        .fflags_acc_bits_i  (fp_fflags_commit_bits),
+        .fp_state_dirty_i   (fp_state_dirty_commit),
         .trap_valid         (trap_valid),
         .trap_cause         (trap_cause),
         .trap_pc            (trap_pc),
@@ -4573,6 +4887,7 @@ module rv64gc_core_top
         .mepc               (csr_mepc),
         .sepc               (csr_sepc),
         .priv_mode          (csr_priv_mode),
+        .frm_out            (csr_frm),
         .irq_pending        (csr_irq_pending),
         .irq_cause          (csr_irq_cause),
         .insn_retired_count (insn_retired_count),
