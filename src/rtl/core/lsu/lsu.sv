@@ -194,6 +194,7 @@ module lsu
     // no source register).  Detect this case via is_fused on a load and use
     // pc + imm.  Other fusions never produce loads.
     logic [63:0] load_eff_addr [0:1];
+    logic [63:0] load_mem_addr [0:1];
     logic [1:0]  load_addr_misaligned;
     logic [1:0]  load_addr_mmio;
 
@@ -218,13 +219,6 @@ module lsu
                 endcase
             end
 
-            assign load_addr_mmio[li] =
-                ((load_eff_addr[li] >= CLINT_BASE) &&
-                 (load_eff_addr[li] < (CLINT_BASE + CLINT_SIZE))) ||
-                ((load_eff_addr[li] >= PLIC_BASE) &&
-                 (load_eff_addr[li] < (PLIC_BASE + PLIC_SIZE))) ||
-                ((load_eff_addr[li] >= UART_BASE) &&
-                 (load_eff_addr[li] < (UART_BASE + UART_SIZE)));
         end
     endgenerate
 
@@ -234,6 +228,7 @@ module lsu
     // For fused AUIPC+ST: same logic as fused loads — use pc instead of rs1
     // because the store's base register comes from the auipc half.
     logic [63:0] sta_eff_addr;
+    logic [63:0] sta_mem_addr;
     logic        sta_addr_misaligned;
     logic        sta_addr_mmio;
     logic [2:0]  sta_off;
@@ -252,14 +247,6 @@ module lsu
         endcase
     end
 
-    assign sta_addr_mmio =
-        ((sta_eff_addr >= CLINT_BASE) &&
-         (sta_eff_addr < (CLINT_BASE + CLINT_SIZE))) ||
-        ((sta_eff_addr >= PLIC_BASE) &&
-         (sta_eff_addr < (PLIC_BASE + PLIC_SIZE))) ||
-        ((sta_eff_addr >= UART_BASE) &&
-         (sta_eff_addr < (UART_BASE + UART_SIZE)));
-
     // =========================================================================
     // DTLB lookup scaffold
     // =========================================================================
@@ -269,6 +256,7 @@ module lsu
     logic dtlb_lookup_fault;
     logic sta_tlb_miss;
     logic sta_tlb_fault;
+    logic load0_tlb_port_wait;
     logic load0_tlb_miss;
     logic load0_tlb_fault;
     logic load1_tlb_wait;
@@ -304,6 +292,12 @@ module lsu
         data_vm_active_i &&
         dtlb_lookup_sel_store &&
         dtlb_fault_i;
+    assign load0_tlb_port_wait =
+        data_vm_active_i &&
+        load_issue_candidate_valid[0] &&
+        !load_addr_misaligned[0] &&
+        !flush_in.valid &&
+        !dtlb_lookup_sel_load0;
     assign load0_tlb_miss =
         data_vm_active_i &&
         dtlb_lookup_sel_load0 &&
@@ -327,6 +321,39 @@ module lsu
     assign dtlb_exc_rob_idx_o = dtlb_lookup_rob_idx;
     assign dtlb_exc_code_o = dtlb_fault_code_i;
     assign sta_issue_suppress = sta_tlb_miss || sta_tlb_fault;
+
+    assign sta_mem_addr =
+        (data_vm_active_i && dtlb_lookup_sel_store && dtlb_hit_i && !dtlb_fault_i)
+            ? dtlb_pa_i
+            : sta_eff_addr;
+    assign load_mem_addr[0] =
+        (data_vm_active_i && dtlb_lookup_sel_load0 && dtlb_hit_i && !dtlb_fault_i)
+            ? dtlb_pa_i
+            : load_eff_addr[0];
+    assign load_mem_addr[1] = load_eff_addr[1];
+
+    assign sta_addr_mmio =
+        ((sta_mem_addr >= CLINT_BASE) &&
+         (sta_mem_addr < (CLINT_BASE + CLINT_SIZE))) ||
+        ((sta_mem_addr >= PLIC_BASE) &&
+         (sta_mem_addr < (PLIC_BASE + PLIC_SIZE))) ||
+        ((sta_mem_addr >= UART_BASE) &&
+         (sta_mem_addr < (UART_BASE + UART_SIZE)));
+
+    assign load_addr_mmio[0] =
+        ((load_mem_addr[0] >= CLINT_BASE) &&
+         (load_mem_addr[0] < (CLINT_BASE + CLINT_SIZE))) ||
+        ((load_mem_addr[0] >= PLIC_BASE) &&
+         (load_mem_addr[0] < (PLIC_BASE + PLIC_SIZE))) ||
+        ((load_mem_addr[0] >= UART_BASE) &&
+         (load_mem_addr[0] < (UART_BASE + UART_SIZE)));
+    assign load_addr_mmio[1] =
+        ((load_mem_addr[1] >= CLINT_BASE) &&
+         (load_mem_addr[1] < (CLINT_BASE + CLINT_SIZE))) ||
+        ((load_mem_addr[1] >= PLIC_BASE) &&
+         (load_mem_addr[1] < (PLIC_BASE + PLIC_SIZE))) ||
+        ((load_mem_addr[1] >= UART_BASE) &&
+         (load_mem_addr[1] < (UART_BASE + UART_SIZE)));
 
     // =========================================================================
     // Store data: byte mask generation
@@ -441,9 +468,9 @@ module lsu
     logic                  sta_older_than_load0;
     logic                  sta_older_than_load1;
 
-    assign sta_byte_off   = sta_eff_addr[2:0];
-    assign load0_byte_off = load_eff_addr[0][2:0];
-    assign load1_byte_off = load_eff_addr[1][2:0];
+    assign sta_byte_off   = sta_mem_addr[2:0];
+    assign load0_byte_off = load_mem_addr[0][2:0];
+    assign load1_byte_off = load_mem_addr[1][2:0];
 
     always_comb begin
         case (sta_issue_data.mem_size)
@@ -502,10 +529,10 @@ module lsu
     // oscillating through the same-cycle forwarding comparison.
     assign same_cycle_addr_match0 =
         load_issue_valid[0] & sta_std_same_store &
-        (sta_eff_addr[63:3] == load_eff_addr[0][63:3]);
+        (sta_mem_addr[63:3] == load_mem_addr[0][63:3]);
     assign same_cycle_addr_match1 =
         load_issue_candidate_valid[1] & sta_issue_valid &
-        (sta_eff_addr[63:3] == load_eff_addr[1][63:3]);
+        (sta_mem_addr[63:3] == load_mem_addr[1][63:3]);
     assign same_cycle_overlap0 = (sta_older_than_load0 && same_cycle_addr_match0)
                                ? (sta_byte_mask_dyn & load0_byte_mask_dyn)
                                : 8'h00;
@@ -568,7 +595,7 @@ module lsu
         .sta_valid       (sta_issue_valid),
         .sta_idx         (sta_issue_data.sq_idx),
         .sta_rob_idx     (sta_issue_data.rob_idx),
-        .sta_addr        (sta_eff_addr),
+        .sta_addr        (sta_mem_addr),
         .sta_size        (sta_issue_data.mem_size),
         // STD fill (same rationale: let older stores through; SQ filters)
         .std_valid       (std_issue_valid),
@@ -581,7 +608,7 @@ module lsu
         // load_eff_addr from oscillating through Verilator's eval loop.
         .fwd_req_valid   (load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
         .fwd_req_addr    ((load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
-                          ? load_eff_addr[0] : 64'd0),
+                          ? load_mem_addr[0] : 64'd0),
         .fwd_req_size    (load_issue_data[0].mem_size),
         .fwd_req_rob_idx (load_issue_data[0].rob_idx),
         .fwd_hit         (sq_fwd_hit),
@@ -676,7 +703,7 @@ module lsu
             lq_exec_valid       = 1'b1;
             lq_exec_idx         = load_issue_data[0].lq_idx;
             lq_exec_rob_idx     = load_issue_data[0].rob_idx;
-            lq_exec_addr        = load_eff_addr[0];
+            lq_exec_addr        = load_mem_addr[0];
             lq_exec_size        = load_issue_data[0].mem_size;
             lq_exec_is_unsigned = load_issue_data[0].is_unsigned;
         end else begin
@@ -792,7 +819,7 @@ module lsu
             load_issue_valid_r[1] <= p1_eff_valid;
             load_issue_data_r[0]  <= load_issue_data[0];
             load_issue_data_r[1]  <= p1_eff_data;
-            load_eff_addr_r[0]    <= load_eff_addr[0];
+            load_eff_addr_r[0]    <= load_mem_addr[0];
             load_eff_addr_r[1]    <= p1_eff_addr;
             load_nocache_r[0]     <= load_issue_valid[0] &
                                      (load_addr_misaligned[0] | load_addr_mmio[0] |
@@ -874,7 +901,7 @@ module lsu
         // Use the same unguarded STA valid as above; a flush-cycle STA that
         // is older than the flush point still needs its ordering check.
         .st_addr_valid     (sta_issue_valid),
-        .st_addr           (sta_eff_addr),
+        .st_addr           (sta_mem_addr),
         .st_size           (sta_issue_data.mem_size),
         .st_rob_idx        (sta_issue_data.rob_idx),
         .ordering_violation(ordering_violation),
@@ -915,7 +942,7 @@ module lsu
         // Store-to-load forwarding
         .fwd_valid      (load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
         .fwd_addr       ((load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
-                          ? load_eff_addr[0] : 64'd0),
+                          ? load_mem_addr[0] : 64'd0),
         .fwd_size       (load_issue_data[0].mem_size),
         .fwd_hit        (csb_fwd_hit),
         .fwd_data       (csb_fwd_data),
@@ -983,7 +1010,7 @@ module lsu
          load_issue_candidate_valid[0] &&
          !load_addr_misaligned[0] &&
          !flush_in.valid &&
-         (sq_drain_entry.addr[63:3] == load_eff_addr[0][63:3]))
+         (sq_drain_entry.addr[63:3] == load_mem_addr[0][63:3]))
             ? (csb_enq_fwd_bmask & load0_byte_mask_dyn)
             : 8'h00;
     assign csb_enq_fwd_overlap1 =
@@ -1130,6 +1157,7 @@ module lsu
         load_issue_candidate_valid[0] &&
         (flush_in.valid ||
          load0_tlb_miss ||
+         load0_tlb_port_wait ||
          load0_tlb_fault ||
          (!load_addr_misaligned[0] &&
           (p0_sq_order_wait_block || same_cycle_sta_wait0 ||
@@ -1589,7 +1617,7 @@ module lsu
                 mmio_req_we_r        <= 1'b0;
                 mmio_req_is_load_r   <= 1'b1;
                 mmio_req_drop_r      <= 1'b0;
-                mmio_req_addr_r      <= load_eff_addr[0];
+                mmio_req_addr_r      <= load_mem_addr[0];
                 mmio_req_wdata_r     <= 64'd0;
                 mmio_req_wmask_r     <= 8'd0;
                 mmio_req_size_r      <= load_issue_data[0].mem_size;
@@ -1620,7 +1648,7 @@ module lsu
                                     & ~(load_issue_data[0].is_amo &&
                                         (load_issue_data[0].amo_op == AMO_SC))
                                     & ~flush_in.valid;
-    assign dcache_load_req_addr[0]  = load_eff_addr[0];
+    assign dcache_load_req_addr[0]  = load_mem_addr[0];
     assign dcache_load_req_size[0]  = load_issue_data[0].mem_size;
     assign dcache_load_req_is_unsigned[0] = load_issue_data[0].is_unsigned;
 
@@ -1763,7 +1791,7 @@ module lsu
     assign amo_store_ack_fire = amo_store_valid_r && dcache_store_ack;
     assign amo_sc_success =
         lr_valid_r &&
-        (lr_addr_r[63:2] == load_eff_addr[0][63:2]) &&
+        (lr_addr_r[63:2] == load_mem_addr[0][63:2]) &&
         (lr_size_r == load_issue_data[0].mem_size);
     assign lr_store_clear =
         lr_valid_r &&
@@ -1907,7 +1935,7 @@ module lsu
 
             if (amo_sc_issue_fire) begin
                 amo_data_r <= load_issue_data[0];
-                amo_addr_r <= load_eff_addr[0];
+                amo_addr_r <= load_mem_addr[0];
                 amo_rs2_r  <= load_rs2[0];
                 lr_valid_r <= 1'b0;
                 if (amo_sc_success) begin
@@ -1924,7 +1952,7 @@ module lsu
             end else if (amo_load_issue_fire) begin
                 amo_wait_load_r <= 1'b1;
                 amo_data_r      <= load_issue_data[0];
-                amo_addr_r      <= load_eff_addr[0];
+                amo_addr_r      <= load_mem_addr[0];
                 amo_rs2_r       <= load_rs2[0];
             end
         end

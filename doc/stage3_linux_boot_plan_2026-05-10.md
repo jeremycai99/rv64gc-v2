@@ -48,18 +48,18 @@ Baseline reference:
 Reference artifact: `benchmark_results/dse_stage2_ds_viability_profile_20260510`
 on commit `bddfed8`.
 
-The reference cycle counts are diagnostic thresholds, not hard limits. A run is
+The reference cycle counts are diagnostic anchors, not hard limits. A run is
 acceptable only when the measured performance regression is no more than
-`0.01%` versus the reference. The wrapper reports cycle movement against the
-same `0.01%` envelope, but the hard performance gate is the reported metric:
-it must not drop by more than `0.01%`.
+`0.01%` versus the reference metric. The wrapper reports cycle movement so we
+can spot suspicious drift, but the hard performance gate is the reported
+DMIPS/MHz or CoreMark/MHz metric: it must not drop by more than `0.01%`.
 
-| Row | Reference timed cycles | Diagnostic cycles at 0.01% | Reference metric | Hard min metric with 0.01% tolerance |
-|---|---:|---:|---:|---:|
-| Dhrystone 100 | `18,161` | `18,162` | `3.133924 DMIPS/MHz` | `3.133611 DMIPS/MHz` |
-| Dhrystone 300 | `53,469` | `53,474` | `3.193357 DMIPS/MHz` | `3.193038 DMIPS/MHz` |
-| CoreMark 1 | `154,233` | `154,248` | `6.483697 CM/MHz` | `6.483049 CM/MHz` |
-| CoreMark 10 | `1,491,334` | `1,491,483` | `6.705406 CM/MHz` | `6.704735 CM/MHz` |
+| Row | Diagnostic cycle reference | Reference metric | Hard min metric with 0.01% tolerance |
+|---|---:|---:|---:|
+| Dhrystone 100 | `18,161` | `3.133924 DMIPS/MHz` | `3.133611 DMIPS/MHz` |
+| Dhrystone 300 | `53,469` | `3.193357 DMIPS/MHz` | `3.193038 DMIPS/MHz` |
+| CoreMark 1 | `154,233` | `6.483697 CM/MHz` | `6.483049 CM/MHz` |
+| CoreMark 10 | `1,491,334` | `6.705406 CM/MHz` | `6.704735 CM/MHz` |
 
 Required regression command shape after each RTL slice:
 
@@ -69,8 +69,8 @@ python3 tools/run_stage3_rtl_guard.py --runner dsim --run-id <date>_<slice>
 
 The wrapper rebuilds the selected simulator, runs the four locked DS/CM rows
 with the strict owner, delivery, branch-recovery, performance, stat, and
-bottleneck plusargs, then reports timed cycles and checks metrics against the
-table above using the default `--max-regression-pct 0.01` tolerance. Use
+bottleneck plusargs, then reports timed-cycle deltas and checks metrics against
+the table above using the default `--max-regression-pct 0.01` tolerance. Use
 `--runner xsim-sh` when DSim is blocked by license availability.
 The current OpenSBI platform-probe slice used that fallback for the hard DS/CM
 gate because the DSim benchmark row hit a simulator scheduler iteration limit
@@ -104,7 +104,7 @@ Gate rules:
 
 - Rebuild the simulator from the current RTL before running the guard.
 - All four rows must pass endpoint checks.
-- Timed cycles are reported against the diagnostic `0.01%` cycle envelope, but
+- Timed cycles are reported as diagnostic movement against the reference, but
   cycle count alone is not a hard failure.
 - Performance metrics must stay within the `0.01%` regression tolerance versus
   the baseline table above.
@@ -418,12 +418,12 @@ Promoted validation for this slice:
 - The Stage 3 DS/CM hard guard passes on the rebuilt XSim benchmark snapshot:
   `benchmark_results/stage3_rtl_guard_opensbi_platform_probe_xsim_guard_20260511`.
 
-| Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
+| Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
-| Dhrystone 100 | `18,082` | `18,162` | `3.147616 DMIPS/MHz` |
-| Dhrystone 300 | `53,360` | `53,474` | `3.199880 DMIPS/MHz` |
-| CoreMark 1 | `154,184` | `154,248` | `6.485757 CM/MHz` |
-| CoreMark 10 | `1,491,293` | `1,491,483` | `6.705590 CM/MHz` |
+| Dhrystone 100 | `18,082` | `18,161` | `3.147616 DMIPS/MHz` |
+| Dhrystone 300 | `53,360` | `53,469` | `3.199880 DMIPS/MHz` |
+| CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
+| CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
 
 DSim benchmark caveat:
 
@@ -635,13 +635,25 @@ Execution status:
   sideband.
 - Validation for the DTLB immediate-fault sideband slice:
   `benchmark_results/stage3_rtl_guard_20260511_dtlb_fault_sideband`.
+- Ninth RTL slice completed: the LSU now has a physical-address-selected
+  memory address path for store-address issue and load port 0. Store queue,
+  load queue, committed-store-buffer forwarding, D-cache, MMIO, AMO, and
+  load-miss-buffer launch points consume the translated address when a DTLB
+  hit is selected; otherwise they retain the Bare-mode effective address.
+  Load port 0 now waits when store-address translation owns the single DTLB
+  lookup port, and load port 1 remains held under data VM until a deliberate
+  second translated-load path is added. `rv64gc_core_top.sv` still keeps
+  `data_vm_active_i` disabled, so this slice is a behavior-neutral PA mux
+  setup for the later data-VM enable step.
+- Validation for the LSU data PA-mux slice:
+  `benchmark_results/stage3_rtl_guard_20260511_lsu_data_pa_mux`.
 
-| Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
+| Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
-| Dhrystone 100 | `18,082` | `18,162` | `3.147616 DMIPS/MHz` |
-| Dhrystone 300 | `53,360` | `53,474` | `3.199880 DMIPS/MHz` |
-| CoreMark 1 | `154,184` | `154,248` | `6.485757 CM/MHz` |
-| CoreMark 10 | `1,491,293` | `1,491,483` | `6.705590 CM/MHz` |
+| Dhrystone 100 | `18,082` | `18,161` | `3.147616 DMIPS/MHz` |
+| Dhrystone 300 | `53,360` | `53,469` | `3.199880 DMIPS/MHz` |
+| CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
+| CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
 
 ### L3: Linux Early Boot
 
@@ -775,7 +787,10 @@ harness policy:
   OpenSBI platform probing.
 - v2 now has real RV64GC F/D execution in core RTL, with DSim FP smoke passing
   and DS/CM performance preserved.
-- v2 does not yet have the Sv48 MMU/PTW/TLB path Linux requires.
+- v2 now has the Sv48 MMU/PTW/TLB scaffold, L2 PTW source port, data-side
+  PTW and DTLB fault sidebands, and LSU PA mux setup. Data translation is not
+  enabled yet, and fetch/ITLB translation plus instruction page-fault handling
+  are still open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style

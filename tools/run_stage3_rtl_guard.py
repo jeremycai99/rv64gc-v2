@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import subprocess
 import sys
 from datetime import datetime
@@ -105,12 +104,12 @@ def load_results(path: Path) -> list[dict[str, Any]]:
     raise ValueError(f"unexpected results format: {path}")
 
 
-def allowed_cycle_limit(cycles: int, max_regression_pct: float) -> int:
-    return math.floor(float(cycles) * (1.0 + (max_regression_pct / 100.0)))
-
-
 def allowed_metric_min(metric: float, max_regression_pct: float) -> float:
     return metric * (1.0 - (max_regression_pct / 100.0))
+
+
+def pct_delta(value: float, baseline: float) -> float:
+    return ((value - baseline) / baseline) * 100.0
 
 
 def evaluate_results(
@@ -123,8 +122,11 @@ def evaluate_results(
 
     print("\nStage 3 RTL guard summary:")
     print(f"maximum allowed performance regression: {max_regression_pct:.4f}%")
-    print("cycle limits are diagnostic; metric limits are the hard performance gate")
-    print("benchmark                         cycles   cycle_ref       metric      metric_min")
+    print("timed cycles are diagnostic; metrics are the hard performance gate")
+    print(
+        "benchmark                         cycles   cycle_ref  cycle_delta%       "
+        "metric      metric_min"
+    )
     for bench in BENCHES:
         if bench not in rows:
             failures.append(f"{bench}: missing from results")
@@ -137,11 +139,14 @@ def evaluate_results(
         metric = result_metric(row, str(expected["metric_key"]))
         baseline_metric = float(expected["metric_min"])
         baseline_cycles = int(expected["timed_cycles"])
-        cycle_limit = allowed_cycle_limit(baseline_cycles, max_regression_pct)
         metric_limit = allowed_metric_min(baseline_metric, max_regression_pct)
+        cycle_delta = "missing"
+        if cycles is not None:
+            cycle_delta = f"{pct_delta(float(cycles), float(baseline_cycles)):.5f}"
 
         print(
-            f"{bench:<33} {str(cycles):>10} {cycle_limit:>11} "
+            f"{bench:<33} {str(cycles):>10} {baseline_cycles:>11} "
+            f"{cycle_delta:>13} "
             f"{metric if metric is not None else 'missing':>12} "
             f"{metric_limit:>12.6f}"
         )
@@ -152,14 +157,12 @@ def evaluate_results(
             failures.append(f"{bench}: gate_status={row.get('gate_status')}")
         if cycles is None:
             failures.append(f"{bench}: missing timed_cycles")
-        elif int(cycles) > cycle_limit:
-            cycle_regression_pct = (
-                (float(cycles) - float(baseline_cycles)) /
-                float(baseline_cycles) * 100.0
-            )
+        elif pct_delta(float(cycles), float(baseline_cycles)) > max_regression_pct:
+            cycle_regression_pct = pct_delta(float(cycles), float(baseline_cycles))
             warnings.append(
-                f"{bench}: timed_cycles {cycles} > diagnostic {cycle_limit} "
-                f"({cycle_regression_pct:.5f}% cycle increase)"
+                f"{bench}: timed_cycles increased by {cycle_regression_pct:.5f}% "
+                "versus the diagnostic reference; cycle movement is not a "
+                "hard failure when the score metric passes"
             )
         if metric is None:
             failures.append(f"{bench}: missing {expected['metric_key']}")
