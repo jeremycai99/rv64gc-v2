@@ -24,4 +24,7 @@ SECTIONS {
 
     . = 0x80008000;
     .vm_phys_data : { *(.vm_phys_data) }
+
+    . = 0x80009000;
+    .vm_exec_code : { *(.vm_exec_code) }
 }

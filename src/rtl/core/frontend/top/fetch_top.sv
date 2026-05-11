@@ -41,6 +41,16 @@ module fetch_top
     input  logic        redirect_valid,
     input  logic [63:0] redirect_pc,
 
+    // Instruction translation
+    input  logic        instr_vm_active,
+    input  logic        itlb_hit,
+    input  logic [63:0] itlb_pa,
+    input  logic        itlb_fault,
+    output logic        itlb_lookup_valid,
+    output logic [63:0] itlb_lookup_va,
+    output logic        itlb_miss_valid,
+    output logic [63:0] itlb_miss_va,
+
     // BPU update (from commit -- actual branch outcome)
     input  logic        bpu_update_valid,
     input  logic [63:0] bpu_update_pc,
@@ -137,6 +147,7 @@ module fetch_top
     logic        consumed_remainder_r;
 
     logic        fe_stall;
+    logic        instr_translation_stall;
 
     // =========================================================================
     // I-Cache instance
@@ -303,6 +314,7 @@ module fetch_top
         .redirect_i                               (redirect_valid),
         .redirect_pc_i                            (redirect_pc),
         .frontend_hold_i                          (frontend_hold),
+        .translation_stall_i                      (instr_translation_stall),
         .packet_buf_full_i                        (packet_buf_full),
         .icq_full_i                               (icq_full),
         .ftq_enq_ready_i                          (ftq_enq_ready),
@@ -421,6 +433,15 @@ module fetch_top
         .req_valid_i            (ic_req_valid),
         .req_addr_i             (ic_req_addr),
         .aux_lookup_addr_i      (f1_pc),
+        .instr_vm_active_i      (instr_vm_active),
+        .itlb_hit_i             (itlb_hit),
+        .itlb_pa_i              (itlb_pa),
+        .itlb_fault_i           (itlb_fault),
+        .itlb_lookup_valid_o    (itlb_lookup_valid),
+        .itlb_lookup_va_o       (itlb_lookup_va),
+        .itlb_miss_valid_o      (itlb_miss_valid),
+        .itlb_miss_va_o         (itlb_miss_va),
+        .instr_translation_stall_o(instr_translation_stall),
         .f1_valid_i             (f1_valid),
         .stall_i                (fe_stall),
         .work_valid_i           (f2_work_valid_c),

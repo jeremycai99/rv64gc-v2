@@ -10,6 +10,16 @@
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "notes": "Runs in M-mode with MPRV/MPP=S so instruction fetch remains physical while LSU accesses use Sv48 translation through DTLB/PTW."
+    },
+    {
+      "name": "vm_ifetch_sv48_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/vm_ifetch_sv48_smoke.hex",
+      "max_cycles": 300000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Enters S-mode and fetches from an executable Sv48 virtual page before storing PASS through a translated S-mode tohost mapping."
     }
   ]
 }

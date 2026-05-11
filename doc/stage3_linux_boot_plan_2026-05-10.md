@@ -689,6 +689,26 @@ Execution status:
   `benchmark_results/stage3_rtl_guard_20260511_vm_csr_serial_redirect`.
   The hard metric gate passed with the same preserved metrics as the prior
   data-VM activation slice.
+- Thirteenth RTL slice completed: instruction fetch now has an ITLB lookup in
+  front of the I-cache when `instr_vm_active` is set. The frontend keeps
+  virtual PCs for FTQ, owner tracking, decode, and commit identity, but sends
+  the translated physical address to the I-cache and L2 fill path on ITLB hit.
+  On ITLB miss, fetch holds the current F1 PC and requests the shared PTW;
+  next-line prefetch is disabled while instruction VM is active so early
+  Linux bring-up does not issue untranslated prefetches.
+- Directed instruction-side Sv48 proof added:
+  `tests/asm/vm_ifetch_sv48_smoke.S` extends the Stage 3 VM smoke manifest.
+  The test enables Sv48 in M-mode, sets `mstatus.MPP=S`, writes `mepc` to a
+  supervisor virtual address, executes `mret`, fetches the S-mode payload via
+  an executable Sv48 mapping from VA `0x4000` to PA `0x80009000`, then stores
+  PASS through a translated S-mode data mapping to the physical tohost word.
+- Validation for the ITLB fetch slice:
+  `benchmark_results/stage3_vm_smoke_20260511_itlb` passed both
+  `vm_data_sv48_smoke` and `vm_ifetch_sv48_smoke`.
+- DS/CM regression validation for the ITLB fetch slice:
+  `benchmark_results/stage3_rtl_guard_20260511_itlb_fetch`. The hard metric
+  gate again passed with no DS/CM metric regression beyond the `0.01%`
+  tolerance.
 
 | Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
@@ -833,9 +853,10 @@ harness policy:
   PTW and DTLB fault sidebands, LSU PA mux setup, data-side VM activation
   wired into the LSU, a commit-time VM serialization redirect for relevant CSR
   writes and `sfence.vma`, and a passing directed Sv48 LSU load/store
-  translation smoke. Fetch/ITLB translation, instruction page-fault handling,
-  broader privileged/MMU directed tests, and dirty PTE memory writeback remain
-  open.
+  translation smoke. The instruction fetch path now also has ITLB/PTW
+  translation with a passing S-mode Sv48 ifetch smoke. Instruction page-fault
+  handling, broader privileged/MMU directed tests, and dirty PTE memory
+  writeback remain open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style

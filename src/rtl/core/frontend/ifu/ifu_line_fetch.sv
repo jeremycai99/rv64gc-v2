@@ -20,6 +20,15 @@ module ifu_line_fetch
     input  logic                          req_valid_i,
     input  logic [63:0]                   req_addr_i,
     input  logic [63:0]                   aux_lookup_addr_i,
+    input  logic                          instr_vm_active_i,
+    input  logic                          itlb_hit_i,
+    input  logic [63:0]                   itlb_pa_i,
+    input  logic                          itlb_fault_i,
+    output logic                          itlb_lookup_valid_o,
+    output logic [63:0]                   itlb_lookup_va_o,
+    output logic                          itlb_miss_valid_o,
+    output logic [63:0]                   itlb_miss_va_o,
+    output logic                          instr_translation_stall_o,
     input  logic                          f1_valid_i,
     input  logic                          stall_i,
     input  logic                          work_valid_i,
@@ -100,6 +109,9 @@ module ifu_line_fetch
     logic         merged_resp_valid_c;
     logic [511:0] merged_resp_data_c;
     logic         merged_resp_hit_c;
+    logic         instr_vm_lookup_c;
+    logic         icache_req_valid_c;
+    logic [63:0]  icache_req_addr_c;
     logic [63:0]  ic_req_addr_pipe_r;
     logic         ic_req_ftq_pipe_valid_r;
     logic [FTQ_IDX_BITS-1:0] ic_req_ftq_pipe_idx_r;
@@ -135,7 +147,21 @@ module ifu_line_fetch
     logic         line_resp_hit_c;
     logic [63:LINE_BITS] line_resp_addr_c;
 
-    assign nlpb_trigger      = ic_resp_valid_comb && ic_resp_hit_comb;
+    assign instr_vm_lookup_c = instr_vm_active_i && f1_valid_i && !flush_i;
+    assign itlb_lookup_valid_o = instr_vm_lookup_c;
+    assign itlb_lookup_va_o    = req_addr_i;
+    assign itlb_miss_valid_o   = instr_vm_lookup_c && !itlb_hit_i && !itlb_fault_i;
+    assign itlb_miss_va_o      = req_addr_i;
+    assign instr_translation_stall_o =
+        instr_vm_lookup_c && (!itlb_hit_i || itlb_fault_i);
+
+    assign icache_req_valid_c =
+        req_valid_i &&
+        (!instr_vm_active_i || (itlb_hit_i && !itlb_fault_i));
+    assign icache_req_addr_c = instr_vm_active_i ? itlb_pa_i : req_addr_i;
+
+    assign nlpb_trigger      =
+        !instr_vm_active_i && ic_resp_valid_comb && ic_resp_hit_comb;
     assign nlpb_trigger_addr = {req_addr_i[63:6], 6'b0};
     assign nlpb_resp_match_c =
         nlpb_resp_valid_r &&
@@ -238,8 +264,8 @@ module ifu_line_fetch
     icache u_icache (
         .clk            (clk),
         .rst_n          (rst_n),
-        .req_valid      (req_valid_i),
-        .req_addr       (req_addr_i),
+        .req_valid      (icache_req_valid_c),
+        .req_addr       (icache_req_addr_c),
         .resp_valid     (ic_resp_valid_comb),
         .resp_data      (ic_resp_data_comb),
         .resp_hit       (ic_resp_hit_comb),
@@ -256,11 +282,11 @@ module ifu_line_fetch
     next_line_prefetch_buffer u_nlpb (
         .clk             (clk),
         .rst_n           (rst_n),
-        .lookup_valid    (f1_valid_i && !stall_i),
+        .lookup_valid    (f1_valid_i && !stall_i && !instr_vm_active_i),
         .lookup_addr     (req_addr_i),
         .hit             (nlpb_hit_comb),
         .hit_data        (nlpb_data_comb),
-        .aux_lookup_valid(f1_valid_i && !stall_i),
+        .aux_lookup_valid(f1_valid_i && !stall_i && !instr_vm_active_i),
         .aux_lookup_addr (aux_lookup_addr_i),
         .aux_hit         (nlpb_aux_hit_comb),
         .aux_hit_data    (nlpb_aux_data_comb),
@@ -317,10 +343,11 @@ module ifu_line_fetch
             future_line_ftq_alloc_tag_r <= '0;
             future_line_ftq_entry_r     <= '0;
         end else begin
-            nlpb_resp_valid_r <= f1_valid_i && !stall_i && nlpb_hit_comb;
+            nlpb_resp_valid_r <=
+                f1_valid_i && !stall_i && !instr_vm_active_i && nlpb_hit_comb;
             nlpb_resp_addr_r  <= {req_addr_i[63:LINE_BITS], {LINE_BITS{1'b0}}};
             nlpb_resp_data_r  <= nlpb_data_comb;
-            if (req_valid_i) begin
+            if (icache_req_valid_c) begin
                 ic_req_addr_pipe_r <= req_addr_i;
                 ic_req_ftq_pipe_valid_r <= req_owner_valid_i;
                 if (req_owner_valid_i) begin

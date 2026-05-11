@@ -220,6 +220,15 @@ module rv64gc_core_top
     logic        icache_fill_resp_valid;
     logic [63:0] icache_fill_resp_addr;
     logic [511:0] icache_fill_resp_data;
+    logic        instr_vm_active;
+    logic        itlb_lookup_valid;
+    logic [63:0] itlb_lookup_va;
+    logic        itlb_miss_valid;
+    logic [63:0] itlb_miss_va;
+    logic        itlb_hit;
+    logic [63:0] itlb_pa;
+    logic        itlb_fault;
+    logic [3:0]  itlb_fault_code;
 
     // Prefetch L2 signals (from fetch_top NLPB to L2 prefetch port).
     // Declared here because fetch_top instantiation below uses them as
@@ -359,6 +368,14 @@ module rv64gc_core_top
         .redirect_valid         (frontend_flush_valid || uoc_handoff_valid),
         .redirect_pc            (frontend_flush_valid ? frontend_flush_pc :
                                                         uoc_handoff_pc),
+        .instr_vm_active        (instr_vm_active),
+        .itlb_hit               (itlb_hit),
+        .itlb_pa                (itlb_pa),
+        .itlb_fault             (itlb_fault),
+        .itlb_lookup_valid      (itlb_lookup_valid),
+        .itlb_lookup_va         (itlb_lookup_va),
+        .itlb_miss_valid        (itlb_miss_valid),
+        .itlb_miss_va           (itlb_miss_va),
         .bpu_update_valid       (bpu_update_valid),
         .bpu_update_pc          (bpu_update_pc),
         .bpu_tage_update_valid  (bpu_tage_update_valid),
@@ -4980,14 +4997,9 @@ module rv64gc_core_top
     // =========================================================================
     logic                    satp_vm_enabled;
     logic [1:0]              csr_data_priv_mode;
-    logic                    instr_vm_active;
     logic                    sfence_vma_commit;
     logic                    satp_commit_valid;
     logic                    translation_tlb_invalidate;
-    logic                    itlb_hit;
-    logic [63:0]             itlb_pa;
-    logic                    itlb_fault;
-    logic [3:0]              itlb_fault_code;
     logic                    dtlb_dirty_wb_valid;
     logic [63:0]             dtlb_dirty_wb_pte_pa;
     logic [63:0]             dtlb_dirty_wb_pte_value;
@@ -5037,8 +5049,8 @@ module rv64gc_core_top
     itlb u_itlb (
         .clk                 (clk),
         .rst_n               (rst_n),
-        .lookup_valid_i      (1'b0),
-        .va_i                (64'd0),
+        .lookup_valid_i      (itlb_lookup_valid),
+        .va_i                (itlb_lookup_va),
         .priv_i              (csr_priv_mode),
         .asid_i              (csr_satp[59:44]),
         .hit_o               (itlb_hit),
@@ -5100,8 +5112,8 @@ module rv64gc_core_top
         .dtlb_req_rob_idx_i  (dtlb_miss_rob_idx),
         .dtlb_req_is_store_i (dtlb_miss_is_store),
         .dtlb_req_ready_o    (ptw_dtlb_req_ready),
-        .itlb_req_valid_i    (1'b0),
-        .itlb_req_va_i       (64'd0),
+        .itlb_req_valid_i    (itlb_miss_valid),
+        .itlb_req_va_i       (itlb_miss_va),
         .itlb_req_ready_o    (ptw_itlb_req_ready),
         .dtlb_fill_valid_o   (ptw_dtlb_fill_valid),
         .itlb_fill_valid_o   (ptw_itlb_fill_valid),

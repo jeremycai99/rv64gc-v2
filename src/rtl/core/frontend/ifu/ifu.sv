@@ -14,6 +14,7 @@ module ifu
     input  logic [63:0]                   redirect_pc_i,
 
     input  logic                          frontend_hold_i,
+    input  logic                          translation_stall_i,
     input  logic                          packet_buf_full_i,
     input  logic                          icq_full_i,
     input  logic                          ftq_enq_ready_i,
@@ -338,6 +339,7 @@ module ifu
         required_ftq_need_alloc_c ||
         selected_req_is_runahead_c;
     assign fe_stall_c = frontend_hold_i ||
+                        translation_stall_i ||
                         packet_buf_full_i ||
                         icq_full_i ||
                         (required_ftq_need_alloc_c && !ftq_enq_ready_i);
