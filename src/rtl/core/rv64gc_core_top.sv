@@ -4356,6 +4356,10 @@ module rv64gc_core_top
     logic [63:0]             dtlb_miss_va;
     logic [ROB_IDX_BITS-1:0] dtlb_miss_rob_idx;
     logic                    dtlb_miss_is_store;
+    logic                    lsu_dtlb_exc_valid;
+    logic [63:0]             lsu_dtlb_exc_va;
+    logic [ROB_IDX_BITS-1:0] lsu_dtlb_exc_rob_idx;
+    logic [3:0]              lsu_dtlb_exc_code;
     logic                    dtlb_hit;
     logic [63:0]             dtlb_pa;
     logic                    dtlb_fault;
@@ -4456,6 +4460,10 @@ module rv64gc_core_top
         .dtlb_miss_va_o         (dtlb_miss_va),
         .dtlb_miss_rob_idx_o    (dtlb_miss_rob_idx),
         .dtlb_miss_is_store_o   (dtlb_miss_is_store),
+        .dtlb_exc_valid_o       (lsu_dtlb_exc_valid),
+        .dtlb_exc_va_o          (lsu_dtlb_exc_va),
+        .dtlb_exc_rob_idx_o     (lsu_dtlb_exc_rob_idx),
+        .dtlb_exc_code_o        (lsu_dtlb_exc_code),
         // D-cache interface
         .dcache_load_req_valid  (dc_load_req_valid),
         .dcache_load_req_addr   (dc_load_req_addr),
@@ -4998,13 +5006,20 @@ module rv64gc_core_top
     logic                    ptw_fault_is_store;
     logic [ROB_IDX_BITS-1:0] ptw_fault_rob_idx;
     logic [63:0]             ptw_fault_va;
+    logic                    ptw_data_fault_valid;
 
-    assign rob_sideband_exc_valid =
+    assign ptw_data_fault_valid =
         ptw_fault_valid && !ptw_fault_is_itlb;
-    assign rob_sideband_exc_rob_idx = ptw_fault_rob_idx;
+    assign rob_sideband_exc_valid =
+        ptw_data_fault_valid || lsu_dtlb_exc_valid;
+    assign rob_sideband_exc_rob_idx =
+        ptw_data_fault_valid ? ptw_fault_rob_idx : lsu_dtlb_exc_rob_idx;
     assign rob_sideband_exc_code =
-        ptw_fault_is_store ? EXC_STORE_PAGE_FAULT : EXC_LOAD_PAGE_FAULT;
-    assign rob_sideband_exc_tval = ptw_fault_va;
+        ptw_data_fault_valid
+            ? (ptw_fault_is_store ? EXC_STORE_PAGE_FAULT : EXC_LOAD_PAGE_FAULT)
+            : lsu_dtlb_exc_code;
+    assign rob_sideband_exc_tval =
+        ptw_data_fault_valid ? ptw_fault_va : lsu_dtlb_exc_va;
 
     assign satp_vm_enabled = (csr_satp[63:60] == 4'd8) ||
                              (csr_satp[63:60] == 4'd9);

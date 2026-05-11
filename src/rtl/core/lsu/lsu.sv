@@ -88,6 +88,10 @@ module lsu
     output logic [63:0] dtlb_miss_va_o,
     output logic [ROB_IDX_BITS-1:0] dtlb_miss_rob_idx_o,
     output logic dtlb_miss_is_store_o,
+    output logic dtlb_exc_valid_o,
+    output logic [63:0] dtlb_exc_va_o,
+    output logic [ROB_IDX_BITS-1:0] dtlb_exc_rob_idx_o,
+    output logic [3:0] dtlb_exc_code_o,
 
     // D-cache interface
     output logic [1:0] dcache_load_req_valid,
@@ -262,8 +266,11 @@ module lsu
     logic dtlb_lookup_sel_store;
     logic dtlb_lookup_sel_load0;
     logic dtlb_lookup_miss;
+    logic dtlb_lookup_fault;
     logic sta_tlb_miss;
+    logic sta_tlb_fault;
     logic load0_tlb_miss;
+    logic load0_tlb_fault;
     logic load1_tlb_wait;
     logic [ROB_IDX_BITS-1:0] dtlb_lookup_rob_idx;
 
@@ -286,16 +293,26 @@ module lsu
         dtlb_lookup_sel_store ? sta_issue_data.rob_idx : load_issue_data[0].rob_idx;
     assign dtlb_lookup_miss =
         dtlb_lookup_valid_o && !dtlb_hit_i && !dtlb_fault_i;
+    assign dtlb_lookup_fault =
+        dtlb_lookup_valid_o && dtlb_fault_i;
     assign sta_tlb_miss =
         data_vm_active_i &&
         dtlb_lookup_sel_store &&
         !dtlb_hit_i &&
         !dtlb_fault_i;
+    assign sta_tlb_fault =
+        data_vm_active_i &&
+        dtlb_lookup_sel_store &&
+        dtlb_fault_i;
     assign load0_tlb_miss =
         data_vm_active_i &&
         dtlb_lookup_sel_load0 &&
         !dtlb_hit_i &&
         !dtlb_fault_i;
+    assign load0_tlb_fault =
+        data_vm_active_i &&
+        dtlb_lookup_sel_load0 &&
+        dtlb_fault_i;
     assign load1_tlb_wait =
         data_vm_active_i &&
         load_issue_candidate_valid[1] &&
@@ -305,7 +322,11 @@ module lsu
     assign dtlb_miss_va_o = dtlb_lookup_va_o;
     assign dtlb_miss_rob_idx_o = dtlb_lookup_rob_idx;
     assign dtlb_miss_is_store_o = dtlb_lookup_is_store_o;
-    assign sta_issue_suppress = sta_tlb_miss;
+    assign dtlb_exc_valid_o = dtlb_lookup_fault;
+    assign dtlb_exc_va_o = dtlb_lookup_va_o;
+    assign dtlb_exc_rob_idx_o = dtlb_lookup_rob_idx;
+    assign dtlb_exc_code_o = dtlb_fault_code_i;
+    assign sta_issue_suppress = sta_tlb_miss || sta_tlb_fault;
 
     // =========================================================================
     // Store data: byte mask generation
@@ -1109,6 +1130,7 @@ module lsu
         load_issue_candidate_valid[0] &&
         (flush_in.valid ||
          load0_tlb_miss ||
+         load0_tlb_fault ||
          (!load_addr_misaligned[0] &&
           (p0_sq_order_wait_block || same_cycle_sta_wait0 ||
            fwd_hold_blocked || mmio_load0_block ||

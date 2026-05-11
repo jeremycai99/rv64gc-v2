@@ -625,6 +625,16 @@ Execution status:
   instruction ROB index.
 - Validation for the PTW-to-ROB fault sideband slice:
   `benchmark_results/stage3_rtl_guard_20260511_ptw_rob_fault_sideband`.
+- Eighth RTL slice completed: DTLB permission faults are now handled through
+  the same precise ROB sideband as PTW walk faults. `lsu.sv` reports immediate
+  DTLB hit faults with the faulting VA, ROB index, and load or store page-fault
+  cause; it also suppresses the issuing load or store-address IQ entry so the
+  core does not access memory or mark a store address complete while a
+  translation permission fault is pending. `rv64gc_core_top.sv` prioritizes
+  one-cycle PTW data faults over repeatable LSU DTLB faults on the shared ROB
+  sideband.
+- Validation for the DTLB immediate-fault sideband slice:
+  `benchmark_results/stage3_rtl_guard_20260511_dtlb_fault_sideband`.
 
 | Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
 |---|---:|---:|---:|
