@@ -1,5 +1,6 @@
 /* file: ptw.sv
  Description: Shared Sv39 and Sv48 page table walker for ITLB and DTLB misses.
+ Performs hardware-managed A/D fill tagging for TLB entries.
  Author: Jeremy Cai
  Date: May 11, 2026
  Version: 1.0
@@ -96,6 +97,7 @@ module ptw
     logic                      pte_invalid_c;
     logic                      superpage_misalign_c;
     logic                      ptw_read_inflight_c;
+    logic [63:0]               pte_fill_c;
 
     assign satp_mode = satp_i[63:60];
     assign satp_sv39 = (satp_mode == 4'd8);
@@ -150,6 +152,10 @@ module ptw
     assign pte_leaf_c    = pte_r_c || pte_x_c;
     assign pte_ppn_c     = pte_resp_c[53:10];
     assign pte_invalid_c = !pte_v_c || (pte_w_c && !pte_r_c);
+    assign pte_fill_c    = pte_resp_c | 64'h0000_0000_0000_0040 |
+                           (walk_is_store_r
+                               ? 64'h0000_0000_0000_0080
+                               : 64'h0000_0000_0000_0000);
 
     always_comb begin
         superpage_misalign_c = 1'b0;
@@ -259,7 +265,7 @@ module ptw
 
                     S_WAIT: begin
                         if (pte_resp_match_c) begin
-                            pte_r      <= pte_resp_c | {57'd0, walk_is_store_r, 1'b1, 5'd0};
+                            pte_r      <= pte_fill_c;
                             if (pte_invalid_c) begin
                                 state_r <= S_FAULT;
                             end else if (pte_leaf_c) begin

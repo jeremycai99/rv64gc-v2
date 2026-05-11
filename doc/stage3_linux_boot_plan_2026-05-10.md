@@ -647,6 +647,15 @@ Execution status:
   setup for the later data-VM enable step.
 - Validation for the LSU data PA-mux slice:
   `benchmark_results/stage3_rtl_guard_20260511_lsu_data_pa_mux`.
+- Tenth RTL slice completed: PTW TLB-fill permission tagging now sets the
+  RISC-V `A` bit on successful fills and sets `D` only for store-originated
+  fills using explicit bit masks. This fixes the inherited v1-style
+  concatenation that intended hardware-managed A/D tagging but actually set
+  `G` and misplaced the store bit. The PTW still preserves the original PTE
+  permission bits and data translation remains disabled at the LSU top-level
+  input until the next promotion slice.
+- Validation for the PTW A/D fill-bit slice:
+  `benchmark_results/stage3_rtl_guard_20260511_ptw_ad_fill_bits`.
 
 | Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
