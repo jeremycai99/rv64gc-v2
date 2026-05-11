@@ -74,8 +74,8 @@ module lsu
     output logic [1:0] load_issue_suppress,
     output logic sta_issue_suppress,
 
-    // DTLB sideband. Current top-level integration keeps data_vm_active_i low
-    // until the translated data path is enabled.
+    // DTLB sideband. Data VM is asserted when SATP translation applies to the
+    // effective data privilege mode.
     input logic data_vm_active_i,
     input logic dtlb_hit_i,
     input logic [63:0] dtlb_pa_i,

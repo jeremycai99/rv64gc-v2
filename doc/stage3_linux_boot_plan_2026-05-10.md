@@ -656,6 +656,16 @@ Execution status:
   input until the next promotion slice.
 - Validation for the PTW A/D fill-bit slice:
   `benchmark_results/stage3_rtl_guard_20260511_ptw_ad_fill_bits`.
+- Eleventh RTL slice completed: `rv64gc_core_top.sv` now wires the computed
+  `data_vm_active` signal into `lsu.sv` instead of holding the LSU DTLB
+  sideband disabled. This promotes the data-side DTLB/PTW/PA-mux path from
+  scaffold to an active architectural path whenever `satp` enables Sv39 or
+  Sv48 and the effective data privilege is not M-mode. The committed DS/CM
+  rows still run Bare mode, so this slice proves non-regression and clean
+  elaboration; a directed VM data-translation smoke remains required before
+  claiming functional data-MMU completion.
+- Validation for the data-VM activation slice:
+  `benchmark_results/stage3_rtl_guard_20260511_data_vm_active`.
 
 | Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
@@ -797,9 +807,9 @@ harness policy:
 - v2 now has real RV64GC F/D execution in core RTL, with DSim FP smoke passing
   and DS/CM performance preserved.
 - v2 now has the Sv48 MMU/PTW/TLB scaffold, L2 PTW source port, data-side
-  PTW and DTLB fault sidebands, and LSU PA mux setup. Data translation is not
-  enabled yet, and fetch/ITLB translation plus instruction page-fault handling
-  are still open.
+  PTW and DTLB fault sidebands, LSU PA mux setup, and data-side VM activation
+  wired into the LSU. Directed VM data-translation proof, fetch/ITLB
+  translation, and instruction page-fault handling are still open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style

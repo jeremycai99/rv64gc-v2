@@ -4349,6 +4349,7 @@ module rv64gc_core_top
     logic [2:0] sq_alloc_count;
     logic [ROB_IDX_BITS-1:0] lq_alloc_rob_idx [0:PIPE_WIDTH-1];
     logic [ROB_IDX_BITS-1:0] sq_alloc_rob_idx [0:PIPE_WIDTH-1];
+    logic                    data_vm_active;
     logic                    dtlb_lookup_valid;
     logic [63:0]             dtlb_lookup_va;
     logic                    dtlb_lookup_is_store;
@@ -4447,8 +4448,8 @@ module rv64gc_core_top
         .load_issue_suppress    (lsu_load_issue_suppress_raw),
         .sta_issue_suppress     (lsu_sta_issue_suppress[0]),
         .violation_rob_idx      (lsu_violation_rob_idx),
-        // DTLB sideband, held disabled until data translation is promoted
-        .data_vm_active_i       (1'b0),
+        // DTLB sideband
+        .data_vm_active_i       (data_vm_active),
         .dtlb_hit_i             (dtlb_hit),
         .dtlb_pa_i              (dtlb_pa),
         .dtlb_fault_i           (dtlb_fault),
@@ -4980,7 +4981,6 @@ module rv64gc_core_top
     logic                    satp_vm_enabled;
     logic [1:0]              csr_data_priv_mode;
     logic                    instr_vm_active;
-    logic                    data_vm_active;
     logic                    sfence_vma_commit;
     logic                    satp_commit_valid;
     logic                    translation_tlb_invalidate;
