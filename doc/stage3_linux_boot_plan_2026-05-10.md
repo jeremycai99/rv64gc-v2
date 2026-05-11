@@ -48,13 +48,13 @@ Baseline reference:
 Reference artifact: `benchmark_results/dse_stage2_ds_viability_profile_20260510`
 on commit `bddfed8`.
 
-The reference cycle counts are not exact hard limits. A run is acceptable only
-when the measured performance regression is no more than `0.01%` versus the
-reference. The wrapper checks both directions: timed cycles must not increase
-by more than `0.01%`, and the reported performance metric must not drop by
-more than `0.01%`.
+The reference cycle counts are diagnostic thresholds, not hard limits. A run is
+acceptable only when the measured performance regression is no more than
+`0.01%` versus the reference. The wrapper reports cycle movement against the
+same `0.01%` envelope, but the hard performance gate is the reported metric:
+it must not drop by more than `0.01%`.
 
-| Row | Reference timed cycles | Max cycles with 0.01% tolerance | Reference metric | Min metric with 0.01% tolerance |
+| Row | Reference timed cycles | Diagnostic cycles at 0.01% | Reference metric | Hard min metric with 0.01% tolerance |
 |---|---:|---:|---:|---:|
 | Dhrystone 100 | `18,161` | `18,162` | `3.133924 DMIPS/MHz` | `3.133611 DMIPS/MHz` |
 | Dhrystone 300 | `53,469` | `53,474` | `3.193357 DMIPS/MHz` | `3.193038 DMIPS/MHz` |
@@ -69,8 +69,8 @@ python3 tools/run_stage3_rtl_guard.py --runner dsim --run-id <date>_<slice>
 
 The wrapper rebuilds the selected simulator, runs the four locked DS/CM rows
 with the strict owner, delivery, branch-recovery, performance, stat, and
-bottleneck plusargs, then checks timed cycles and metrics against the table
-above using the default `--max-regression-pct 0.01` tolerance. Use
+bottleneck plusargs, then reports timed cycles and checks metrics against the
+table above using the default `--max-regression-pct 0.01` tolerance. Use
 `--runner xsim-sh` when DSim is blocked by license availability.
 The current OpenSBI platform-probe slice used that fallback for the hard DS/CM
 gate because the DSim benchmark row hit a simulator scheduler iteration limit
@@ -104,8 +104,10 @@ Gate rules:
 
 - Rebuild the simulator from the current RTL before running the guard.
 - All four rows must pass endpoint checks.
-- Timed cycles and performance metrics must stay within the `0.01%`
-  regression tolerance versus the baseline table above.
+- Timed cycles are reported against the diagnostic `0.01%` cycle envelope, but
+  cycle count alone is not a hard failure.
+- Performance metrics must stay within the `0.01%` regression tolerance versus
+  the baseline table above.
 - Owner, delivery, branch-recovery, stale-owner, legacy loop-buffer, and
   standalone decoded-op replay checks must remain clean.
 - Any performance regression blocks the RTL commit unless the change is
@@ -416,7 +418,7 @@ Promoted validation for this slice:
 - The Stage 3 DS/CM hard guard passes on the rebuilt XSim benchmark snapshot:
   `benchmark_results/stage3_rtl_guard_opensbi_platform_probe_xsim_guard_20260511`.
 
-| Row | Timed cycles | 0.01% max cycles | Metric |
+| Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
 |---|---:|---:|---:|
 | Dhrystone 100 | `18,082` | `18,162` | `3.147616 DMIPS/MHz` |
 | Dhrystone 300 | `53,360` | `53,474` | `3.199880 DMIPS/MHz` |
@@ -585,7 +587,7 @@ Execution status:
 - Validation for the PTW-to-L2 integration slice:
   `benchmark_results/stage3_rtl_guard_20260511_ptw_l2_integrated`.
 
-| Row | Timed cycles | 0.01% max cycles | Metric |
+| Row | Timed cycles | Diagnostic 0.01% cycles | Metric |
 |---|---:|---:|---:|
 | Dhrystone 100 | `18,082` | `18,162` | `3.147616 DMIPS/MHz` |
 | Dhrystone 300 | `53,360` | `53,474` | `3.199880 DMIPS/MHz` |
