@@ -28,6 +28,7 @@ DEFAULT_MANIFEST = REPO_ROOT / "tests" / "benchmarks" / "benchmarks.json"
 DEFAULT_XSIM = Path("D:/Xilinx/Vivado/2024.1/bin/xsim.bat")
 DHRYSTONE_VAX_DHRYSTONES_PER_SEC = 1757.0
 WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_ELF_SYMBOL_CACHE: dict[Path, dict[str, int]] = {}
 
 IPC_RE = re.compile(
     r"IPC:\s+mcycle=(?P<mcycle>\d+)\s+minstret=(?P<minstret>\d+)\s+IPC=(?P<ipc>[0-9.eE+-]+)"
@@ -35,7 +36,7 @@ IPC_RE = re.compile(
 PASS_RE = re.compile(r"PASS at cycle (?P<cycle>\d+) \(tohost=(?P<tohost>\d+)\)")
 FAIL_RE = re.compile(r"FAIL at cycle (?P<cycle>\d+)")
 TIMEOUT_RE = re.compile(r"TIMEOUT after (?P<cycle>\d+)")
-TOHOST_RE = re.compile(r"^TOHOST=(?P<tohost>\d+)")
+TOHOST_RE = re.compile(r"^TOHOST=(?P<tohost>[0-9a-fA-F]+)")
 BENCH_RESULT_RE = re.compile(
     r"\[BENCH_RESULT\]\s+index=(?P<index>\d+)\s+field=(?P<field>\w+)\s+"
     r"value=(?P<value>\d+)\s+hex=(?P<hex>[0-9a-fA-F]+)"
@@ -326,8 +327,65 @@ def benchmark_plusargs(bench: dict[str, Any]) -> list[str]:
     return normalize_plusargs(bench.get("plusargs"))
 
 
+def read_elf_symbols(elf: Path) -> dict[str, int]:
+    elf = repo_path(elf)
+    if elf in _ELF_SYMBOL_CACHE:
+        return _ELF_SYMBOL_CACHE[elf]
+
+    nm = shutil.which("riscv64-unknown-elf-nm") or shutil.which("llvm-nm") or shutil.which("nm")
+    symbols: dict[str, int] = {}
+    if not elf.exists() or nm is None:
+        _ELF_SYMBOL_CACHE[elf] = symbols
+        return symbols
+
+    completed = subprocess.run(
+        [nm, "-n", str(elf)],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if completed.returncode != 0:
+        _ELF_SYMBOL_CACHE[elf] = symbols
+        return symbols
+
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        value, _, name = parts[0], parts[1], parts[2]
+        try:
+            symbols[name] = int(value, 16)
+        except ValueError:
+            continue
+
+    _ELF_SYMBOL_CACHE[elf] = symbols
+    return symbols
+
+
+def auto_platform_plusargs(bench: dict[str, Any], explicit_plusargs: list[str]) -> list[str]:
+    names = {plusarg_name(arg) for arg in explicit_plusargs}
+    plusargs: list[str] = []
+
+    elf = bench.get("elf")
+    if elf:
+        symbols = read_elf_symbols(repo_path(elf))
+        tohost = symbols.get("tohost")
+        fromhost = symbols.get("fromhost")
+        if tohost is not None and "TOHOST_ADDR" not in names:
+            plusargs.append(f"TOHOST_ADDR={tohost:x}")
+            names.add("TOHOST_ADDR")
+        if fromhost is not None and "FROMHOST_ADDR" not in names:
+            plusargs.append(f"FROMHOST_ADDR={fromhost:x}")
+            names.add("FROMHOST_ADDR")
+
+    return plusargs
+
+
 def effective_plusargs(args: argparse.Namespace, bench: dict[str, Any]) -> list[str]:
-    return [*args.plusarg, *benchmark_plusargs(bench)]
+    explicit = [*args.plusarg, *benchmark_plusargs(bench)]
+    return [*explicit, *auto_platform_plusargs(bench, explicit)]
 
 
 def drift_safe_gate_required(args: argparse.Namespace, bench: dict[str, Any]) -> bool:
@@ -671,7 +729,7 @@ def parse_xsim_log(text: str) -> dict[str, Any]:
             status = "TIMEOUT"
             continue
         if match := TOHOST_RE.search(line):
-            tohost = int(match.group("tohost"))
+            tohost = int(match.group("tohost"), 16)
             if status == "UNKNOWN":
                 status = f"TOHOST_{tohost}"
             continue
@@ -1882,6 +1940,9 @@ def main(argv: list[str] | None = None) -> int:
     for bench in benchmarks:
         print(f"=== {bench['name']} ===")
         results.append(run_benchmark(bench, args, git_info))
+        if args.run_root is not None and not args.dry_run:
+            write_json(results, args.json_out or (args.run_root / "results.json"))
+            write_markdown(results, args.markdown_out or (args.run_root / "summary.md"))
 
     print_summary(results)
 

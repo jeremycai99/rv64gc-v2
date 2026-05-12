@@ -26,11 +26,13 @@ module committed_store_buffer
     input  logic [63:0] fwd_addr,
     input  logic [1:0]  fwd_size,
     output logic        fwd_hit,
+    output logic        fwd_partial,
     output logic [63:0] fwd_data,
     input  logic        fwd1_valid,
     input  logic [63:0] fwd1_addr,
     input  logic [1:0]  fwd1_size,
     output logic        fwd1_hit,
+    output logic        fwd1_partial,
     output logic [63:0] fwd1_data,
     // Full signal
     output logic        full
@@ -87,6 +89,7 @@ module committed_store_buffer
     logic [63:0] fwd_req_addr_arr [0:1];
     logic [1:0]  fwd_req_size_arr [0:1];
     logic        fwd_hit_arr [0:1];
+    logic        fwd_partial_arr [0:1];
     logic [63:0] fwd_data_arr [0:1];
 
     assign fwd_req_valid_arr[0] = fwd_valid;
@@ -97,6 +100,8 @@ module committed_store_buffer
     assign fwd_req_size_arr[1]  = fwd1_size;
     assign fwd_hit              = fwd_hit_arr[0];
     assign fwd1_hit             = fwd_hit_arr[1];
+    assign fwd_partial          = fwd_partial_arr[0];
+    assign fwd1_partial         = fwd_partial_arr[1];
     assign fwd_data             = fwd_data_arr[0];
     assign fwd1_data            = fwd_data_arr[1];
 
@@ -191,6 +196,10 @@ module committed_store_buffer
                 end
 
                 fwd_hit_arr[fp] = fwd_req_valid_arr[fp] && (cover_mask == req_bmask);
+                fwd_partial_arr[fp] =
+                    fwd_req_valid_arr[fp] &&
+                    (cover_mask != 8'h00) &&
+                    (cover_mask != req_bmask);
             end
         end
     endgenerate

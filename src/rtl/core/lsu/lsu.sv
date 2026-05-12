@@ -466,8 +466,10 @@ module lsu
     logic [ROB_IDX_BITS-1:0] p1_wait_req_rob_idx;
 
     logic        csb_fwd_hit;
+    logic        csb_fwd_partial;
     logic [63:0] csb_fwd_data;
     logic        csb_fwd_hit_p1;
+    logic        csb_fwd_partial_p1;
     logic [63:0] csb_fwd_data_p1;
     logic        csb_enq_fwd_hit;
     logic [63:0] csb_enq_fwd_data;
@@ -478,6 +480,8 @@ module lsu
     logic [7:0]  csb_enq_fwd_overlap0;
     logic [7:0]  csb_enq_fwd_overlap1;
     logic        p1_any_fwd_hit;
+    logic        p0_partial_fwd_wait;
+    logic        p1_partial_fwd_wait;
     logic        p0_sq_order_wait_block;
     logic        p1_sq_order_wait_block;
     logic [1:0]  load_issue_spec_past_addr_unknown;
@@ -866,7 +870,7 @@ module lsu
                                      (load_addr_misaligned[0] | load_addr_mmio[0] |
                                       load_issue_data[0].is_amo |
                                       p0_fwd_hit |
-                                      sq_fwd_partial | flush_in.valid);
+                                      p0_partial_fwd_wait | flush_in.valid);
             load_nocache_r[1]     <= p1_eff_valid & p1_eff_nocache;
 
             // Stage 2 retained for debug-only traces and legacy assertions.
@@ -986,11 +990,13 @@ module lsu
                           ? load_mem_addr[0] : 64'd0),
         .fwd_size       (load_issue_data[0].mem_size),
         .fwd_hit        (csb_fwd_hit),
+        .fwd_partial    (csb_fwd_partial),
         .fwd_data       (csb_fwd_data),
         .fwd1_valid     (p1_wait_req_valid),
         .fwd1_addr      (p1_wait_req_valid ? p1_wait_req_addr : 64'd0),
         .fwd1_size      (p1_wait_req_size),
         .fwd1_hit       (csb_fwd_hit_p1),
+        .fwd1_partial   (csb_fwd_partial_p1),
         .fwd1_data      (csb_fwd_data_p1),
         // Full
         .full           ()
@@ -1100,6 +1106,13 @@ module lsu
         sq_fwd_hit_p1 |
         csb_enq_fwd_hit_p1 |
         csb_fwd_hit_p1;
+    assign p0_partial_fwd_wait =
+        sq_fwd_partial |
+        same_cycle_fwd_partial |
+        csb_fwd_partial;
+    assign p1_partial_fwd_wait =
+        sq_fwd_partial_p1 |
+        csb_fwd_partial_p1;
     assign p0_sq_order_wait_block =
         sq_fwd_wait_data_missing || sq_fwd_wait_addr_unknown;
     assign p1_sq_order_wait_block =
@@ -1156,7 +1169,7 @@ module lsu
         !p1_eff_misalign &&
         p1_any_fwd_hit &&
         !p1_sq_order_wait_block &&
-        !sq_fwd_partial_p1 &&
+        !p1_partial_fwd_wait &&
         !sta_issue_valid &&
         !p1_normal_wb_valid &&
         !p0_fwd_spill_to_p1 &&
@@ -1188,10 +1201,9 @@ module lsu
         sta_older_than_load0 |
         sq_fwd_wait |
         sq_fwd_hit |
-        sq_fwd_partial |
+        p0_partial_fwd_wait |
         csb_enq_fwd_hit |
-        csb_fwd_hit |
-        same_cycle_fwd_partial;
+        csb_fwd_hit;
     assign amo_flush_kill = flush_in.valid && flush_in.full_flush;
 
     assign load_issue_suppress[0] =
@@ -1201,7 +1213,8 @@ module lsu
          load0_tlb_port_wait ||
          load0_tlb_fault ||
          (!load_addr_misaligned[0] &&
-          (p0_sq_order_wait_block || same_cycle_sta_wait0 ||
+          (p0_sq_order_wait_block || sq_fwd_partial ||
+           csb_fwd_partial || same_cycle_sta_wait0 ||
            fwd_hold_blocked || mmio_load0_block ||
            amo_busy ||
            (load_issue_data[0].is_amo &&
@@ -1309,7 +1322,7 @@ module lsu
 
                 hit_idx = -1;
                 empty_idx = -1;
-                do_capture = !sq_wait_p1 && !sq_fwd_partial_p1 && !sq_fwd_hit_p1;
+                do_capture = !sq_wait_p1 && !p1_partial_fwd_wait && !sq_fwd_hit_p1;
 
                 sim_p1_conf_total_cnt <= sim_p1_conf_total_cnt + 1;
                 if (do_capture)
@@ -1428,7 +1441,7 @@ module lsu
          (load_issue_candidate_valid[0] && load_issue_data[0].is_amo) ||
          p1_retry_valid_r ||
          (!load_addr_misaligned[1] && !p1_retry_valid_r &&
-          (p1_sq_order_wait_block || sq_fwd_partial_p1 || p1_fwd_blocked ||
+          (p1_sq_order_wait_block || p1_partial_fwd_wait || p1_fwd_blocked ||
            same_cycle_sta_wait1 || lq_p1_issue_block || mmio_load1_block)));
 
     assign load_issue_spec_past_addr_unknown = 2'b00;
@@ -1452,7 +1465,7 @@ module lsu
     always_comb begin
         if (p1_retry_valid_r) begin
             p1_eff_valid    = !p1_sq_order_wait_block &&
-                              !sq_fwd_partial_p1 &&
+                              !p1_partial_fwd_wait &&
                               !lq_p1_issue_block &&
                               (!p1_any_fwd_hit || !p1_fwd_hold_valid_r);
             p1_eff_data     = p1_retry_data_r;
@@ -1460,8 +1473,8 @@ module lsu
             p1_eff_misalign = p1_retry_misalign_r;
             p1_eff_nocache  = p1_retry_load_nocache_r |
                               p1_retry_addr_mmio |
-                              p1_any_fwd_hit | sq_fwd_partial_p1;
-        end else if (load_issue_valid[1] && !p1_sq_order_wait_block && !sq_fwd_partial_p1 &&
+                              p1_any_fwd_hit | p1_partial_fwd_wait;
+        end else if (load_issue_valid[1] && !p1_sq_order_wait_block && !p1_partial_fwd_wait &&
                      !lq_p1_issue_block &&
                      (p1_any_fwd_hit ? !p1_fwd_hold_valid_r : !dcache_conflict)) begin
             p1_eff_valid    = 1'b1;
@@ -1470,7 +1483,7 @@ module lsu
             p1_eff_misalign = load_addr_misaligned[1];
             p1_eff_nocache  = load_addr_misaligned[1] | flush_in.valid |
                               load_addr_mmio[1] |
-                              p1_any_fwd_hit | sq_fwd_partial_p1;
+                              p1_any_fwd_hit | p1_partial_fwd_wait;
         end else begin
             p1_eff_valid    = 1'b0;
             p1_eff_data     = '0;
@@ -1492,13 +1505,13 @@ module lsu
                 // Drain after one cycle unless the retried load is still
                 // blocked by an older store whose address is known but whose
                 // data has not reached the SQ yet.
-                if (!p1_sq_order_wait_block && !sq_fwd_partial_p1 &&
+                if (!p1_sq_order_wait_block && !p1_partial_fwd_wait &&
                     !lq_p1_issue_block &&
                     (!p1_any_fwd_hit || !p1_fwd_hold_valid_r))
                     p1_retry_valid_r <= 1'b0;
             end
             if (dcache_conflict && !p1_sq_order_wait_block &&
-                !sq_fwd_partial_p1 && !p1_any_fwd_hit) begin
+                !p1_partial_fwd_wait && !p1_any_fwd_hit) begin
                 p1_retry_valid_r        <= 1'b1;
                 p1_retry_data_r         <= load_issue_data[1];
                 p1_retry_addr_r         <= load_eff_addr[1];
@@ -1542,8 +1555,7 @@ module lsu
         !load_addr_misaligned[0] &&
         load_addr_mmio[0] &&
         !p0_fwd_hit &&
-        !sq_fwd_partial &&
-        !same_cycle_fwd_partial &&
+        !p0_partial_fwd_wait &&
         !flush_in.valid;
 
     assign mmio_load1_launch =
@@ -1552,7 +1564,7 @@ module lsu
         !p1_eff_misalign &&
         p1_eff_addr_mmio &&
         !p1_any_fwd_hit &&
-        !sq_fwd_partial_p1 &&
+        !p1_partial_fwd_wait &&
         !flush_in.valid;
 
     assign mmio_load0_block =
@@ -1684,8 +1696,7 @@ module lsu
                                     & ~load_addr_misaligned[0]
                                     & ~load_addr_mmio[0]
                                     & ~p0_fwd_hit
-                                    & ~sq_fwd_partial
-                                    & ~same_cycle_fwd_partial
+                                    & ~p0_partial_fwd_wait
                                     & ~(load_issue_data[0].is_amo &&
                                         (load_issue_data[0].amo_op == AMO_SC))
                                     & ~flush_in.valid;
@@ -1697,7 +1708,7 @@ module lsu
                                     & ~p1_eff_misalign
                                     & ~p1_eff_addr_mmio
                                     & ~p1_any_fwd_hit
-                                    & ~sq_fwd_partial_p1
+                                    & ~p1_partial_fwd_wait
                                     & ~flush_in.valid;
     assign dcache_load_req_addr[1]  = p1_eff_addr;
     assign dcache_load_req_size[1]  = p1_eff_data.mem_size;
