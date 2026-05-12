@@ -835,7 +835,7 @@ Execution status:
   verifies noncanonical data and instruction virtual addresses raise load and
   instruction page faults with `mtval` equal to the rejected VA.
 - Validation for the expanded VM smoke:
-  `benchmark_results/stage3_vm_smoke_20260512_superpage_canonical_full` passed
+  `benchmark_results/stage3_vm_smoke_20260512_superpage_canonical_clean` passed
   `vm_data_sv48_smoke`, `vm_ifetch_sv48_smoke`,
   `vm_ifetch_fault_sv48_smoke`, `vm_store_fault_sv48_smoke`,
   `vm_ad_update_sv48_smoke`, `vm_perm_sv48_smoke`,
