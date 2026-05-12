@@ -195,6 +195,46 @@ def build_riscv_tests(
         if not required.exists():
             raise FileNotFoundError(f"missing riscv-tests build input: {required}")
 
+    reset_stub = build_root / "reset_stub.S"
+    reset_stub.write_text(
+        "\n".join(
+            [
+                ".section .text.reset,\"ax\",@progbits",
+                ".globl _reset",
+                "_reset:",
+                "    j _start",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    local_link = build_root / "link_rv64gc_compliance.ld"
+    local_link.write_text(
+        "\n".join(
+            [
+                'OUTPUT_ARCH("riscv")',
+                "ENTRY(_start)",
+                "",
+                "SECTIONS",
+                "{",
+                "  . = 0x80000000;",
+                "  .text.reset : { *(.text.reset) }",
+                "  .text.init : { *(.text.init) }",
+                "  . = ALIGN(0x1000);",
+                "  .tohost : { *(.tohost) }",
+                "  . = ALIGN(0x1000);",
+                "  .text : { *(.text) }",
+                "  . = ALIGN(0x1000);",
+                "  .data : { *(.data) }",
+                "  .bss : { *(.bss) }",
+                "  _end = .;",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
     manifest_entries = []
     for test in tests:
         target = test["target"]
@@ -211,10 +251,12 @@ def build_riscv_tests(
                     "-fvisibility=hidden",
                     "-nostdlib",
                     "-nostartfiles",
+                    "-Wl,--build-id=none",
                     f"-I{env_p}",
                     f"-I{macros}",
                     "-T",
-                    str(link_ld),
+                    str(local_link),
+                    str(reset_stub),
                     str(test["source"]),
                     "-o",
                     str(local_elf),
@@ -494,6 +536,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--iter-limit", type=int, default=10_000_000)
     parser.add_argument("--build-sim", action="store_true")
     parser.add_argument("--no-build-tests", action="store_true")
+    parser.add_argument(
+        "--build-only",
+        action="store_true",
+        help="Build/convert tests and write the generated manifest without running simulation.",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--plusarg", action="append", default=[])
     args = parser.parse_args(argv)
@@ -515,6 +562,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif not manifest.exists():
         raise FileNotFoundError(f"missing generated manifest: {manifest}")
+
+    if args.build_only:
+        print(f"Generated manifest: {manifest}")
+        return 0
 
     run_dir = (
         args.run_dir.resolve()
