@@ -18,6 +18,7 @@ module rob
     input  logic [PIPE_WIDTH-1:0]   alloc_ready_now, // entries complete at rename
     input  logic [PIPE_WIDTH-1:0]   alloc_has_exception,
     input  logic [3:0]              alloc_exc_code [0:PIPE_WIDTH-1],
+    input  logic [63:0]             alloc_exc_tval [0:PIPE_WIDTH-1],
     // Data to write at allocation time (per-entry fields)
     input  logic [63:0]             alloc_pc [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   alloc_is_branch,
@@ -840,7 +841,7 @@ module rob
                     pc_packed[ai_w[i]*64 +: 64]       <= alloc_pc[i];
                     has_exc_r[ai_w[i]]                <= alloc_has_exception[i];
                     exc_code_packed[ai_w[i]*4 +: 4]   <= alloc_exc_code[i];
-                    exc_tval_packed[ai_w[i]*64 +: 64] <= 64'd0;
+                    exc_tval_packed[ai_w[i]*64 +: 64] <= alloc_exc_tval[i];
                     is_branch_r[ai_w[i]]      <= alloc_is_branch[i];
                     bpu_type_r[ai_w[i]]       <= alloc_bpu_type[i];
                     is_store_r[ai_w[i]]       <= alloc_is_store[i];

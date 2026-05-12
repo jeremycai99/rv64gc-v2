@@ -207,6 +207,7 @@ package uarch_pkg;
         logic [GHR_BITS-1:0] bp_ghr;
         logic               has_exception;
         logic [3:0]         exc_code;
+        logic [63:0]        exc_tval;
         // NEW v2 fields: instruction fusion
         logic               is_fused;
         logic [31:0]        fused_imm;

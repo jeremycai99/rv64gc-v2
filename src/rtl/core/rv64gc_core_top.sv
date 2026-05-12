@@ -332,6 +332,10 @@ module rv64gc_core_top
     logic        bru_redirect_quarantine_r;
     logic        bru_redirect_quarantine;
     logic        keep_early_frontend;
+    logic        fetch_exception_pending_r;
+    logic [63:0] fetch_exception_pc_r;
+    logic [3:0]  fetch_exception_code_r;
+    logic        fetch_exception_fire_c;
     localparam int SELECTIVE_RECOVERY_COOLDOWN_CYCLES = 32;
     localparam int SELECTIVE_RECOVERY_COOLDOWN_BITS =
         $clog2(SELECTIVE_RECOVERY_COOLDOWN_CYCLES + 1);
@@ -360,7 +364,7 @@ module rv64gc_core_top
         .backend_stall          (frontend_backend_stall),
         // When UOP-cache playback owns rename input, quiesce fetch traffic and
         // let the stream-exit redirect restart the live frontend.
-        .frontend_hold          (uoc_active),
+        .frontend_hold          (uoc_active || fetch_exception_pending_r),
         .frontend_replay_blocking(1'b0),
         .frontend_replay_start   (1'b0),
         .recovery_headroom_ok   (frontend_recovery_headroom_ok),
@@ -491,7 +495,7 @@ module rv64gc_core_top
         .ev_invalidate          (uoc_ev_invalidate)
     );
 
-    // Mux: bru-quarantine > UOP-cache > fused.
+    // Mux: bru-quarantine > fetch exception > UOP-cache > fused.
     decoded_insn_t rename_dec_in [0:PIPE_WIDTH-1];
     logic [2:0]    rename_dec_count;
 
@@ -500,6 +504,20 @@ module rv64gc_core_top
             for (int i = 0; i < PIPE_WIDTH; i++)
                 rename_dec_in[i] = '0;
             rename_dec_count = 3'd0;
+        end else if (fetch_exception_pending_r) begin
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                rename_dec_in[i] = '0;
+            end
+            rename_dec_in[0].valid         = 1'b1;
+            rename_dec_in[0].pc            = fetch_exception_pc_r;
+            rename_dec_in[0].insn          = 32'h0000_0013;
+            rename_dec_in[0].fu_type       = FU_ALU;
+            rename_dec_in[0].alu_op        = ALU_ADD;
+            rename_dec_in[0].use_imm       = 1'b1;
+            rename_dec_in[0].has_exception = 1'b1;
+            rename_dec_in[0].exc_code      = fetch_exception_code_r;
+            rename_dec_in[0].exc_tval      = fetch_exception_pc_r;
+            rename_dec_count = 3'd1;
         end else if (uoc_active) begin
             for (int i = 0; i < PIPE_WIDTH; i++)
                 rename_dec_in[i] = uoc_insn[i];
@@ -1385,6 +1403,7 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_fp_instr;
     logic [PIPE_WIDTH-1:0]  rob_alloc_has_exception;
     logic [3:0]             rob_alloc_exc_code [0:PIPE_WIDTH-1];
+    logic [63:0]            rob_alloc_exc_tval [0:PIPE_WIDTH-1];
     // Per-uop FU-type tags driven into the ROB to support sub-classification
     // of the SIMULATION-only "other" head-stall bucket (mul/div/bru).
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_mul;
@@ -1441,6 +1460,7 @@ module rv64gc_core_top
             rob_alloc_is_fp_instr[i] = ren_insn[i].base.is_fp_op;
             rob_alloc_has_exception[i] = ren_insn[i].base.has_exception;
             rob_alloc_exc_code[i]      = ren_insn[i].base.exc_code;
+            rob_alloc_exc_tval[i]      = ren_insn[i].base.exc_tval;
             rob_alloc_is_mul[i]      = ren_insn[i].base.is_mul;
             rob_alloc_is_div[i]      = ren_insn[i].base.is_div;
             rob_alloc_is_bru[i]      = (ren_insn[i].base.fu_type == FU_BRU);
@@ -1496,6 +1516,7 @@ module rv64gc_core_top
         .alloc_ready_now        (rob_alloc_ready_now),
         .alloc_has_exception    (rob_alloc_has_exception),
         .alloc_exc_code         (rob_alloc_exc_code),
+        .alloc_exc_tval         (rob_alloc_exc_tval),
         .alloc_pc               (rob_alloc_pc),
         .alloc_is_branch        (rob_alloc_is_branch),
         .alloc_bpu_type         (rob_alloc_bpu_type),
@@ -4774,6 +4795,7 @@ module rv64gc_core_top
 
     // CSR file outputs
     logic [63:0] csr_mtvec, csr_stvec, csr_mepc, csr_sepc;
+    logic [63:0] csr_medeleg, csr_mideleg;
     logic [1:0]  csr_priv_mode;
     logic        csr_irq_pending;
     logic [63:0] csr_irq_cause;
@@ -4837,6 +4859,8 @@ module rv64gc_core_top
         .mepc                   (csr_mepc),
         .sepc                   (csr_sepc),
         .priv_mode              (csr_priv_mode),
+        .medeleg                (csr_medeleg),
+        .mideleg                (csr_mideleg),
         .irq_pending            (csr_irq_pending),
         .irq_cause              (csr_irq_cause),
         .insn_retired_count     (insn_retired_count)
@@ -5118,7 +5142,9 @@ module rv64gc_core_top
         .mstatus_mpp        (csr_mstatus_mpp),
         .mstatus_sum        (csr_mstatus_sum),
         .mstatus_mxr        (csr_mstatus_mxr),
-        .satp               (csr_satp)
+        .satp               (csr_satp),
+        .medeleg            (csr_medeleg),
+        .mideleg            (csr_mideleg)
     );
 
     // =========================================================================
@@ -5151,6 +5177,13 @@ module rv64gc_core_top
 
     assign ptw_data_fault_valid =
         ptw_fault_valid && !ptw_fault_is_itlb;
+    assign fetch_exception_fire_c =
+        fetch_exception_pending_r &&
+        (ren_count_w != 3'd0) &&
+        ren_insn[0].base.valid &&
+        ren_insn[0].base.has_exception &&
+        (ren_insn[0].base.exc_code == fetch_exception_code_r) &&
+        (ren_insn[0].base.exc_tval == fetch_exception_pc_r);
     assign rob_sideband_exc_valid =
         ptw_data_fault_valid || lsu_dtlb_exc_valid;
     assign rob_sideband_exc_rob_idx =
@@ -5174,6 +5207,28 @@ module rv64gc_core_top
                                rob_head_is_sfence_vma[0];
     assign satp_commit_valid = csr_commit_valid && (csr_commit_addr == CSR_SATP);
     assign translation_tlb_invalidate = sfence_vma_commit || satp_commit_valid;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || flush_out.valid) begin
+            fetch_exception_pending_r <= 1'b0;
+            fetch_exception_pc_r      <= 64'd0;
+            fetch_exception_code_r    <= 4'd0;
+        end else if (fetch_exception_fire_c) begin
+            fetch_exception_pending_r <= 1'b0;
+            fetch_exception_pc_r      <= 64'd0;
+            fetch_exception_code_r    <= 4'd0;
+        end else if (!fetch_exception_pending_r) begin
+            if (ptw_fault_valid && ptw_fault_is_itlb) begin
+                fetch_exception_pending_r <= 1'b1;
+                fetch_exception_pc_r      <= ptw_fault_va;
+                fetch_exception_code_r    <= EXC_INSN_PAGE_FAULT;
+            end else if (itlb_lookup_valid && itlb_fault) begin
+                fetch_exception_pending_r <= 1'b1;
+                fetch_exception_pc_r      <= itlb_lookup_va;
+                fetch_exception_code_r    <= itlb_fault_code;
+            end
+        end
+    end
 
     itlb u_itlb (
         .clk                 (clk),

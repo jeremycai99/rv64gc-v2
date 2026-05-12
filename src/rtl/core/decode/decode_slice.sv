@@ -111,6 +111,7 @@ module decode_slice
         decoded.bp_ghr         = '0;
         decoded.has_exception  = 1'b0;
         decoded.exc_code       = 4'd0;
+        decoded.exc_tval       = 64'd0;
         // v2 fusion fields (initialized to 0, fusion_detector fills later)
         decoded.is_fused       = 1'b0;
         decoded.fused_imm      = 32'd0;

@@ -67,7 +67,9 @@ module csr_file
     output logic [1:0]  mstatus_mpp,
     output logic        mstatus_sum,
     output logic        mstatus_mxr,
-    output logic [63:0] satp
+    output logic [63:0] satp,
+    output logic [63:0] medeleg,
+    output logic [63:0] mideleg
 );
 
     // =========================================================================
@@ -141,6 +143,8 @@ module csr_file
     assign mstatus_sum = mstatus_r[18];
     assign mstatus_mxr = mstatus_r[19];
     assign satp        = satp_r;
+    assign medeleg     = medeleg_r;
+    assign mideleg     = mideleg_r;
     assign mcycle_val  = mcycle_r;
     assign minstret_val= minstret_r;
 

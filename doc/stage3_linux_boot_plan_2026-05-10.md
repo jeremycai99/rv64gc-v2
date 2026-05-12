@@ -742,6 +742,27 @@ Execution status:
   `benchmark_results/stage3_rtl_guard_20260511_itlb_fetch`. The hard metric
   gate again passed with no DS/CM metric regression beyond the `0.01%`
   tolerance.
+- Fourteenth RTL slice completed: instruction page faults now enter the
+  architectural trap path instead of remaining a fetch-side stall. The core
+  records a pending fetch exception from either direct ITLB permission fault or
+  PTW instruction-side fault, injects one ready decoded exception into rename,
+  carries `exc_tval` through decoded/renamed state into the ROB, and commits the
+  trap with `mtval` equal to the faulting virtual PC. The slice also fixed the
+  pre-existing commit/CSR trap-vector contract: commit now uses `medeleg` and
+  `mideleg` when selecting `mtvec` versus `stvec`, matching the CSR file's trap
+  state update instead of redirecting every non-M exception to `stvec`.
+- Directed instruction-page-fault proof added:
+  `tests/asm/vm_ifetch_fault_sv48_smoke.S` maps VA `0x4000` through a readable
+  but non-executable Sv48 leaf, enters S-mode through `mret`, and verifies
+  `mcause=12` plus `mtval=0x4000` in the M-mode trap handler.
+- Validation for the instruction page-fault slice:
+  `benchmark_results/stage3_vm_smoke_20260511_ifetch_fault_delegation_fix`
+  passed `vm_data_sv48_smoke`, `vm_ifetch_sv48_smoke`,
+  `vm_ifetch_fault_sv48_smoke`, and `vm_store_fault_sv48_smoke`.
+- DS/CM regression validation for the instruction page-fault slice:
+  `benchmark_results/stage3_rtl_guard_20260511_ifetch_fault_delegation_fix`.
+  The hard metric gate passed with no DS/CM metric regression beyond the
+  `0.01%` tolerance; timed cycles remain diagnostic only.
 
 | Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
@@ -888,9 +909,9 @@ harness policy:
   writes and `sfence.vma`, and a passing directed Sv48 LSU load/store
   translation smoke. The instruction fetch path now also has ITLB/PTW
   translation with a passing S-mode Sv48 ifetch smoke. Data-side store page
-  faults are now precise through the ROB/CSR trap path and are covered by a
-  directed Sv48 smoke. Instruction page-fault handling, broader privileged/MMU
-  directed tests, and dirty PTE memory writeback remain open.
+  faults and instruction page faults are now precise through the ROB/CSR trap
+  path and are covered by directed Sv48 smokes. Broader privileged/MMU directed
+  tests and dirty PTE memory writeback remain open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style

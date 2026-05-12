@@ -79,6 +79,8 @@ module commit
     input  logic [63:0]             mepc,
     input  logic [63:0]             sepc,
     input  logic [1:0]              priv_mode,     // current privilege level
+    input  logic [63:0]             medeleg,
+    input  logic [63:0]             mideleg,
 
     // Interrupt
     input  logic                    irq_pending,
@@ -107,14 +109,21 @@ module commit
         end
     end
 
+    logic       found_exception;
+    logic [2:0] exc_slot;
+
     // =========================================================================
     // Trap vector computation
     // =========================================================================
-    // Use mtvec by default; use stvec if trap is delegated to S-mode
-    // (simplified: delegate if priv_mode != M)
+    // Use mtvec by default; use stvec only when CSR delegation state says the
+    // current exception or interrupt is delegated to S-mode.
     wire [63:0] mtvec_base = {mtvec[63:2], 2'b00};
     wire [63:0] stvec_base = {stvec[63:2], 2'b00};
-    wire        trap_delegated = (priv_mode != 2'b11); // not M-mode -> delegate to S
+    wire        exception_delegated =
+        (priv_mode != PRIV_M) && medeleg[{2'b00, head_exc_code[exc_slot]}];
+    wire        interrupt_delegated =
+        (priv_mode != PRIV_M) && mideleg[{1'b0, irq_cause[4:0]}];
+    wire        trap_delegated = found_exception && exception_delegated;
     wire [63:0] trap_vector    = trap_delegated ? stvec_base : mtvec_base;
 
     // Interrupt vector: vectored mode support
@@ -122,14 +131,12 @@ module commit
                              mtvec_base + {56'd0, irq_cause[5:0], 2'b00} : mtvec_base;
     wire [63:0] irq_stvec = (stvec[1:0] == 2'b01) ?
                              stvec_base + {56'd0, irq_cause[5:0], 2'b00} : stvec_base;
-    wire [63:0] irq_vector = trap_delegated ? irq_stvec : irq_mtvec;
+    wire [63:0] irq_vector = interrupt_delegated ? irq_stvec : irq_mtvec;
 
     // =========================================================================
     // Commit scan: determine how many entries can retire (combinational)
     // =========================================================================
     logic [2:0] scan_count;     // number of entries to retire
-    logic       found_exception;
-    logic [2:0] exc_slot;
     logic       found_mispredict;
     logic [2:0] misp_slot;
     logic       found_ret;      // MRET or SRET
