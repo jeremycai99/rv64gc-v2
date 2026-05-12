@@ -254,6 +254,7 @@ module lsu
     logic dtlb_lookup_sel_load0;
     logic dtlb_lookup_miss;
     logic dtlb_lookup_fault;
+    logic sta_tlb_port_wait;
     logic sta_tlb_miss;
     logic sta_tlb_fault;
     logic load0_tlb_port_wait;
@@ -261,11 +262,44 @@ module lsu
     logic load0_tlb_fault;
     logic load1_tlb_wait;
     logic [ROB_IDX_BITS-1:0] dtlb_lookup_rob_idx;
+    logic [ROB_IDX_BITS:0]   dtlb_sta_age;
+    logic [ROB_IDX_BITS:0]   dtlb_load0_age;
+    logic                    dtlb_store_older_than_load0;
+
+    always_comb begin
+        if (sta_issue_data.rob_idx >= rob_head) begin
+            dtlb_sta_age =
+                {1'b0, sta_issue_data.rob_idx} - {1'b0, rob_head};
+        end else begin
+            dtlb_sta_age =
+                (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                {1'b0, rob_head} +
+                {1'b0, sta_issue_data.rob_idx};
+        end
+
+        if (load_issue_data[0].rob_idx >= rob_head) begin
+            dtlb_load0_age =
+                {1'b0, load_issue_data[0].rob_idx} - {1'b0, rob_head};
+        end else begin
+            dtlb_load0_age =
+                (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                {1'b0, rob_head} +
+                {1'b0, load_issue_data[0].rob_idx};
+        end
+    end
+
+    assign dtlb_store_older_than_load0 =
+        sta_issue_candidate_valid &&
+        load_issue_candidate_valid[0] &&
+        (dtlb_sta_age < dtlb_load0_age);
 
     assign dtlb_lookup_sel_store =
         sta_issue_candidate_valid &&
         !sta_addr_misaligned &&
-        !flush_in.valid;
+        !flush_in.valid &&
+        (!load_issue_candidate_valid[0] ||
+         load_addr_misaligned[0] ||
+         dtlb_store_older_than_load0);
     assign dtlb_lookup_sel_load0 =
         !dtlb_lookup_sel_store &&
         load_issue_candidate_valid[0] &&
@@ -283,6 +317,12 @@ module lsu
         dtlb_lookup_valid_o && !dtlb_hit_i && !dtlb_fault_i;
     assign dtlb_lookup_fault =
         dtlb_lookup_valid_o && dtlb_fault_i;
+    assign sta_tlb_port_wait =
+        data_vm_active_i &&
+        sta_issue_candidate_valid &&
+        !sta_addr_misaligned &&
+        !flush_in.valid &&
+        !dtlb_lookup_sel_store;
     assign sta_tlb_miss =
         data_vm_active_i &&
         dtlb_lookup_sel_store &&
@@ -320,7 +360,8 @@ module lsu
     assign dtlb_exc_va_o = dtlb_lookup_va_o;
     assign dtlb_exc_rob_idx_o = dtlb_lookup_rob_idx;
     assign dtlb_exc_code_o = dtlb_fault_code_i;
-    assign sta_issue_suppress = sta_tlb_miss || sta_tlb_fault;
+    assign sta_issue_suppress =
+        sta_tlb_port_wait || sta_tlb_miss || sta_tlb_fault;
 
     assign sta_mem_addr =
         (data_vm_active_i && dtlb_lookup_sel_store && dtlb_hit_i && !dtlb_fault_i)

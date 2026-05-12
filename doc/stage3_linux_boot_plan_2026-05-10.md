@@ -425,6 +425,39 @@ Promoted validation for this slice:
 | CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
 | CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
 
+- Fourteenth RTL slice completed: data-side Sv48 store permission faults are
+  now covered by a directed smoke. The LSU DTLB arbitration is age aware between
+  a store-address translation and load port 0, and a store-address uop waits
+  when an older load owns the single DTLB lookup port instead of writing a
+  virtual address into the SQ. Commit also no longer increments the SQ
+  side-effect commit count for an exceptioning store. The store still retires
+  precisely to take the trap, but the faulting store is not marked as a
+  committed memory side effect and is discarded by the exception flush. This
+  matches the architectural contract inspected in v1: page-table and platform
+  work may use the existing SQ/CSB path, but exceptioning stores must never be
+  promoted to a drainable committed store.
+- Directed store-fault Sv48 proof added:
+  `tests/asm/vm_store_fault_sv48_smoke.S` extends the Stage 3 VM smoke
+  manifest. The test keeps fetch in M-mode physical addressing, uses
+  `MPRV`/`MPP=S` for S-mode LSU translation, maps VA `0x9000` as a read-only
+  Sv48 leaf, verifies a translated load succeeds, then verifies the store traps
+  with `mcause=15` and `mtval=0x9000`.
+- Validation for the data-side store-fault slice:
+  `benchmark_results/stage3_vm_smoke_20260511_store_fault_no_side_effect_commit`
+  passed `vm_data_sv48_smoke`, `vm_ifetch_sv48_smoke`, and
+  `vm_store_fault_sv48_smoke`.
+- DS/CM regression validation for the data-side store-fault slice:
+  `benchmark_results/stage3_rtl_guard_20260511_store_fault_no_side_effect_commit`.
+  The hard metric gate passed with no DS/CM metric regression beyond the
+  `0.01%` tolerance.
+
+| Row | Timed cycles | Diagnostic cycle reference | Metric |
+|---|---:|---:|---:|
+| Dhrystone 100 | `18,082` | `18,161` | `3.147616 DMIPS/MHz` |
+| Dhrystone 300 | `53,360` | `53,469` | `3.199880 DMIPS/MHz` |
+| CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
+| CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
+
 DSim benchmark caveat:
 
 - The DSim OpenSBI milestone is valid, but the DSim CoreMark guard row hit a
@@ -854,15 +887,16 @@ harness policy:
   wired into the LSU, a commit-time VM serialization redirect for relevant CSR
   writes and `sfence.vma`, and a passing directed Sv48 LSU load/store
   translation smoke. The instruction fetch path now also has ITLB/PTW
-  translation with a passing S-mode Sv48 ifetch smoke. Instruction page-fault
-  handling, broader privileged/MMU directed tests, and dirty PTE memory
-  writeback remain open.
+  translation with a passing S-mode Sv48 ifetch smoke. Data-side store page
+  faults are now precise through the ROB/CSR trap path and are covered by a
+  directed Sv48 smoke. Instruction page-fault handling, broader privileged/MMU
+  directed tests, and dirty PTE memory writeback remain open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 implementation should move to Sv48 MMU/PTW/TLB support before
-attempting a full Linux kernel boot. Sv39 should stay as a directed-test subset,
-but the primary Linux path is four-level Sv48 because that matches the intended
-Linux signoff configuration.
+The next Stage 3 implementation should keep closing Sv48 MMU/PTW/TLB coverage
+before attempting a full Linux kernel boot. Sv39 should stay as a directed-test
+subset, but the primary Linux path is four-level Sv48 because that matches the
+intended Linux signoff configuration.

@@ -11,6 +11,8 @@ package uarch_pkg;
     import rv64gc_pkg::*;
     import fpu_pkg::*;
 
+    localparam logic [3:0] EXC_INTERNAL_REPLAY = 4'd14;
+
     // =========================================================================
     // Functional unit type (3 bits)
     // =========================================================================

@@ -83,7 +83,7 @@ module rob
 
     // Memory ordering violation: a younger load executed before an older
     // store with overlapping bytes was visible.  Mark the violating load
-    // ready with the special replay exception (exc_code=15) so commit
+    // ready with the internal replay marker so commit
     // flushes to the load's own PC and re-executes it against the
     // now-visible store.  replay_valid stays on the port list for the
     // future partial-replay design, but is intentionally unused here.
@@ -816,7 +816,8 @@ module rob
             if (ordering_violation_valid) begin
                 ready_r[ordering_violation_rob_idx]                <= 1'b1;
                 has_exc_r[ordering_violation_rob_idx]              <= 1'b1;
-                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <=
+                    EXC_INTERNAL_REPLAY;
                 exc_tval_packed[ordering_violation_rob_idx*64 +: 64] <= 64'd0;
             end
 
@@ -938,14 +939,15 @@ module rob
             end
 
             // Ordering violation: mark the violating load as ready, flag it
-            // with the EXC_LOAD_REPLAY (4'd15) special exception code so the
+            // with the internal replay marker so the
             // commit unit can recognise it and redirect to the load's own
             // PC without committing the load (its data is wrong; it must
             // re-execute against the now-visible store).
             if (ordering_violation_valid) begin
                 ready_r[ordering_violation_rob_idx]                <= 1'b1;
                 has_exc_r[ordering_violation_rob_idx]              <= 1'b1;
-                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <= 4'd15;
+                exc_code_packed[ordering_violation_rob_idx*4 +: 4] <=
+                    EXC_INTERNAL_REPLAY;
                 exc_tval_packed[ordering_violation_rob_idx*64 +: 64] <= 64'd0;
             end
 

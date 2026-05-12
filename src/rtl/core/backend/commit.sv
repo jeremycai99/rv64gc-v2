@@ -144,10 +144,9 @@ module commit
     logic scan_stopped;
     // verilator lint_on UNOPTFLAT
 
-    // Memory ordering violation marker (encoded as has_exception with
-    // exc_code = 4'd15): replay the load by flushing from its PC, but do
-    // NOT commit the load (its data is stale).  This bypasses the normal
-    // exception path which would jump to the trap vector.
+    // Memory ordering violation marker: replay the load by flushing from its
+    // PC, but do NOT commit the load because its data is stale.  This bypasses
+    // the normal exception path which would jump to the trap vector.
     logic       found_replay;
     logic [2:0] replay_slot;
     logic [PIPE_WIDTH-1:0] head_is_control;
@@ -193,7 +192,8 @@ module commit
                 scan_stopped = 1'b1;
             end
             // Memory ordering violation: do NOT commit, flush from this entry
-            else if (head_has_exception[i] && (head_exc_code[i] == 4'd15)) begin
+            else if (head_has_exception[i] &&
+                     (head_exc_code[i] == EXC_INTERNAL_REPLAY)) begin
                 found_replay = 1'b1;
                 replay_slot  = i[2:0];
             end
@@ -204,7 +204,6 @@ module commit
                 scan_count = scan_count + 3'd1;
                 retired_inst_count = retired_inst_count +
                     (head_is_fused[i] ? 4'd2 : 4'd1);
-                if (head_is_store[i]) store_cnt = store_cnt + 3'd1;
                 if (head_is_load[i])  load_cnt = load_cnt  + 3'd1;
                 found_exception = 1'b1;
                 exc_slot = i[2:0];

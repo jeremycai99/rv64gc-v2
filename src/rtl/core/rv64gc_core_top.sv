@@ -1470,7 +1470,17 @@ module rv64gc_core_top
     // before the LSU instantiation below).
     logic [1:0]               lsu_load_issue_suppress_raw;
     logic [1:0]               lsu_load_issue_suppress;
+    logic [0:0]               lsu_sta_issue_suppress_raw;
     logic [0:0]               lsu_sta_issue_suppress;
+    logic                     vm_serial_alloc_c;
+    logic [ROB_IDX_BITS-1:0]  vm_serial_alloc_idx_c;
+    logic                     vm_serial_inflight_r;
+    logic [ROB_IDX_BITS-1:0]  vm_serial_rob_idx_r;
+    logic [ROB_IDX_BITS:0]    vm_serial_age_c;
+    logic [ROB_IDX_BITS:0]    vm_serial_flush_tail_age_c;
+    logic                     vm_serial_partial_flush_c;
+    logic [1:0]               vm_serial_load_issue_suppress;
+    logic [0:0]               vm_serial_sta_issue_suppress;
     // D-cache fill snoop (produced by dcache, consumed by LSU instantiated
     // earlier in the file).
     logic        dc_fill_snoop_valid;
@@ -1749,7 +1759,126 @@ module rv64gc_core_top
     assign store_iq_load_probe_rob_idx[1] = iq_load_issue_data[1].rob_idx;
 
     assign lsu_load_issue_suppress =
-        lsu_load_issue_suppress_raw | store_iq_older_than_load;
+        lsu_load_issue_suppress_raw |
+        store_iq_older_than_load |
+        vm_serial_load_issue_suppress;
+    assign lsu_sta_issue_suppress =
+        lsu_sta_issue_suppress_raw |
+        vm_serial_sta_issue_suppress;
+
+    always_comb begin
+        vm_serial_alloc_c = 1'b0;
+        vm_serial_alloc_idx_c = '0;
+        vm_serial_age_c = '0;
+        vm_serial_flush_tail_age_c = '0;
+        vm_serial_partial_flush_c = 1'b0;
+        vm_serial_load_issue_suppress = '0;
+        vm_serial_sta_issue_suppress = '0;
+
+        if (vm_serial_rob_idx_r >= rob_head_idx) begin
+            vm_serial_age_c =
+                {1'b0, vm_serial_rob_idx_r} - {1'b0, rob_head_idx};
+        end else begin
+            vm_serial_age_c =
+                (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                {1'b0, rob_head_idx} +
+                {1'b0, vm_serial_rob_idx_r};
+        end
+
+        if (flush_out.rob_idx >= rob_head_idx) begin
+            vm_serial_flush_tail_age_c =
+                {1'b0, flush_out.rob_idx} - {1'b0, rob_head_idx};
+        end else begin
+            vm_serial_flush_tail_age_c =
+                (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                {1'b0, rob_head_idx} +
+                {1'b0, flush_out.rob_idx};
+        end
+
+        vm_serial_partial_flush_c =
+            vm_serial_inflight_r &&
+            flush_out.valid &&
+            !flush_out.full_flush &&
+            (vm_serial_age_c >= vm_serial_flush_tail_age_c);
+
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            logic csr_write;
+
+            csr_write =
+                (ren_insn[i].base.csr_op == CSR_RW) ||
+                (((ren_insn[i].base.csr_op == CSR_RS) ||
+                  (ren_insn[i].base.csr_op == CSR_RC)) &&
+                 (ren_insn[i].base.use_imm
+                    ? (ren_insn[i].base.imm[4:0] != 5'd0)
+                    : (ren_insn[i].base.rs1_arch != 5'd0)));
+
+            if (!vm_serial_inflight_r &&
+                !vm_serial_alloc_c &&
+                (3'(i) < ren_count_w) &&
+                !ren_insn[i].base.has_exception &&
+                (ren_insn[i].base.is_sfence_vma ||
+                 (ren_insn[i].base.is_csr &&
+                  csr_write &&
+                  ((ren_insn[i].base.csr_addr == CSR_SATP) ||
+                   (ren_insn[i].base.csr_addr == CSR_MSTATUS) ||
+                   (ren_insn[i].base.csr_addr == CSR_SSTATUS))))) begin
+                vm_serial_alloc_c = 1'b1;
+                vm_serial_alloc_idx_c = rob_alloc_idx[i];
+            end
+        end
+
+        for (int p = 0; p < 2; p++) begin
+            logic [ROB_IDX_BITS:0] load_age;
+
+            if (iq_load_issue_data[p].rob_idx >= rob_head_idx) begin
+                load_age =
+                    {1'b0, iq_load_issue_data[p].rob_idx} -
+                    {1'b0, rob_head_idx};
+            end else begin
+                load_age =
+                    (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                    {1'b0, rob_head_idx} +
+                    {1'b0, iq_load_issue_data[p].rob_idx};
+            end
+
+            vm_serial_load_issue_suppress[p] =
+                vm_serial_inflight_r &&
+                iq_load_issue_candidate_valid[p] &&
+                (load_age > vm_serial_age_c);
+        end
+
+        if (iq_store_issue_data[0].rob_idx >= rob_head_idx) begin
+            vm_serial_sta_issue_suppress[0] =
+                vm_serial_inflight_r &&
+                iq_store_issue_candidate_valid_s[0] &&
+                (({1'b0, iq_store_issue_data[0].rob_idx} -
+                  {1'b0, rob_head_idx}) > vm_serial_age_c);
+        end else begin
+            vm_serial_sta_issue_suppress[0] =
+                vm_serial_inflight_r &&
+                iq_store_issue_candidate_valid_s[0] &&
+                (((ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                  {1'b0, rob_head_idx} +
+                  {1'b0, iq_store_issue_data[0].rob_idx}) >
+                 vm_serial_age_c);
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            vm_serial_inflight_r <= 1'b0;
+            vm_serial_rob_idx_r  <= '0;
+        end else if (flush_out.valid && flush_out.full_flush) begin
+            vm_serial_inflight_r <= 1'b0;
+            vm_serial_rob_idx_r  <= '0;
+        end else if (vm_serial_partial_flush_c) begin
+            vm_serial_inflight_r <= 1'b0;
+            vm_serial_rob_idx_r  <= '0;
+        end else if (vm_serial_alloc_c) begin
+            vm_serial_inflight_r <= 1'b1;
+            vm_serial_rob_idx_r  <= vm_serial_alloc_idx_c;
+        end
+    end
 
     // =========================================================================
     // Dispatch routing: precompute renamed_insn_t to iq_entry_t conversion
@@ -4463,7 +4592,7 @@ module rv64gc_core_top
         // Ordering violation
         .ordering_violation     (lsu_ordering_violation),
         .load_issue_suppress    (lsu_load_issue_suppress_raw),
-        .sta_issue_suppress     (lsu_sta_issue_suppress[0]),
+        .sta_issue_suppress     (lsu_sta_issue_suppress_raw[0]),
         .violation_rob_idx      (lsu_violation_rob_idx),
         // DTLB sideband
         .data_vm_active_i       (data_vm_active),
