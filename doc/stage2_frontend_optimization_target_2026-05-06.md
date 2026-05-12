@@ -175,20 +175,21 @@ Key artifacts:
 
 Verdict:
 
-- Keep `IQ_READY_ENQ_BYPASS_ALU_ONLY` as a default-off DSE candidate and
-  continue from it, not from raw bypass. The FU-class filter is an
-  architectural selector: it targets same-cycle ALU dependency repair while
-  avoiding branch and serializing-operation timing shifts.
-- Do not promote to signoff yet. The remaining `hotspot_matrix_store`
-  regression is only 6 cycles, but the rule for this stage is no unexplained
-  benchmark regression.
-- Next work should explain and remove the matrix-store regression without
-  fixed PCs or benchmark-shaped policy. The specific counter lead is IQ0
-  non-ALU filtering: ALU-only blocks 834 ready IQ0 non-ALU enqueue bypasses on
-  the matrix row, while raw bypass keeps the row cycle-neutral but causes broad
-  regressions elsewhere. The next candidate should distinguish harmless loop
-  branch bypass from harmful broad branch/serial bypass using general pipeline
-  state, not scalar threshold chasing.
+- 2026-05-12 update: ALU-only enqueue issue bypass is promoted as the default
+  IQ0/IQ1 policy after the Stage 3 RTL guard and RV64GC compliance audit. The
+  old `+IQ_READY_ENQ_BYPASS_ALU_ONLY` signoff plusarg is removed from the
+  harness because the behavior is no longer a runtime DSE knob.
+- The earlier `hotspot_matrix_store` concern was not a reason to keep the
+  mechanism default-off. The row exposed a real L2/LSU contract bug: DCache
+  could retry or wait on a miss that L2 had not accepted for the D-cache
+  source when another source already owned the same line.
+- The accepted fix keeps the ALU-only architectural selector, adds a DCache to
+  LSU miss-retry contract for unaccepted port-1 misses, and makes L2 same-line
+  MSHR duplicate detection source-aware for read fills.
+- Promoted artifact:
+  `benchmark_results/stage3_l2_lsu_contract_guard_refined_20260512` passes the
+  16-row guard, with `hotspot_matrix_store` at `84,357` cycles and CM10 at
+  `1,454,994` timed cycles, `6.872881` CM/MHz.
 
 Follow-up implementation, 2026-05-08:
 

@@ -22,6 +22,7 @@ module dcache
     output logic [1:0]  load_resp_valid,
     output logic [63:0] load_resp_data [0:1],
     output logic [1:0]  load_resp_hit,
+    output logic [1:0]  load_miss_retry,
     // Store port (1, from CSB)
     input  logic        store_req_valid,
     input  logic [63:0] store_req_addr,
@@ -43,6 +44,9 @@ module dcache
     output logic        fill_snoop_valid,
     output logic [63:0] fill_snoop_addr,
     output logic [511:0] fill_snoop_data,
+    // Store write-through drain state, used to hold FENCE.I until older
+    // committed stores are instruction-visible in the backing hierarchy.
+    output logic        store_wt_busy,
     // Invalidate
     input  logic        invalidate_all,
     output logic        invalidate_busy
@@ -105,6 +109,10 @@ module dcache
     integer sim_ld1_new_blocked_same_line_cyc;
     integer sim_ld1_new_blocked_diff_line_cyc;
     integer sim_ld_new_blocked_no_free_cyc;
+    integer sim_store_wt_enq_cyc;
+    integer sim_store_wt_deq_cyc;
+    integer sim_store_wt_full_cyc;
+    integer sim_store_wt_occ_max;
 `endif
     logic [L1D_SET_BITS-1:0]   tr_dirty_waddr;
     logic [1:0]                tr_dirty_wway;
@@ -589,6 +597,23 @@ module dcache
 
     // Track which MSHR is being serviced
     logic [MSHR_IDX_BITS-1:0] l2_active_mshr_q, l2_active_mshr_d;
+    logic [LINE_SIZE*8-1:0]   st_wt_line_data;
+    logic                     st_wt_enq_valid;
+    logic                     st_wt_enq_ready;
+    logic [63:0]              st_wt_enq_addr;
+    logic [LINE_SIZE*8-1:0]   st_wt_enq_data;
+    logic                     st_wt_deq_valid;
+    logic                     st_wt_deq_fire;
+
+    localparam int WT_DEPTH      = 4;
+    localparam int WT_IDX_BITS   = $clog2(WT_DEPTH);
+    localparam int WT_COUNT_BITS = $clog2(WT_DEPTH + 1);
+
+    logic [WT_IDX_BITS-1:0]      wt_head_q;
+    logic [WT_IDX_BITS-1:0]      wt_tail_q;
+    logic [WT_COUNT_BITS-1:0]    wt_count_q;
+    logic [63:0]                 wt_addr_q [0:WT_DEPTH-1];
+    logic [LINE_SIZE*8-1:0]      wt_data_q [0:WT_DEPTH-1];
 
     // Find a MSHR entry with pending writeback
     logic [MSHR_IDX_BITS-1:0] wb_mshr_idx;
@@ -631,7 +656,12 @@ module dcache
 
         case (l2_state_q)
             L2_IDLE: begin
-                if (wb_mshr_avail) begin
+                if (st_wt_deq_valid) begin
+                    l2_req_valid = 1'b1;
+                    l2_req_we    = 1'b1;
+                    l2_req_addr  = wt_addr_q[wt_head_q];
+                    l2_req_wdata = wt_data_q[wt_head_q];
+                end else if (wb_mshr_avail) begin
                     l2_state_d       = L2_WRITEBACK;
                     l2_active_mshr_d = wb_mshr_idx;
                 end else if (fill_mshr_avail) begin
@@ -670,6 +700,14 @@ module dcache
             default: l2_state_d = L2_IDLE;
         endcase
     end
+
+    assign st_wt_deq_valid = (wt_count_q != '0);
+    assign st_wt_deq_fire = (l2_state_q == L2_IDLE) &&
+                             st_wt_deq_valid &&
+                             l2_req_ready;
+    assign st_wt_enq_ready = (wt_count_q < WT_COUNT_BITS'(WT_DEPTH)) ||
+                             st_wt_deq_fire;
+    assign store_wt_busy = (wt_count_q != '0) || st_wt_enq_valid;
 
     // =========================================================================
     // Fill install: when a fill_done MSHR entry exists, install into cache
@@ -742,6 +780,22 @@ module dcache
                                                 st_full_mask)
                 : base_line;
         end
+    end
+
+    always_comb begin
+        st_wt_line_data = st_cache_hit
+                        ? merge_store_overlay_into_line(
+                              st_data_way[st_hit_way],
+                              st_full_data,
+                              st_full_mask
+                          )
+                        : '0;
+        st_wt_enq_addr  = fill_done_store_merge
+                        ? mshr[fill_done_idx].addr
+                        : st_line_addr;
+        st_wt_enq_data  = fill_done_store_merge
+                        ? fill_done_line_data
+                        : st_wt_line_data;
     end
 
     // =========================================================================
@@ -831,7 +885,9 @@ module dcache
     assign store_ack_s1 =
         s1_st_valid &&
         (fill_done_store_merge ||
-         (!fill_done_avail && !invalidate_all && st_cache_hit));
+         (!fill_done_avail && !invalidate_all && st_cache_hit)) &&
+        st_wt_enq_ready;
+    assign st_wt_enq_valid = store_ack_s1;
 
     assign store_ack_matches_head =
         store_ack_s1 &&
@@ -873,6 +929,15 @@ module dcache
     assign ld_new_blocked_no_free = (ld0_new_miss_req || ld1_new_miss_req) &&
                                     !mshr_free_avail;
 
+    // Notify the LSU when a load miss did not attach to a fill source this
+    // cycle.  Port 1 can be retried by the LSU when port 0 consumes the only
+    // miss allocation slot; same-line sharing is accepted because port 0's
+    // fill will satisfy both LMB entries.
+    assign load_miss_retry[0] = ld0_new_miss_req && !ld0_miss_alloc_sel;
+    assign load_miss_retry[1] = ld1_new_miss_req &&
+                                !ld1_miss_alloc_sel &&
+                                !ld1_new_blocked_same_line;
+
 `ifndef SYNTHESIS
     initial sim_perf_profile = $test$plusargs("PERF_PROFILE");
 
@@ -899,6 +964,10 @@ module dcache
             sim_ld1_new_blocked_same_line_cyc <= 0;
             sim_ld1_new_blocked_diff_line_cyc <= 0;
             sim_ld_new_blocked_no_free_cyc <= 0;
+            sim_store_wt_enq_cyc <= 0;
+            sim_store_wt_deq_cyc <= 0;
+            sim_store_wt_full_cyc <= 0;
+            sim_store_wt_occ_max <= 0;
         end else if (sim_perf_profile) begin
             if (store_req_valid)
                 sim_store_req_cyc <= sim_store_req_cyc + 1;
@@ -948,6 +1017,17 @@ module dcache
             if (ld_new_blocked_no_free)
                 sim_ld_new_blocked_no_free_cyc <=
                     sim_ld_new_blocked_no_free_cyc + 1;
+            if (st_wt_enq_valid)
+                sim_store_wt_enq_cyc <= sim_store_wt_enq_cyc + 1;
+            if (st_wt_deq_fire)
+                sim_store_wt_deq_cyc <= sim_store_wt_deq_cyc + 1;
+            if (!st_wt_enq_ready &&
+                (fill_done_store_merge ||
+                 (s1_st_valid && !fill_done_avail &&
+                  !invalidate_all && st_cache_hit)))
+                sim_store_wt_full_cyc <= sim_store_wt_full_cyc + 1;
+            if (int'(wt_count_q) > sim_store_wt_occ_max)
+                sim_store_wt_occ_max <= int'(wt_count_q);
         end
     end
 `endif
@@ -1036,12 +1116,33 @@ module dcache
         if (!rst_n) begin
             l2_state_q       <= L2_IDLE;
             l2_active_mshr_q <= '0;
+            wt_head_q        <= '0;
+            wt_tail_q        <= '0;
+            wt_count_q       <= '0;
+            for (int w = 0; w < WT_DEPTH; w++) begin
+                wt_addr_q[w] <= '0;
+                wt_data_q[w] <= '0;
+            end
             for (int m = 0; m < MSHR_DEPTH; m++) begin
                 mshr[m] <= '0;
             end
         end else begin
             l2_state_q       <= l2_state_d;
             l2_active_mshr_q <= l2_active_mshr_d;
+
+            if (st_wt_enq_valid) begin
+                wt_addr_q[wt_tail_q] <= st_wt_enq_addr;
+                wt_data_q[wt_tail_q] <= st_wt_enq_data;
+                wt_tail_q <= wt_tail_q + WT_IDX_BITS'(1);
+            end
+            if (st_wt_deq_fire) begin
+                wt_head_q <= wt_head_q + WT_IDX_BITS'(1);
+            end
+            case ({st_wt_enq_valid, st_wt_deq_fire})
+                2'b10: wt_count_q <= wt_count_q + WT_COUNT_BITS'(1);
+                2'b01: wt_count_q <= wt_count_q - WT_COUNT_BITS'(1);
+                default: wt_count_q <= wt_count_q;
+            endcase
 
             // ---- Allocate new MSHR on load miss ----
             if (ld0_miss_alloc_sel) begin
@@ -1206,6 +1307,11 @@ module dcache
                      sim_store_miss_alloc_cyc, sim_store_miss_merge_cyc);
             $display("  grant_a / grant_b          : %0d / %0d",
                      sim_store_port_grant_a_cyc, sim_store_port_grant_b_cyc);
+            $display("  wt_enq / wt_deq / wt_full  : %0d / %0d / %0d",
+                     sim_store_wt_enq_cyc, sim_store_wt_deq_cyc,
+                     sim_store_wt_full_cyc);
+            $display("  wt_occ_max                 : %0d",
+                     sim_store_wt_occ_max);
             $display("D-cache load miss allocation summary:");
             $display("  both_loads_s1              : %0d", sim_ld_both_s1_cyc);
             $display("  ld0 new/alloc/merge        : %0d / %0d / %0d",

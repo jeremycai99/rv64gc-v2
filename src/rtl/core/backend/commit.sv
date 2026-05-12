@@ -32,6 +32,7 @@ module commit
     input  logic [PIPE_WIDTH-1:0]   head_is_ecall,
     input  logic [PIPE_WIDTH-1:0]   head_is_wfi,
     input  logic [PIPE_WIDTH-1:0]   head_is_fused,
+    input  logic                    fence_i_ready,
     input  logic [PIPE_WIDTH-1:0]   head_branch_taken,
     input  logic [63:0]             head_branch_target [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   head_branch_mispredict,
@@ -198,20 +199,23 @@ module commit
             else if (!head_ready[i]) begin
                 scan_stopped = 1'b1;
             end
+            // FENCE.I is only allowed to retire once older committed stores
+            // have drained into the instruction-visible backing hierarchy.
+            else if (head_is_fence_i[i] && !fence_i_ready) begin
+                scan_stopped = 1'b1;
+            end
             // Memory ordering violation: do NOT commit, flush from this entry
             else if (head_has_exception[i] &&
                      (head_exc_code[i] == EXC_INTERNAL_REPLAY)) begin
                 found_replay = 1'b1;
                 replay_slot  = i[2:0];
             end
-            // Architectural exception at this entry: commit it (for arch
-            // state update), then stop
+            // Architectural exception at this entry: remove it from the ROB
+            // and redirect to the trap vector, but do not retire it or update
+            // architectural destination state.
             else if (head_has_exception[i]) begin
                 slot_can_commit[i] = 1'b1;
                 scan_count = scan_count + 3'd1;
-                retired_inst_count = retired_inst_count +
-                    (head_is_fused[i] ? 4'd2 : 4'd1);
-                if (head_is_load[i])  load_cnt = load_cnt  + 3'd1;
                 found_exception = 1'b1;
                 exc_slot = i[2:0];
             end
@@ -422,7 +426,8 @@ module commit
             commit_out[i].pdst     = head_pdst[i];
             commit_out[i].old_pdst = head_old_pdst[i];
             commit_out[i].rd_arch  = head_rd_arch[i];
-            commit_out[i].rd_valid = slot_can_commit[i] & head_rd_valid[i];
+            commit_out[i].rd_valid =
+                slot_can_commit[i] & head_rd_valid[i] & !head_has_exception[i];
         end
     end
 

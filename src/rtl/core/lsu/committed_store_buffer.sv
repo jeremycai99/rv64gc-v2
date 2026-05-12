@@ -114,6 +114,15 @@ module committed_store_buffer
                 logic [7:0] enq_bmask;
                 logic [7:0] enq_overlap;
                 logic [7:0] enq_uncovered;
+                logic       req_cross_dword;
+                logic       enq_cross_dword;
+                logic       cross_block;
+                logic [3:0] req_size_bytes;
+                logic [3:0] enq_size_bytes;
+                logic [63:0] req_last_addr;
+                logic [63:0] enq_last_addr;
+                logic       enq_same_dword;
+                logic       enq_range_overlap;
 
                 case (fwd_req_size_arr[fp])
                     2'd0:    req_bmask = 8'h01 << fwd_req_addr_arr[fp][2:0];
@@ -121,9 +130,29 @@ module committed_store_buffer
                     2'd2:    req_bmask = 8'h0F << fwd_req_addr_arr[fp][2:0];
                     default: req_bmask = 8'hFF;
                 endcase
+                case (fwd_req_size_arr[fp])
+                    2'd0: begin
+                        req_size_bytes = 4'd1;
+                        req_cross_dword = 1'b0;
+                    end
+                    2'd1: begin
+                        req_size_bytes = 4'd2;
+                        req_cross_dword = (fwd_req_addr_arr[fp][2:0] > 3'd6);
+                    end
+                    2'd2: begin
+                        req_size_bytes = 4'd4;
+                        req_cross_dword = (fwd_req_addr_arr[fp][2:0] > 3'd4);
+                    end
+                    default: begin
+                        req_size_bytes = 4'd8;
+                        req_cross_dword = (fwd_req_addr_arr[fp][2:0] != 3'd0);
+                    end
+                endcase
+                req_last_addr = fwd_req_addr_arr[fp] + {60'd0, req_size_bytes} - 64'd1;
 
                 fwd_data_arr[fp] = '0;
                 cover_mask       = '0;
+                cross_block      = 1'b0;
 
                 case (enq_data.size)
                     2'd0:    enq_bmask = 8'h01 << enq_data.addr[2:0];
@@ -131,13 +160,38 @@ module committed_store_buffer
                     2'd2:    enq_bmask = 8'h0F << enq_data.addr[2:0];
                     default: enq_bmask = 8'hFF;
                 endcase
+                case (enq_data.size)
+                    2'd0: begin
+                        enq_size_bytes = 4'd1;
+                        enq_cross_dword = 1'b0;
+                    end
+                    2'd1: begin
+                        enq_size_bytes = 4'd2;
+                        enq_cross_dword = (enq_data.addr[2:0] > 3'd6);
+                    end
+                    2'd2: begin
+                        enq_size_bytes = 4'd4;
+                        enq_cross_dword = (enq_data.addr[2:0] > 3'd4);
+                    end
+                    default: begin
+                        enq_size_bytes = 4'd8;
+                        enq_cross_dword = (enq_data.addr[2:0] != 3'd0);
+                    end
+                endcase
+                enq_last_addr = enq_data.addr + {60'd0, enq_size_bytes} - 64'd1;
+                enq_same_dword = enq_data.addr[63:3] == fwd_req_addr_arr[fp][63:3];
+                enq_range_overlap = fwd_req_valid_arr[fp] &&
+                                    enq_valid &&
+                                    enq_ready &&
+                                    (enq_data.addr <= req_last_addr) &&
+                                    (fwd_req_addr_arr[fp] <= enq_last_addr);
 
-                enq_overlap = (fwd_req_valid_arr[fp] &&
-                               enq_valid &&
-                               enq_ready &&
-                               (enq_data.addr[63:3] == fwd_req_addr_arr[fp][63:3]))
+                enq_overlap = (enq_range_overlap && enq_same_dword)
                             ? (enq_bmask & req_bmask)
                             : 8'h00;
+                if (enq_range_overlap &&
+                    (enq_cross_dword || req_cross_dword || !enq_same_dword))
+                    cross_block = 1'b1;
                 enq_uncovered = enq_overlap & ~cover_mask;
 
                 // Same-cycle enqueue is the newest committed store.
@@ -160,6 +214,11 @@ module committed_store_buffer
                         logic [7:0]          ent_bmask;
                         logic [7:0]          overlap;
                         logic [7:0]          uncovered;
+                        logic                ent_cross_dword;
+                        logic [3:0]          ent_size_bytes;
+                        logic [63:0]         ent_last_addr;
+                        logic                ent_same_dword;
+                        logic                ent_range_overlap;
                         int                  idx_int;
 
                         idx_int = int'(tail_r) - step - 1;
@@ -173,12 +232,39 @@ module committed_store_buffer
                             2'd2:    ent_bmask = 8'h0F << buf_q[scan_idx].addr[2:0];
                             default: ent_bmask = 8'hFF;
                         endcase
+                        case (buf_q[scan_idx].size)
+                            2'd0: begin
+                                ent_size_bytes = 4'd1;
+                                ent_cross_dword = 1'b0;
+                            end
+                            2'd1: begin
+                                ent_size_bytes = 4'd2;
+                                ent_cross_dword = (buf_q[scan_idx].addr[2:0] > 3'd6);
+                            end
+                            2'd2: begin
+                                ent_size_bytes = 4'd4;
+                                ent_cross_dword = (buf_q[scan_idx].addr[2:0] > 3'd4);
+                            end
+                            default: begin
+                                ent_size_bytes = 4'd8;
+                                ent_cross_dword = (buf_q[scan_idx].addr[2:0] != 3'd0);
+                            end
+                        endcase
+                        ent_last_addr = buf_q[scan_idx].addr +
+                                        {60'd0, ent_size_bytes} - 64'd1;
+                        ent_same_dword = buf_q[scan_idx].addr[63:3] ==
+                                         fwd_req_addr_arr[fp][63:3];
+                        ent_range_overlap = fwd_req_valid_arr[fp] &&
+                                            buf_q[scan_idx].valid &&
+                                            (buf_q[scan_idx].addr <= req_last_addr) &&
+                                            (fwd_req_addr_arr[fp] <= ent_last_addr);
 
-                        overlap = (fwd_req_valid_arr[fp] &&
-                                   buf_q[scan_idx].valid &&
-                                   (buf_q[scan_idx].addr[63:3] == fwd_req_addr_arr[fp][63:3]))
+                        overlap = (ent_range_overlap && ent_same_dword)
                                 ? (ent_bmask & req_bmask)
                                 : 8'h00;
+                        if (ent_range_overlap &&
+                            (ent_cross_dword || req_cross_dword || !ent_same_dword))
+                            cross_block = 1'b1;
                         uncovered = overlap & ~cover_mask;
 
                         for (int b = 0; b < 8; b++) begin
@@ -195,11 +281,14 @@ module committed_store_buffer
                     end
                 end
 
-                fwd_hit_arr[fp] = fwd_req_valid_arr[fp] && (cover_mask == req_bmask);
+                fwd_hit_arr[fp] = fwd_req_valid_arr[fp] &&
+                                  !cross_block &&
+                                  (cover_mask == req_bmask);
                 fwd_partial_arr[fp] =
                     fwd_req_valid_arr[fp] &&
-                    (cover_mask != 8'h00) &&
-                    (cover_mask != req_bmask);
+                    (((cover_mask != 8'h00) &&
+                      (cover_mask != req_bmask)) ||
+                     cross_block);
             end
         end
     endgenerate

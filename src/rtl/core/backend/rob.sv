@@ -533,6 +533,13 @@ module rob
             head_csr_we[i]           = csr_we_r[head_idx_w[i]];
             head_csr_op[i]           = csr_op_r[head_idx_w[i]];
             head_fp_fflags[i]        = fp_fflags_packed[head_idx_w[i]*5 +: 5];
+            for (int w = 0; w < CDB_WIDTH; w++) begin
+                if (wb_valid[w] &&
+                    wb_fp_fflags_valid[w] &&
+                    (wb_idx[w] == head_idx_w[i][ROB_IDX_BITS-1:0])) begin
+                    head_fp_fflags[i] = head_fp_fflags[i] | wb_fp_fflags[w];
+                end
+            end
         end
     end
 

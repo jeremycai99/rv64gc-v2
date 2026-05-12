@@ -19,7 +19,7 @@ module dispatch_queue
     input  renamed_insn_t enq_data [0:PIPE_WIDTH-1],
     output logic          full,          // backpressure to rename
 
-    // Dequeue to issue queues (up to 6 per cycle)
+    // Dequeue to issue queues (up to PIPE_WIDTH per cycle)
     output logic [2:0]    deq_count,
     output renamed_insn_t deq_data [0:PIPE_WIDTH-1],
     output logic [1:0]    deq_iq_target [0:PIPE_WIDTH-1],  // 0,1,2 = int IQ; 3 = mem IQ
@@ -50,6 +50,7 @@ module dispatch_queue
     localparam logic [1:0] IQ_MEM_TARGET = 2'd3;
     // Flat-vector width for renamed_insn_t (avoids Verilator packed-struct array bugs)
     localparam int RI_W = $bits(renamed_insn_t);
+    localparam int ROB_AGE_BITS = ROB_IDX_BITS + 1;
 
     // =========================================================================
     // Integer FIFO -- stored as flat bit-vectors to avoid struct corruption
@@ -130,6 +131,10 @@ module dispatch_queue
     logic [2:0] actual_deq_int;
     logic [2:0] actual_deq_mem;
     logic       all_int_iq_full;
+    logic       mem_head_has_credit;
+    logic       reserve_mem_slot;
+    logic       mem_head_older_than_int;
+    logic       mem_head_conflict;
 
     // Per-slot mem FIFO read address for mem_cap loop (formerly automatic)
     logic [MEM_IDX_BITS-1:0] mem_cap_rd_a [0:PIPE_WIDTH-1];
@@ -143,15 +148,57 @@ module dispatch_queue
     logic [MEM_IDX_BITS-1:0] mem_rd_addr [0:PIPE_WIDTH-1];
 
     always_comb begin : deq_count_comb
-        logic [2:0] max_int, max_mem, rem_slots;
-        logic [2:0] candidate_mem;
-        logic [2:0] store_cnt;
+        logic [2:0] max_int;
+        logic [2:0] int_slot_limit;
+        logic [ROB_AGE_BITS-1:0] int_head_age;
+        logic [ROB_AGE_BITS-1:0] mem_head_age;
 
         all_int_iq_full = (iq_full == {NUM_INT_IQS{1'b1}});
+        mem_head_has_credit = 1'b0;
+        reserve_mem_slot = 1'b0;
+        mem_head_older_than_int = 1'b0;
+        mem_head_conflict = 1'b0;
 
-        // How many int entries available (capped at PIPE_WIDTH)
-        if (int_count >= INT_CNT_BITS'(PIPE_WIDTH))
-            max_int = 3'(PIPE_WIDTH);
+        if (mem_count != '0) begin
+            if (mem_fifo[mem_head].base.is_store)
+                mem_head_has_credit = (store_iq_credit != 2'd0);
+            else
+                mem_head_has_credit = (load_iq_credit != 2'd0);
+        end
+
+        int_head_age = '0;
+        mem_head_age = '0;
+        if ((int_count != '0) && (mem_count != '0) && mem_head_has_credit) begin
+            int_head_age =
+                (int_fifo[int_head].rob_idx >= rob_head)
+                    ? ({1'b0, int_fifo[int_head].rob_idx} -
+                       {1'b0, rob_head})
+                    : ((ROB_AGE_BITS)'(ROB_DEPTH) - {1'b0, rob_head} +
+                       {1'b0, int_fifo[int_head].rob_idx});
+            mem_head_age =
+                (mem_fifo[mem_head].rob_idx >= rob_head)
+                    ? ({1'b0, mem_fifo[mem_head].rob_idx} -
+                       {1'b0, rob_head})
+                    : ((ROB_AGE_BITS)'(ROB_DEPTH) - {1'b0, rob_head} +
+                       {1'b0, mem_fifo[mem_head].rob_idx});
+            mem_head_older_than_int = (mem_head_age < int_head_age);
+        end
+
+        mem_head_conflict =
+            mem_head_older_than_int &&
+            mem_head_has_credit &&
+            !all_int_iq_full &&
+            (int_count >= INT_CNT_BITS'(PIPE_WIDTH));
+
+        reserve_mem_slot = mem_head_conflict;
+
+        int_slot_limit = reserve_mem_slot ? 3'(PIPE_WIDTH - 1)
+                                          : 3'(PIPE_WIDTH);
+
+        // How many int entries available, capped at the dispatch-width budget
+        // left after an older memory head reserves one normal output slot.
+        if (int_count >= INT_CNT_BITS'(int_slot_limit))
+            max_int = int_slot_limit;
         else
             max_int = int_count[2:0];
 
@@ -159,49 +206,6 @@ module dispatch_queue
         // Note: actual_deq_int is the maximum; accepted_int_count (computed
         // later by rr_assign_comb) may be lower due to per-IQ capacity limits.
         actual_deq_int = all_int_iq_full ? 3'd0 : max_int;
-
-        // Remaining slots for mem
-        rem_slots = 3'(PIPE_WIDTH) - actual_deq_int;
-        if (mem_count >= MEM_CNT_BITS'(rem_slots))
-            candidate_mem = rem_slots;
-        else
-            candidate_mem = mem_count[2:0];
-
-        // Cap mem releases by target IQ credits. The dispatch queue owns the
-        // memory FIFO head, so it must not release a load/store unless the
-        // corresponding downstream IQ(s) can accept it this cycle.
-        begin : mem_cap
-            logic stopped_m;
-            logic [2:0] load_cnt;
-            max_mem    = 3'd0;
-            store_cnt  = 3'd0;
-            load_cnt   = 3'd0;
-            stopped_m  = 1'b0;
-            for (int i = 0; i < PIPE_WIDTH; i++) begin
-                mem_cap_rd_a[i] = mem_head + MEM_IDX_BITS'(i);
-                if (!stopped_m && 3'(i) < candidate_mem) begin
-                    if (mem_fifo[mem_cap_rd_a[i]].base.is_store) begin
-                        if ((store_cnt < 3'd2) &&
-                            (store_cnt < 3'(store_iq_credit))) begin
-                            max_mem   = 3'(i) + 3'd1;
-                            store_cnt = store_cnt + 3'd1;
-                        end else begin
-                            stopped_m = 1'b1;
-                        end
-                    end else begin
-                        if ((load_cnt < 3'd2) &&
-                            (load_cnt < 3'(load_iq_credit))) begin
-                            max_mem  = 3'(i) + 3'd1;
-                            load_cnt = load_cnt + 3'd1;
-                        end else begin
-                            stopped_m = 1'b1;
-                        end
-                    end
-                end
-            end
-        end
-
-        actual_deq_mem = max_mem;
     end
 
     // =========================================================================
@@ -325,6 +329,53 @@ module dispatch_queue
     end
 
     // =========================================================================
+    // Memory release count
+    // =========================================================================
+    always_comb begin : mem_deq_count_comb
+        logic [2:0] max_mem;
+        logic [2:0] rem_slots;
+        logic [2:0] candidate_mem;
+        logic [2:0] store_cnt;
+        logic [2:0] load_cnt;
+        logic       stopped_m;
+
+        rem_slots = 3'(PIPE_WIDTH) - accepted_int_count;
+        if (mem_count >= MEM_CNT_BITS'(rem_slots))
+            candidate_mem = rem_slots;
+        else
+            candidate_mem = mem_count[2:0];
+
+        max_mem   = 3'd0;
+        store_cnt = 3'd0;
+        load_cnt  = 3'd0;
+        stopped_m = 1'b0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            mem_cap_rd_a[i] = mem_head + MEM_IDX_BITS'(i);
+            if (!stopped_m && 3'(i) < candidate_mem) begin
+                if (mem_fifo[mem_cap_rd_a[i]].base.is_store) begin
+                    if ((store_cnt < 3'd2) &&
+                        (store_cnt < 3'(store_iq_credit))) begin
+                        max_mem   = 3'(i) + 3'd1;
+                        store_cnt = store_cnt + 3'd1;
+                    end else begin
+                        stopped_m = 1'b1;
+                    end
+                end else begin
+                    if ((load_cnt < 3'd2) &&
+                        (load_cnt < 3'(load_iq_credit))) begin
+                        max_mem  = 3'(i) + 3'd1;
+                        load_cnt = load_cnt + 3'd1;
+                    end else begin
+                        stopped_m = 1'b1;
+                    end
+                end
+            end
+        end
+
+        actual_deq_mem = max_mem;
+    end
+
+    // =========================================================================
     // Dequeue output assembly (combinational)
     // Use local index variables typed to the right width to avoid WIDTHEXPAND
     // =========================================================================
@@ -387,8 +438,6 @@ module dispatch_queue
     // =========================================================================
     // Partial-flush compaction
     // =========================================================================
-    localparam int ROB_AGE_BITS = ROB_IDX_BITS + 1;
-
     logic [ROB_AGE_BITS-1:0] dq_flush_tail_age;
     logic [ROB_AGE_BITS-1:0] dq_int_entry_age [0:INT_DEPTH-1];
     logic [ROB_AGE_BITS-1:0] dq_mem_entry_age [0:MEM_DEPTH-1];
@@ -515,13 +564,16 @@ module dispatch_queue
             // Update occupancy counts (net = enq - deq)
             // -------------------------------------------------------------------
             int_count <= int_count + {3'b000, enq_int_count} - {3'b000, accepted_int_count};
-            mem_count <= mem_count + {3'b000, enq_mem_count} - {3'b000, actual_deq_mem};
+            mem_count <= mem_count +
+                         {3'b000, enq_mem_count} -
+                         {3'b000, actual_deq_mem};
 
             // -------------------------------------------------------------------
             // Advance round-robin pointer
             // -------------------------------------------------------------------
             if (actual_deq_int > 3'd0)
                 rr_ptr <= rr_next;
+
         end
     end
 

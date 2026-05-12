@@ -159,7 +159,8 @@ module l2_cache
 
     // MSHR full / address-match checks
     logic mshr_full;
-    logic mshr_addr_match;   // same address already tracked
+    logic mshr_addr_match;          // same address already tracked
+    logic mshr_addr_source_match;   // same address already tracked for this requester
 
     // Free MSHR slot
     logic [4:0]  mshr_free_idx;
@@ -277,6 +278,7 @@ module l2_cache
         mshr_has_free   = 1'b0;
         mshr_free_idx   = 5'd0;
         mshr_addr_match = 1'b0;
+        mshr_addr_source_match = 1'b0;
         for (int i = 0; i < L2_MSHR_DEPTH; i++) begin
             if (!mshr[i].valid) begin
                 if (!mshr_has_free) begin
@@ -286,8 +288,11 @@ module l2_cache
                 mshr_full = 1'b0;
             end else begin
                 // Check if same cache-line address already outstanding
-                if (mshr[i].addr[63:LINE_BITS] == arb_addr[63:LINE_BITS])
+                if (mshr[i].addr[63:LINE_BITS] == arb_addr[63:LINE_BITS]) begin
                     mshr_addr_match = 1'b1;
+                    if (mshr[i].source == arb_source)
+                        mshr_addr_source_match = 1'b1;
+                end
             end
         end
     end
@@ -379,13 +384,13 @@ module l2_cache
         arb_valid &&
         (arb_source == SRC_ICACHE) &&
         !arb_we &&
-        (hit_any || (!mshr_addr_match && mshr_has_free));
+        (hit_any || (!mshr_addr_source_match && mshr_has_free));
 
     assign ptw_req_accepted =
         arb_valid &&
         (arb_source == SRC_PTW) &&
         !arb_we &&
-        (hit_any || (!mshr_addr_match && mshr_has_free));
+        (hit_any || (!mshr_addr_source_match && mshr_has_free));
 
     // =========================================================================
     // Invalidate busy
@@ -678,7 +683,8 @@ module l2_cache
                     // Only allocate MSHR for fill requests (not writebacks)
                     // For writebacks on a miss: just allocate as a write-through
                     // (write directly to MSHR-less path; handle inline)
-                    if (!mshr_addr_match) begin
+                    if ((arb_we && !mshr_addr_match) ||
+                        (!arb_we && !mshr_addr_source_match)) begin
                         if (arb_we) begin
                             // D-cache dirty writeback, line not in L2:
                             // allocate a victim, evict if dirty, install wb data

@@ -16,7 +16,9 @@ module csr_file
 
     // CSR read (for CSR instructions – combinational)
     input  logic [11:0] read_addr,
+    input  logic        read_write_intent,
     output logic [63:0] read_data,
+    output logic        read_illegal,
 
     // CSR write (from commit — serialized, at most 1/cycle)
     input  logic        write_valid,
@@ -65,6 +67,7 @@ module csr_file
     // Privileged translation state
     output logic        mstatus_mprv,
     output logic [1:0]  mstatus_mpp,
+    output logic [1:0]  mstatus_fs,
     output logic        mstatus_sum,
     output logic        mstatus_mxr,
     output logic [63:0] satp,
@@ -140,6 +143,7 @@ module csr_file
     assign frm_out     = frm_r;
     assign mstatus_mprv = mstatus_r[17];
     assign mstatus_mpp = mstatus_r[12:11];
+    assign mstatus_fs  = mstatus_r[14:13];
     assign mstatus_sum = mstatus_r[18];
     assign mstatus_mxr = mstatus_r[19];
     assign satp        = satp_r;
@@ -235,6 +239,12 @@ module csr_file
     logic [63:0] sstatus_applied_norm;
     logic [63:0] sstatus_view;
     logic [63:0] sstatus_view_bypass;
+    logic        csr_addr_supported;
+    logic        csr_priv_illegal;
+    logic        csr_readonly_illegal;
+    logic        csr_counter_illegal;
+    logic        csr_counter_addr;
+    logic [1:0]  csr_counter_bit;
 
     assign csr_bypass = write_valid && !trap_valid && !mret_valid && !sret_valid &&
                         (write_addr == read_addr);
@@ -269,6 +279,93 @@ module csr_file
     end
     assign sstatus_view          = mstatus_norm        & SSTATUS_MASK;
     assign sstatus_view_bypass   = sstatus_applied_norm & SSTATUS_MASK;
+
+    // =========================================================================
+    // CSR access legality for the in-flight CSR instruction.
+    // =========================================================================
+    assign csr_priv_illegal = (priv_r < read_addr[9:8]);
+    assign csr_readonly_illegal = read_write_intent && (read_addr[11:10] == 2'b11);
+
+    always_comb begin
+        csr_counter_addr = 1'b1;
+        csr_counter_bit  = 2'd0;
+        case (read_addr)
+            CSR_CYCLE:   csr_counter_bit = 2'd0;
+            CSR_TIME:    csr_counter_bit = 2'd1;
+            CSR_INSTRET: csr_counter_bit = 2'd2;
+            default: begin
+                csr_counter_addr = 1'b0;
+                csr_counter_bit  = 2'd0;
+            end
+        endcase
+    end
+
+    always_comb begin
+        csr_counter_illegal = 1'b0;
+        if (csr_counter_addr) begin
+            if (priv_r == PRIV_S) begin
+                csr_counter_illegal = !mcounteren_r[csr_counter_bit];
+            end else if (priv_r == PRIV_U) begin
+                csr_counter_illegal =
+                    !mcounteren_r[csr_counter_bit] ||
+                    !scounteren_r[csr_counter_bit];
+            end
+        end
+    end
+
+    always_comb begin
+        case (read_addr)
+            CSR_FFLAGS,
+            CSR_FRM,
+            CSR_FCSR,
+            CSR_SSTATUS,
+            CSR_SIE,
+            CSR_STVEC,
+            CSR_SCOUNTEREN,
+            CSR_SENVCFG,
+            CSR_SSCRATCH,
+            CSR_SEPC,
+            CSR_SCAUSE,
+            CSR_STVAL,
+            CSR_SIP,
+            CSR_SATP,
+            CSR_MSTATUS,
+            CSR_MISA,
+            CSR_MEDELEG,
+            CSR_MIDELEG,
+            CSR_MIE,
+            CSR_MTVEC,
+            CSR_MCOUNTEREN,
+            CSR_MCOUNTINHIBIT,
+            CSR_MSCRATCH,
+            CSR_MEPC,
+            CSR_MCAUSE,
+            CSR_MTVAL,
+            CSR_MIP,
+            CSR_PMPCFG0,
+            CSR_PMPADDR0,
+            CSR_TSELECT,
+            CSR_TDATA1,
+            CSR_TDATA2,
+            CSR_TCONTROL,
+            CSR_MVENDORID,
+            CSR_MARCHID,
+            CSR_MIMPID,
+            CSR_MHARTID,
+            CSR_MCYCLE,
+            CSR_MINSTRET,
+            CSR_CYCLE,
+            CSR_TIME,
+            CSR_INSTRET: csr_addr_supported = 1'b1;
+            default:    csr_addr_supported = 1'b0;
+        endcase
+    end
+
+    assign read_illegal =
+        !csr_addr_supported ||
+        csr_priv_illegal ||
+        csr_readonly_illegal ||
+        csr_counter_illegal;
 
     // =========================================================================
     // Precomputed CSR operation results for FFLAGS/FRM/FCSR/SATP bypass

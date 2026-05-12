@@ -47,29 +47,16 @@ module tb_top
     // =========================================================================
     logic [63:0] sim_tohost_addr;
     logic        backend_admission_throttle_enable = 1'b0;
-    logic        iq_ready_enq_bypass_enable = 1'b0;
-    logic        iq_ready_enq_bypass_alu_only = 1'b0;
 
     initial begin
         sim_tohost_addr = TOHOST_ADDR;
         backend_admission_throttle_enable =
             $test$plusargs("BACKEND_ADMISSION_THROTTLE");
-        iq_ready_enq_bypass_enable =
-            $test$plusargs("IQ_READY_ENQ_BYPASS") ||
-            $test$plusargs("IQ_READY_ENQ_BYPASS_ALU_ONLY");
-        iq_ready_enq_bypass_alu_only =
-            $test$plusargs("IQ_READY_ENQ_BYPASS_ALU_ONLY");
         if ($value$plusargs("TOHOST_ADDR=%h", sim_tohost_addr)) begin
             $display("[SIM_PLATFORM] TOHOST_ADDR=%016h", sim_tohost_addr);
         end
         if (backend_admission_throttle_enable) begin
             $display("[SIM_PLATFORM] BACKEND_ADMISSION_THROTTLE=1");
-        end
-        if (iq_ready_enq_bypass_enable) begin
-            $display("[SIM_PLATFORM] IQ_READY_ENQ_BYPASS=1");
-        end
-        if (iq_ready_enq_bypass_alu_only) begin
-            $display("[SIM_PLATFORM] IQ_READY_ENQ_BYPASS_ALU_ONLY=1");
         end
     end
 
@@ -110,8 +97,6 @@ module tb_top
 
         // Optional DSE controls
         .backend_admission_throttle_enable(backend_admission_throttle_enable),
-        .iq_ready_enq_bypass_enable(iq_ready_enq_bypass_enable),
-        .iq_ready_enq_bypass_alu_only(iq_ready_enq_bypass_alu_only),
 
         // Performance counters
         .perf_mcycle     (perf_mcycle),
@@ -241,9 +226,13 @@ module tb_top
     logic trace_wdog_en;
     logic trace_lsu_fwd_en;
     logic trace_lsu_p1_en;
+    logic trace_store_en;
+    logic [63:0] trace_lsu_fwd_pc;
+    logic [63:0] trace_store_pc;
     logic trace_listptr_en;
     logic trace_iqld_watch_en;
     logic trace_head_stall_en;
+    logic trace_fpu_en;
     logic trace_coremark_progress_en;
     logic trace_coremark_exit_en;
     logic trace_matrix_branch_en;
@@ -283,9 +272,13 @@ module tb_top
         trace_wdog_en   = 0;
         trace_lsu_fwd_en = 0;
         trace_lsu_p1_en = 0;
+        trace_store_en = 0;
+        trace_lsu_fwd_pc = 64'h0000_0000_8000_2382;
+        trace_store_pc = 64'h0000_0000_8000_106c;
         trace_listptr_en = 0;
         trace_iqld_watch_en = 0;
         trace_head_stall_en = 0;
+        trace_fpu_en = 0;
         trace_coremark_progress_en = 0;
         trace_coremark_exit_en = 0;
         trace_matrix_branch_en = 0;
@@ -306,11 +299,16 @@ module tb_top
         if ($test$plusargs("TRACE_ORDV"))   trace_ordv_en   = 1;
         if ($test$plusargs("TRACE_WDOG"))   trace_wdog_en   = 1;
         if ($test$plusargs("TRACE_LSU_FWD")) trace_lsu_fwd_en = 1;
+        if ($value$plusargs("TRACE_LSU_FWD_PC=%h", trace_lsu_fwd_pc))
+            trace_lsu_fwd_en = 1;
         if ($test$plusargs("TRACE_LSU_P1"))  trace_lsu_p1_en  = 1;
+        if ($value$plusargs("TRACE_STORE_PC=%h", trace_store_pc))
+            trace_store_en = 1;
         if ($test$plusargs("TRACE_LISTPTR")) trace_listptr_en = 1;
         if ($value$plusargs("TRACE_LISTPTR_START=%d", trace_listptr_start))
             trace_listptr_en = 1;
         if ($test$plusargs("TRACE_HEAD_STALL")) trace_head_stall_en = 1;
+        if ($test$plusargs("TRACE_FPU")) trace_fpu_en = 1;
         if ($test$plusargs("TRACE_COREMARK_PROGRESS")) trace_coremark_progress_en = 1;
         if ($test$plusargs("TRACE_COREMARK_EXIT")) trace_coremark_exit_en = 1;
         if ($test$plusargs("TRACE_MATRIX_BRANCH")) trace_matrix_branch_en = 1;
@@ -361,6 +359,43 @@ module tb_top
             end
             golden_emit_en = 1;
             $display("[GOLDEN_PC EMITTING] path=%s", golden_emit_path);
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        if (trace_fpu_en) begin
+            if (u_core.fpu_issue || u_core.fpu_valid_in ||
+                u_core.fpu_out_valid || u_core.fpu_unsupported ||
+                u_core.cdb_fp_fflags_valid[3] ||
+                u_core.cdb_fp_fflags_valid_r[3] ||
+                u_core.fp_fflags_commit_valid) begin
+                $display("[FPUTRACE] cyc=%0d issue=%b req_valid=%b ready=%b valid_in=%b op=%0d pipe=%0d rob=%0d pdst=%0d out=%b unsup=%b out_rob=%0d out_pdst=%0d out_data=%016h st=%b%b%b%b%b cdbv=%b cdb=%05b cdbvr=%b cdbr=%05b commit=%b commit_bits=%05b",
+                    trace_cycle,
+                    u_core.fpu_issue,
+                    u_core.fpu_req_valid_r,
+                    u_core.fpu_ready,
+                    u_core.fpu_valid_in,
+                    u_core.fpu_req_data_r.fp_op,
+                    u_core.fpu_req_data_r.fp_pipe,
+                    u_core.fpu_req_data_r.rob_idx,
+                    u_core.fpu_req_data_r.pdst,
+                    u_core.fpu_out_valid,
+                    u_core.fpu_unsupported,
+                    u_core.fpu_out_rob_idx,
+                    u_core.fpu_out_pdst,
+                    u_core.fpu_out_data,
+                    u_core.fpu_out_status.nv,
+                    u_core.fpu_out_status.dz,
+                    u_core.fpu_out_status.of,
+                    u_core.fpu_out_status.uf,
+                    u_core.fpu_out_status.nx,
+                    u_core.cdb_fp_fflags_valid[3],
+                    u_core.cdb_fp_fflags[3],
+                    u_core.cdb_fp_fflags_valid_r[3],
+                    u_core.cdb_fp_fflags_r[3],
+                    u_core.fp_fflags_commit_valid,
+                    u_core.fp_fflags_commit_bits);
+            end
         end
     end
 
@@ -6001,6 +6036,9 @@ module tb_top
     logic [ROB_IDX_BITS-1:0] trace_sq_alloc_rob [0:SQ_DEPTH-1];
     logic [63:0] trace_csb_pc [0:CSB_DEPTH-1];
     logic [ROB_IDX_BITS-1:0] trace_csb_rob [0:CSB_DEPTH-1];
+    logic       trace_lsu_watch_valid;
+    logic [ROB_IDX_BITS-1:0] trace_lsu_watch_rob;
+    logic [63:0] trace_lsu_watch_addr;
     integer     cm_progress_count [0:20];
     integer     matrix_branch_trace_count;
     integer     trace_lowpc_count;
@@ -6032,6 +6070,9 @@ module tb_top
             trace_prev_cmt2    <= 1'b0;
             trace_prev_uoc_state  <= 2'd0;
             trace_prev_uoc_active <= 1'b0;
+            trace_lsu_watch_valid <= 1'b0;
+            trace_lsu_watch_rob   <= '0;
+            trace_lsu_watch_addr  <= 64'd0;
             for (int i = 0; i <= 20; i++) begin
                 cm_progress_count[i] <= 0;
             end
@@ -7785,6 +7826,229 @@ module tb_top
                     u_core.rob_head_is_ecall[0],
                     u_core.rob_head_is_wfi[0]);
             end
+            if (trace_lsu_fwd_en) begin
+                for (int i = 0; i < PIPE_WIDTH; i++) begin
+                    if ((3'(i) < u_core.ren_count_w) &&
+                        u_core.ren_insn[i].base.valid &&
+                        (u_core.ren_insn[i].base.pc == trace_lsu_fwd_pc)) begin
+                        trace_lsu_watch_valid <= 1'b1;
+                        trace_lsu_watch_rob   <= u_core.ren_insn[i].rob_idx;
+                        trace_lsu_watch_addr  <= 64'd0;
+                        $display("[LSUPC_REN%0d] cyc=%0d pc=%016h rob=%0d pdst=%0d rs1p=%0d rs2p=%0d rdy=%b/%b lq=%0d sq=%0d flush=%b dq_enq=%0d dq_mem_count=%0d dq_mem_head=%0d dq_mem_tail=%0d load_credit=%0d store_credit=%0d",
+                            i,
+                            trace_cycle,
+                            u_core.ren_insn[i].base.pc,
+                            u_core.ren_insn[i].rob_idx,
+                            u_core.ren_insn[i].pdst,
+                            u_core.ren_insn[i].rs1_phys,
+                            u_core.ren_insn[i].rs2_phys,
+                            u_core.ren_insn[i].rs1_ready,
+                            u_core.ren_insn[i].rs2_ready,
+                            u_core.ren_insn[i].lq_idx,
+                            u_core.ren_insn[i].sq_idx,
+                            u_core.flush_out.valid,
+                            u_core.dq_enq_count,
+                            u_core.u_dispatch_queue.mem_count,
+                            u_core.u_dispatch_queue.mem_head,
+                            u_core.u_dispatch_queue.mem_tail,
+                            u_core.dq_load_iq_credit,
+                            u_core.dq_store_iq_credit);
+                    end
+                    if ((3'(i) < u_core.dq_deq_count) &&
+                        u_core.dq_deq_data[i].base.valid &&
+                        (u_core.dq_deq_data[i].base.pc == trace_lsu_fwd_pc)) begin
+                        $display("[LSUPC_DQ%0d] cyc=%0d pc=%016h rob=%0d pdst=%0d rs1p=%0d rs2p=%0d rdy=%b/%b lq=%0d sq=%0d",
+                            i,
+                            trace_cycle,
+                            u_core.dq_deq_data[i].base.pc,
+                            u_core.dq_deq_data[i].rob_idx,
+                            u_core.dq_deq_data[i].pdst,
+                            u_core.dq_deq_data[i].rs1_phys,
+                            u_core.dq_deq_data[i].rs2_phys,
+                            u_core.dq_deq_data[i].rs1_ready,
+                            u_core.dq_deq_data[i].rs2_ready,
+                            u_core.dq_deq_data[i].lq_idx,
+                            u_core.dq_deq_data[i].sq_idx);
+                    end
+                end
+                if (trace_lsu_watch_valid &&
+                    (u_core.flush_out.valid ||
+                     (u_core.rob_head_valid[0] &&
+                      !u_core.rob_head_ready[0] &&
+                      (u_core.rob_head_pc[0] == trace_lsu_fwd_pc)))) begin
+                    for (int d = 0; d < DQ_MEM_DEPTH; d++) begin
+                        if (d < int'(u_core.u_dispatch_queue.mem_count)) begin
+                            automatic int trace_dq_idx;
+                            automatic renamed_insn_t trace_dq_entry;
+                            trace_dq_idx =
+                                (int'(u_core.u_dispatch_queue.mem_head) + d) %
+                                DQ_MEM_DEPTH;
+                            trace_dq_entry =
+                                u_core.u_dispatch_queue.mem_fifo[trace_dq_idx];
+                            if ((trace_dq_entry.base.pc == trace_lsu_fwd_pc) ||
+                                (trace_dq_entry.rob_idx == trace_lsu_watch_rob)) begin
+                                $display("[LSUPC_DQMEM] cyc=%0d pos=%0d phys=%0d pc=%016h rob=%0d watch=%0d count=%0d head=%0d tail=%0d flush=%b/%b ftail=%0d age=%0d tail_age=%0d keep=%b load_credit=%0d store_credit=%0d",
+                                    trace_cycle,
+                                    d,
+                                    trace_dq_idx,
+                                    trace_dq_entry.base.pc,
+                                    trace_dq_entry.rob_idx,
+                                    trace_lsu_watch_rob,
+                                    u_core.u_dispatch_queue.mem_count,
+                                    u_core.u_dispatch_queue.mem_head,
+                                    u_core.u_dispatch_queue.mem_tail,
+                                    u_core.flush_out.valid,
+                                    u_core.flush_out.full_flush,
+                                    u_core.flush_out.rob_idx,
+                                    u_core.u_dispatch_queue.dq_mem_entry_age[d],
+                                    u_core.u_dispatch_queue.dq_flush_tail_age,
+                                    u_core.u_dispatch_queue.dq_mem_entry_age[d] <
+                                        u_core.u_dispatch_queue.dq_flush_tail_age,
+                                    u_core.dq_load_iq_credit,
+                                    u_core.dq_store_iq_credit);
+                            end
+                        end
+                    end
+                end
+                for (int q = 0; q < 2; q++) begin
+                    if (u_core.iq_load_enq_valid[q] &&
+                        (u_core.iq_load_enq_data[q].pc == trace_lsu_fwd_pc)) begin
+                        $display("[LSUPC_LDIQ_ENQ%0d] cyc=%0d pc=%016h rob=%0d pdst=%0d rs1p=%0d rs2p=%0d rdy=%b/%b lq=%0d free=%b spec=%b cancel=%b",
+                            q,
+                            trace_cycle,
+                            u_core.iq_load_enq_data[q].pc,
+                            u_core.iq_load_enq_data[q].rob_idx,
+                            u_core.iq_load_enq_data[q].pdst,
+                            u_core.iq_load_enq_data[q].rs1_phys,
+                            u_core.iq_load_enq_data[q].rs2_phys,
+                            u_core.u_iq_load.enq_s1_rdy[q],
+                            u_core.u_iq_load.enq_s2_rdy[q],
+                            u_core.iq_load_enq_data[q].lq_idx,
+                            u_core.u_iq_load.free_found[q],
+                            u_core.u_iq_load.enq_s1_spec_wakeup[q],
+                            u_core.u_iq_load.enq_s1_spec_cancelled[q]);
+                    end
+                end
+                if (u_core.flush_out.valid && !u_core.flush_out.full_flush) begin
+                    for (int e = 0; e < IQ_MEM_DEPTH; e++) begin
+                        if (u_core.u_iq_load.entry_valid[e]) begin
+                            automatic iq_entry_t trace_iq_entry;
+                            trace_iq_entry = iq_entry_t'(u_core.u_iq_load.payload_r[e]);
+                            if (trace_iq_entry.pc == trace_lsu_fwd_pc) begin
+                                $display("[LSUPC_FLUSH_IQ] cyc=%0d slot=%0d pc=%016h rob=%0d head=%0d tail=%0d remove=%b rdy=%b/%b/%b age=%0d tail_age=%0d",
+                                    trace_cycle,
+                                    e,
+                                    trace_iq_entry.pc,
+                                    u_core.u_iq_load.rob_idx_r[e],
+                                    u_core.rob_head_idx,
+                                    u_core.flush_out.rob_idx,
+                                    u_core.u_iq_load.flush_remove[e],
+                                    u_core.u_iq_load.src1_ready[e],
+                                    u_core.u_iq_load.src2_ready[e],
+                                    u_core.u_iq_load.src3_ready[e],
+                                    u_core.u_iq_load.entry_age[e],
+                                    u_core.u_iq_load.flush_tail_age);
+                            end
+                        end
+                    end
+                end
+                for (int p = 0; p < 2; p++) begin
+                    if (u_core.iq_load_issue_valid[p] &&
+                        (u_core.iq_load_issue_data[p].pc == trace_lsu_fwd_pc)) begin
+                        trace_lsu_watch_valid <= 1'b1;
+                        trace_lsu_watch_rob   <= u_core.iq_load_issue_data[p].rob_idx;
+                        trace_lsu_watch_addr  <= (p == 0)
+                                               ? u_core.u_lsu.load_eff_addr[0]
+                                               : u_core.u_lsu.load_eff_addr[1];
+                        $display("[LSUPC_ISS%0d] cyc=%0d pc=%016h rob=%0d pdst=%0d rs1p=%0d addr=%016h size=%0d suppress=%b",
+                            p,
+                            trace_cycle,
+                            u_core.iq_load_issue_data[p].pc,
+                            u_core.iq_load_issue_data[p].rob_idx,
+                            u_core.iq_load_issue_data[p].pdst,
+                            u_core.iq_load_issue_data[p].rs1_phys,
+                            (p == 0) ? u_core.u_lsu.load_eff_addr[0]
+                                     : u_core.u_lsu.load_eff_addr[1],
+                            u_core.iq_load_issue_data[p].mem_size,
+                            u_core.lsu_load_issue_suppress[p]);
+                    end
+                    if (u_core.u_lsu.load_issue_valid[p] &&
+                        (u_core.u_lsu.load_issue_data[p].pc == trace_lsu_fwd_pc)) begin
+                        $display("[LSUPC_FIRE%0d] cyc=%0d pc=%016h rob=%0d addr=%016h req=%b req_addr=%016h nocache_r=%b",
+                            p,
+                            trace_cycle,
+                            u_core.u_lsu.load_issue_data[p].pc,
+                            u_core.u_lsu.load_issue_data[p].rob_idx,
+                            (p == 0) ? u_core.u_lsu.load_eff_addr[0]
+                                     : u_core.u_lsu.load_eff_addr[1],
+                            u_core.dc_load_req_valid[p],
+                            u_core.dc_load_req_addr[p],
+                            u_core.u_lsu.load_nocache_r[p]);
+                    end
+                    if (u_core.u_lsu.load_issue_valid_r[p] &&
+                        (u_core.u_lsu.load_issue_data_r[p].pc == trace_lsu_fwd_pc)) begin
+                        $display("[LSUPC_S1%0d] cyc=%0d pc=%016h rob=%0d addr=%016h resp=%b hit=%b data=%016h nocache=%b",
+                            p,
+                            trace_cycle,
+                            u_core.u_lsu.load_issue_data_r[p].pc,
+                            u_core.u_lsu.load_issue_data_r[p].rob_idx,
+                            u_core.u_lsu.load_eff_addr_r[p],
+                            u_core.dc_load_resp_valid[p],
+                            u_core.dc_load_resp_hit[p],
+                            u_core.dc_load_resp_data[p],
+                            u_core.u_lsu.load_nocache_r[p]);
+                    end
+                    if (u_core.lsu_load_wb_valid[p] &&
+                        trace_lsu_watch_valid &&
+                        (u_core.lsu_load_wb_rob_idx[p] == trace_lsu_watch_rob)) begin
+                        $display("[LSUPC_WB%0d] cyc=%0d rob=%0d pdst=%0d data=%016h exc=%b",
+                            p,
+                            trace_cycle,
+                            u_core.lsu_load_wb_rob_idx[p],
+                            u_core.lsu_load_wb_pdst[p],
+                            u_core.lsu_load_wb_data[p],
+                            u_core.lsu_load_wb_has_exception[p]);
+                    end
+                end
+                if (trace_lsu_watch_valid &&
+                    u_core.rob_head_valid[0] &&
+                    !u_core.rob_head_ready[0] &&
+                    (u_core.rob_head_idx == trace_lsu_watch_rob)) begin
+                    $display("[LSUPC_HEAD] cyc=%0d rob=%0d pc=%016h addr=%016h lq_count=%0d lmb_valid=%b lmb_match=%b split_busy=%b",
+                        trace_cycle,
+                        trace_lsu_watch_rob,
+                        u_core.rob_head_pc[0],
+                        trace_lsu_watch_addr,
+                        u_core.u_lsu.u_load_queue.count_r,
+                        u_core.u_lsu.lmb_any_valid,
+                        u_core.u_lsu.lmb_any_match,
+                        u_core.u_lsu.split_load_busy);
+                end
+                if (u_core.rob_head_valid[0] &&
+                    !u_core.rob_head_ready[0] &&
+                    (u_core.rob_head_pc[0] == trace_lsu_fwd_pc)) begin
+                    for (int e = 0; e < IQ_MEM_DEPTH; e++) begin
+                        if (u_core.u_iq_load.entry_valid[e] &&
+                            (u_core.u_iq_load.rob_idx_r[e] == u_core.rob_head_idx)) begin
+                            automatic iq_entry_t trace_head_iq_entry;
+                            trace_head_iq_entry = iq_entry_t'(u_core.u_iq_load.payload_r[e]);
+                            $display("[LSUPC_HEAD_IQ] cyc=%0d slot=%0d pc=%016h rob=%0d rdy=%b/%b/%b next=%b/%b/%b eligible=%b suppress=%b",
+                                trace_cycle,
+                                e,
+                                trace_head_iq_entry.pc,
+                                u_core.u_iq_load.rob_idx_r[e],
+                                u_core.u_iq_load.src1_ready[e],
+                                u_core.u_iq_load.src2_ready[e],
+                                u_core.u_iq_load.src3_ready[e],
+                                u_core.u_iq_load.next_src1_ready[e],
+                                u_core.u_iq_load.next_src2_ready[e],
+                                u_core.u_iq_load.next_src3_ready[e],
+                                u_core.u_iq_load.eligible[e],
+                                u_core.lsu_load_issue_suppress[0]);
+                        end
+                    end
+                end
+            end
             if (trace_commit_en && u_core.bru_issue &&
                 (u_core.iq0_issue_data[0].pc >= 64'h0000000080002000) &&
                 (u_core.iq0_issue_data[0].pc <  64'h0000000080002440)) begin
@@ -8275,6 +8539,55 @@ module tb_top
                         u_core.iq_store_issue_data[0].imm,
                         u_core.iq_store_issue_data[0].mem_size);
                 end
+                if (trace_store_en &&
+                    u_core.u_lsu.sta_issue_valid &&
+                    (u_core.u_lsu.sta_issue_data.pc == trace_store_pc)) begin
+                    $display("[TRACE_STA] cyc=%0d pc=%016h rob=%0d sq=%0d rs1p=%0d rs1=%016h imm=%016h eff=%016h size=%0d suppress=%b",
+                        trace_cycle,
+                        u_core.u_lsu.sta_issue_data.pc,
+                        u_core.u_lsu.sta_issue_data.rob_idx,
+                        u_core.u_lsu.sta_issue_data.sq_idx,
+                        u_core.u_lsu.sta_issue_data.rs1_phys,
+                        u_core.u_lsu.sta_rs1,
+                        u_core.u_lsu.sta_issue_data.imm,
+                        u_core.u_lsu.sta_eff_addr,
+                        u_core.u_lsu.sta_issue_data.mem_size,
+                        u_core.lsu_sta_issue_suppress[0]);
+                end
+                if (trace_store_en &&
+                    u_core.u_lsu.std_issue_valid &&
+                    (u_core.u_lsu.std_issue_data.pc == trace_store_pc)) begin
+                    $display("[TRACE_STD] cyc=%0d pc=%016h rob=%0d sq=%0d rs2p=%0d rs2=%016h mask=%02h entry_valid=%b entry_rob=%0d addr_valid=%b addr=%016h data_valid=%b data=%016h",
+                        trace_cycle,
+                        u_core.u_lsu.std_issue_data.pc,
+                        u_core.u_lsu.std_issue_data.rob_idx,
+                        u_core.u_lsu.std_issue_data.sq_idx,
+                        u_core.u_lsu.std_issue_data.rs2_phys,
+                        u_core.u_lsu.std_rs2,
+                        u_core.u_lsu.std_byte_mask,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].valid,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].rob_idx,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr_valid,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].data_valid,
+                        u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].data);
+                end
+                if (trace_store_en &&
+                    u_core.u_lsu.sq_drain_valid &&
+                    u_core.u_lsu.sq_drain_ready &&
+                    (u_core.u_lsu.sq_drain_entry.rob_idx ==
+                     u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.u_store_queue.head_r].rob_idx)) begin
+                    if (u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.u_store_queue.head_r].addr ==
+                        64'h0000_0000_8000_3003) begin
+                        $display("[TRACE_SQ_DRAIN] cyc=%0d sq=%0d rob=%0d addr=%016h data=%016h mask=%02h",
+                            trace_cycle,
+                            u_core.u_lsu.u_store_queue.head_r,
+                            u_core.u_lsu.sq_drain_entry.rob_idx,
+                            u_core.u_lsu.sq_drain_entry.addr,
+                            u_core.u_lsu.sq_drain_entry.data,
+                            u_core.u_lsu.sq_drain_entry.byte_mask);
+                    end
+                end
                 // L1D fill trace (snoop)
                 if (u_core.dc_fill_snoop_valid) begin
                     $display("[DCFILL] cyc=%0d addr=%016h data[0..63]=%016h data[192..255]=%016h",
@@ -8317,8 +8630,8 @@ module tb_top
                 end
                 if (trace_lsu_fwd_en &&
                     u_core.u_lsu.load_issue_candidate_valid[0] &&
-                    (u_core.u_lsu.load_issue_data[0].pc == 64'h0000_0000_8000_2382)) begin
-                    $display("[LSUFWD0] cyc=%0d pc=%016h rob=%0d eff=%016h sq_hit=%b sq_wait=%b sq_partial=%b same_hit=%b same_partial=%b csb_hit=%b suppress=%b",
+                    (u_core.u_lsu.load_issue_data[0].pc == trace_lsu_fwd_pc)) begin
+                    $display("[LSUFWD0] cyc=%0d pc=%016h rob=%0d eff=%016h sq_hit=%b sq_wait=%b sq_partial=%b same_hit=%b same_partial=%b csb_hit=%b csb_partial=%b enq_hit=%b enq_partial=%b suppress=%b",
                         trace_cycle,
                         u_core.u_lsu.load_issue_data[0].pc,
                         u_core.u_lsu.load_issue_data[0].rob_idx,
@@ -8329,6 +8642,9 @@ module tb_top
                         u_core.u_lsu.same_cycle_fwd_hit,
                         u_core.u_lsu.same_cycle_fwd_partial,
                         u_core.u_lsu.csb_fwd_hit,
+                        u_core.u_lsu.csb_fwd_partial,
+                        u_core.u_lsu.csb_enq_fwd_hit,
+                        u_core.u_lsu.csb_enq_fwd_partial,
                         u_core.lsu_load_issue_suppress[0]);
                     $display("[LSUFWD0_SQ] cyc=%0d head=%0d tail=%0d commit_ptr=%0d rob_head=%0d",
                         trace_cycle,

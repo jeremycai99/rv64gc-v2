@@ -184,12 +184,36 @@ module store_queue
         logic [7:0]              fwd_wait_mask;
         logic [7:0]              fwd_wait_addr_mask;
         logic [7:0]              fwd_wait_data_mask;
+        logic                    fwd_cross_block;
+        logic                    fwd_req_cross_dword;
+        logic [3:0]              fwd_req_size_bytes;
+        logic [63:0]             fwd_req_last_addr;
 
         fwd_req_age   = rob_age_from_head(fwd_req_rob_idx);
         fwd_cover_mask = '0;
         fwd_wait_mask  = '0;
         fwd_wait_addr_mask = '0;
         fwd_wait_data_mask = '0;
+        fwd_cross_block = 1'b0;
+        case (fwd_req_size)
+            2'd0: begin
+                fwd_req_size_bytes = 4'd1;
+                fwd_req_cross_dword = 1'b0;
+            end
+            2'd1: begin
+                fwd_req_size_bytes = 4'd2;
+                fwd_req_cross_dword = (fwd_req_addr[2:0] > 3'd6);
+            end
+            2'd2: begin
+                fwd_req_size_bytes = 4'd4;
+                fwd_req_cross_dword = (fwd_req_addr[2:0] > 3'd4);
+            end
+            default: begin
+                fwd_req_size_bytes = 4'd8;
+                fwd_req_cross_dword = (fwd_req_addr[2:0] != 3'd0);
+            end
+        endcase
+        fwd_req_last_addr = fwd_req_addr + {60'd0, fwd_req_size_bytes} - 64'd1;
         fwd_data       = '0;
 
         for (int step = 0; step < SQ_DEPTH; step++) begin
@@ -208,6 +232,10 @@ module store_queue
 	                logic [63:0]            scan_addr;
 	                logic [1:0]             scan_size;
 	                logic [63:0]            data_value;
+	                logic                   scan_cross_dword;
+                    logic [3:0]             scan_size_bytes;
+                    logic [63:0]            scan_last_addr;
+                    logic                   range_overlap;
 	                int                     idx_int;
 
                 idx_int = int'(tail_r) - step - 1;
@@ -233,6 +261,25 @@ module store_queue
 	                    2'd2:    scan_bmask = 8'h0F << scan_addr[2:0];
 	                    default: scan_bmask = 8'hFF;
 	                endcase
+	                case (scan_size)
+	                    2'd0: begin
+                            scan_size_bytes = 4'd1;
+                            scan_cross_dword = 1'b0;
+                        end
+	                    2'd1: begin
+                            scan_size_bytes = 4'd2;
+                            scan_cross_dword = (scan_addr[2:0] > 3'd6);
+                        end
+	                    2'd2: begin
+                            scan_size_bytes = 4'd4;
+                            scan_cross_dword = (scan_addr[2:0] > 3'd4);
+                        end
+	                    default: begin
+                            scan_size_bytes = 4'd8;
+                            scan_cross_dword = (scan_addr[2:0] != 3'd0);
+                        end
+	                endcase
+                    scan_last_addr = scan_addr + {60'd0, scan_size_bytes} - 64'd1;
 	
 	                store_age      = rob_age_from_head(queue[scan_idx].rob_idx);
 	                store_is_older = fwd_req_valid &&
@@ -241,7 +288,14 @@ module store_queue
 	                addr_match     = store_is_older &&
 	                                 scan_addr_valid &&
 	                                 (scan_addr[63:3] == fwd_req_addr[63:3]);
+                    range_overlap  = store_is_older &&
+                                     scan_addr_valid &&
+                                     (scan_addr <= fwd_req_last_addr) &&
+                                     (fwd_req_addr <= scan_last_addr);
 	                overlap_mask   = addr_match ? (scan_bmask & fwd_req_bmask) : 8'h00;
+	                if (range_overlap &&
+	                    (scan_cross_dword || fwd_req_cross_dword || !addr_match))
+	                    fwd_cross_block = 1'b1;
 	                uncovered_mask = (store_is_older && !scan_addr_valid)
 	                               ? (fwd_req_bmask & ~fwd_cover_mask)
 	                               : (overlap_mask & ~fwd_cover_mask);
@@ -270,8 +324,11 @@ module store_queue
             end
         end
 
-        fwd_hit               = fwd_req_valid && (fwd_cover_mask == fwd_req_bmask);
-        fwd_partial           = fwd_req_valid && (fwd_cover_mask != 8'h00) && !fwd_hit;
+        fwd_hit               = fwd_req_valid && !fwd_cross_block &&
+                                (fwd_cover_mask == fwd_req_bmask);
+        fwd_partial           = fwd_req_valid &&
+                                (((fwd_cover_mask != 8'h00) && !fwd_hit) ||
+                                 fwd_cross_block);
         fwd_wait              = fwd_req_valid && (fwd_wait_mask != 8'h00);
         fwd_wait_addr_unknown = fwd_req_valid && (fwd_wait_addr_mask != 8'h00);
         fwd_wait_data_missing = fwd_req_valid && (fwd_wait_data_mask != 8'h00);
@@ -283,12 +340,36 @@ module store_queue
         logic [7:0]              wait_wait_mask;
         logic [7:0]              wait_wait_addr_mask;
         logic [7:0]              wait_wait_data_mask;
+        logic                    wait_cross_block;
+        logic                    wait_req_cross_dword;
+        logic [3:0]              wait_req_size_bytes;
+        logic [63:0]             wait_req_last_addr;
 
         wait_req_age_now = rob_age_from_head(wait_req_rob_idx);
         wait_cover_mask  = '0;
         wait_wait_mask   = '0;
         wait_wait_addr_mask = '0;
         wait_wait_data_mask = '0;
+        wait_cross_block = 1'b0;
+        case (wait_req_size)
+            2'd0: begin
+                wait_req_size_bytes = 4'd1;
+                wait_req_cross_dword = 1'b0;
+            end
+            2'd1: begin
+                wait_req_size_bytes = 4'd2;
+                wait_req_cross_dword = (wait_req_addr[2:0] > 3'd6);
+            end
+            2'd2: begin
+                wait_req_size_bytes = 4'd4;
+                wait_req_cross_dword = (wait_req_addr[2:0] > 3'd4);
+            end
+            default: begin
+                wait_req_size_bytes = 4'd8;
+                wait_req_cross_dword = (wait_req_addr[2:0] != 3'd0);
+            end
+        endcase
+        wait_req_last_addr = wait_req_addr + {60'd0, wait_req_size_bytes} - 64'd1;
         wait_data        = '0;
 
         for (int step = 0; step < SQ_DEPTH; step++) begin
@@ -307,6 +388,10 @@ module store_queue
 	                logic [63:0]            scan_addr;
 	                logic [1:0]             scan_size;
 	                logic [63:0]            data_value;
+	                logic                   scan_cross_dword;
+                    logic [3:0]             scan_size_bytes;
+                    logic [63:0]            scan_last_addr;
+                    logic                   range_overlap;
 	                int                     idx_int;
 
                 idx_int = int'(tail_r) - step - 1;
@@ -332,6 +417,25 @@ module store_queue
 	                    2'd2:    scan_bmask = 8'h0F << scan_addr[2:0];
 	                    default: scan_bmask = 8'hFF;
 	                endcase
+	                case (scan_size)
+	                    2'd0: begin
+                            scan_size_bytes = 4'd1;
+                            scan_cross_dword = 1'b0;
+                        end
+	                    2'd1: begin
+                            scan_size_bytes = 4'd2;
+                            scan_cross_dword = (scan_addr[2:0] > 3'd6);
+                        end
+	                    2'd2: begin
+                            scan_size_bytes = 4'd4;
+                            scan_cross_dword = (scan_addr[2:0] > 3'd4);
+                        end
+	                    default: begin
+                            scan_size_bytes = 4'd8;
+                            scan_cross_dword = (scan_addr[2:0] != 3'd0);
+                        end
+	                endcase
+                    scan_last_addr = scan_addr + {60'd0, scan_size_bytes} - 64'd1;
 	
 	                store_age      = rob_age_from_head(queue[scan_idx].rob_idx);
 	                store_is_older = wait_req_valid &&
@@ -340,7 +444,14 @@ module store_queue
 	                addr_match     = store_is_older &&
 	                                 scan_addr_valid &&
 	                                 (scan_addr[63:3] == wait_req_addr[63:3]);
+                    range_overlap  = store_is_older &&
+                                     scan_addr_valid &&
+                                     (scan_addr <= wait_req_last_addr) &&
+                                     (wait_req_addr <= scan_last_addr);
 	                overlap_mask   = addr_match ? (scan_bmask & wait_req_bmask) : 8'h00;
+	                if (range_overlap &&
+	                    (scan_cross_dword || wait_req_cross_dword || !addr_match))
+	                    wait_cross_block = 1'b1;
 	                uncovered_mask = (store_is_older && !scan_addr_valid)
 	                               ? (wait_req_bmask & ~wait_cover_mask)
 	                               : (overlap_mask & ~wait_cover_mask);
@@ -369,8 +480,11 @@ module store_queue
             end
         end
 
-        wait_fwd_hit           = wait_req_valid && (wait_cover_mask == wait_req_bmask);
-        wait_partial           = wait_req_valid && (wait_cover_mask != 8'h00) && !wait_fwd_hit;
+        wait_fwd_hit           = wait_req_valid && !wait_cross_block &&
+                                 (wait_cover_mask == wait_req_bmask);
+        wait_partial           = wait_req_valid &&
+                                 (((wait_cover_mask != 8'h00) && !wait_fwd_hit) ||
+                                  wait_cross_block);
         wait_wait              = wait_req_valid && (wait_wait_mask != 8'h00);
         wait_wait_addr_unknown = wait_req_valid && (wait_wait_addr_mask != 8'h00);
         wait_wait_data_missing = wait_req_valid && (wait_wait_data_mask != 8'h00);

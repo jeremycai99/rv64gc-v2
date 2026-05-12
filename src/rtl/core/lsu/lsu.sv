@@ -101,6 +101,7 @@ module lsu
     input logic [1:0] dcache_load_resp_valid,
     input logic [63:0] dcache_load_resp_data [0:1],
     input logic [1:0] dcache_load_resp_hit,
+    input logic [1:0] dcache_load_miss_retry,
 
     // D-cache store port (from CSB)
     output logic dcache_store_req_valid,
@@ -129,6 +130,7 @@ module lsu
     input  logic        data_mmio_req_ready,
     input  logic        data_mmio_resp_valid,
     input  logic [63:0] data_mmio_resp_data,
+    output logic        fence_i_ready,
 
     // Flush
     input flush_t flush_in
@@ -195,7 +197,10 @@ module lsu
     // pc + imm.  Other fusions never produce loads.
     logic [63:0] load_eff_addr [0:1];
     logic [63:0] load_mem_addr [0:1];
+    logic [1:0]  load_addr_natural_misaligned;
     logic [1:0]  load_addr_misaligned;
+    logic [1:0]  load_cross_line;
+    logic [3:0]  load_size_bytes [0:1];
     logic [1:0]  load_addr_mmio;
 
     genvar li;
@@ -206,18 +211,40 @@ module lsu
                 (is_pc_rel_ld ? load_issue_data[li].pc : load_rs1[li])
                 + load_issue_data[li].imm;
 
-            // Misalignment check based on access size
+            // Natural alignment check based on access size.  Ordinary cached
+            // integer loads are allowed to complete through the cache line
+            // byte extraction path; AMOs still require natural alignment.
             logic [2:0] ld_off;
             assign ld_off = load_eff_addr[li][2:0];
 
             always_comb begin
+                load_size_bytes[li] = 4'd1;
                 case (load_issue_data[li].mem_size)
-                    MEM_HALF:  load_addr_misaligned[li] = ld_off[0];
-                    MEM_WORD:  load_addr_misaligned[li] = |ld_off[1:0];
-                    MEM_DWORD: load_addr_misaligned[li] = |ld_off[2:0];
-                    default:   load_addr_misaligned[li] = 1'b0;
+                    MEM_HALF: begin
+                        load_size_bytes[li] = 4'd2;
+                        load_addr_natural_misaligned[li] = ld_off[0];
+                    end
+                    MEM_WORD: begin
+                        load_size_bytes[li] = 4'd4;
+                        load_addr_natural_misaligned[li] = |ld_off[1:0];
+                    end
+                    MEM_DWORD: begin
+                        load_size_bytes[li] = 4'd8;
+                        load_addr_natural_misaligned[li] = |ld_off[2:0];
+                    end
+                    default: begin
+                        load_size_bytes[li] = 4'd1;
+                        load_addr_natural_misaligned[li] = 1'b0;
+                    end
                 endcase
+                load_cross_line[li] =
+                    ({1'b0, load_eff_addr[li][5:0]} +
+                     {3'b000, load_size_bytes[li]}) > 7'd64;
             end
+
+            assign load_addr_misaligned[li] =
+                load_addr_natural_misaligned[li] &&
+                load_issue_data[li].is_amo;
 
         end
     endgenerate
@@ -229,6 +256,7 @@ module lsu
     // because the store's base register comes from the auipc half.
     logic [63:0] sta_eff_addr;
     logic [63:0] sta_mem_addr;
+    logic        sta_addr_natural_misaligned;
     logic        sta_addr_misaligned;
     logic        sta_addr_mmio;
     logic [2:0]  sta_off;
@@ -240,12 +268,16 @@ module lsu
 
     always_comb begin
         case (sta_issue_data.mem_size)
-            MEM_HALF:  sta_addr_misaligned = sta_off[0];
-            MEM_WORD:  sta_addr_misaligned = |sta_off[1:0];
-            MEM_DWORD: sta_addr_misaligned = |sta_off[2:0];
-            default:   sta_addr_misaligned = 1'b0;
+            MEM_HALF:  sta_addr_natural_misaligned = sta_off[0];
+            MEM_WORD:  sta_addr_natural_misaligned = |sta_off[1:0];
+            MEM_DWORD: sta_addr_natural_misaligned = |sta_off[2:0];
+            default:   sta_addr_natural_misaligned = 1'b0;
         endcase
     end
+
+    // Store AMOs are issued through the load/AMO path.  Normal stores can be
+    // byte merged into the cache line at arbitrary byte offsets.
+    assign sta_addr_misaligned = 1'b0;
 
     // =========================================================================
     // DTLB lookup scaffold
@@ -475,10 +507,24 @@ module lsu
     logic [63:0] csb_enq_fwd_data;
     logic        csb_enq_fwd_hit_p1;
     logic [63:0] csb_enq_fwd_data_p1;
+    logic        csb_enq_fwd_partial;
+    logic        csb_enq_fwd_partial_p1;
     logic [7:0]  csb_enq_fwd_bmask;
     logic [7:0]  csb_enq_fwd_req1_bmask;
     logic [7:0]  csb_enq_fwd_overlap0;
     logic [7:0]  csb_enq_fwd_overlap1;
+    logic        csb_enq_cross_dword;
+    logic [3:0]  csb_enq_size_bytes;
+    logic [3:0]  p1_wait_req_size_bytes;
+    logic        p1_wait_req_cross_dword;
+    logic [63:0] csb_enq_last_addr;
+    logic [63:0] p1_wait_req_last_addr;
+    logic        csb_enq_fwd_same_dword0;
+    logic        csb_enq_fwd_same_dword1;
+    logic        csb_enq_fwd_range_overlap0;
+    logic        csb_enq_fwd_range_overlap1;
+    logic        csb_enq_fwd_cross_block0;
+    logic        csb_enq_fwd_cross_block1;
     logic        p1_any_fwd_hit;
     logic        p0_partial_fwd_wait;
     logic        p1_partial_fwd_wait;
@@ -504,9 +550,18 @@ module lsu
     logic [7:0]  sta_byte_mask_dyn;
     logic [7:0]  load0_byte_mask_dyn;
     logic [7:0]  load1_byte_mask_dyn;
+    logic        sta_cross_dword;
+    logic        load0_cross_dword;
+    logic        load1_cross_dword;
     logic [2:0]  sta_byte_off;
     logic [2:0]  load0_byte_off;
     logic [2:0]  load1_byte_off;
+    logic [3:0]  sta_size_bytes;
+    logic [3:0]  load0_size_bytes;
+    logic [3:0]  load1_size_bytes;
+    logic [63:0] sta_last_addr;
+    logic [63:0] load0_last_addr;
+    logic [63:0] load1_last_addr;
     logic [ROB_IDX_BITS:0] sta_issue_age;
     logic [ROB_IDX_BITS:0] load0_issue_age;
     logic [ROB_IDX_BITS:0] load1_issue_age;
@@ -539,6 +594,52 @@ module lsu
             MEM_DWORD: load1_byte_mask_dyn = 8'hFF;
             default:   load1_byte_mask_dyn = 8'h00;
         endcase
+        case (sta_issue_data.mem_size)
+            MEM_BYTE:  sta_size_bytes = 4'd1;
+            MEM_HALF:  sta_size_bytes = 4'd2;
+            MEM_WORD:  sta_size_bytes = 4'd4;
+            MEM_DWORD: sta_size_bytes = 4'd8;
+            default:   sta_size_bytes = 4'd1;
+        endcase
+        case (load_issue_data[0].mem_size)
+            MEM_BYTE:  load0_size_bytes = 4'd1;
+            MEM_HALF:  load0_size_bytes = 4'd2;
+            MEM_WORD:  load0_size_bytes = 4'd4;
+            MEM_DWORD: load0_size_bytes = 4'd8;
+            default:   load0_size_bytes = 4'd1;
+        endcase
+        case (load_issue_data[1].mem_size)
+            MEM_BYTE:  load1_size_bytes = 4'd1;
+            MEM_HALF:  load1_size_bytes = 4'd2;
+            MEM_WORD:  load1_size_bytes = 4'd4;
+            MEM_DWORD: load1_size_bytes = 4'd8;
+            default:   load1_size_bytes = 4'd1;
+        endcase
+    end
+
+    assign sta_last_addr   = sta_mem_addr + {60'd0, sta_size_bytes} - 64'd1;
+    assign load0_last_addr = load_mem_addr[0] + {60'd0, load0_size_bytes} - 64'd1;
+    assign load1_last_addr = load_mem_addr[1] + {60'd0, load1_size_bytes} - 64'd1;
+
+    always_comb begin
+        case (sta_issue_data.mem_size)
+            MEM_HALF:  sta_cross_dword = (sta_byte_off > 3'd6);
+            MEM_WORD:  sta_cross_dword = (sta_byte_off > 3'd4);
+            MEM_DWORD: sta_cross_dword = (sta_byte_off != 3'd0);
+            default:   sta_cross_dword = 1'b0;
+        endcase
+        case (load_issue_data[0].mem_size)
+            MEM_HALF:  load0_cross_dword = (load0_byte_off > 3'd6);
+            MEM_WORD:  load0_cross_dword = (load0_byte_off > 3'd4);
+            MEM_DWORD: load0_cross_dword = (load0_byte_off != 3'd0);
+            default:   load0_cross_dword = 1'b0;
+        endcase
+        case (load_issue_data[1].mem_size)
+            MEM_HALF:  load1_cross_dword = (load1_byte_off > 3'd6);
+            MEM_WORD:  load1_cross_dword = (load1_byte_off > 3'd4);
+            MEM_DWORD: load1_cross_dword = (load1_byte_off != 3'd0);
+            default:   load1_cross_dword = 1'b0;
+        endcase
     end
 
     function automatic logic [ROB_IDX_BITS:0] lsu_rob_age_from_head(
@@ -568,16 +669,28 @@ module lsu
     // when they belong to the same SQ entry.
     logic same_cycle_addr_match0;
     logic same_cycle_addr_match1;
+    logic same_cycle_range_overlap0;
+    logic same_cycle_range_overlap1;
     logic [7:0] same_cycle_overlap0;
     logic [7:0] same_cycle_overlap1;
-    // Gate on load_issue_valid to prevent stale load_eff_addr from
-    // oscillating through the same-cycle forwarding comparison.
+    // Suppression must be decided from the stable candidate signal.  Using
+    // load_issue_valid here feeds the issue suppress decision back into the
+    // issue queue select path and can form a zero-delay loop.  Actual
+    // forwarding still requires load_issue_valid in same_cycle_fwd_hit below.
     assign same_cycle_addr_match0 =
-        load_issue_valid[0] & sta_std_same_store &
+        load_issue_candidate_valid[0] & sta_issue_valid &
         (sta_mem_addr[63:3] == load_mem_addr[0][63:3]);
     assign same_cycle_addr_match1 =
         load_issue_candidate_valid[1] & sta_issue_valid &
         (sta_mem_addr[63:3] == load_mem_addr[1][63:3]);
+    assign same_cycle_range_overlap0 =
+        load_issue_candidate_valid[0] & sta_issue_valid &
+        (sta_mem_addr <= load0_last_addr) &
+        (load_mem_addr[0] <= sta_last_addr);
+    assign same_cycle_range_overlap1 =
+        load_issue_candidate_valid[1] & sta_issue_valid &
+        (sta_mem_addr <= load1_last_addr) &
+        (load_mem_addr[1] <= sta_last_addr);
     assign same_cycle_overlap0 = (sta_older_than_load0 && same_cycle_addr_match0)
                                ? (sta_byte_mask_dyn & load0_byte_mask_dyn)
                                : 8'h00;
@@ -587,23 +700,25 @@ module lsu
     assign same_cycle_fwd_hit = load_issue_valid[0] & ~load_addr_misaligned[0] &
                                 ~flush_in.valid &
                                 sta_older_than_load0 &
+                                sta_std_same_store &
                                 same_cycle_addr_match0 &
+                                !(sta_cross_dword || load0_cross_dword) &
                                 ((sta_byte_mask_dyn & load0_byte_mask_dyn)
                                  == load0_byte_mask_dyn);
     assign same_cycle_fwd_partial =
         load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid &
         sta_older_than_load0 &
-        same_cycle_addr_match0 &
-        (same_cycle_overlap0 != 8'h00) & ~same_cycle_fwd_hit;
+        same_cycle_range_overlap0 &
+        ~same_cycle_fwd_hit;
     assign same_cycle_sta_wait0 =
         load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid &
         sta_older_than_load0 &
-        (same_cycle_overlap0 != 8'h00) &
+        same_cycle_range_overlap0 &
         ~same_cycle_fwd_hit;
     assign same_cycle_sta_wait1 =
         load_issue_candidate_valid[1] & ~load_addr_misaligned[1] & ~flush_in.valid &
         sta_older_than_load1 &
-        (same_cycle_overlap1 != 8'h00);
+        same_cycle_range_overlap1;
 
     // Build same-cycle fwd data: for each byte position `b` in the memory
     // dword that is covered by the store, take the store's byte at position
@@ -867,7 +982,8 @@ module lsu
             load_eff_addr_r[0]    <= load_mem_addr[0];
             load_eff_addr_r[1]    <= p1_eff_addr;
             load_nocache_r[0]     <= load_issue_valid[0] &
-                                     (load_addr_misaligned[0] | load_addr_mmio[0] |
+                                     (load_cross_line[0] |
+                                      load_addr_misaligned[0] | load_addr_mmio[0] |
                                       load_issue_data[0].is_amo |
                                       p0_fwd_hit |
                                       p0_partial_fwd_wait | flush_in.valid);
@@ -967,8 +1083,30 @@ module lsu
     logic [63:0] csb_deq_addr;
     logic [63:0] csb_deq_data;
     logic [7:0]  csb_deq_byte_mask;
+    logic [1:0]  csb_deq_size;
     logic        csb_deq_ack;
     logic        csb_deq_mmio;
+    logic        csb_deq_cross_line;
+    logic [3:0]  csb_deq_size_bytes;
+    logic [3:0]  csb_split_first_bytes;
+    logic [3:0]  csb_split_second_bytes;
+    logic [7:0]  csb_split_first_mask;
+    logic [7:0]  csb_split_second_mask;
+    logic [63:0] csb_split_second_addr;
+    logic [63:0] csb_split_second_data;
+    logic        split_store_active_r;
+    logic [63:0] split_store_addr_r;
+    logic [63:0] split_store_data_r;
+    logic [7:0]  split_store_mask_r;
+    logic        split_store_start;
+    logic        split_store_req_valid;
+    logic [63:0] split_store_req_addr;
+    logic [63:0] split_store_req_data;
+    logic [7:0]  split_store_req_mask;
+    logic        split_store_first_ack;
+    logic        split_store_second_ack;
+    logic        csb_normal_store_req_valid;
+    logic        csb_store_ack;
 
     committed_store_buffer u_csb (
         .clk            (clk),
@@ -982,7 +1120,7 @@ module lsu
         .deq_addr       (csb_deq_addr),
         .deq_data       (csb_deq_data),
         .deq_byte_mask  (csb_deq_byte_mask),
-        .deq_size       (),
+        .deq_size       (csb_deq_size),
         .deq_ack        (csb_deq_ack),
         // Store-to-load forwarding
         .fwd_valid      (load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
@@ -1012,18 +1150,106 @@ module lsu
         ((csb_deq_addr >= UART_BASE) &&
          (csb_deq_addr < (UART_BASE + UART_SIZE)));
 
+    always_comb begin
+        case (csb_deq_size)
+            MEM_HALF:  csb_deq_size_bytes = 4'd2;
+            MEM_WORD:  csb_deq_size_bytes = 4'd4;
+            MEM_DWORD: csb_deq_size_bytes = 4'd8;
+            default:   csb_deq_size_bytes = 4'd1;
+        endcase
+        csb_deq_cross_line =
+            ({1'b0, csb_deq_addr[5:0]} + {3'b000, csb_deq_size_bytes}) >
+            7'd64;
+        csb_split_first_bytes =
+            csb_deq_cross_line
+                ? 4'(7'd64 - {1'b0, csb_deq_addr[5:0]})
+                : csb_deq_size_bytes;
+        csb_split_second_bytes = csb_deq_size_bytes - csb_split_first_bytes;
+        csb_split_first_mask   = 8'h00;
+        csb_split_second_mask  = 8'h00;
+        for (int b = 0; b < 8; b++) begin
+            if (b < int'(csb_split_first_bytes))
+                csb_split_first_mask[b] = 1'b1;
+            if (b < int'(csb_split_second_bytes))
+                csb_split_second_mask[b] = 1'b1;
+        end
+        csb_split_second_addr =
+            {csb_deq_addr[63:LINE_BITS] + 1'b1, {LINE_BITS{1'b0}}};
+        csb_split_second_data =
+            csb_deq_data >> ({3'b000, csb_split_first_bytes} * 4'd8);
+    end
+
+    assign split_store_start =
+        csb_deq_valid &&
+        !csb_deq_mmio &&
+        csb_deq_cross_line &&
+        !split_store_active_r;
+    assign split_store_req_valid = split_store_start || split_store_active_r;
+    assign split_store_req_addr  = split_store_active_r
+                                 ? split_store_addr_r
+                                 : csb_deq_addr;
+    assign split_store_req_data  = split_store_active_r
+                                 ? split_store_data_r
+                                 : csb_deq_data;
+    assign split_store_req_mask  = split_store_active_r
+                                 ? split_store_mask_r
+                                 : csb_split_first_mask;
+    assign split_store_first_ack =
+        split_store_start &&
+        !amo_store_valid_r &&
+        dcache_store_ack;
+    assign split_store_second_ack =
+        split_store_active_r &&
+        !amo_store_valid_r &&
+        dcache_store_ack;
+    assign csb_normal_store_req_valid =
+        csb_deq_valid &&
+        !csb_deq_mmio &&
+        !csb_deq_cross_line &&
+        !split_store_active_r;
+    assign csb_store_ack = (csb_deq_cross_line || split_store_active_r)
+                         ? split_store_second_ack
+                         : dcache_store_ack;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            split_store_active_r <= 1'b0;
+            split_store_addr_r   <= 64'd0;
+            split_store_data_r   <= 64'd0;
+            split_store_mask_r   <= 8'd0;
+        end else if (flush_in.valid) begin
+            split_store_active_r <= 1'b0;
+        end else begin
+            if (split_store_second_ack) begin
+                split_store_active_r <= 1'b0;
+            end else if (split_store_first_ack) begin
+                split_store_active_r <= 1'b1;
+                split_store_addr_r   <= csb_split_second_addr;
+                split_store_data_r   <= csb_split_second_data;
+                split_store_mask_r   <= csb_split_second_mask;
+            end
+        end
+    end
+
     assign dcache_store_req_valid     = amo_store_valid_r
                                       ? 1'b1
-                                      : (csb_deq_valid & ~csb_deq_mmio);
+                                      : (split_store_req_valid |
+                                         csb_normal_store_req_valid);
     assign dcache_store_req_addr      = amo_store_valid_r
                                       ? amo_addr_r
-                                      : csb_deq_addr;
+                                      : (split_store_req_valid
+                                         ? split_store_req_addr
+                                         : csb_deq_addr);
     assign dcache_store_req_data      = amo_store_valid_r
                                       ? amo_store_data_r
-                                      : csb_deq_data;
+                                      : (split_store_req_valid
+                                         ? split_store_req_data
+                                         : csb_deq_data);
     assign dcache_store_req_byte_mask = amo_store_valid_r
                                       ? amo_store_mask_r
-                                      : csb_deq_byte_mask;
+                                      : (split_store_req_valid
+                                         ? split_store_req_mask
+                                         : csb_deq_byte_mask);
 
     // =========================================================================
     // D-cache load request generation
@@ -1050,20 +1276,85 @@ module lsu
             MEM_DWORD: csb_enq_fwd_req1_bmask = 8'hFF;
             default:   csb_enq_fwd_req1_bmask = 8'h00;
         endcase
+        case (sq_drain_entry.size)
+            MEM_BYTE: begin
+                csb_enq_size_bytes = 4'd1;
+                csb_enq_cross_dword = 1'b0;
+            end
+            MEM_HALF: begin
+                csb_enq_size_bytes = 4'd2;
+                csb_enq_cross_dword = (sq_drain_entry.addr[2:0] > 3'd6);
+            end
+            MEM_WORD: begin
+                csb_enq_size_bytes = 4'd4;
+                csb_enq_cross_dword = (sq_drain_entry.addr[2:0] > 3'd4);
+            end
+            MEM_DWORD: begin
+                csb_enq_size_bytes = 4'd8;
+                csb_enq_cross_dword = (sq_drain_entry.addr[2:0] != 3'd0);
+            end
+            default: begin
+                csb_enq_size_bytes = 4'd1;
+                csb_enq_cross_dword = 1'b0;
+            end
+        endcase
+        case (p1_wait_req_size)
+            MEM_BYTE: begin
+                p1_wait_req_size_bytes = 4'd1;
+                p1_wait_req_cross_dword = 1'b0;
+            end
+            MEM_HALF: begin
+                p1_wait_req_size_bytes = 4'd2;
+                p1_wait_req_cross_dword = (p1_wait_req_addr[2:0] > 3'd6);
+            end
+            MEM_WORD: begin
+                p1_wait_req_size_bytes = 4'd4;
+                p1_wait_req_cross_dword = (p1_wait_req_addr[2:0] > 3'd4);
+            end
+            MEM_DWORD: begin
+                p1_wait_req_size_bytes = 4'd8;
+                p1_wait_req_cross_dword = (p1_wait_req_addr[2:0] != 3'd0);
+            end
+            default: begin
+                p1_wait_req_size_bytes = 4'd1;
+                p1_wait_req_cross_dword = 1'b0;
+            end
+        endcase
     end
 
+    assign csb_enq_last_addr =
+        sq_drain_entry.addr + {60'd0, csb_enq_size_bytes} - 64'd1;
+    assign p1_wait_req_last_addr =
+        p1_wait_req_addr + {60'd0, p1_wait_req_size_bytes} - 64'd1;
+    assign csb_enq_fwd_same_dword0 =
+        sq_drain_entry.addr[63:3] == load_mem_addr[0][63:3];
+    assign csb_enq_fwd_same_dword1 =
+        sq_drain_entry.addr[63:3] == p1_wait_req_addr[63:3];
+    assign csb_enq_fwd_range_overlap0 =
+        sq_drain_valid && sq_drain_ready &&
+        load_issue_candidate_valid[0] &&
+        !load_addr_misaligned[0] &&
+        !flush_in.valid &&
+        (sq_drain_entry.addr <= load0_last_addr) &&
+        (load_mem_addr[0] <= csb_enq_last_addr);
+    assign csb_enq_fwd_range_overlap1 =
+        sq_drain_valid && sq_drain_ready &&
+        p1_wait_req_valid &&
+        (sq_drain_entry.addr <= p1_wait_req_last_addr) &&
+        (p1_wait_req_addr <= csb_enq_last_addr);
+    assign csb_enq_fwd_cross_block0 =
+        csb_enq_fwd_range_overlap0 &&
+        (csb_enq_cross_dword || load0_cross_dword || !csb_enq_fwd_same_dword0);
+    assign csb_enq_fwd_cross_block1 =
+        csb_enq_fwd_range_overlap1 &&
+        (csb_enq_cross_dword || p1_wait_req_cross_dword || !csb_enq_fwd_same_dword1);
+
     assign csb_enq_fwd_overlap0 =
-        (sq_drain_valid && sq_drain_ready &&
-         load_issue_candidate_valid[0] &&
-         !load_addr_misaligned[0] &&
-         !flush_in.valid &&
-         (sq_drain_entry.addr[63:3] == load_mem_addr[0][63:3]))
+        (csb_enq_fwd_range_overlap0 && csb_enq_fwd_same_dword0)
             ? (csb_enq_fwd_bmask & load0_byte_mask_dyn)
             : 8'h00;
     assign csb_enq_fwd_overlap1 =
-        (sq_drain_valid && sq_drain_ready &&
-         p1_wait_req_valid &&
-         (sq_drain_entry.addr[63:3] == p1_wait_req_addr[63:3]))
+        (csb_enq_fwd_range_overlap1 && csb_enq_fwd_same_dword1)
             ? (csb_enq_fwd_bmask & csb_enq_fwd_req1_bmask)
             : 8'h00;
 
@@ -1071,10 +1362,22 @@ module lsu
         load_issue_candidate_valid[0] &&
         !load_addr_misaligned[0] &&
         !flush_in.valid &&
+        !csb_enq_fwd_cross_block0 &&
         (csb_enq_fwd_overlap0 == load0_byte_mask_dyn);
     assign csb_enq_fwd_hit_p1 =
         p1_wait_req_valid &&
+        !csb_enq_fwd_cross_block1 &&
         (csb_enq_fwd_overlap1 == csb_enq_fwd_req1_bmask);
+    assign csb_enq_fwd_partial =
+        load_issue_candidate_valid[0] &&
+        !load_addr_misaligned[0] &&
+        !flush_in.valid &&
+        (csb_enq_fwd_range_overlap0 || (csb_enq_fwd_overlap0 != 8'h00)) &&
+        !csb_enq_fwd_hit;
+    assign csb_enq_fwd_partial_p1 =
+        p1_wait_req_valid &&
+        (csb_enq_fwd_range_overlap1 || (csb_enq_fwd_overlap1 != 8'h00)) &&
+        !csb_enq_fwd_hit_p1;
 
     always_comb begin
         csb_enq_fwd_data    = '0;
@@ -1109,14 +1412,21 @@ module lsu
     assign p0_partial_fwd_wait =
         sq_fwd_partial |
         same_cycle_fwd_partial |
+        csb_enq_fwd_partial |
         csb_fwd_partial;
     assign p1_partial_fwd_wait =
         sq_fwd_partial_p1 |
+        csb_enq_fwd_partial_p1 |
         csb_fwd_partial_p1;
     assign p0_sq_order_wait_block =
         sq_fwd_wait_data_missing || sq_fwd_wait_addr_unknown;
     assign p1_sq_order_wait_block =
         sq_wait_p1_data_missing || sq_wait_p1_addr_unknown;
+    assign fence_i_ready =
+        !sq_drain_valid &&
+        !csb_deq_valid &&
+        !split_store_active_r &&
+        !data_mmio_req_valid;
 
     // -------------------------------------------------------------------------
     // Port-1 retry hold register for d-cache same-set conflicts.
@@ -1138,7 +1448,11 @@ module lsu
     logic            p1_retry_misalign_r;
     logic            p1_retry_load_nocache_r;
     logic            p1_retry_addr_mmio;
+    logic            p1_miss_retry_req;
     logic            p1_fwd_blocked;
+    logic            split_load_busy;
+    logic            split_load_start;
+    logic            split_load_wb_fire;
 `ifdef SIMULATION
     logic            sim_p1_fast_fwd_enable;
     initial begin
@@ -1183,6 +1497,7 @@ module lsu
         (load_issue_valid_r != 2'b00) |
         (load_issue_valid_rr != 2'b00) |
         p1_retry_valid_r |
+        p1_miss_retry_req |
         fwd_hold_valid_r |
         p1_fwd_hold_valid_r;
     assign amo_issue_fire =
@@ -1209,6 +1524,7 @@ module lsu
     assign load_issue_suppress[0] =
         load_issue_candidate_valid[0] &&
         (flush_in.valid ||
+         split_load_busy ||
          load0_tlb_miss ||
          load0_tlb_port_wait ||
          load0_tlb_fault ||
@@ -1435,11 +1751,14 @@ module lsu
     assign load_issue_suppress[1] =
         load_issue_candidate_valid[1] &&
         (flush_in.valid ||
+         split_load_busy ||
+         load_cross_line[1] ||
          load1_tlb_wait ||
          amo_busy ||
          load_issue_data[1].is_amo ||
          (load_issue_candidate_valid[0] && load_issue_data[0].is_amo) ||
          p1_retry_valid_r ||
+         p1_miss_retry_req ||
          (!load_addr_misaligned[1] && !p1_retry_valid_r &&
           (p1_sq_order_wait_block || p1_partial_fwd_wait || p1_fwd_blocked ||
            same_cycle_sta_wait1 || lq_p1_issue_block || mmio_load1_block)));
@@ -1510,13 +1829,21 @@ module lsu
                     (!p1_any_fwd_hit || !p1_fwd_hold_valid_r))
                     p1_retry_valid_r <= 1'b0;
             end
-            if (dcache_conflict && !p1_sq_order_wait_block &&
+            if (dcache_conflict && !p1_miss_retry_req &&
+                !p1_sq_order_wait_block &&
                 !p1_partial_fwd_wait && !p1_any_fwd_hit) begin
                 p1_retry_valid_r        <= 1'b1;
                 p1_retry_data_r         <= load_issue_data[1];
                 p1_retry_addr_r         <= load_eff_addr[1];
                 p1_retry_misalign_r     <= load_addr_misaligned[1];
                 p1_retry_load_nocache_r <= load_addr_misaligned[1] | flush_in.valid;
+            end
+            if (p1_miss_retry_req) begin
+                p1_retry_valid_r        <= 1'b1;
+                p1_retry_data_r         <= load_issue_data_r[1];
+                p1_retry_addr_r         <= load_eff_addr_r[1];
+                p1_retry_misalign_r     <= 1'b0;
+                p1_retry_load_nocache_r <= 1'b0;
             end
         end
     end
@@ -1690,19 +2017,175 @@ module lsu
     end
 
     assign csb_deq_ack = csb_deq_mmio ? mmio_store_resp_fire_r
-                         : (amo_store_valid_r ? 1'b0 : dcache_store_ack);
+                         : (amo_store_valid_r ? 1'b0 : csb_store_ack);
 
-    assign dcache_load_req_valid[0] = load_issue_valid[0]
-                                    & ~load_addr_misaligned[0]
-                                    & ~load_addr_mmio[0]
-                                    & ~p0_fwd_hit
-                                    & ~p0_partial_fwd_wait
-                                    & ~(load_issue_data[0].is_amo &&
-                                        (load_issue_data[0].amo_op == AMO_SC))
-                                    & ~flush_in.valid;
-    assign dcache_load_req_addr[0]  = load_mem_addr[0];
-    assign dcache_load_req_size[0]  = load_issue_data[0].mem_size;
-    assign dcache_load_req_is_unsigned[0] = load_issue_data[0].is_unsigned;
+    // =========================================================================
+    // Split-line load assist
+    // =========================================================================
+    // The D-cache can extract arbitrary bytes inside one 64-byte line, but a
+    // strict RV64GC compliance row also exercises accesses that straddle a
+    // line boundary.  Handle ordinary cached cross-line loads here by issuing
+    // two aligned dword reads through D-cache port 0 and merging the bytes.
+    typedef enum logic [2:0] {
+        SPLIT_LD_IDLE  = 3'd0,
+        SPLIT_LD_REQ0  = 3'd1,
+        SPLIT_LD_WAIT0 = 3'd2,
+        SPLIT_LD_REQ1  = 3'd3,
+        SPLIT_LD_WAIT1 = 3'd4,
+        SPLIT_LD_WB    = 3'd5
+    } split_load_state_e;
+
+    split_load_state_e split_load_state_r;
+    iq_entry_t         split_load_data_r;
+    logic [63:0]       split_load_addr_r;
+    logic [63:0]       split_load_wait_addr_r;
+    logic [63:0]       split_load_first_dword_r;
+    logic [63:0]       split_load_second_dword_r;
+    logic [63:0]       split_load_req_addr;
+    logic              split_load_req_valid;
+    logic              split_load_resp_valid;
+    logic [63:0]       split_load_resp_data;
+    logic [63:0]       split_load_fill_dword;
+    logic [63:0]       split_load_merged_raw;
+    logic [63:0]       split_load_result;
+    logic [3:0]        split_load_first_bytes;
+
+    assign split_load_busy = (split_load_state_r != SPLIT_LD_IDLE);
+    assign split_load_start =
+        load_issue_valid[0] &&
+        load_cross_line[0] &&
+        !load_addr_misaligned[0] &&
+        !load_addr_mmio[0] &&
+        !load_issue_data[0].is_amo &&
+        !p0_fwd_hit &&
+        !p0_partial_fwd_wait &&
+        !flush_in.valid;
+
+    always_comb begin
+        split_load_req_valid = 1'b0;
+        split_load_req_addr  = 64'd0;
+        if (split_load_state_r == SPLIT_LD_REQ0) begin
+            split_load_req_valid = 1'b1;
+            split_load_req_addr  = {split_load_addr_r[63:3], 3'b000};
+        end else if (split_load_state_r == SPLIT_LD_REQ1) begin
+            split_load_req_valid = 1'b1;
+            split_load_req_addr  =
+                {split_load_addr_r[63:LINE_BITS] + 1'b1, {LINE_BITS{1'b0}}};
+        end
+    end
+
+    always_comb begin
+        split_load_fill_dword =
+            dcache_fill_data[{split_load_wait_addr_r[5:3], 6'b000000} +: 64];
+        split_load_resp_valid = 1'b0;
+        split_load_resp_data  = 64'd0;
+        if (dcache_load_resp_valid[0]) begin
+            split_load_resp_valid = 1'b1;
+            split_load_resp_data  = dcache_load_resp_data[0];
+        end else if (dcache_fill_valid &&
+                     (dcache_fill_addr[63:LINE_BITS] ==
+                      split_load_wait_addr_r[63:LINE_BITS])) begin
+            split_load_resp_valid = 1'b1;
+            split_load_resp_data  = split_load_fill_dword;
+        end
+    end
+
+    always_comb begin
+        split_load_first_bytes =
+            4'(7'd64 - {1'b0, split_load_addr_r[5:0]});
+        split_load_merged_raw =
+            (split_load_first_dword_r >>
+             ({3'b000, split_load_addr_r[2:0]} * 4'd8)) |
+            (split_load_second_dword_r <<
+             ({3'b000, split_load_first_bytes} * 4'd8));
+        case (split_load_data_r.mem_size)
+            MEM_BYTE:  split_load_result = split_load_data_r.is_unsigned
+                        ? {56'b0, split_load_merged_raw[7:0]}
+                        : {{56{split_load_merged_raw[7]}}, split_load_merged_raw[7:0]};
+            MEM_HALF:  split_load_result = split_load_data_r.is_unsigned
+                        ? {48'b0, split_load_merged_raw[15:0]}
+                        : {{48{split_load_merged_raw[15]}}, split_load_merged_raw[15:0]};
+            MEM_WORD:  split_load_result = split_load_data_r.is_unsigned
+                        ? {32'b0, split_load_merged_raw[31:0]}
+                        : {{32{split_load_merged_raw[31]}}, split_load_merged_raw[31:0]};
+            default:   split_load_result = split_load_merged_raw;
+        endcase
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            split_load_state_r        <= SPLIT_LD_IDLE;
+            split_load_data_r         <= '0;
+            split_load_addr_r         <= 64'd0;
+            split_load_wait_addr_r    <= 64'd0;
+            split_load_first_dword_r  <= 64'd0;
+            split_load_second_dword_r <= 64'd0;
+        end else if (flush_in.valid) begin
+            split_load_state_r <= SPLIT_LD_IDLE;
+        end else begin
+            case (split_load_state_r)
+                SPLIT_LD_IDLE: begin
+                    if (split_load_start) begin
+                        split_load_state_r <= SPLIT_LD_REQ0;
+                        split_load_data_r  <= load_issue_data[0];
+                        split_load_addr_r  <= load_mem_addr[0];
+                    end
+                end
+
+                SPLIT_LD_REQ0: begin
+                    split_load_wait_addr_r <= split_load_req_addr;
+                    split_load_state_r     <= SPLIT_LD_WAIT0;
+                end
+
+                SPLIT_LD_WAIT0: begin
+                    if (split_load_resp_valid) begin
+                        split_load_first_dword_r <= split_load_resp_data;
+                        split_load_state_r       <= SPLIT_LD_REQ1;
+                    end
+                end
+
+                SPLIT_LD_REQ1: begin
+                    split_load_wait_addr_r <= split_load_req_addr;
+                    split_load_state_r     <= SPLIT_LD_WAIT1;
+                end
+
+                SPLIT_LD_WAIT1: begin
+                    if (split_load_resp_valid) begin
+                        split_load_second_dword_r <= split_load_resp_data;
+                        split_load_state_r        <= SPLIT_LD_WB;
+                    end
+                end
+
+                SPLIT_LD_WB: begin
+                    if (split_load_wb_fire)
+                        split_load_state_r <= SPLIT_LD_IDLE;
+                end
+
+                default: split_load_state_r <= SPLIT_LD_IDLE;
+            endcase
+        end
+    end
+
+    assign dcache_load_req_valid[0] = split_load_req_valid |
+                                      (load_issue_valid[0]
+                                       & ~load_addr_misaligned[0]
+                                       & ~load_cross_line[0]
+                                       & ~split_load_busy
+                                       & ~load_addr_mmio[0]
+                                       & ~p0_fwd_hit
+                                       & ~p0_partial_fwd_wait
+                                       & ~(load_issue_data[0].is_amo &&
+                                           (load_issue_data[0].amo_op == AMO_SC))
+                                       & ~flush_in.valid);
+    assign dcache_load_req_addr[0]  = split_load_req_valid
+                                    ? split_load_req_addr
+                                    : load_mem_addr[0];
+    assign dcache_load_req_size[0]  = split_load_req_valid
+                                    ? MEM_DWORD
+                                    : load_issue_data[0].mem_size;
+    assign dcache_load_req_is_unsigned[0] = split_load_req_valid
+                                          ? 1'b1
+                                          : load_issue_data[0].is_unsigned;
 
     assign dcache_load_req_valid[1] = p1_eff_valid
                                     & ~p1_eff_misalign
@@ -1715,6 +2198,7 @@ module lsu
     assign dcache_load_req_is_unsigned[1] = p1_eff_data.is_unsigned;
 
     assign spec_wakeup_valid[0] = dcache_load_req_valid[0] &
+                                  !split_load_req_valid &
                                   ~load_issue_data[0].is_amo;
     assign spec_wakeup_tag[0]   = load_issue_data[0].pdst;
     assign spec_wakeup_valid[1] = dcache_load_req_valid[1] &
@@ -2079,6 +2563,11 @@ module lsu
     logic p1_miss_fill_hit;
     logic [LINE_SIZE*8-1:0] p0_miss_fill_data;
     logic [LINE_SIZE*8-1:0] p1_miss_fill_data;
+    assign p1_miss_retry_req = !flush_in.valid
+                             & load_issue_valid_r[1]
+                             & ~load_nocache_r[1]
+                             & ~load_issue_data_r[1].is_amo
+                             & dcache_load_miss_retry[1];
     assign p0_miss_detect = !flush_in.valid
                           & load_issue_valid_r[0]
                           & ~load_nocache_r[0]
@@ -2088,7 +2577,8 @@ module lsu
                           & load_issue_valid_r[1]
                           & ~load_nocache_r[1]
                           & ~load_issue_data_r[1].is_amo
-                          & ~dcache_load_resp_valid[1];
+                          & ~dcache_load_resp_valid[1]
+                          & ~dcache_load_miss_retry[1];
 
     // D-cache can install a line before the two-cycle load-miss detection
     // stage sees that an older request missed.  Keep a tiny recent-fill
@@ -2592,6 +3082,13 @@ module lsu
     //
     // Note: only port 0 is wired to the LMB for now (single-port fill match).
     // =========================================================================
+    assign split_load_wb_fire =
+        (split_load_state_r == SPLIT_LD_WB) &&
+        !flush_in.valid &&
+        !amo_wb_valid_r &&
+        !p0_dcache_hit_valid &&
+        !fwd_hold_valid_r;
+
     always_comb begin
         // Default LQ index selector (drives lq_result_idx_sel)
         lq_result_idx_sel = '0;
@@ -2635,6 +3132,15 @@ module lsu
             load_wb_has_exception[0] = fwd_hold_is_exc_r;
             load_wb_exc_code[0]      = fwd_hold_is_exc_r ? 4'd4 : 4'd0;
             lq_result_idx_sel        = fwd_hold_lq_idx_r;
+        end else if (split_load_wb_fire) begin
+            load_wb_valid[0]         = 1'b1;
+            load_wb_rob_idx[0]       = split_load_data_r.rob_idx;
+            load_wb_pdst[0]          = split_load_data_r.pdst;
+            load_wb_data[0]          = split_load_result;
+            load_wb_mem_size[0]      = split_load_data_r.mem_size;
+            load_wb_has_exception[0] = 1'b0;
+            load_wb_exc_code[0]      = '0;
+            lq_result_idx_sel        = split_load_data_r.lq_idx;
         end else if (lmb_wb_port_free && lmb_any_match) begin
             // Late miss response from LMB (fill arrived).
             load_wb_valid[0]         = 1'b1;

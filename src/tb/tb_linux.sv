@@ -79,8 +79,6 @@ module tb_linux;
         .seip                        (seip),
         .time_val                    (time_val),
         .backend_admission_throttle_enable(1'b0),
-        .iq_ready_enq_bypass_enable  (1'b0),
-        .iq_ready_enq_bypass_alu_only(1'b0),
         .perf_mcycle                 (perf_mcycle),
         .perf_minstret               (perf_minstret)
     );
