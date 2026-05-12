@@ -72,6 +72,16 @@
       "notes": "Uses MPRV to verify Sv48 DTLB translation through positive 1 GiB and 2 MiB superpage leaf mappings."
     },
     {
+      "name": "vm_superpage_fault_sv48_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/vm_superpage_fault_sv48_smoke.hex",
+      "max_cycles": 300000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Uses MPRV to verify Sv48 PTW rejects misaligned 1 GiB and 2 MiB superpage leaf PPNs with load page faults."
+    },
+    {
       "name": "vm_canonical_sv48_smoke",
       "kind": "generic",
       "hex": "tests/hex/vm_canonical_sv48_smoke.hex",

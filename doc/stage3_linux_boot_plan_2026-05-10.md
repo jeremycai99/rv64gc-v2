@@ -831,16 +831,20 @@ Execution status:
   coverage slice, so the DS/CM RTL guard was not rerun.
 - Directed Sv48 superpage and canonical-address proof added:
   `tests/asm/vm_superpage_sv48_smoke.S` verifies positive DTLB translation
-  through 1 GiB and 2 MiB Sv48 leaf mappings. `tests/asm/vm_canonical_sv48_smoke.S`
-  verifies noncanonical data and instruction virtual addresses raise load and
-  instruction page faults with `mtval` equal to the rejected VA.
+  through 1 GiB and 2 MiB Sv48 leaf mappings.
+  `tests/asm/vm_superpage_fault_sv48_smoke.S` verifies the PTW rejects
+  misaligned 1 GiB and 2 MiB leaf PPNs before DTLB fill.
+  `tests/asm/vm_canonical_sv48_smoke.S` verifies noncanonical data and
+  instruction virtual addresses raise load and instruction page faults with
+  `mtval` equal to the rejected VA.
 - Validation for the expanded VM smoke:
-  `benchmark_results/stage3_vm_smoke_20260512_superpage_canonical_clean` passed
+  `benchmark_results/stage3_vm_smoke_20260512_sv48_mmu_full_clean` passed
   `vm_data_sv48_smoke`, `vm_ifetch_sv48_smoke`,
   `vm_ifetch_fault_sv48_smoke`, `vm_store_fault_sv48_smoke`,
   `vm_ad_update_sv48_smoke`, `vm_perm_sv48_smoke`,
-  `vm_superpage_sv48_smoke`, and `vm_canonical_sv48_smoke`. This is a
-  test-only coverage slice, so the DS/CM RTL guard was not rerun.
+  `vm_superpage_sv48_smoke`, `vm_superpage_fault_sv48_smoke`, and
+  `vm_canonical_sv48_smoke`. This is a test-only coverage slice, so the DS/CM
+  RTL guard was not rerun.
 
 ### L3: Linux Early Boot
 
@@ -983,8 +987,9 @@ harness policy:
   faults and instruction page faults are now precise through the ROB/CSR trap
   path and are covered by directed Sv48 smokes. Hardware-managed PTE A/D memory
   writeback, SUM/MXR/U data permission behavior, DTLB superpage translation,
-  and Sv48 canonical-address faulting are now covered by directed Sv48 smokes.
-  Broader privileged/MMU directed tests remain open.
+  superpage-alignment faults, and Sv48 canonical-address faulting are now
+  covered by directed Sv48 smokes. Broader privileged/MMU directed tests remain
+  open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
