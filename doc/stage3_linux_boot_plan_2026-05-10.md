@@ -3,10 +3,12 @@
 Date: May 10, 2026
 
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
-phase. L0 platform smoke, L1 OpenSBI platform-probe, and directed Sv48
-MMU/PTW/TLB milestones are now working through the ASIC-style core boundary.
-The first trimmed Linux image boot reaches the OpenSBI S-mode handoff and is
-blocked before Linux early console by an early `setup_vm` load-queue stall.
+phase, but Linux kernel debug is now parked behind a higher-priority RV64GC
+instruction compliance gate. L0 platform smoke, L1 OpenSBI platform-probe, and
+directed Sv48 MMU/PTW/TLB milestones are working through the ASIC-style core
+boundary. The first trimmed Linux image boot reaches the OpenSBI S-mode handoff
+and exposes an early `setup_vm` load-queue stall, but that stall must not drive
+the next RTL work until full RV64GC compliance is proven.
 
 ## Goal
 
@@ -37,6 +39,72 @@ platform simulation stack:
 - Every RTL modification made for Stage 3 must preserve the committed
   Dhrystone and CoreMark performance baseline. Linux boot progress is not a
   substitute for this regression gate.
+
+## Highest Priority: RV64GC Instruction Compliance Gate
+
+Linux boot is no longer the next debug target. Before resuming kernel bring-up,
+rv64gc-v2 must pass a full RV64GC instruction compliance gate. The current
+custom ISA smokes and directed VM smokes are valuable, but they are not enough
+evidence for Linux-scale execution.
+
+Rationale:
+
+- Linux setup and early boot exercise broad integer, multiply/divide, atomic,
+  compressed, floating-point, CSR, fence, trap, and memory-ordering behavior.
+- A kernel stall can be a pipeline bug, an MMU bug, or a basic ISA semantic
+  bug. Without full instruction compliance, Linux traces are too ambiguous.
+- The F/D integration and `misa` advertising make the core claim RV64GC. That
+  claim must be backed by standard test evidence before using Linux as the
+  primary correctness workload.
+
+Required scope before continuing Linux kernel debug:
+
+- RV64I base integer tests: `rv64ui`.
+- RV64M multiply/divide tests: `rv64um`.
+- RV64A atomic tests: `rv64ua`.
+- RV64C compressed tests: `rv64uc`.
+- RV64F single-precision floating-point tests: `rv64uf`.
+- RV64D double-precision floating-point tests: `rv64ud`.
+- `Zicsr` and `Zifencei` coverage.
+- Directed privilege, trap, interrupt, and Sv48/Sv39 MMU smokes remain
+  required, but they are additional Linux readiness checks rather than a
+  substitute for RV64GC instruction compliance.
+
+Compliance infrastructure direction:
+
+1. Reuse the v1 `riscv-tests` infrastructure as a methodology reference, or
+   import a standard `riscv-tests` or `riscv-arch-test` flow into v2.
+2. Add a v2 compliance manifest and runner that builds or consumes ELF/hex
+   images and reports per-test `PASS`, `FAIL`, or `TIMEOUT`.
+3. Support the standard compliance-suite `tohost/fromhost` convention only in
+   the simulation platform, testbench, or runner. Do not add a `tohost` port or
+   compliance-specific endpoint logic to synthesizable core RTL.
+4. Keep optional non-GC extensions such as Zba, Zbb, Zbs, and Zicond in a
+   separate optional-extension row. They must not be counted as RV64GC
+   compliance evidence.
+5. If an RTL fix is required, rerun the failing compliance subset first, then
+   rerun the Stage 3 DS/CM hard gate before committing the RTL change.
+
+Compliance acceptance:
+
+- All required RV64GC rows pass on a rebuilt DSim or XSim image from the
+  current working tree.
+- No hidden allowlist is permitted for required RV64GC failures. Any waiver
+  must be explicit, documented, and limited to unsupported optional extensions.
+- The existing Stage 3 DS/CM hard gate passes after every RTL change made to
+  fix compliance.
+- Only after this gate passes should Stage 3 resume the Linux `setup_vm`
+  load-queue stall investigation.
+
+Current compliance status:
+
+- v2 has custom bare-metal ISA smoke rows for a small integer and optional
+  bitmanip subset, plus one FP smoke. That is not full RV64GC compliance.
+- v2 has directed Sv48 MMU, permission, A/D, fault, and canonical-address
+  smokes. These prove important privileged-memory contracts but do not replace
+  instruction compliance.
+- The Linux `setup_vm` trace and UART logs are preserved as evidence, but Linux
+  kernel debug is parked until this compliance gate is complete.
 
 ## Hard RTL Modification Gate
 
@@ -245,7 +313,7 @@ Implemented methodology adjustment for v2:
 | Core boundary | `rv64gc_core_top.sv` exposes memory request/response, interrupt inputs, and `time_val`; no fixed `tohost` port | Good ASIC-style boundary to preserve |
 | Reset | frontend reset vector is `0x80000000` | Compatible with OpenSBI `FW_TEXT_START=0x80000000` |
 | Privilege CSRs | `csr_file.sv` has M/S privilege state, delegation CSRs, `satp`, traps, `mret`, `sret`, interrupt inputs, `SUM`, `MXR`, and `MPRV` state | Basic OpenSBI trap and handoff validation now passes; Sv48 permission behavior is now covered by directed VM smoke rows |
-| RV64GC ISA | Integer, atomics, compressed, and now F/D floating point are integrated in the core RTL and advertised through `misa` | Keep FP support in the ASIC-style core datapath; do not emulate FP in the testbench |
+| RV64GC ISA | Integer, atomics, compressed, and now F/D floating point are integrated in the core RTL and advertised through `misa`, but full RV64GC instruction compliance is not yet proven | Highest priority is now a full RV64GC compliance gate before more Linux kernel debug; keep FP support in the ASIC-style core datapath and do not emulate FP in the testbench |
 | MMU | `src/rtl/core/mmu/` now contains Sv39/Sv48 ITLB, DTLB, and shared PTW blocks; instruction and data translation are wired through `rv64gc_core_top.sv` | Directed Sv48 data, instruction, fault, A/D, permission, superpage, and canonical-address smokes pass; remaining MMU work is broader coverage and Linux-scale integration |
 | Platform devices | L0 `tb_linux` now has an uncached MMIO path, polling UART, and CLINT timer/software interrupt block; PLIC is only a reserved zero-response range | OpenSBI platform probing now passes; first Linux image boot reaches S-mode handoff and early `setup_vm` before blocking on a load-queue stall |
 | Simulation memory | `sim_memory.sv` defaults to 2 MB for benchmark sims and is parameterized; `tb_linux.sv` raises the Linux platform instance to 64 MB | Enough for the trimmed OpenSBI plus Linux `fw_payload` image, initramfs, and DTB at `0x82000000`; benchmark harness memory sizing is unchanged |
@@ -518,10 +586,12 @@ python3 tools/run_linux_boot.py --run --build-mode linux \
   `last_pc=0x8080563c`, `last_commit_cycle=1617832`, `rename_stall=1`, and
   `lq_full=1`. Symbolizing `0x8080563c` against the Linux image at payload base
   `0x80200000` maps to `setup_vm`, at a relocation-table load sequence.
-- Immediate debug target: root-cause the early `setup_vm` load-queue stall.
-  The next run should add a focused trace for the head load at
-  `0x8080563c/0x8080563e/0x80805642`, including virtual address, DTLB/PTW
-  state, LQ allocation/free state, and the data-cache miss/response path.
+- Parked Linux debug target after compliance: root-cause the early `setup_vm`
+  load-queue stall. The next Linux-specific run should add a focused trace for
+  the head load at `0x8080563c/0x8080563e/0x80805642`, including virtual
+  address, DTLB/PTW state, LQ allocation/free state, and the data-cache
+  miss/response path. This is not the next RTL priority until full RV64GC
+  instruction compliance passes.
 - DS/CM guard for the Linux image-memory slice passed:
   `benchmark_results/stage3_rtl_guard_stage3_l9_linux_image_boot_trimmed_20260512`.
 
@@ -982,8 +1052,15 @@ Pass criteria:
    `linux_boot_results/stage3_opensbi_platform_dsim_pass_20260511`.
 5. Implement Sv48 MMU/PTW/TLB and privileged regression tests, keeping Sv39 as
    a fallback mode.
-6. Boot minimal Linux to early console.
-7. Boot to initramfs `BOOT OK`.
+6. Build and pass the full RV64GC instruction compliance gate:
+   - standard `rv64ui`, `rv64um`, `rv64ua`, `rv64uc`, `rv64uf`, `rv64ud`,
+     `Zicsr`, and `Zifencei` coverage,
+   - endpoint handling kept in the simulation platform or runner only,
+   - impacted compliance subset plus DS/CM hard gate after any RTL fix.
+7. Resume Linux-specific debug, starting with the parked `setup_vm` load-queue
+   stall only after the compliance gate passes.
+8. Boot minimal Linux to early console.
+9. Boot to initramfs `BOOT OK`.
 
 Current Stage 3 scaffold commands:
 
@@ -999,6 +1076,18 @@ python3 tools/run_linux_boot.py --build --build-mode linux
 python3 tools/run_linux_boot.py --run --build-mode linux \
   --target-milestone linux_early_console --max-cycles 6000000
 ```
+
+The Linux commands above are parked for RTL-debug priority until the compliance
+gate passes. The next implementation slice should add a command shape like:
+
+```bash
+python3 tools/run_rv64gc_compliance.py --build --suite riscv-tests --runner dsim
+python3 tools/run_rv64gc_compliance.py --run --isa rv64gc --runner dsim
+```
+
+Use `--runner xsim-sh` or an equivalent XSim path when DSim is blocked. The
+runner must archive per-test logs, the ELF/hex provenance, and a summary table
+with pass, fail, timeout, and first failing PC or trap when available.
 
 The Linux runner can now run the M-mode UART smoke and has a dedicated OpenSBI
 banner mode. It records reached milestones and the last reached milestone in
@@ -1028,22 +1117,22 @@ handoff. Full Linux remains blocked before early console by the early
 | CLINT or ACLINT? | CLINT is acceptable for first boot because v1 already used it; ACLINT can replace it later if we want newer platform naming. |
 | ELF loader or hex only? | Add ELF/binary loading in the runner or memory model. Keep byte-hex compatibility for existing tests. |
 | How to stop the sim? | UART milestone or syscon poweroff. Never a core `tohost` port. |
-| What is the first success milestone? | OpenSBI platform probe is achieved; next Linux success is early console, then initramfs `BOOT OK`. |
+| What is the first success milestone? | OpenSBI platform probe is achieved. Next Stage 3 success is full RV64GC instruction compliance; next Linux success after that is early console, then initramfs `BOOT OK`. |
 
 ## Current Verdict
 
-Stage 3 remains feasible, but not by just running v1's image on v2. The first
-platform blockers are resolved: v2 can execute an M-mode UART smoke and reach
-the OpenSBI platform-probe milestone through device-visible UART and CLINT
-paths while preserving the DS/CM performance gate. The remaining blockers are
-larger platform completeness and privileged-memory support, not benchmark
-harness policy:
+Stage 3 remains feasible, but the priority is recalibrated. The first platform
+blockers are resolved: v2 can execute an M-mode UART smoke and reach the
+OpenSBI platform-probe milestone through device-visible UART and CLINT paths
+while preserving the DS/CM performance gate. However, the next signoff blocker
+is full RV64GC instruction compliance, not the current Linux `setup_vm` trace:
 
 - v2 has the right clean core boundary for ASIC-style Linux bring-up.
 - v2 now has an L0 UART/CLINT platform path for early M-mode smoke and L1
   OpenSBI platform probing.
 - v2 now has real RV64GC F/D execution in core RTL, with DSim FP smoke passing
-  and DS/CM performance preserved.
+  and DS/CM performance preserved, but full standard RV64GC instruction
+  compliance has not yet been run or passed.
 - v2 now has the Sv48 MMU/PTW/TLB scaffold, L2 PTW source port, data-side
   PTW and DTLB fault sidebands, LSU PA mux setup, data-side VM activation
   wired into the LSU, a commit-time VM serialization redirect for relevant CSR
@@ -1057,13 +1146,15 @@ harness policy:
   covered by directed Sv48 smokes. Broader privileged/MMU directed tests remain
   open.
 - v2 now has a first 64 MB trimmed Linux image path and can execute OpenSBI
-  through S-mode payload handoff from that image.
+  through S-mode payload handoff from that image, but Linux kernel debug is
+  parked until the instruction compliance gate passes.
 - v2 does not yet have Linux early console, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 implementation should debug the early Linux `setup_vm`
+The next Stage 3 implementation should build and run the full RV64GC
+compliance gate. After that passes, resume the early Linux `setup_vm`
 load-queue stall before broadening platform devices. Sv39 should stay as a
 directed-test subset, but the primary Linux path is four-level Sv48 because
 that matches the intended Linux signoff configuration.
