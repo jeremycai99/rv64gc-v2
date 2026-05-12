@@ -339,7 +339,7 @@ Validation for this slice:
   slice:
   `benchmark_results/stage3_rtl_guard_rv64gc_fpu_guard_icfill_accept_20260510`.
 
-| Row | Timed cycles | Limit | Metric |
+| Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
 | Dhrystone 100 | `18,155` | `18,161` | `3.134960 DMIPS/MHz` |
 | Dhrystone 300 | `53,440` | `53,469` | `3.195090 DMIPS/MHz` |
@@ -369,7 +369,7 @@ Current v1-methodology runner slice:
 - The Stage 3 DS/CM hard guard still passes:
   `benchmark_results/stage3_rtl_guard_stage3_linux_runner_status_20260510`.
 
-| Row | Timed cycles | Limit | Metric |
+| Row | Timed cycles | Diagnostic cycle reference | Metric |
 |---|---:|---:|---:|
 | Dhrystone 100 | `18,155` | `18,161` | `3.134960 DMIPS/MHz` |
 | Dhrystone 300 | `53,440` | `53,469` | `3.195090 DMIPS/MHz` |
