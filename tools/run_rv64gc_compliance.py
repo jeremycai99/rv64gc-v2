@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 from collections import defaultdict
@@ -189,29 +188,38 @@ def build_riscv_tests(
     elf_dir.mkdir(parents=True, exist_ok=True)
     hex_dir.mkdir(parents=True, exist_ok=True)
 
-    targets = [str(test["target"]) for test in tests]
-    must_run(
-        [
-            "make",
-            "-C",
-            str(isa_dir),
-            "XLEN=64",
-            f"RISCV_PREFIX={prefix}",
-            *targets,
-        ]
-    )
+    env_p = isa_dir.parent / "env" / "p"
+    macros = isa_dir / "macros" / "scalar"
+    link_ld = env_p / "link.ld"
+    for required in (env_p / "riscv_test.h", macros / "test_macros.h", link_ld):
+        if not required.exists():
+            raise FileNotFoundError(f"missing riscv-tests build input: {required}")
 
     manifest_entries = []
     for test in tests:
         target = test["target"]
-        source_elf = isa_dir / target
-        if not source_elf.exists():
-            raise FileNotFoundError(f"make did not produce {source_elf}")
-
         local_elf = elf_dir / f"{target}.elf"
         local_hex = hex_dir / f"{target}.hex"
         if force or not local_elf.exists():
-            shutil.copy2(source_elf, local_elf)
+            must_run(
+                [
+                    f"{prefix}gcc",
+                    "-march=rv64g",
+                    "-mabi=lp64d",
+                    "-static",
+                    "-mcmodel=medany",
+                    "-fvisibility=hidden",
+                    "-nostdlib",
+                    "-nostartfiles",
+                    f"-I{env_p}",
+                    f"-I{macros}",
+                    "-T",
+                    str(link_ld),
+                    str(test["source"]),
+                    "-o",
+                    str(local_elf),
+                ]
+            )
         if force or not local_hex.exists():
             must_run(
                 [
