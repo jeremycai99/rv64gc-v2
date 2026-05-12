@@ -50,6 +50,16 @@
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "notes": "Verifies hardware-managed Sv48 PTE A update before TLB fill and D update on a later translated store hit."
+    },
+    {
+      "name": "vm_perm_sv48_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/vm_perm_sv48_smoke.hex",
+      "max_cycles": 300000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Uses MPRV to verify Sv48 DTLB SUM, MXR, and U/S data permission behavior."
     }
   ]
 }

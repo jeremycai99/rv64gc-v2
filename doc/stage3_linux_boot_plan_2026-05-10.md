@@ -243,9 +243,9 @@ Implemented methodology adjustment for v2:
 |---|---|---|
 | Core boundary | `rv64gc_core_top.sv` exposes memory request/response, interrupt inputs, and `time_val`; no fixed `tohost` port | Good ASIC-style boundary to preserve |
 | Reset | frontend reset vector is `0x80000000` | Compatible with OpenSBI `FW_TEXT_START=0x80000000` |
-| Privilege CSRs | `csr_file.sv` has M/S privilege state, delegation CSRs, `satp`, traps, `mret`, `sret`, interrupt inputs | Basic OpenSBI trap and handoff validation now passes; Sv48 and Linux exception behavior still need directed validation |
+| Privilege CSRs | `csr_file.sv` has M/S privilege state, delegation CSRs, `satp`, traps, `mret`, `sret`, interrupt inputs, `SUM`, `MXR`, and `MPRV` state | Basic OpenSBI trap and handoff validation now passes; Sv48 permission behavior is now covered by directed VM smoke rows |
 | RV64GC ISA | Integer, atomics, compressed, and now F/D floating point are integrated in the core RTL and advertised through `misa` | Keep FP support in the ASIC-style core datapath; do not emulate FP in the testbench |
-| MMU | `src/rtl/core/mmu/` is empty; caches use physical addresses | Linux cannot boot until instruction/data translation and page faults are implemented |
+| MMU | `src/rtl/core/mmu/` now contains Sv39/Sv48 ITLB, DTLB, and shared PTW blocks; instruction and data translation are wired through `rv64gc_core_top.sv` | Directed Sv48 data, instruction, fault, A/D, and permission smokes pass; remaining MMU work is broader coverage and Linux-scale integration |
 | Platform devices | L0 `tb_linux` now has an uncached MMIO path, polling UART, and CLINT timer/software interrupt block; PLIC is only a reserved zero-response range | OpenSBI platform probing now passes; Linux needs larger memory and real external interrupt behavior before enabling more devices |
 | Simulation memory | `sim_memory.sv` is a 2 MB byte-addressed RAM loaded by `$readmemh` | Linux needs much larger DRAM and an image loader that can handle OpenSBI plus kernel payload |
 | Interrupt hookup | `tb_linux.sv` connects CLINT `mtime`, `mtip`, and `msip`; the existing benchmark `tb_top.sv` still ties interrupts low | OpenSBI reaches platform probing with the CLINT path present; Linux timer and external interrupt validation remain ahead |
@@ -807,6 +807,29 @@ Execution status:
 | CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
 | CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
 
+- v1 MMU reference audit completed for this slice:
+  `rv64gc-v1/src/rtl/core/mmu/{itlb,dtlb,ptw}.sv` and `rv64gc-v1/handoff.md`
+  identify three Linux-facing MMU contracts that must not be skipped:
+  SUM/MXR/U permission checks, filtered `SFENCE.VMA` invalidation, and
+  hardware-managed PTE A/D writeback. v2 now has A/D memory writeback and
+  matches the v1-style DTLB permission checks for SUM, MXR, and U/S data
+  access. Filtered `SFENCE.VMA` remains a future refinement; the current v2
+  integration still performs full TLB invalidation on `sfence.vma` and `satp`
+  commit, which is functionally conservative for single-hart bring-up.
+- Directed Sv48 permission proof added:
+  `tests/asm/vm_perm_sv48_smoke.S` extends the Stage 3 VM smoke manifest. It
+  uses M-mode fetch plus `MPRV` to force S-effective and U-effective data
+  translation. The test verifies that S-mode access to a U page faults when
+  `SUM=0`, load from an execute-only page faults when `MXR=0`, U-effective load
+  from a supervisor page faults, and the matching `SUM=1`, `MXR=1`, and U-page
+  success cases all return the expected data.
+- Validation for the permission smoke:
+  `benchmark_results/stage3_vm_smoke_20260512_perm_full` passed
+  `vm_data_sv48_smoke`, `vm_ifetch_sv48_smoke`,
+  `vm_ifetch_fault_sv48_smoke`, `vm_store_fault_sv48_smoke`,
+  `vm_ad_update_sv48_smoke`, and `vm_perm_sv48_smoke`. This is a test-only
+  coverage slice, so the DS/CM RTL guard was not rerun.
+
 ### L3: Linux Early Boot
 
 Goal: enter Linux and reach early console output.
@@ -947,8 +970,8 @@ harness policy:
   translation with a passing S-mode Sv48 ifetch smoke. Data-side store page
   faults and instruction page faults are now precise through the ROB/CSR trap
   path and are covered by directed Sv48 smokes. Hardware-managed PTE A/D memory
-  writeback is now covered by a directed Sv48 smoke. Broader privileged/MMU
-  directed tests remain open.
+  writeback plus SUM/MXR/U data permission behavior are now covered by directed
+  Sv48 smokes. Broader privileged/MMU directed tests remain open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
