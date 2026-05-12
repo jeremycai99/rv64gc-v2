@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = REPO_ROOT / "tests" / "benchmarks" / "stage1_signoff.json"
 DHRYSTONE_VAX_DHRYSTONES_PER_SEC = 1757.0
 DEFAULT_MAX_REGRESSION_PCT = 0.01
+DEFAULT_SIM_MAX_CYCLES = 10_000_000
 
 BENCHES = [
     "dhrystone_100_checkedin",
@@ -237,6 +238,15 @@ def main(argv: list[str] | None = None) -> int:
             "Default: 0.01."
         ),
     )
+    parser.add_argument(
+        "--sim-max-cycles",
+        type=int,
+        default=DEFAULT_SIM_MAX_CYCLES,
+        help=(
+            "Generous simulator timeout for guard rows. This is a liveness "
+            "limit, not a performance pass/fail threshold. Default: 10000000."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.run_dir is None:
@@ -269,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
         "default_rtl",
         "--run-dir",
         str(run_dir),
+        "--max-cycles",
+        str(args.sim_max_cycles),
     ]
     for bench in BENCHES:
         bench_cmd.extend(["--bench", bench])

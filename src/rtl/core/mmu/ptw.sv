@@ -1,6 +1,6 @@
 /* file: ptw.sv
  Description: Shared Sv39 and Sv48 page table walker for ITLB and DTLB misses.
- Performs hardware-managed A/D fill tagging for TLB entries.
+ Performs hardware-managed A/D memory writeback before TLB fills.
  Author: Jeremy Cai
  Date: May 11, 2026
  Version: 1.0
@@ -39,6 +39,11 @@ module ptw
     output logic [ROB_IDX_BITS-1:0] fault_rob_idx_o,
     output logic [63:0]             fault_va_o,
 
+    output logic                    dirty_wb_ready_o,
+    input  logic                    dirty_wb_valid_i,
+    input  logic [63:0]             dirty_wb_pte_pa_i,
+    input  logic [63:0]             dirty_wb_pte_value_i,
+
     output logic                    l2_req_valid_o,
     output logic [63:0]             l2_req_addr_o,
     input  logic                    l2_req_ready_i,
@@ -47,16 +52,22 @@ module ptw
     input  logic [63:0]             l2_resp_addr_i,
     input  logic [511:0]            l2_resp_data_i,
 
+    output logic                    dcache_store_valid_o,
+    output logic [63:0]             dcache_store_addr_o,
+    output logic [63:0]             dcache_store_data_o,
+    input  logic                    dcache_store_ack_i,
+
     input  logic                    flush_i,
     input  logic                    translation_flush_i
 );
 
     typedef enum logic [2:0] {
-        S_IDLE  = 3'd0,
-        S_REQ   = 3'd1,
-        S_WAIT  = 3'd2,
-        S_FILL  = 3'd3,
-        S_FAULT = 3'd4
+        S_IDLE         = 3'd0,
+        S_REQ          = 3'd1,
+        S_WAIT         = 3'd2,
+        S_FILL         = 3'd3,
+        S_FAULT        = 3'd4,
+        S_AD_WRITEBACK = 3'd5
     } ptw_state_e;
 
     ptw_state_e                state_r;
@@ -70,6 +81,12 @@ module ptw
     logic [63:0]               pte_r;
     logic [63:0]               pte_addr_r;
     logic                      stale_resp_pending_r;
+    logic                      dirty_wb_pending_r;
+    logic [63:0]               dirty_wb_pa_r;
+    logic [63:0]               dirty_wb_value_r;
+    logic [63:0]               ad_wb_pa_r;
+    logic [63:0]               ad_wb_value_r;
+    logic                      ad_wb_return_fill_r;
 
     logic [3:0]                satp_mode;
     logic                      satp_sv39;
@@ -98,6 +115,7 @@ module ptw
     logic                      superpage_misalign_c;
     logic                      ptw_read_inflight_c;
     logic [63:0]               pte_fill_c;
+    logic                      pte_ad_update_needed_c;
 
     assign satp_mode = satp_i[63:60];
     assign satp_sv39 = (satp_mode == 4'd8);
@@ -125,9 +143,13 @@ module ptw
         endcase
     end
 
-    assign pte_line_addr_c = {pte_addr_c[63:LINE_BITS], {LINE_BITS{1'b0}}};
-    assign l2_req_addr_o   = pte_line_addr_c;
-    assign fill_pte_pa_o   = pte_addr_r;
+    assign pte_line_addr_c  = {pte_addr_c[63:LINE_BITS], {LINE_BITS{1'b0}}};
+    assign l2_req_addr_o         = pte_line_addr_c;
+    assign dcache_store_valid_o  = (state_r == S_AD_WRITEBACK);
+    assign dcache_store_addr_o   = ad_wb_pa_r;
+    assign dcache_store_data_o   = ad_wb_value_r;
+    assign fill_pte_pa_o         = pte_addr_r;
+    assign dirty_wb_ready_o      = !dirty_wb_pending_r;
 
     always_comb begin
         case (pte_addr_r[5:3])
@@ -156,6 +178,7 @@ module ptw
                            (walk_is_store_r
                                ? 64'h0000_0000_0000_0080
                                : 64'h0000_0000_0000_0000);
+    assign pte_ad_update_needed_c = (pte_fill_c[7:6] != pte_resp_c[7:6]);
 
     always_comb begin
         superpage_misalign_c = 1'b0;
@@ -178,25 +201,26 @@ module ptw
 
     assign dtlb_req_ready_o =
         (state_r == S_IDLE) && !flush_i && !translation_flush_i &&
-        !stale_resp_pending_r;
+        !stale_resp_pending_r && !dirty_wb_pending_r;
     assign itlb_req_ready_o =
         (state_r == S_IDLE) && !dtlb_req_valid_i && !flush_i &&
-        !translation_flush_i && !stale_resp_pending_r;
+        !translation_flush_i && !stale_resp_pending_r &&
+        !dirty_wb_pending_r;
 
     always_comb begin
-        l2_req_valid_o     = 1'b0;
-        dtlb_fill_valid_o  = 1'b0;
-        itlb_fill_valid_o  = 1'b0;
-        fault_valid_o      = 1'b0;
-        fault_is_itlb_o    = walk_is_itlb_r;
-        fault_is_store_o   = walk_is_store_r;
-        fault_rob_idx_o    = walk_rob_idx_r;
-        fault_va_o         = walk_va_r;
-        fill_vpn_o         = walk_va_r[47:12];
-        fill_ppn_o         = pte_r[53:10];
-        fill_asid_o        = walk_asid_r;
-        fill_page_size_o   = walk_level_r;
-        fill_perm_o        = pte_r[7:0];
+        l2_req_valid_o    = 1'b0;
+        dtlb_fill_valid_o = 1'b0;
+        itlb_fill_valid_o = 1'b0;
+        fault_valid_o     = 1'b0;
+        fault_is_itlb_o   = walk_is_itlb_r;
+        fault_is_store_o  = walk_is_store_r;
+        fault_rob_idx_o   = walk_rob_idx_r;
+        fault_va_o        = walk_va_r;
+        fill_vpn_o        = walk_va_r[47:12];
+        fill_ppn_o        = pte_r[53:10];
+        fill_asid_o       = walk_asid_r;
+        fill_page_size_o  = walk_level_r;
+        fill_perm_o       = pte_r[7:0];
 
         case (state_r)
             S_REQ: begin
@@ -215,32 +239,52 @@ module ptw
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            state_r                <= S_IDLE;
-            walk_va_r              <= 64'd0;
-            walk_is_store_r        <= 1'b0;
-            walk_is_itlb_r         <= 1'b0;
-            walk_rob_idx_r         <= '0;
-            walk_ppn_r             <= 44'd0;
-            walk_level_r           <= 2'd0;
-            walk_asid_r            <= 16'd0;
-            pte_r                  <= 64'd0;
-            pte_addr_r             <= 64'd0;
-            stale_resp_pending_r   <= 1'b0;
+            state_r              <= S_IDLE;
+            walk_va_r            <= 64'd0;
+            walk_is_store_r      <= 1'b0;
+            walk_is_itlb_r       <= 1'b0;
+            walk_rob_idx_r       <= '0;
+            walk_ppn_r           <= 44'd0;
+            walk_level_r         <= 2'd0;
+            walk_asid_r          <= 16'd0;
+            pte_r                <= 64'd0;
+            pte_addr_r           <= 64'd0;
+            stale_resp_pending_r <= 1'b0;
+            dirty_wb_pending_r   <= 1'b0;
+            dirty_wb_pa_r        <= 64'd0;
+            dirty_wb_value_r     <= 64'd0;
+            ad_wb_pa_r           <= 64'd0;
+            ad_wb_value_r        <= 64'd0;
+            ad_wb_return_fill_r  <= 1'b0;
         end else begin
             if (stale_resp_pending_r && l2_resp_valid_i)
                 stale_resp_pending_r <= 1'b0;
 
+            if (dirty_wb_valid_i && !dirty_wb_pending_r) begin
+                dirty_wb_pending_r <= 1'b1;
+                dirty_wb_pa_r      <= dirty_wb_pte_pa_i;
+                dirty_wb_value_r   <= dirty_wb_pte_value_i;
+            end
+
             if (flush_i || translation_flush_i) begin
                 if (ptw_read_inflight_c && !l2_resp_valid_i)
                     stale_resp_pending_r <= 1'b1;
-                state_r    <= S_IDLE;
-                pte_r      <= 64'd0;
-                pte_addr_r <= 64'd0;
+                state_r             <= S_IDLE;
+                pte_r               <= 64'd0;
+                pte_addr_r          <= 64'd0;
+                ad_wb_pa_r          <= 64'd0;
+                ad_wb_value_r       <= 64'd0;
+                ad_wb_return_fill_r <= 1'b0;
             end else begin
                 case (state_r)
                     S_IDLE: begin
                         if (stale_resp_pending_r) begin
                             state_r <= S_IDLE;
+                        end else if (dirty_wb_pending_r) begin
+                            ad_wb_pa_r          <= dirty_wb_pa_r;
+                            ad_wb_value_r       <= dirty_wb_value_r;
+                            ad_wb_return_fill_r <= 1'b0;
+                            state_r             <= S_AD_WRITEBACK;
                         end else if (req_is_dtlb_c || req_is_itlb_c) begin
                             walk_va_r       <= req_va_c;
                             walk_rob_idx_r  <= req_rob_idx_c;
@@ -265,14 +309,20 @@ module ptw
 
                     S_WAIT: begin
                         if (pte_resp_match_c) begin
-                            pte_r      <= pte_fill_c;
+                            pte_r <= pte_fill_c;
                             if (pte_invalid_c) begin
                                 state_r <= S_FAULT;
                             end else if (pte_leaf_c) begin
-                                if (superpage_misalign_c)
+                                if (superpage_misalign_c) begin
                                     state_r <= S_FAULT;
-                                else
+                                end else if (pte_ad_update_needed_c) begin
+                                    ad_wb_pa_r          <= pte_addr_r;
+                                    ad_wb_value_r       <= pte_fill_c;
+                                    ad_wb_return_fill_r <= 1'b1;
+                                    state_r             <= S_AD_WRITEBACK;
+                                end else begin
                                     state_r <= S_FILL;
+                                end
                             end else if (walk_level_r == 2'd0) begin
                                 state_r <= S_FAULT;
                             end else begin
@@ -280,6 +330,19 @@ module ptw
                                 walk_level_r <= walk_level_r - 2'd1;
                                 state_r      <= S_REQ;
                             end
+                        end
+                    end
+
+                    S_AD_WRITEBACK: begin
+                        if (dcache_store_ack_i) begin
+                            if (!ad_wb_return_fill_r)
+                                dirty_wb_pending_r <= 1'b0;
+                            state_r             <= ad_wb_return_fill_r
+                                                 ? S_FILL
+                                                 : S_IDLE;
+                            ad_wb_pa_r          <= 64'd0;
+                            ad_wb_value_r       <= 64'd0;
+                            ad_wb_return_fill_r <= 1'b0;
                         end
                     end
 

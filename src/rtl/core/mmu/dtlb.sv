@@ -39,6 +39,7 @@ module dtlb
     output logic                 dirty_wb_valid_o,
     output logic [63:0]          dirty_wb_pte_pa_o,
     output logic [63:0]          dirty_wb_pte_value_o,
+    input  logic                 dirty_wb_ready_i,
 
     input  logic                 inv_all_i,
     input  logic                 inv_va_valid_i,
@@ -65,6 +66,7 @@ module dtlb
     logic [63:0]            pa_assembled;
     logic                   perm_fault;
     logic [3:0]             perm_fault_code;
+    logic                   dirty_upgrade_req;
     logic                   dirty_upgrade_now;
 
     assign lookup_vpn = va_i[47:12];
@@ -130,16 +132,18 @@ module dtlb
         end
     end
 
-    assign dirty_upgrade_now =
+    assign dirty_upgrade_req =
         lookup_valid_i && match_found && is_store_i &&
         !perm_r[match_idx][7] && perm_r[match_idx][0] && !perm_fault;
+    assign dirty_upgrade_now = dirty_upgrade_req && dirty_wb_ready_i;
 
     assign dirty_wb_valid_o     = dirty_upgrade_now;
     assign dirty_wb_pte_pa_o    = pte_pa_r[match_idx];
     assign dirty_wb_pte_value_o = {10'd0, ppn_r[match_idx], 2'd0,
                                    perm_r[match_idx] | 8'h80};
 
-    assign hit_o        = lookup_valid_i && match_found;
+    assign hit_o        = lookup_valid_i && match_found &&
+                          !(dirty_upgrade_req && !dirty_wb_ready_i);
     assign pa_o         = pa_assembled;
     assign fault_o      = lookup_valid_i && match_found && perm_fault;
     assign fault_code_o = perm_fault_code;

@@ -40,6 +40,16 @@
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "notes": "Uses MPRV/MPP=S to verify a store to a read-only Sv48 page traps with mcause=15 and mtval equal to the faulting VA."
+    },
+    {
+      "name": "vm_ad_update_sv48_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/vm_ad_update_sv48_smoke.hex",
+      "max_cycles": 300000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Verifies hardware-managed Sv48 PTE A update before TLB fill and D update on a later translated store hit."
     }
   ]
 }

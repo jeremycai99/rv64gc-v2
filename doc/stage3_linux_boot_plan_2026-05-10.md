@@ -70,8 +70,10 @@ python3 tools/run_stage3_rtl_guard.py --runner dsim --run-id <date>_<slice>
 The wrapper rebuilds the selected simulator, runs the four locked DS/CM rows
 with the strict owner, delivery, branch-recovery, performance, stat, and
 bottleneck plusargs, then reports timed-cycle deltas and checks metrics against
-the table above using the default `--max-regression-pct 0.01` tolerance. Use
-`--runner xsim-sh` when DSim is blocked by license availability.
+the table above using the default `--max-regression-pct 0.01` tolerance. It also
+overrides the per-row simulator timeout with a generous `--sim-max-cycles`
+budget, so `MAX_CYCLES` is only a liveness guard and not a performance threshold.
+Use `--runner xsim-sh` when DSim is blocked by license availability.
 The current OpenSBI platform-probe slice used that fallback for the hard DS/CM
 gate because the DSim benchmark row hit a simulator scheduler iteration limit
 on CoreMark before the timed window completed, while XSim completed all four
@@ -104,6 +106,8 @@ Gate rules:
 
 - Rebuild the simulator from the current RTL before running the guard.
 - All four rows must pass endpoint checks.
+- The simulator max-cycle budget is a timeout guard only; it must not be used
+  as the performance acceptance rule.
 - Timed cycles are reported as diagnostic movement against the reference, but
   cycle count alone is not a hard failure.
 - Performance metrics must stay within the `0.01%` regression tolerance versus
@@ -771,6 +775,38 @@ Execution status:
 | CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
 | CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
 
+- Fifteenth RTL slice completed: hardware-managed Sv48 PTE A/D updates now
+  write back to memory before the TLB fill or dirty-hit store can proceed. The
+  PTW performs A-bit and store-originated D-bit updates through the coherent
+  D-cache store path, so later software page-table reads see the updated PTE
+  through the same L1D path. DTLB dirty-hit upgrades are backpressured by PTW
+  readiness, preventing a store from completing when the D-bit writeback request
+  cannot be accepted.
+- Directed PTE A/D proof added:
+  `tests/asm/vm_ad_update_sv48_smoke.S` extends the Stage 3 VM smoke manifest.
+  The test starts with a valid read/write leaf with `A=0,D=0`, performs an
+  S-effective translated load and checks that memory PTE `A=1,D=0`, then
+  performs an S-effective translated store and checks that memory PTE `D=1` and
+  the physical data line changed.
+- Validation for the A/D memory-writeback slice:
+  `benchmark_results/stage3_vm_smoke_20260511_ad_dcache_store_clean_full`
+  passed
+  `vm_data_sv48_smoke`, `vm_ifetch_sv48_smoke`,
+  `vm_ifetch_fault_sv48_smoke`, `vm_store_fault_sv48_smoke`, and
+  `vm_ad_update_sv48_smoke`.
+- DS/CM regression validation for the A/D memory-writeback slice:
+  `benchmark_results/stage3_rtl_guard_20260511_ad_dcache_store_clean`. The
+  guard ran with `--max-cycles 10000000`; this is only a liveness timeout. The
+  hard acceptance gate remained the DS/CM metric, and all four rows stayed
+  within the `0.01%` regression tolerance.
+
+| Row | Timed cycles | Diagnostic cycle reference | Metric |
+|---|---:|---:|---:|
+| Dhrystone 100 | `18,082` | `18,161` | `3.147616 DMIPS/MHz` |
+| Dhrystone 300 | `53,360` | `53,469` | `3.199880 DMIPS/MHz` |
+| CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
+| CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
+
 ### L3: Linux Early Boot
 
 Goal: enter Linux and reach early console output.
@@ -910,8 +946,9 @@ harness policy:
   translation smoke. The instruction fetch path now also has ITLB/PTW
   translation with a passing S-mode Sv48 ifetch smoke. Data-side store page
   faults and instruction page faults are now precise through the ROB/CSR trap
-  path and are covered by directed Sv48 smokes. Broader privileged/MMU directed
-  tests and dirty PTE memory writeback remain open.
+  path and are covered by directed Sv48 smokes. Hardware-managed PTE A/D memory
+  writeback is now covered by a directed Sv48 smoke. Broader privileged/MMU
+  directed tests remain open.
 - v2 does not yet have large-memory loading, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style

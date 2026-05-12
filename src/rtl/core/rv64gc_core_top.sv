@@ -2156,8 +2156,8 @@ module rv64gc_core_top
 
     // CSR operations read committed CSR state. Keep them resident until
     // their ROB entry reaches the head so older CSR writes are visible.
-	    assign iq2_issue_suppress_s[0] =
-	        iq2_issue_candidate_valid_s[0] &&
+        assign iq2_issue_suppress_s[0] =
+            iq2_issue_candidate_valid_s[0] &&
          (((iq2_issue_data_s[0].fu_type == FU_CSR) &&
            (iq2_issue_data_s[0].rob_idx != rob_head_idx)) ||
           ((iq2_issue_data_s[0].fu_type == FU_DIV) &&
@@ -2552,101 +2552,101 @@ module rv64gc_core_top
     );
 
     // =========================================================================
-	    // 10a. FPU (serialized on IQ2 port 0)
-	    // =========================================================================
-	    logic        fpu_issue;
-	    logic        fpu_valid_in;
-	    iq_entry_t   fpu_req_data_r;
-	    logic [63:0] fpu_req_rs1_data_r;
-	    logic [63:0] fpu_req_rs2_data_r;
-	    logic [63:0] fpu_req_rs3_data_r;
-	    fp_rm_e      fpu_req_rm_r;
-	    logic [63:0] fpu_issue_rs1_data;
-	    logic [63:0] fpu_issue_rs2_data;
-	    logic [63:0] fpu_issue_rs3_data;
-	    fp_rm_e      fpu_issue_rm;
-	    logic [63:0] fpu_rs1_data;
-	    logic [63:0] fpu_rs2_data;
-	    logic [63:0] fpu_rs3_data;
-	    logic [ROB_IDX_BITS-1:0]  fpu_out_rob_idx;
-	    logic [PHYS_REG_BITS-1:0] fpu_out_pdst;
-	    logic [63:0] fpu_out_data;
-	    fp_status_t  fpu_out_status;
+        // 10a. FPU (serialized on IQ2 port 0)
+        // =========================================================================
+        logic        fpu_issue;
+        logic        fpu_valid_in;
+        iq_entry_t   fpu_req_data_r;
+        logic [63:0] fpu_req_rs1_data_r;
+        logic [63:0] fpu_req_rs2_data_r;
+        logic [63:0] fpu_req_rs3_data_r;
+        fp_rm_e      fpu_req_rm_r;
+        logic [63:0] fpu_issue_rs1_data;
+        logic [63:0] fpu_issue_rs2_data;
+        logic [63:0] fpu_issue_rs3_data;
+        fp_rm_e      fpu_issue_rm;
+        logic [63:0] fpu_rs1_data;
+        logic [63:0] fpu_rs2_data;
+        logic [63:0] fpu_rs3_data;
+        logic [ROB_IDX_BITS-1:0]  fpu_out_rob_idx;
+        logic [PHYS_REG_BITS-1:0] fpu_out_pdst;
+        logic [63:0] fpu_out_data;
+        fp_status_t  fpu_out_status;
 
-	    assign fpu_issue =
-	        iq2_issue_valid[0] && iq2_issue_data[0].is_fp_op;
-	    assign fpu_valid_in = fpu_req_valid_r;
-	    assign fpu_issue_rs1_data =
-	        iq2_issue_data[0].rs1_is_fp ? fp_prf_rdata[0] : bypassed_data[6];
-	    assign fpu_issue_rs2_data =
-	        iq2_issue_data[0].rs2_is_fp ? fp_prf_rdata[1] : bypassed_data[7];
-	    assign fpu_issue_rs3_data =
-	        iq2_issue_data[0].rs3_is_fp ? fp_prf_rdata[2] : 64'd0;
-	    assign fpu_rs1_data = fpu_req_rs1_data_r;
-	    assign fpu_rs2_data = fpu_req_rs2_data_r;
-	    assign fpu_rs3_data = fpu_req_rs3_data_r;
+        assign fpu_issue =
+            iq2_issue_valid[0] && iq2_issue_data[0].is_fp_op;
+        assign fpu_valid_in = fpu_req_valid_r;
+        assign fpu_issue_rs1_data =
+            iq2_issue_data[0].rs1_is_fp ? fp_prf_rdata[0] : bypassed_data[6];
+        assign fpu_issue_rs2_data =
+            iq2_issue_data[0].rs2_is_fp ? fp_prf_rdata[1] : bypassed_data[7];
+        assign fpu_issue_rs3_data =
+            iq2_issue_data[0].rs3_is_fp ? fp_prf_rdata[2] : 64'd0;
+        assign fpu_rs1_data = fpu_req_rs1_data_r;
+        assign fpu_rs2_data = fpu_req_rs2_data_r;
+        assign fpu_rs3_data = fpu_req_rs3_data_r;
 
-	    always_comb begin
-	        if (iq2_issue_data[0].fp_rm == FP_RM_DYN) begin
-	            case (csr_frm)
-	                3'd0:    fpu_issue_rm = FP_RM_RNE;
-	                3'd1:    fpu_issue_rm = FP_RM_RTZ;
-	                3'd2:    fpu_issue_rm = FP_RM_RDN;
-	                3'd3:    fpu_issue_rm = FP_RM_RUP;
-	                3'd4:    fpu_issue_rm = FP_RM_RMM;
-	                default: fpu_issue_rm = FP_RM_DYN;
-	            endcase
-	        end else begin
-	            fpu_issue_rm = iq2_issue_data[0].fp_rm;
-	        end
-	    end
+        always_comb begin
+            if (iq2_issue_data[0].fp_rm == FP_RM_DYN) begin
+                case (csr_frm)
+                    3'd0:    fpu_issue_rm = FP_RM_RNE;
+                    3'd1:    fpu_issue_rm = FP_RM_RTZ;
+                    3'd2:    fpu_issue_rm = FP_RM_RDN;
+                    3'd3:    fpu_issue_rm = FP_RM_RUP;
+                    3'd4:    fpu_issue_rm = FP_RM_RMM;
+                    default: fpu_issue_rm = FP_RM_DYN;
+                endcase
+            end else begin
+                fpu_issue_rm = iq2_issue_data[0].fp_rm;
+            end
+        end
 
-	    always_ff @(posedge clk or negedge rst_n) begin
-	        if (!rst_n || flush_out.valid) begin
-	            fpu_req_valid_r    <= 1'b0;
-	            fpu_req_data_r     <= '0;
-	            fpu_req_rs1_data_r <= 64'd0;
-	            fpu_req_rs2_data_r <= 64'd0;
-	            fpu_req_rs3_data_r <= 64'd0;
-	            fpu_req_rm_r       <= FP_RM_RNE;
-	        end else begin
-	            if (fpu_req_valid_r && fpu_ready)
-	                fpu_req_valid_r <= 1'b0;
+        always_ff @(posedge clk or negedge rst_n) begin
+            if (!rst_n || flush_out.valid) begin
+                fpu_req_valid_r    <= 1'b0;
+                fpu_req_data_r     <= '0;
+                fpu_req_rs1_data_r <= 64'd0;
+                fpu_req_rs2_data_r <= 64'd0;
+                fpu_req_rs3_data_r <= 64'd0;
+                fpu_req_rm_r       <= FP_RM_RNE;
+            end else begin
+                if (fpu_req_valid_r && fpu_ready)
+                    fpu_req_valid_r <= 1'b0;
 
-	            if (fpu_issue) begin
-	                fpu_req_valid_r    <= 1'b1;
-	                fpu_req_data_r     <= iq2_issue_data[0];
-	                fpu_req_rs1_data_r <= fpu_issue_rs1_data;
-	                fpu_req_rs2_data_r <= fpu_issue_rs2_data;
-	                fpu_req_rs3_data_r <= fpu_issue_rs3_data;
-	                fpu_req_rm_r       <= fpu_issue_rm;
-	            end
-	        end
-	    end
+                if (fpu_issue) begin
+                    fpu_req_valid_r    <= 1'b1;
+                    fpu_req_data_r     <= iq2_issue_data[0];
+                    fpu_req_rs1_data_r <= fpu_issue_rs1_data;
+                    fpu_req_rs2_data_r <= fpu_issue_rs2_data;
+                    fpu_req_rs3_data_r <= fpu_issue_rs3_data;
+                    fpu_req_rm_r       <= fpu_issue_rm;
+                end
+            end
+        end
 
-	    fpu_top u_fpu_top (
-	        .clk_i        (clk),
-	        .rst_ni       (rst_n),
-	        .flush_i      (flush_out.valid),
-	        .valid_i      (fpu_valid_in),
-	        .use_fpnew_i  (1'b1),
-	        .pipe_i       (fpu_req_data_r.fp_pipe),
-	        .op_i         (fpu_req_data_r.fp_op),
-	        .op_mod_i     (fpu_req_data_r.fp_op_mod),
-	        .misc_op_i    (fpu_req_data_r.fp_misc_op),
-	        .fmv_op_i     (fpu_req_data_r.fmv_op),
-	        .src_fmt_i    (fpu_req_data_r.fp_fmt),
-	        .dst_fmt_i    (fpu_req_data_r.fp_dst_fmt),
-	        .int_fmt_i    (fpu_req_data_r.fp_int_fmt),
-	        .rm_i         (fpu_req_rm_r),
-	        .rs1_data_i   (fpu_rs1_data),
-	        .rs2_data_i   (fpu_rs2_data),
-	        .rs3_data_i   (fpu_rs3_data),
-	        .rob_idx_i    (fpu_req_data_r.rob_idx),
-	        .pdst_i       (fpu_req_data_r.pdst),
-	        .ready_o      (fpu_ready),
-	        .out_valid_o  (fpu_out_valid),
-	        .out_rob_idx_o(fpu_out_rob_idx),
+        fpu_top u_fpu_top (
+            .clk_i        (clk),
+            .rst_ni       (rst_n),
+            .flush_i      (flush_out.valid),
+            .valid_i      (fpu_valid_in),
+            .use_fpnew_i  (1'b1),
+            .pipe_i       (fpu_req_data_r.fp_pipe),
+            .op_i         (fpu_req_data_r.fp_op),
+            .op_mod_i     (fpu_req_data_r.fp_op_mod),
+            .misc_op_i    (fpu_req_data_r.fp_misc_op),
+            .fmv_op_i     (fpu_req_data_r.fmv_op),
+            .src_fmt_i    (fpu_req_data_r.fp_fmt),
+            .dst_fmt_i    (fpu_req_data_r.fp_dst_fmt),
+            .int_fmt_i    (fpu_req_data_r.fp_int_fmt),
+            .rm_i         (fpu_req_rm_r),
+            .rs1_data_i   (fpu_rs1_data),
+            .rs2_data_i   (fpu_rs2_data),
+            .rs3_data_i   (fpu_rs3_data),
+            .rob_idx_i    (fpu_req_data_r.rob_idx),
+            .pdst_i       (fpu_req_data_r.pdst),
+            .ready_o      (fpu_ready),
+            .out_valid_o  (fpu_out_valid),
+            .out_rob_idx_o(fpu_out_rob_idx),
         .out_pdst_o   (fpu_out_pdst),
         .out_data_o   (fpu_out_data),
         .out_status_o (fpu_out_status),
@@ -3739,14 +3739,14 @@ module rv64gc_core_top
     assign div_eff_data    = div_take_hold ? div_hold_data_r    : div_result;
 
     // CDB[3]: FPU, ALU3 (same cycle), or DIV (multi-cycle, with hold)
-	    always_comb begin
-	        if (fpu_out_valid || fpu_unsupported) begin
-	            cdb_valid[3]         = 1'b1;
-	            cdb_tag[3]           = fpu_unsupported ? fpu_req_data_r.pdst
-	                                                    : fpu_out_pdst;
-	            cdb_rob_idx[3]       = fpu_unsupported ? fpu_req_data_r.rob_idx
-	                                                    : fpu_out_rob_idx;
-	            cdb_data[3]          = fpu_unsupported ? 64'd0 : fpu_out_data;
+        always_comb begin
+            if (fpu_out_valid || fpu_unsupported) begin
+                cdb_valid[3]         = 1'b1;
+                cdb_tag[3]           = fpu_unsupported ? fpu_req_data_r.pdst
+                                                        : fpu_out_pdst;
+                cdb_rob_idx[3]       = fpu_unsupported ? fpu_req_data_r.rob_idx
+                                                        : fpu_out_rob_idx;
+                cdb_data[3]          = fpu_unsupported ? 64'd0 : fpu_out_data;
             cdb_csr_we[3]        = 1'b0;
             cdb_csr_addr[3]      = 12'd0;
             cdb_csr_wdata[3]     = 64'd0;
@@ -4154,6 +4154,7 @@ module rv64gc_core_top
     logic [63:0] dc_store_req_data;
     logic [7:0]  dc_store_req_byte_mask;
     logic        dc_store_ack;
+    logic        dcache_store_ack_raw;
 
     // LSU ordering violation
     // (lsu_ordering_violation / lsu_violation_rob_idx / lsu_port0_suppress
@@ -4201,13 +4202,13 @@ module rv64gc_core_top
     // ("is producer in replay range?").  Written on every rename; flushed
     // to 0 on full_flush (mirrors rename_buf).
     // =========================================================================
-	    logic [ROB_IDX_BITS-1:0] pdst_producer_rob [0:PHYS_TAG_COUNT-1];
+        logic [ROB_IDX_BITS-1:0] pdst_producer_rob [0:PHYS_TAG_COUNT-1];
 
-	    always_ff @(posedge clk or negedge rst_n) begin
-	        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
-	            for (int p = 0; p < PHYS_TAG_COUNT; p++)
-	                pdst_producer_rob[p] <= '0;
-	        end else begin
+        always_ff @(posedge clk or negedge rst_n) begin
+            if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
+                for (int p = 0; p < PHYS_TAG_COUNT; p++)
+                    pdst_producer_rob[p] <= '0;
+            end else begin
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if ((3'(i) < ren_count_w) &&
                     ren_insn[i].base.rd_valid &&
@@ -4675,6 +4676,10 @@ module rv64gc_core_top
     logic [63:0] dc_l2_resp_addr;
     logic [511:0] dc_l2_resp_data;
     logic        dc_invalidate_busy;
+    logic        ptw_dcache_store_valid;
+    logic [63:0] ptw_dcache_store_addr;
+    logic [63:0] ptw_dcache_store_data;
+    logic        ptw_dcache_store_ack;
 
     // D-cache fill snoop (to LSU for missed-load late response) —
     // (dc_fill_snoop_* signals hoisted to before the LSU instantiation
@@ -4690,11 +4695,17 @@ module rv64gc_core_top
         .load_resp_valid    (dc_load_resp_valid),
         .load_resp_data     (dc_load_resp_data),
         .load_resp_hit      (dc_load_resp_hit),
-        .store_req_valid    (dc_store_req_valid),
-        .store_req_addr     (dc_store_req_addr),
-        .store_req_data     (dc_store_req_data),
-        .store_req_byte_mask(dc_store_req_byte_mask),
-        .store_ack          (dc_store_ack),
+        .store_req_valid    (ptw_dcache_store_valid || dc_store_req_valid),
+        .store_req_addr     (ptw_dcache_store_valid
+                              ? ptw_dcache_store_addr
+                              : dc_store_req_addr),
+        .store_req_data     (ptw_dcache_store_valid
+                              ? ptw_dcache_store_data
+                              : dc_store_req_data),
+        .store_req_byte_mask(ptw_dcache_store_valid
+                              ? 8'hff
+                              : dc_store_req_byte_mask),
+        .store_ack          (dcache_store_ack_raw),
         .l2_req_valid       (dc_l2_req_valid),
         .l2_req_addr        (dc_l2_req_addr),
         .l2_req_we          (dc_l2_req_we),
@@ -4709,6 +4720,10 @@ module rv64gc_core_top
         .invalidate_all     (1'b0),
         .invalidate_busy    (dc_invalidate_busy)
     );
+
+    assign dc_store_ack = dcache_store_ack_raw && !ptw_dcache_store_valid;
+    assign ptw_dcache_store_ack =
+        dcache_store_ack_raw && ptw_dcache_store_valid;
 
     // =========================================================================
     // 17. L2 CACHE
@@ -5158,6 +5173,7 @@ module rv64gc_core_top
     logic                    dtlb_dirty_wb_valid;
     logic [63:0]             dtlb_dirty_wb_pte_pa;
     logic [63:0]             dtlb_dirty_wb_pte_value;
+    logic                    ptw_dirty_wb_ready;
     logic                    ptw_dtlb_req_ready;
     logic                    ptw_itlb_req_ready;
     logic                    ptw_dtlb_fill_valid;
@@ -5279,6 +5295,7 @@ module rv64gc_core_top
         .dirty_wb_valid_o    (dtlb_dirty_wb_valid),
         .dirty_wb_pte_pa_o   (dtlb_dirty_wb_pte_pa),
         .dirty_wb_pte_value_o(dtlb_dirty_wb_pte_value),
+        .dirty_wb_ready_i    (ptw_dirty_wb_ready),
         .inv_all_i           (translation_tlb_invalidate),
         .inv_va_valid_i      (1'b0),
         .inv_va_i            (64'd0),
@@ -5312,6 +5329,10 @@ module rv64gc_core_top
         .fault_is_store_o    (ptw_fault_is_store),
         .fault_rob_idx_o     (ptw_fault_rob_idx),
         .fault_va_o          (ptw_fault_va),
+        .dirty_wb_ready_o    (ptw_dirty_wb_ready),
+        .dirty_wb_valid_i    (dtlb_dirty_wb_valid),
+        .dirty_wb_pte_pa_i   (dtlb_dirty_wb_pte_pa),
+        .dirty_wb_pte_value_i(dtlb_dirty_wb_pte_value),
         .l2_req_valid_o      (ptw_l2_req_valid),
         .l2_req_addr_o       (ptw_l2_req_addr),
         .l2_req_ready_i      (ptw_l2_req_ready),
@@ -5319,6 +5340,10 @@ module rv64gc_core_top
         .l2_resp_valid_i     (ptw_l2_resp_valid),
         .l2_resp_addr_i      (ptw_l2_resp_addr),
         .l2_resp_data_i      (ptw_l2_resp_data),
+        .dcache_store_valid_o(ptw_dcache_store_valid),
+        .dcache_store_addr_o (ptw_dcache_store_addr),
+        .dcache_store_data_o (ptw_dcache_store_data),
+        .dcache_store_ack_i  (ptw_dcache_store_ack),
         .flush_i             (flush_out.valid),
         .translation_flush_i (translation_tlb_invalidate)
     );
