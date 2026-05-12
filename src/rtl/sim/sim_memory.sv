@@ -6,6 +6,9 @@
 */
 module sim_memory
     import rv64gc_pkg::*;
+#(
+    parameter int MEM_SIZE_BYTES = 2 * 1024 * 1024
+)
 (
     input  logic        clk,
     input  logic        rst_n,
@@ -23,11 +26,10 @@ module sim_memory
     // =========================================================================
     // Parameters
     // =========================================================================
-    // Reduced from 256 MB -> 2 MB: Dhrystone + CoreMark fit in ~1 MB.  Smaller
-    // array makes zero-init (done below to eliminate X propagation on uninit
-    // reads) feasible at elaboration time.
-    localparam int MEM_SIZE  = 2 * 1024 * 1024;    // 2 MB
-    localparam int ADDR_BITS = $clog2(MEM_SIZE);    // 21
+    // Default remains 2 MB for benchmark simulations. Linux tb instances can
+    // raise this parameter to hold firmware, kernel, initramfs, and FDT images.
+    localparam int MEM_SIZE  = MEM_SIZE_BYTES;
+    localparam int ADDR_BITS = $clog2(MEM_SIZE);
 
     // =========================================================================
     // Byte-addressed storage

@@ -452,8 +452,8 @@ def main(argv: list[str] | None = None) -> int:
         args.dtb_addr = {
             "smoke": 0,
             "opensbi": 0x8018_0000,
-            "linux": 0x8600_0000,
-            "all": 0x8600_0000,
+            "linux": 0x8200_0000,
+            "all": 0x8200_0000,
         }[args.build_mode]
     raw_plusargs.append(f"+BOOT_HARTID={args.boot_hartid:x}")
     raw_plusargs.append(f"+DTB_ADDR={args.dtb_addr:x}")

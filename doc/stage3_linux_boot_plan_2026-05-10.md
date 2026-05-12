@@ -3,9 +3,10 @@
 Date: May 10, 2026
 
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
-phase. L0 platform smoke and L1 OpenSBI platform-probe milestones are now
-working through the ASIC-style core boundary; the next architecture milestone
-is Sv48 MMU/PTW/TLB support for Linux entry.
+phase. L0 platform smoke, L1 OpenSBI platform-probe, and directed Sv48
+MMU/PTW/TLB milestones are now working through the ASIC-style core boundary.
+The first trimmed Linux image boot reaches the OpenSBI S-mode handoff and is
+blocked before Linux early console by an early `setup_vm` load-queue stall.
 
 ## Goal
 
@@ -178,8 +179,8 @@ used a real firmware/kernel/initramfs stack instead of a benchmark image:
 4. Build OpenSBI generic `fw_payload.elf`.
    - v1 used `FW_TEXT_START=0x80000000`, `FW_PAYLOAD_OFFSET=0x200000`, and
      `FW_PAYLOAD_FDT_ADDR=0x86000000`.
-   - v2 should keep those addresses unless the memory map changes, so reset,
-     firmware, kernel payload, and DTB placement stay easy to compare.
+   - v2 keeps reset and payload placement, but the first trimmed 64 MB memory
+     map places the Linux DTB at `0x82000000`.
 5. Convert the firmware payload to the simulator memory format.
    - v1 converted `fw_payload.elf` to a hex image for the simulator.
    - v2 should keep this as an artifact-producing build step under
@@ -246,8 +247,8 @@ Implemented methodology adjustment for v2:
 | Privilege CSRs | `csr_file.sv` has M/S privilege state, delegation CSRs, `satp`, traps, `mret`, `sret`, interrupt inputs, `SUM`, `MXR`, and `MPRV` state | Basic OpenSBI trap and handoff validation now passes; Sv48 permission behavior is now covered by directed VM smoke rows |
 | RV64GC ISA | Integer, atomics, compressed, and now F/D floating point are integrated in the core RTL and advertised through `misa` | Keep FP support in the ASIC-style core datapath; do not emulate FP in the testbench |
 | MMU | `src/rtl/core/mmu/` now contains Sv39/Sv48 ITLB, DTLB, and shared PTW blocks; instruction and data translation are wired through `rv64gc_core_top.sv` | Directed Sv48 data, instruction, fault, A/D, permission, superpage, and canonical-address smokes pass; remaining MMU work is broader coverage and Linux-scale integration |
-| Platform devices | L0 `tb_linux` now has an uncached MMIO path, polling UART, and CLINT timer/software interrupt block; PLIC is only a reserved zero-response range | OpenSBI platform probing now passes; Linux needs larger memory and real external interrupt behavior before enabling more devices |
-| Simulation memory | `sim_memory.sv` is a 2 MB byte-addressed RAM loaded by `$readmemh` | Linux needs much larger DRAM and an image loader that can handle OpenSBI plus kernel payload |
+| Platform devices | L0 `tb_linux` now has an uncached MMIO path, polling UART, and CLINT timer/software interrupt block; PLIC is only a reserved zero-response range | OpenSBI platform probing now passes; first Linux image boot reaches S-mode handoff and early `setup_vm` before blocking on a load-queue stall |
+| Simulation memory | `sim_memory.sv` defaults to 2 MB for benchmark sims and is parameterized; `tb_linux.sv` raises the Linux platform instance to 64 MB | Enough for the trimmed OpenSBI plus Linux `fw_payload` image, initramfs, and DTB at `0x82000000`; benchmark harness memory sizing is unchanged |
 | Interrupt hookup | `tb_linux.sv` connects CLINT `mtime`, `mtip`, and `msip`; the existing benchmark `tb_top.sv` still ties interrupts low | OpenSBI reaches platform probing with the CLINT path present; Linux timer and external interrupt validation remain ahead |
 | Endpoint | Current bare-metal rows use testbench-observed stores to configurable `TOHOST_ADDR` | Keep for bare-metal tests only; Stage 3 uses UART/log/syscon milestones |
 
@@ -471,6 +472,66 @@ DSim benchmark caveat:
   slice. The DSim CoreMark convergence issue should be treated as simulator
   debug debt, not as evidence of a DS/CM functional or performance regression.
 
+First trimmed Linux image boot attempt:
+
+- The full Linux software build now produces a trimmed single-hart image using
+  the v2 DTS, OpenSBI generic firmware, Linux `Image`, and a static initramfs
+  `/init` that prints `BOOT OK`. The build disables SMP, modules, networking,
+  EFI, USB, DRM, framebuffer, input, ext4, NFS, ACPI, vector, and other
+  nonessential paths. The DTS exposes 64 MB DRAM, CLINT, and NS16550A UART
+  only.
+- `sim_memory.sv` remains 2 MB by default for the benchmark harness, and
+  `tb_linux.sv` overrides only the Linux platform instance to 64 MB. This keeps
+  the larger DRAM model at the simulation platform boundary instead of changing
+  the core or benchmark path.
+- The build fragment requests four-level page tables with
+  `CONFIG_PGTABLE_LEVELS=4`, but the referenced v1 Linux tree hard-defaults
+  `CONFIG_PGTABLE_LEVELS=5` for 64-bit builds. The DTS still advertises
+  `mmu-type = "riscv,sv48"` for runtime. If compile-time four-level-only Linux
+  is required, that should be a controlled kernel-tree configuration patch, not
+  an RTL workaround.
+- Current generated image sizes are approximately:
+  `fw_payload.bin` 18 MB, `fw_payload.elf` 17 MB, `fw_payload.hex` 54 MB,
+  static initramfs `/init` 464 KB, and DTB 1.3 KB.
+- The promoted first trimmed image boot run was:
+
+```bash
+python3 tools/run_linux_boot.py --run --build-mode linux \
+  --run-dir linux_boot_results/stage3_l9_linux_image_boot_trimmed_20260512 \
+  --target-milestone linux_early_console \
+  --max-cycles 2000000 \
+  --status-interval 1000000 \
+  --sim-plusarg +LINUX_TRACE_REGS
+```
+
+- UART log path for this first attempt:
+  `linux_boot_results/stage3_l9_linux_image_boot_trimmed_20260512/uart.log`.
+- Sim log path for this first attempt:
+  `linux_boot_results/stage3_l9_linux_image_boot_trimmed_20260512/dsim.log`.
+- Result: OpenSBI reaches platform probing, reports UART and CLINT, and hands
+  off to Linux at `0x80200000` with DTB argument `0x82000000`. No Linux early
+  console text appears by the 2M-cycle bound. The runner summary classifies
+  the last milestone as `opensbi_platform_probe`.
+- First blocker after the trimmed rebuild: the core reaches Linux `setup_vm`
+  before `satp` is enabled, then stops making forward progress with the load
+  queue full. The 2M-cycle status snapshot reports `priv=1`, `satp=0`,
+  `last_pc=0x8080563c`, `last_commit_cycle=1617832`, `rename_stall=1`, and
+  `lq_full=1`. Symbolizing `0x8080563c` against the Linux image at payload base
+  `0x80200000` maps to `setup_vm`, at a relocation-table load sequence.
+- Immediate debug target: root-cause the early `setup_vm` load-queue stall.
+  The next run should add a focused trace for the head load at
+  `0x8080563c/0x8080563e/0x80805642`, including virtual address, DTLB/PTW
+  state, LQ allocation/free state, and the data-cache miss/response path.
+- DS/CM guard for the Linux image-memory slice passed:
+  `benchmark_results/stage3_rtl_guard_stage3_l9_linux_image_boot_trimmed_20260512`.
+
+| Row | Timed cycles | Diagnostic cycle reference | Metric |
+|---|---:|---:|---:|
+| Dhrystone 100 | `18,082` | `18,161` | `3.147616 DMIPS/MHz` |
+| Dhrystone 300 | `53,360` | `53,469` | `3.199880 DMIPS/MHz` |
+| CoreMark 1 | `154,184` | `154,233` | `6.485757 CM/MHz` |
+| CoreMark 10 | `1,491,293` | `1,491,334` | `6.705590 CM/MHz` |
+
 ## Stage 3 Architecture Direction
 
 ### Platform Shape
@@ -479,7 +540,7 @@ Use a simple single-core SoC shell around the existing core:
 
 | Address | Device | Required for first Linux boot? | Notes |
 |---:|---|---|---|
-| `0x8000_0000` | DRAM | yes | Start with 128 MB to match v1 DTS; allow larger later |
+| `0x8000_0000` | DRAM | yes | First trimmed image boot uses 64 MB; keep the DTS and `tb_linux` memory window aligned |
 | `0x0200_0000` | CLINT or ACLINT | yes | Provides `mtime`, `mtimecmp`, and `msip` for OpenSBI/Linux timer flow |
 | `0x1000_0000` | NS16550A UART | yes | Use polling first; interrupts can come later |
 | `0x0c00_0000` | PLIC | optional for first polling-UART boot | Needed when UART/external interrupts are enabled |
@@ -511,7 +572,7 @@ Initial software image:
    - `FW_PAYLOAD_PATH=<Linux Image>`,
    - `FW_FDT_PATH=<rv64gc-v2 DTB>`,
    - `FW_PAYLOAD_OFFSET=0x200000`,
-   - DTB placed at a stable high DRAM address such as `0x86000000`.
+   - DTB placed at `0x82000000` inside the 64 MB first-boot DRAM window.
 4. Load `fw_payload.elf` or a generated memory image into simulated DRAM.
 
 Initial kernel command line:
@@ -541,7 +602,8 @@ Goal: run a tiny M-mode firmware image from larger DRAM and print over UART.
 
 Tasks:
 
-- Add or port a large simulation DRAM model, parameterized to at least 128 MB.
+- Add or port a large simulation DRAM model, parameterized for the chosen
+  Linux image window. The first trimmed boot uses 64 MB.
 - Add an MMIO decode shell outside the core.
 - Add a simple UART model with TX capture to a log file.
 - Add an ELF or binary loader path for OpenSBI-style images.
@@ -934,6 +996,8 @@ python3 tools/run_linux_boot.py --build-sim --build --build-mode smoke --run \
 python3 tools/run_linux_boot.py --build --build-mode opensbi --run \
   --target-milestone opensbi_platform_probe
 python3 tools/run_linux_boot.py --build --build-mode linux
+python3 tools/run_linux_boot.py --run --build-mode linux \
+  --target-milestone linux_early_console --max-cycles 6000000
 ```
 
 The Linux runner can now run the M-mode UART smoke and has a dedicated OpenSBI
@@ -941,8 +1005,10 @@ banner mode. It records reached milestones and the last reached milestone in
 `summary.json` and `summary.md`, so a timeout now reports the exact boot level
 instead of only `PASS` or `TIMEOUT`. RV64GC/FPU support is integrated and
 guarded against DS/CM regression. OpenSBI platform probing now works through
-the ASIC-style core/platform boundary. Full Linux remains blocked until larger
-image loading is validated and Sv48 translation is implemented.
+the ASIC-style core/platform boundary. The first full Linux image is now
+loadable in the 64 MB Linux platform memory and reaches the OpenSBI S-mode
+handoff. Full Linux remains blocked before early console by the early
+`setup_vm` load-queue stall described above.
 
 ## Near-Term Non-Goals
 
@@ -990,12 +1056,14 @@ harness policy:
   superpage-alignment faults, and Sv48 canonical-address faulting are now
   covered by directed Sv48 smokes. Broader privileged/MMU directed tests remain
   open.
-- v2 does not yet have large-memory loading, Linux-visible PLIC/external
+- v2 now has a first 64 MB trimmed Linux image path and can execute OpenSBI
+  through S-mode payload handoff from that image.
+- v2 does not yet have Linux early console, Linux-visible PLIC/external
   interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 implementation should keep closing Sv48 MMU/PTW/TLB coverage
-before attempting a full Linux kernel boot. Sv39 should stay as a directed-test
-subset, but the primary Linux path is four-level Sv48 because that matches the
-intended Linux signoff configuration.
+The next Stage 3 implementation should debug the early Linux `setup_vm`
+load-queue stall before broadening platform devices. Sv39 should stay as a
+directed-test subset, but the primary Linux path is four-level Sv48 because
+that matches the intended Linux signoff configuration.

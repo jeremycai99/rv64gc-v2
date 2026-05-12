@@ -85,7 +85,9 @@ module tb_linux;
         .perf_minstret               (perf_minstret)
     );
 
-    sim_memory u_mem (
+    sim_memory #(
+        .MEM_SIZE_BYTES(64 * 1024 * 1024)
+    ) u_mem (
         .clk            (clk),
         .rst_n          (rst_n),
         .mem_req_valid  (mem_req_valid),

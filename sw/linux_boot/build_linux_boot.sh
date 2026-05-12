@@ -42,7 +42,7 @@ OPENSBI_MABI="${OPENSBI_MABI:-lp64d}"
 OPENSBI_PAYLOAD_OFFSET="${OPENSBI_PAYLOAD_OFFSET:-0x100000}"
 OPENSBI_FDT_ADDR="${OPENSBI_FDT_ADDR:-0x80180000}"
 LINUX_PAYLOAD_OFFSET="${LINUX_PAYLOAD_OFFSET:-0x200000}"
-LINUX_FDT_ADDR="${LINUX_FDT_ADDR:-0x86000000}"
+LINUX_FDT_ADDR="${LINUX_FDT_ADDR:-0x82000000}"
 NPROC="${NPROC:-$(nproc)}"
 
 need_tool() {
@@ -59,6 +59,21 @@ prepare_opensbi_tree() {
     fi
     if [[ -d "$OPENSBI_DIR/scripts" ]]; then
         chmod u+x "$OPENSBI_DIR"/scripts/*.sh 2>/dev/null || true
+    fi
+}
+
+prepare_linux_tree() {
+    if [[ -d "$LINUX_DIR/scripts" ]]; then
+        find "$LINUX_DIR/scripts" -type f -exec chmod u+x {} + 2>/dev/null || true
+    fi
+    if [[ -d "$LINUX_DIR/arch/riscv/kernel/vdso" ]]; then
+        find "$LINUX_DIR/arch/riscv/kernel/vdso" -type f -exec chmod u+x {} + 2>/dev/null || true
+    fi
+    if [[ -d "$LINUX_DIR/arch/riscv/kernel/compat_vdso" ]]; then
+        find "$LINUX_DIR/arch/riscv/kernel/compat_vdso" -type f -exec chmod u+x {} + 2>/dev/null || true
+    fi
+    if [[ -d "$LINUX_DIR/usr" ]]; then
+        find "$LINUX_DIR/usr" -maxdepth 1 -type f -exec chmod u+x {} + 2>/dev/null || true
     fi
 }
 
@@ -165,6 +180,7 @@ build_linux() {
     need_tool "${CROSS_LINUX}gcc"
     need_tool "${CROSS_LINUX}objcopy"
     need_tool "${CROSS_LINUX}objdump"
+    prepare_linux_tree
 
     build_dtb
 
@@ -177,12 +193,14 @@ build_linux() {
 
     local simcfg
     simcfg="$(mktemp /tmp/rv64gc_v2_linux.XXXXXX.config)"
-    trap 'rm -f "$simcfg"' EXIT
+    trap "rm -f '$simcfg'" EXIT
     cat > "$simcfg" <<SIMCFG
 CONFIG_SMP=n
 CONFIG_MODULES=n
 CONFIG_PRINTK=y
 CONFIG_MMU=y
+CONFIG_NONPORTABLE=y
+CONFIG_PORTABLE=n
 CONFIG_RELOCATABLE=y
 CONFIG_PGTABLE_LEVELS=4
 CONFIG_RISCV_ISA_C=y
@@ -208,10 +226,15 @@ CONFIG_TTY=y
 CONFIG_VT=n
 CONFIG_SWAP=n
 CONFIG_NET=n
+CONFIG_INET=n
 CONFIG_USB=n
 CONFIG_DRM=n
 CONFIG_FB=n
 CONFIG_INPUT=n
+CONFIG_EXT4_FS=n
+CONFIG_NFS_FS=n
+CONFIG_EFI=n
+CONFIG_ACPI=n
 CONFIG_HW_RANDOM=n
 CONFIG_IOMMU_SUPPORT=n
 CONFIG_COMPAT=n
@@ -219,7 +242,10 @@ CONFIG_DEBUG_INFO_NONE=y
 SIMCFG
 
     make -C "$LINUX_DIR" ARCH=riscv CROSS_COMPILE="$CROSS_LINUX" defconfig -j"$NPROC"
-    "$LINUX_DIR/scripts/kconfig/merge_config.sh" -m "$LINUX_DIR/.config" "$simcfg"
+    (
+        cd "$LINUX_DIR"
+        scripts/kconfig/merge_config.sh -m .config "$simcfg"
+    )
     make -C "$LINUX_DIR" ARCH=riscv CROSS_COMPILE="$CROSS_LINUX" olddefconfig
     make -C "$LINUX_DIR" ARCH=riscv CROSS_COMPILE="$CROSS_LINUX" -j"$NPROC" Image
 
