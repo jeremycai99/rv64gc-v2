@@ -129,6 +129,26 @@ Latest validated Linux milestone:
 - Current UART banner:
   `Linux version 6.6.130-rv64gc-v2-sim (rv64gc-v2@linux-sim) ... #18 Tue May 12 12:52:57 PDT 2026`.
 
+Next milestone attempt:
+
+- Artifact:
+  `linux_boot_results/stage3_linux_clocksource_10m_dsim_20260512`.
+- Command target: `riscv_clocksource`, cycle cap `10,000,000`.
+- Result: failed before the clocksource milestone. Linux reached early console,
+  enabled Sv48 paging, then reported a kernel NULL pointer dereference:
+  `Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000`
+  followed by `Oops [#1]`.
+- Useful progress points from the DSim status log:
+  at `2,000,000` cycles Linux was still in S-mode setup with `satp=0` and
+  active retirement; at `3,000,000` cycles Linux had enabled paging with
+  `satp=9000000000080a05`; at `4,000,000` cycles the core was still retiring
+  while the Oops was being printed through early UART.
+- The status PCs after the Oops symbolize into console/printk code
+  (`serial8250_early_in`, `_printk`), so they are not the root fault PC. The
+  next required run must enable `+LINUX_TRACE_TRAP` and avoid periodic status
+  interleaving so the actual fault `sepc/scause/stval` and the full Linux Oops
+  register dump are captured.
+
 SATP interpretation:
 
 - A long window with `satp=0` is not by itself a deadlock. OpenSBI runs in
