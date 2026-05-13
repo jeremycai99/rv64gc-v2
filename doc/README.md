@@ -26,8 +26,8 @@ under `doc/archive/`.
 - `stage3_linux_boot_plan_2026-05-10.md` - Stage 3 Linux boot plan, v1
   infrastructure references, ASIC-style endpoint policy, and mandatory DS/CM
   performance regression gate for any RTL change.
-- `stage4_performance_upgrade_placeholder_2026-05-10.md` - Stage 4 placeholder
-  for returning to architectural performance upgrade after Linux boot bring-up.
+- `stage4_uvm_verification_placeholder_2026-05-12.md` - Stage 4 placeholder
+  for UVM-based verification infrastructure after Stage 3 bring-up.
 - `rv64gc_v2_uarch.md` - current rv64gc-v2 microarchitecture specification.
 - `partial_replay_spec.md` - selective replay design note; keep here while LSU
   replay policy remains under evaluation.

@@ -73,13 +73,20 @@ module fetch_frontend_assertions
 );
 
     logic [63:0] ftq_next_owner_start_pc_c;
+    integer assertions_disabled;
+
+    initial begin
+        assertions_disabled = 0;
+        if ($test$plusargs("DISABLE_FETCH_FRONTEND_ASSERTIONS"))
+            assertions_disabled = 1;
+    end
 
     assign ftq_next_owner_start_pc_c =
         ftq_next_ifu_owner_entry.block_pc +
         64'(ftq_next_ifu_owner_entry.start_offset);
 
     property p_f2_pc_matches_resp_source;
-        @(posedge clk) disable iff (!rst_n || redirect_valid ||
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid ||
                                      consumed_remainder_r)
         (ic_resp_valid && f2_work_line_valid_c) |->
         (f2_work_line_addr_c == icq_deq_line_addr);
@@ -89,7 +96,7 @@ module fetch_frontend_assertions
                     f2_work_line_addr_c, f2_work_pc_c, icq_deq_line_addr);
 
     property p_f2_owner_epoch_current;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         f2_work_ftq_valid_c |->
         (f2_work_ftq_epoch_c == ftq_current_epoch);
     endproperty
@@ -98,14 +105,14 @@ module fetch_frontend_assertions
                     f2_work_ftq_epoch_c, ftq_current_epoch);
 
     property p_emit_implies_consumed;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         f2_will_emit_c |-> f2_pc_consumed_c;
     endproperty
     a_emit_implies_consumed: assert property (p_emit_implies_consumed)
         else $error("[INVARIANT_C] F2 emitted but pc_consumed_c=0");
 
     property p_queue_pc_matches_f2;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         (ic_resp_valid && f2_work_line_valid_c) |->
         (icq_deq_line_addr == f2_work_line_addr_c);
     endproperty
@@ -114,7 +121,7 @@ module fetch_frontend_assertions
                     icq_deq_line_addr, f2_work_line_addr_c, f2_work_pc_c);
 
     property p_icq_owner_entry_matches_ftq_wb;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         icq_deq_owner_match_c |->
         (icq_deq_ftq_entry == ftq_ifu_wb_owner_entry);
     endproperty
@@ -127,7 +134,7 @@ module fetch_frontend_assertions
                     ftq_ifu_wb_owner_tag);
 
     property p_same_line_reuse_has_line_state;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         f2_line_state_use_c |->
         (f2_line_state_valid_c &&
          f2_work_line_valid_c &&
@@ -145,7 +152,7 @@ module fetch_frontend_assertions
                     ftq_current_epoch);
 
     property p_ifu_work_cursor_line_self_consistent;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         (f2_work_line_valid_c == f2_work_valid_c) &&
         (!f2_work_valid_c ||
          (f2_work_line_addr_c == f2_work_pc_c[63:LINE_BITS]));
@@ -159,7 +166,7 @@ module fetch_frontend_assertions
                     f2_work_line_addr_c);
 
     property p_f2_pop_matches_ftq_wb_owner;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ftq_ifu_pop_valid |->
         (f2_work_ftq_valid_c &&
          ftq_ifu_wb_owner_valid &&
@@ -176,7 +183,7 @@ module fetch_frontend_assertions
                     ftq_ifu_wb_owner_tag);
 
     property p_f2_wrong_owner_completion_candidate_does_not_pop;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         (f2_owner_completion_candidate_c && !f2_ftq_owner_live_c) |->
         !ftq_ifu_pop_valid;
     endproperty
@@ -190,7 +197,7 @@ module fetch_frontend_assertions
                     ftq_ifu_wb_owner_tag);
 
     property p_ifu_req_pop_is_ready_enq;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ftq_ifu_req_pop_valid |->
         (ftq_enq_valid && ftq_enq_ready && !icq_full && !packet_buf_full);
     endproperty
@@ -203,7 +210,7 @@ module fetch_frontend_assertions
                     packet_buf_full);
 
     property p_ifu_cursor_loads_ftq_next_owner;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ifu_work_take_ftq_next_owner_c |=>
         (f2_work_valid_c &&
          f2_work_ftq_valid_c &&
@@ -221,7 +228,7 @@ module fetch_frontend_assertions
                     f2_work_ftq_alloc_tag_c);
 
     property p_first_owner_packet_starts_at_owner_pc;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         f2_owner_delivery_push_c |->
         (packet_buf_in.valid &&
          (packet_buf_in.fetch_count != 3'd0) &&
@@ -239,7 +246,7 @@ module fetch_frontend_assertions
                     packet_buf_in.ftq_alloc_tag);
 
     property p_first_owner_packet_matches_work_owner;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         f2_owner_delivery_push_c |->
         (packet_buf_in.valid &&
          (packet_buf_in.ftq_idx == f2_work_ftq_idx_c) &&
@@ -255,7 +262,7 @@ module fetch_frontend_assertions
                     f2_work_ftq_alloc_tag_c);
 
     property p_ifu_redirect_loads_matching_next_owner;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ifu_work_redirect_next_owner_match_c |=>
         (f2_work_valid_c &&
          f2_work_ftq_valid_c &&
@@ -272,7 +279,7 @@ module fetch_frontend_assertions
                     f2_work_ftq_alloc_tag_c);
 
     property p_ifu_same_owner_advance_keeps_owner;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ifu_work_same_owner_advance_c |=>
         ((ftq_current_epoch != $past(ftq_current_epoch, 1, 1'b1, @(posedge clk))) ||
         (f2_work_valid_c &&
@@ -298,7 +305,7 @@ module fetch_frontend_assertions
                     $past(ifu_work_take_remainder_request_owner_c, 1, 1'b1, @(posedge clk)));
 
     property p_runahead_depth_is_bounded;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         !ifu_runahead_depth_gt1_c &&
         (({1'b0, ftq_count_alloc_to_ifu} +
           {1'b0, ftq_count_ifu_to_wb}) <= (FTQ_IDX_BITS+2)'(2));
@@ -310,7 +317,7 @@ module fetch_frontend_assertions
                     ftq_count_ifu_to_wb);
 
     property p_runahead_pending_matches_next_owner;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         (ifu_runahead_pending_c &&
          (ifu_runahead_pending_pc_c != 64'd0)) |->
         (redirect_valid ||
@@ -333,7 +340,7 @@ module fetch_frontend_assertions
                     ifu_runahead_pending_tag_c);
 
     property p_redirect_match_does_not_enqueue_duplicate;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ifu_work_redirect_next_owner_match_c |-> !ftq_enq_valid;
     endproperty
     a_redirect_match_does_not_enqueue_duplicate:
@@ -341,7 +348,7 @@ module fetch_frontend_assertions
         else $error("[INVARIANT_L] redirect consumed existing next owner and also enqueued duplicate");
 
     property p_runahead_future_owner_not_current_work;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         (ifu_runahead_pending_c &&
          f2_work_ftq_valid_c &&
          (f2_work_ftq_idx_c == ifu_runahead_pending_idx_c) &&
@@ -357,7 +364,7 @@ module fetch_frontend_assertions
                     ifu_runahead_pending_tag_c);
 
     property p_runahead_duplicate_block_has_no_enqueue;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ifu_runahead_duplicate_alloc_blocked_c |-> !ftq_enq_valid;
     endproperty
     a_runahead_duplicate_block_has_no_enqueue:
@@ -365,7 +372,7 @@ module fetch_frontend_assertions
         else $error("[INVARIANT_N] runahead duplicate-allocation block still enqueued");
 
     property p_runahead_fire_has_clean_request_pop;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ifu_runahead_req_fire_c |->
         (ftq_ifu_req_pop_valid && ftq_enq_valid && ftq_enq_ready &&
          !icq_full && !packet_buf_full);
@@ -375,7 +382,7 @@ module fetch_frontend_assertions
         else $error("[INVARIANT_O] runahead request fired without clean FTQ/ICQ handoff");
 
     property p_runahead_cancel_has_current_pop_and_enqueue;
-        @(posedge clk) disable iff (!rst_n || redirect_valid)
+        @(posedge clk) disable iff (!rst_n || (assertions_disabled != 0) || redirect_valid)
         ifu_runahead_cancel_next_c |->
         ftq_enq_valid;
     endproperty

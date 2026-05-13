@@ -163,6 +163,8 @@ module pred_checker
 
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (slot_valid_i[i] &&
+                    (slot_pc_i[i][63:LINE_BITS] ==
+                     ftq_entry_i.block_pc[63:LINE_BITS]) &&
                     (slot_pc_i[i][5:0] == ftq_entry_i.pred_ctl_offset)) begin
                     ftq_pred_ctl_slot_match_o = 1'b1;
                     ftq_pred_ctl_slot_o       = 3'(i);
@@ -267,6 +269,8 @@ module pred_checker
 
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (slot_valid_i[i] &&
+                        (slot_pc_i[i][63:LINE_BITS] ==
+                         work_pc_i[63:LINE_BITS]) &&
                         (slot_pc_i[i][5:0] == btb_offset_i)) begin
                         btb_branch_slot_c     = 3'(i);
                         btb_truncated_count_c = 3'(i + 1);
@@ -305,6 +309,8 @@ module pred_checker
 
                 for (int i = 0; i < PIPE_WIDTH; i++) begin
                     if (slot_valid_i[i] &&
+                        (slot_pc_i[i][63:LINE_BITS] ==
+                         work_pc_i[63:LINE_BITS]) &&
                         (slot_pc_i[i][5:0] == btb_alt_offset_i)) begin
                         btb_alt_branch_slot_c     = 3'(i);
                         btb_alt_truncated_count_c = 3'(i + 1);

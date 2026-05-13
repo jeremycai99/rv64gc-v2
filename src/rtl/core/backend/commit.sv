@@ -121,8 +121,20 @@ module commit
     // current exception or interrupt is delegated to S-mode.
     wire [63:0] mtvec_base = {mtvec[63:2], 2'b00};
     wire [63:0] stvec_base = {stvec[63:2], 2'b00};
+    logic [3:0] exception_cause_code;
+    always_comb begin
+        exception_cause_code = head_exc_code[exc_slot];
+        if (head_is_ecall[exc_slot]) begin
+            case (priv_mode)
+                PRIV_U:  exception_cause_code = EXC_ECALL_U;
+                PRIV_S:  exception_cause_code = EXC_ECALL_S;
+                default: exception_cause_code = EXC_ECALL_M;
+            endcase
+        end
+    end
+
     wire        exception_delegated =
-        (priv_mode != PRIV_M) && medeleg[{2'b00, head_exc_code[exc_slot]}];
+        (priv_mode != PRIV_M) && medeleg[{2'b00, exception_cause_code}];
     wire        interrupt_delegated =
         (priv_mode != PRIV_M) && mideleg[{1'b0, irq_cause[4:0]}];
     wire        trap_delegated = found_exception && exception_delegated;
@@ -200,8 +212,11 @@ module commit
             else if (!head_ready[i]) begin
                 scan_stopped = 1'b1;
             end
-            // FENCE.I is only allowed to retire once older committed stores
-            // have drained into the instruction-visible backing hierarchy.
+            // Plain FENCE and FENCE.I are only allowed to retire once older
+            // committed stores have drained into the backing hierarchy.
+            else if (head_is_fence[i] && !fence_i_ready) begin
+                scan_stopped = 1'b1;
+            end
             else if (head_is_fence_i[i] && !fence_i_ready) begin
                 scan_stopped = 1'b1;
             end
@@ -276,6 +291,11 @@ module commit
     wire sfence_vma_commit =
         (scan_count > 3'd0) &&
         head_is_sfence_vma[0] &&
+        !head_has_exception[0];
+    wire fence_commit_redirect =
+        (scan_count > 3'd0) &&
+        (head_is_fence[0] || head_is_fence_i[0]) &&
+        !head_is_sfence_vma[0] &&
         !head_has_exception[0];
     wire vm_serial_redirect = vm_state_csr_commit || sfence_vma_commit;
     wire take_interrupt = irq_pending &&
@@ -386,6 +406,14 @@ module commit
             // contract seen by younger memory operations.  Retire the
             // side effect, then refetch the next instruction under the new
             // VM state instead of letting pre-commit younger work survive.
+            flush_out.valid       = 1'b1;
+            flush_out.full_flush  = 1'b1;
+            flush_out.redirect_pc = head_pc[0] + 64'd4;
+        end else if (fence_commit_redirect) begin
+            // FENCE orders prior memory before later memory, and FENCE.I also
+            // changes the frontend visibility contract. Younger work may
+            // already be decoded or issued speculatively, so refetch after the
+            // ordered fence point once older stores have drained.
             flush_out.valid       = 1'b1;
             flush_out.full_flush  = 1'b1;
             flush_out.redirect_pc = head_pc[0] + 64'd4;

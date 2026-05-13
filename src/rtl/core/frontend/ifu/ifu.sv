@@ -183,6 +183,8 @@ module ifu
     logic        runahead_pending_match_next_c;
     logic        runahead_pending_target_match_c;
     logic        runahead_pending_clear_c;
+    logic        runahead_redirect_cancel_c;
+    logic        runahead_successor_cancel_c;
 
     assign f1_valid_o              = f1_valid_r;
     assign f1_pc_o                 = f1_pc_r;
@@ -305,11 +307,17 @@ module ifu
         (ftq_next_owner_entry_i.block_pc ==
          {successor_req_pc_i[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
         (ftq_next_owner_entry_i.start_offset == successor_req_pc_i[5:0]);
+    assign runahead_successor_cancel_c =
+        !redirect_i &&
+        successor_req_valid_i &&
+        runahead_pending_r &&
+        runahead_pending_match_next_c &&
+        !successor_next_owner_match_c;
     assign successor_req_allowed_c =
         successor_req_valid_i &&
-        runahead_budget_avail_c &&
-        !runahead_pending_r &&
-        !successor_next_owner_match_c;
+        !successor_next_owner_match_c &&
+        (runahead_successor_cancel_c ||
+         (runahead_budget_avail_c && !runahead_pending_r));
     assign runahead_candidate_c =
         !required_ftq_need_alloc_c &&
         !redirect_i &&
@@ -449,7 +457,8 @@ module ifu
         !fe_stall_c &&
         ftq_ifu_pop_valid_c &&
         ftq_next_owner_valid_i &&
-        seq_valid_i;
+        seq_valid_i &&
+        !runahead_pending_match_next_c;
     assign work_take_remainder_request_owner_o =
         !work_redirect_o &&
         !fe_stall_c &&
@@ -486,17 +495,19 @@ module ifu
         ({bpu_target_i[63:LINE_BITS], {LINE_BITS{1'b0}}} ==
          {runahead_pending_pc_r[63:LINE_BITS], {LINE_BITS{1'b0}}}) &&
         (bpu_target_i[5:0] == runahead_pending_pc_r[5:0]);
-    assign runahead_cancel_next_c =
+    assign runahead_redirect_cancel_c =
         work_redirect_o &&
         ftq_enq_valid_c &&
         (ftq_count_ifu_to_wb_i > {{FTQ_IDX_BITS{1'b0}}, 1'b1}) &&
         runahead_pending_r &&
         !runahead_pending_target_match_c;
+    assign runahead_cancel_next_c =
+        runahead_redirect_cancel_c ||
+        (runahead_successor_cancel_c && ftq_enq_valid_c);
     assign runahead_pending_clear_c =
         redirect_i ||
         runahead_cancel_next_c ||
-        runahead_redirect_match_o ||
-        (work_take_ftq_next_owner_o && runahead_pending_match_next_c);
+        runahead_redirect_match_o;
 
     always_comb begin
         if (redirect_i) begin

@@ -1168,10 +1168,52 @@ banner mode. It records reached milestones and the last reached milestone in
 `summary.json` and `summary.md`, so a timeout now reports the exact boot level
 instead of only `PASS` or `TIMEOUT`. RV64GC/FPU support is integrated and
 guarded against DS/CM regression. OpenSBI platform probing now works through
-the ASIC-style core/platform boundary. The first full Linux image is now
-loadable in the 64 MB Linux platform memory and reaches the OpenSBI S-mode
-handoff. Full Linux remains blocked before early console by the early
-`setup_vm` load-queue stall described above.
+the ASIC-style core/platform boundary. The first full Linux image is loadable
+in the 64 MB Linux platform memory, reaches the OpenSBI S-mode handoff, and
+now reaches Linux early console output. The old early `setup_vm` load-queue
+stall is no longer the active blocker.
+
+### Current Linux Oops Status
+
+The previous kernel-visible Oops was real, but the evidence points to frontend
+owner identity rather than Linux software:
+
+- Failing run: `linux_boot_results/stage3_linux_oops_regs_dsim_20260513`
+  reported `Unable to handle kernel NULL pointer dereference` and `Oops [#1]`
+  while repeatedly trapping at `0xffffffff805c5b54`.
+- Root cause 1: predicted-control slot matching compared only low offsets, so
+  a BTB/alternate-BTB hit from the next line could be treated as a valid
+  control instruction in the current fetched packet.
+- Root cause 2: an IFU demand-runahead target owner could be consumed as the
+  next ordinary FTQ owner before an intervening sequential successor owner was
+  delivered, then be allocated again when the real call redirect arrived.
+
+The current RTL fixes both contracts:
+
+- `pred_checker.sv` now requires line identity as well as low-offset identity
+  when matching FTQ, BTB, and alternate-BTB predicted-control slots.
+- `ifu.sv` cancels or replaces a pending runahead owner when a real successor
+  owner must be delivered first, and blocks pending-runahead owners from being
+  consumed through the ordinary next-owner path.
+- The simulation-only Linux trace was extended in `tb_linux.sv` so future
+  frontend owner failures can be isolated without adding debug behavior to
+  synthesizable RTL.
+
+Validation after the fix:
+
+- `linux_boot_results/stage3_linux_runahead_successor_cancel_dsim_10m_20260513a`
+  ran to 10M cycles with no `Oops`, no `Kernel panic`, and no
+  `Unable to handle` signature. It reached Linux early console and timed out
+  while executing kernel `__memset` around `0xffffffff805c5dxx`, which is a
+  long memory-clear path, not the previous `__memcpy` Oops.
+- The run did not reach the `riscv_clocksource` milestone yet. The next Linux
+  debug target is therefore forward progress through the long `__memset`
+  region and then timer/clocksource bring-up, not the old Oops.
+- DS/CM hard guard after the RTL change passed:
+  `benchmark_results/stage3_rtl_guard_stage3_linux_oops_frontend_fix_dsim_20260513a`.
+  Results: DS100 3.150055 DMIPS/MHz, DS300 3.218761 DMIPS/MHz,
+  CM1 6.649201 CM/MHz, CM10 6.872881 CM/MHz. Loop buffer and standalone
+  decoded-op replay remained inactive.
 
 ## Near-Term Non-Goals
 
@@ -1191,22 +1233,22 @@ handoff. Full Linux remains blocked before early console by the early
 | CLINT or ACLINT? | CLINT is acceptable for first boot because v1 already used it; ACLINT can replace it later if we want newer platform naming. |
 | ELF loader or hex only? | Add ELF/binary loading in the runner or memory model. Keep byte-hex compatibility for existing tests. |
 | How to stop the sim? | UART milestone or syscon poweroff. Never a core `tohost` port. |
-| What is the first success milestone? | OpenSBI platform probe is achieved. Next Stage 3 success is full RV64GC instruction compliance; next Linux success after that is early console, then initramfs `BOOT OK`. |
+| What is the first success milestone? | OpenSBI platform probe, full RV64GC instruction compliance, and Linux early console are achieved. Next Linux success is `riscv_clocksource`, then initramfs `BOOT OK`. |
 
 ## Current Verdict
 
-Stage 3 remains feasible, but the priority is recalibrated. The first platform
-blockers are resolved: v2 can execute an M-mode UART smoke and reach the
-OpenSBI platform-probe milestone through device-visible UART and CLINT paths
-while preserving the DS/CM performance gate. However, the next signoff blocker
-is full RV64GC instruction compliance, not the current Linux `setup_vm` trace:
+Stage 3 remains feasible. The first platform blockers are resolved: v2 can
+execute an M-mode UART smoke, reach the OpenSBI platform-probe milestone
+through device-visible UART and CLINT paths, pass the full RV64GC instruction
+compliance prerequisite, and reach Linux early console while preserving the
+DS/CM performance gate.
 
 - v2 has the right clean core boundary for ASIC-style Linux bring-up.
 - v2 now has an L0 UART/CLINT platform path for early M-mode smoke and L1
   OpenSBI platform probing.
-- v2 now has real RV64GC F/D execution in core RTL, with DSim FP smoke passing
-  and DS/CM performance preserved, but full standard RV64GC instruction
-  compliance has not yet been run or passed.
+- v2 now has real RV64GC F/D execution in core RTL, with DSim FP smoke passing,
+  full RV64GC instruction compliance closed for the current RTL candidate, and
+  DS/CM performance preserved.
 - v2 now has the Sv48 MMU/PTW/TLB scaffold, L2 PTW source port, data-side
   PTW and DTLB fault sidebands, LSU PA mux setup, data-side VM activation
   wired into the LSU, a commit-time VM serialization redirect for relevant CSR
@@ -1220,15 +1262,18 @@ is full RV64GC instruction compliance, not the current Linux `setup_vm` trace:
   covered by directed Sv48 smokes. Broader privileged/MMU directed tests remain
   open.
 - v2 now has a first 64 MB trimmed Linux image path and can execute OpenSBI
-  through S-mode payload handoff from that image, but Linux kernel debug is
-  parked until the instruction compliance gate passes.
-- v2 does not yet have Linux early console, Linux-visible PLIC/external
-  interrupts, or validated Linux timer behavior.
+  through S-mode payload handoff from that image. It reaches Linux early
+  console, and the previous Oops path is fixed by frontend owner-line identity
+  and runahead-successor ordering repairs.
+- v2 does not yet reach the Linux `riscv_clocksource` milestone, Linux-visible
+  PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 implementation should build and run the full RV64GC
-compliance gate. After that passes, resume the early Linux `setup_vm`
-load-queue stall before broadening platform devices. Sv39 should stay as a
-directed-test subset, but the primary Linux path is four-level Sv48 because
-that matches the intended Linux signoff configuration.
+The next Stage 3 implementation should continue Linux boot debug from the
+current early-console state. The immediate target is forward progress through
+the long kernel `__memset` region and then the `riscv_clocksource` milestone.
+Any RTL change on that path must still pass impacted compliance tests and the
+DS/CM hard guard before promotion. Sv39 should stay as a directed-test subset,
+but the primary Linux path is four-level Sv48 because that matches the
+intended Linux signoff configuration.

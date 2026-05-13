@@ -1535,6 +1535,16 @@ module rv64gc_core_top
     logic                     vm_serial_partial_flush_c;
     logic [1:0]               vm_serial_load_issue_suppress;
     logic [0:0]               vm_serial_sta_issue_suppress;
+    logic                     mem_fence_alloc_c;
+    logic [ROB_IDX_BITS-1:0]  mem_fence_alloc_idx_c;
+    logic                     mem_fence_inflight_r;
+    logic [ROB_IDX_BITS-1:0]  mem_fence_rob_idx_r;
+    logic [ROB_IDX_BITS:0]    mem_fence_age_c;
+    logic [ROB_IDX_BITS:0]    mem_fence_flush_tail_age_c;
+    logic                     mem_fence_partial_flush_c;
+    logic                     mem_fence_commit_c;
+    logic [1:0]               mem_fence_load_issue_suppress;
+    logic [0:0]               mem_fence_sta_issue_suppress;
     // D-cache fill snoop (produced by dcache, consumed by LSU instantiated
     // earlier in the file).
     logic        dc_fill_snoop_valid;
@@ -1816,10 +1826,12 @@ module rv64gc_core_top
     assign lsu_load_issue_suppress =
         lsu_load_issue_suppress_raw |
         store_iq_older_than_load |
-        vm_serial_load_issue_suppress;
+        vm_serial_load_issue_suppress |
+        mem_fence_load_issue_suppress;
     assign lsu_sta_issue_suppress =
         lsu_sta_issue_suppress_raw |
-        vm_serial_sta_issue_suppress;
+        vm_serial_sta_issue_suppress |
+        mem_fence_sta_issue_suppress;
 
     always_comb begin
         vm_serial_alloc_c = 1'b0;
@@ -1829,6 +1841,14 @@ module rv64gc_core_top
         vm_serial_partial_flush_c = 1'b0;
         vm_serial_load_issue_suppress = '0;
         vm_serial_sta_issue_suppress = '0;
+        mem_fence_alloc_c = 1'b0;
+        mem_fence_alloc_idx_c = '0;
+        mem_fence_age_c = '0;
+        mem_fence_flush_tail_age_c = '0;
+        mem_fence_partial_flush_c = 1'b0;
+        mem_fence_commit_c = 1'b0;
+        mem_fence_load_issue_suppress = '0;
+        mem_fence_sta_issue_suppress = '0;
 
         if (vm_serial_rob_idx_r >= rob_head_idx) begin
             vm_serial_age_c =
@@ -1850,11 +1870,36 @@ module rv64gc_core_top
                 {1'b0, flush_out.rob_idx};
         end
 
+        if (mem_fence_rob_idx_r >= rob_head_idx) begin
+            mem_fence_age_c =
+                {1'b0, mem_fence_rob_idx_r} - {1'b0, rob_head_idx};
+        end else begin
+            mem_fence_age_c =
+                (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                {1'b0, rob_head_idx} +
+                {1'b0, mem_fence_rob_idx_r};
+        end
+
+        if (flush_out.rob_idx >= rob_head_idx) begin
+            mem_fence_flush_tail_age_c =
+                {1'b0, flush_out.rob_idx} - {1'b0, rob_head_idx};
+        end else begin
+            mem_fence_flush_tail_age_c =
+                (ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                {1'b0, rob_head_idx} +
+                {1'b0, flush_out.rob_idx};
+        end
+
         vm_serial_partial_flush_c =
             vm_serial_inflight_r &&
             flush_out.valid &&
             !flush_out.full_flush &&
             (vm_serial_age_c >= vm_serial_flush_tail_age_c);
+        mem_fence_partial_flush_c =
+            mem_fence_inflight_r &&
+            flush_out.valid &&
+            !flush_out.full_flush &&
+            (mem_fence_age_c >= mem_fence_flush_tail_age_c);
 
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             logic csr_write;
@@ -1874,11 +1919,27 @@ module rv64gc_core_top
                 (ren_insn[i].base.is_sfence_vma ||
                  (ren_insn[i].base.is_csr &&
                   csr_write &&
-                  ((ren_insn[i].base.csr_addr == CSR_SATP) ||
-                   (ren_insn[i].base.csr_addr == CSR_MSTATUS) ||
-                   (ren_insn[i].base.csr_addr == CSR_SSTATUS))))) begin
+                    ((ren_insn[i].base.csr_addr == CSR_SATP) ||
+                     (ren_insn[i].base.csr_addr == CSR_MSTATUS) ||
+                     (ren_insn[i].base.csr_addr == CSR_SSTATUS))))) begin
                 vm_serial_alloc_c = 1'b1;
                 vm_serial_alloc_idx_c = rob_alloc_idx[i];
+            end
+
+            if (!mem_fence_inflight_r &&
+                !mem_fence_alloc_c &&
+                (3'(i) < ren_count_w) &&
+                !ren_insn[i].base.has_exception &&
+                (ren_insn[i].base.is_fence ||
+                 ren_insn[i].base.is_fence_i)) begin
+                mem_fence_alloc_c = 1'b1;
+                mem_fence_alloc_idx_c = rob_alloc_idx[i];
+            end
+
+            if (mem_fence_inflight_r &&
+                commit_out[i].valid &&
+                (commit_out[i].rob_idx == mem_fence_rob_idx_r)) begin
+                mem_fence_commit_c = 1'b1;
             end
         end
 
@@ -1900,6 +1961,10 @@ module rv64gc_core_top
                 vm_serial_inflight_r &&
                 iq_load_issue_candidate_valid[p] &&
                 (load_age > vm_serial_age_c);
+            mem_fence_load_issue_suppress[p] =
+                mem_fence_inflight_r &&
+                iq_load_issue_candidate_valid[p] &&
+                (load_age > mem_fence_age_c);
         end
 
         if (iq_store_issue_data[0].rob_idx >= rob_head_idx) begin
@@ -1917,21 +1982,51 @@ module rv64gc_core_top
                   {1'b0, iq_store_issue_data[0].rob_idx}) >
                  vm_serial_age_c);
         end
+
+        if (iq_store_issue_data[0].rob_idx >= rob_head_idx) begin
+            mem_fence_sta_issue_suppress[0] =
+                mem_fence_inflight_r &&
+                iq_store_issue_candidate_valid_s[0] &&
+                (({1'b0, iq_store_issue_data[0].rob_idx} -
+                  {1'b0, rob_head_idx}) > mem_fence_age_c);
+        end else begin
+            mem_fence_sta_issue_suppress[0] =
+                mem_fence_inflight_r &&
+                iq_store_issue_candidate_valid_s[0] &&
+                (((ROB_IDX_BITS+1)'(ROB_DEPTH) -
+                  {1'b0, rob_head_idx} +
+                  {1'b0, iq_store_issue_data[0].rob_idx}) >
+                 mem_fence_age_c);
+        end
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             vm_serial_inflight_r <= 1'b0;
             vm_serial_rob_idx_r  <= '0;
+            mem_fence_inflight_r <= 1'b0;
+            mem_fence_rob_idx_r  <= '0;
         end else if (flush_out.valid && flush_out.full_flush) begin
             vm_serial_inflight_r <= 1'b0;
             vm_serial_rob_idx_r  <= '0;
-        end else if (vm_serial_partial_flush_c) begin
-            vm_serial_inflight_r <= 1'b0;
-            vm_serial_rob_idx_r  <= '0;
-        end else if (vm_serial_alloc_c) begin
-            vm_serial_inflight_r <= 1'b1;
-            vm_serial_rob_idx_r  <= vm_serial_alloc_idx_c;
+            mem_fence_inflight_r <= 1'b0;
+            mem_fence_rob_idx_r  <= '0;
+        end else begin
+            if (vm_serial_partial_flush_c) begin
+                vm_serial_inflight_r <= 1'b0;
+                vm_serial_rob_idx_r  <= '0;
+            end else if (vm_serial_alloc_c) begin
+                vm_serial_inflight_r <= 1'b1;
+                vm_serial_rob_idx_r  <= vm_serial_alloc_idx_c;
+            end
+
+            if (mem_fence_partial_flush_c || mem_fence_commit_c) begin
+                mem_fence_inflight_r <= 1'b0;
+                mem_fence_rob_idx_r  <= '0;
+            end else if (mem_fence_alloc_c) begin
+                mem_fence_inflight_r <= 1'b1;
+                mem_fence_rob_idx_r  <= mem_fence_alloc_idx_c;
+            end
         end
     end
 
@@ -5162,6 +5257,13 @@ module rv64gc_core_top
                 if (commit_out[i].valid && rob_head_has_exception[i] && !trap_valid) begin
                     trap_valid  = 1'b1;
                     trap_cause  = {60'd0, rob_head_exc_code[i]};
+                    if (rob_head_is_ecall[i]) begin
+                        case (csr_priv_mode)
+                            PRIV_U:  trap_cause = {60'd0, EXC_ECALL_U};
+                            PRIV_S:  trap_cause = {60'd0, EXC_ECALL_S};
+                            default: trap_cause = {60'd0, EXC_ECALL_M};
+                        endcase
+                    end
                     trap_pc     = rob_head_pc[i];
                     trap_val    = rob_head_exc_tval[i];
                 end
