@@ -15,6 +15,7 @@ module ifu_line_fetch
     input  logic                          clk,
     input  logic                          rst_n,
     input  logic                          flush_i,
+    input  logic                          redirect_scrub_i,
     input  logic                          fence_i,
 
     input  logic                          req_valid_i,
@@ -110,8 +111,22 @@ module ifu_line_fetch
     logic [511:0] merged_resp_data_c;
     logic         merged_resp_hit_c;
     logic         instr_vm_lookup_c;
+    logic         vm_req_valid_r;
+    logic [63:0]  vm_req_va_r;
+    logic [63:0]  vm_req_pa_r;
+    logic         vm_req_owner_valid_r;
+    logic [FTQ_IDX_BITS-1:0] vm_req_owner_idx_r;
+    logic [FTQ_EPOCH_BITS-1:0] vm_req_owner_epoch_r;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] vm_req_owner_alloc_tag_r;
+    ftq_entry_t   vm_req_owner_entry_r;
     logic         icache_req_valid_c;
     logic [63:0]  icache_req_addr_c;
+    logic [63:0]  icache_req_va_c;
+    logic         icache_req_owner_valid_c;
+    logic [FTQ_IDX_BITS-1:0] icache_req_owner_idx_c;
+    logic [FTQ_EPOCH_BITS-1:0] icache_req_owner_epoch_c;
+    logic [FTQ_ALLOC_TAG_BITS-1:0] icache_req_owner_alloc_tag_c;
+    ftq_entry_t   icache_req_owner_entry_c;
     logic [63:0]  ic_req_addr_pipe_r;
     logic         ic_req_ftq_pipe_valid_r;
     logic [FTQ_IDX_BITS-1:0] ic_req_ftq_pipe_idx_r;
@@ -123,9 +138,11 @@ module ifu_line_fetch
     logic         icq_deq_unowned_stale_c;
     logic         icq_deq_prior_owner_line_c;
     logic         icq_line_matches_work_c;
+    logic         icq_deq_redirect_stale_c;
     logic         icq_deq_stale_c;
     logic         icq_future_capture_c;
     logic         icq_deq_ready_c;
+    logic         redirect_scrub_r;
     logic         line_state_valid_r;
     logic [63:LINE_BITS] line_state_addr_r;
     logic [511:0] line_state_data_r;
@@ -147,18 +164,30 @@ module ifu_line_fetch
     logic         line_resp_hit_c;
     logic [63:LINE_BITS] line_resp_addr_c;
 
-    assign instr_vm_lookup_c = instr_vm_active_i && f1_valid_i && !flush_i;
+    assign instr_vm_lookup_c =
+        instr_vm_active_i && f1_valid_i && !flush_i && !vm_req_valid_r;
     assign itlb_lookup_valid_o = instr_vm_lookup_c;
     assign itlb_lookup_va_o    = req_addr_i;
     assign itlb_miss_valid_o   = instr_vm_lookup_c && !itlb_hit_i && !itlb_fault_i;
     assign itlb_miss_va_o      = req_addr_i;
     assign instr_translation_stall_o =
-        instr_vm_lookup_c && (!itlb_hit_i || itlb_fault_i);
+        instr_vm_active_i && f1_valid_i && !flush_i && !vm_req_valid_r;
 
     assign icache_req_valid_c =
         req_valid_i &&
-        (!instr_vm_active_i || (itlb_hit_i && !itlb_fault_i));
-    assign icache_req_addr_c = instr_vm_active_i ? itlb_pa_i : req_addr_i;
+        (!instr_vm_active_i || vm_req_valid_r);
+    assign icache_req_addr_c = instr_vm_active_i ? vm_req_pa_r : req_addr_i;
+    assign icache_req_va_c   = instr_vm_active_i ? vm_req_va_r : req_addr_i;
+    assign icache_req_owner_valid_c =
+        instr_vm_active_i ? vm_req_owner_valid_r : req_owner_valid_i;
+    assign icache_req_owner_idx_c =
+        instr_vm_active_i ? vm_req_owner_idx_r : req_owner_idx_i;
+    assign icache_req_owner_epoch_c =
+        instr_vm_active_i ? vm_req_owner_epoch_r : req_owner_epoch_i;
+    assign icache_req_owner_alloc_tag_c =
+        instr_vm_active_i ? vm_req_owner_alloc_tag_r : req_owner_alloc_tag_i;
+    assign icache_req_owner_entry_c =
+        instr_vm_active_i ? vm_req_owner_entry_r : req_owner_entry_i;
 
     assign nlpb_trigger      =
         !instr_vm_active_i && ic_resp_valid_comb && ic_resp_hit_comb;
@@ -202,12 +231,18 @@ module ifu_line_fetch
         icq_deq_current_owner_match_c &&
         work_line_valid_i &&
         (icq_deq_line_addr_o < work_line_addr_i);
+    assign icq_deq_redirect_stale_c =
+        redirect_scrub_r &&
+        icq_deq_current_owner_match_c &&
+        work_line_valid_i &&
+        !icq_line_matches_work_c;
     assign icq_deq_stale_c =
         icq_deq_valid_o &&
         (!icq_deq_ftq_valid_o ||
          (icq_deq_ftq_epoch_o != current_epoch_i) ||
          icq_deq_unowned_stale_c ||
-         icq_deq_prior_owner_line_c);
+         icq_deq_prior_owner_line_c ||
+         icq_deq_redirect_stale_c);
     assign icq_future_capture_c =
         icq_deq_valid_o &&
         !icq_line_matches_work_c &&
@@ -307,6 +342,15 @@ module ifu_line_fetch
             nlpb_resp_valid_r <= 1'b0;
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
+            redirect_scrub_r            <= 1'b0;
+            vm_req_valid_r              <= 1'b0;
+            vm_req_va_r                 <= '0;
+            vm_req_pa_r                 <= '0;
+            vm_req_owner_valid_r        <= 1'b0;
+            vm_req_owner_idx_r          <= '0;
+            vm_req_owner_epoch_r        <= '0;
+            vm_req_owner_alloc_tag_r    <= '0;
+            vm_req_owner_entry_r        <= '0;
             ic_req_addr_pipe_r          <= '0;
             ic_req_ftq_pipe_valid_r     <= 1'b0;
             ic_req_ftq_pipe_idx_r       <= '0;
@@ -329,6 +373,15 @@ module ifu_line_fetch
             nlpb_resp_valid_r <= 1'b0;
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
+            redirect_scrub_r <= 1'b0;
+            vm_req_valid_r <= 1'b0;
+            vm_req_va_r    <= '0;
+            vm_req_pa_r    <= '0;
+            vm_req_owner_valid_r     <= 1'b0;
+            vm_req_owner_idx_r       <= '0;
+            vm_req_owner_epoch_r     <= '0;
+            vm_req_owner_alloc_tag_r <= '0;
+            vm_req_owner_entry_r     <= '0;
             ic_req_ftq_pipe_valid_r <= 1'b0;
             line_state_valid_r <= 1'b0;
             line_state_addr_r  <= '0;
@@ -343,18 +396,51 @@ module ifu_line_fetch
             future_line_ftq_alloc_tag_r <= '0;
             future_line_ftq_entry_r     <= '0;
         end else begin
+            if (redirect_scrub_i)
+                redirect_scrub_r <= 1'b1;
+            else if (line_resp_valid_o)
+                redirect_scrub_r <= 1'b0;
+
             nlpb_resp_valid_r <=
                 f1_valid_i && !stall_i && !instr_vm_active_i && nlpb_hit_comb;
             nlpb_resp_addr_r  <= {req_addr_i[63:LINE_BITS], {LINE_BITS{1'b0}}};
             nlpb_resp_data_r  <= nlpb_data_comb;
+            if (!instr_vm_active_i) begin
+                vm_req_valid_r <= 1'b0;
+                vm_req_va_r    <= '0;
+                vm_req_pa_r    <= '0;
+                vm_req_owner_valid_r     <= 1'b0;
+                vm_req_owner_idx_r       <= '0;
+                vm_req_owner_epoch_r     <= '0;
+                vm_req_owner_alloc_tag_r <= '0;
+                vm_req_owner_entry_r     <= '0;
+            end else if (icache_req_valid_c) begin
+                vm_req_valid_r <= 1'b0;
+                vm_req_va_r    <= '0;
+                vm_req_pa_r    <= '0;
+                vm_req_owner_valid_r     <= 1'b0;
+                vm_req_owner_idx_r       <= '0;
+                vm_req_owner_epoch_r     <= '0;
+                vm_req_owner_alloc_tag_r <= '0;
+                vm_req_owner_entry_r     <= '0;
+            end else if (instr_vm_lookup_c && itlb_hit_i && !itlb_fault_i) begin
+                vm_req_valid_r           <= 1'b1;
+                vm_req_va_r              <= req_addr_i;
+                vm_req_pa_r              <= itlb_pa_i;
+                vm_req_owner_valid_r     <= req_owner_valid_i;
+                vm_req_owner_idx_r       <= req_owner_idx_i;
+                vm_req_owner_epoch_r     <= req_owner_epoch_i;
+                vm_req_owner_alloc_tag_r <= req_owner_alloc_tag_i;
+                vm_req_owner_entry_r     <= req_owner_entry_i;
+            end
             if (icache_req_valid_c) begin
-                ic_req_addr_pipe_r <= req_addr_i;
-                ic_req_ftq_pipe_valid_r <= req_owner_valid_i;
-                if (req_owner_valid_i) begin
-                    ic_req_ftq_pipe_idx_r       <= req_owner_idx_i;
-                    ic_req_ftq_pipe_epoch_r     <= req_owner_epoch_i;
-                    ic_req_ftq_pipe_alloc_tag_r <= req_owner_alloc_tag_i;
-                    ic_req_ftq_pipe_entry_r     <= req_owner_entry_i;
+                ic_req_addr_pipe_r <= icache_req_va_c;
+                ic_req_ftq_pipe_valid_r <= icache_req_owner_valid_c;
+                if (icache_req_owner_valid_c) begin
+                    ic_req_ftq_pipe_idx_r       <= icache_req_owner_idx_c;
+                    ic_req_ftq_pipe_epoch_r     <= icache_req_owner_epoch_c;
+                    ic_req_ftq_pipe_alloc_tag_r <= icache_req_owner_alloc_tag_c;
+                    ic_req_ftq_pipe_entry_r     <= icache_req_owner_entry_c;
                 end else begin
                     ic_req_ftq_pipe_idx_r       <= '0;
                     ic_req_ftq_pipe_epoch_r     <= '0;

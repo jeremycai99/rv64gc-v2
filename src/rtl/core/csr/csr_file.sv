@@ -371,6 +371,7 @@ module csr_file
     // Precomputed CSR operation results for FFLAGS/FRM/FCSR/SATP bypass
     // =========================================================================
     logic [63:0] csr_op_fflags, csr_op_frm, csr_op_fcsr, csr_op_satp;
+    logic        csr_op_satp_legal;
     always_comb begin
         case (write_op)
             2'd0:    csr_op_fflags = write_data;
@@ -396,6 +397,10 @@ module csr_file
             2'd2:    csr_op_satp = satp_r & ~write_data;
             default: csr_op_satp = satp_r;
         endcase
+        csr_op_satp_legal =
+            (csr_op_satp[63:60] == 4'd0) ||
+            (csr_op_satp[63:60] == 4'd8) ||
+            (csr_op_satp[63:60] == 4'd9);
     end
 
     // =========================================================================
@@ -427,7 +432,8 @@ module csr_file
             CSR_SIP:       read_data = csr_bypass ?
                                (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mip_eff) | (write_data)) : (write_op == 2'd2) ? ((mip_eff) & ~(write_data)) : (mip_eff)) & mideleg_r)
                              : (mip_eff & mideleg_r);
-            CSR_SATP:      read_data = csr_bypass ? ((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((satp_r) | (write_data)) : (write_op == 2'd2) ? ((satp_r) & ~(write_data)) : (satp_r)) : satp_r;
+            CSR_SATP:      read_data = (csr_bypass && csr_op_satp_legal)
+                             ? csr_op_satp : satp_r;
 
             CSR_MSTATUS:   read_data = csr_bypass ? mstatus_norm_bypass : mstatus_norm;
             CSR_MISA:      read_data = MISA_VAL;
@@ -586,9 +592,7 @@ module csr_file
                                  (((write_op == 2'd0) ? (write_data) : (write_op == 2'd1) ? ((mip_r) | (write_data)) : (write_op == 2'd2) ? ((mip_r) & ~(write_data)) : (mip_r)) & mideleg_r);
                     CSR_SATP: begin
                         // Accept Bare (0), Sv39 (8), Sv48 (9)
-                        if (csr_op_satp[63:60] == 4'd0 ||
-                            csr_op_satp[63:60] == 4'd8 ||
-                            csr_op_satp[63:60] == 4'd9)
+                        if (csr_op_satp_legal)
                             satp_r <= csr_op_satp;
                     end
                     CSR_MSTATUS:

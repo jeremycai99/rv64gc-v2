@@ -7,7 +7,7 @@
     model = "rv64gc-v2-linux-sim";
 
     chosen {
-        bootargs = "console=ttyS0 earlycon=uart8250,mmio,0x10000000 loglevel=8 ignore_loglevel nokaslr";
+        bootargs = "console=ttyS0 earlycon=uart8250,mmio,0x10000000 loglevel=8 ignore_loglevel nokaslr no5lvl";
         stdout-path = "/soc/serial@10000000";
     };
 

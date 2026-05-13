@@ -118,6 +118,7 @@ module fetch_top
     // BPU redirect from F2 (predicted-taken branch)
     logic        f2_bpu_redirect;
     logic [63:0] f2_bpu_target;
+    logic        f2_bpu_redirect_scrub_r;
     logic        req_redirect_c;
     logic        line_straddle_advance_c;
 
@@ -425,10 +426,18 @@ module fetch_top
         end
     end
 
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            f2_bpu_redirect_scrub_r <= 1'b0;
+        else
+            f2_bpu_redirect_scrub_r <= f2_bpu_redirect && !redirect_valid;
+    end
+
     ifu_line_fetch #(.ICQ_DEPTH(ICQ_DEPTH)) u_ifu_line_fetch (
         .clk                    (clk),
         .rst_n                  (rst_n),
         .flush_i                (redirect_valid),
+        .redirect_scrub_i       (f2_bpu_redirect_scrub_r),
         .fence_i                (fence_i),
         .req_valid_i            (ic_req_valid),
         .req_addr_i             (ic_req_addr),

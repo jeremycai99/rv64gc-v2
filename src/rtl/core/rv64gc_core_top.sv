@@ -4903,6 +4903,7 @@ module rv64gc_core_top
         .head_is_wfi            (rob_head_is_wfi),
         .head_is_fused          (rob_head_is_fused),
         .fence_i_ready          (memory_fence_i_ready),
+        .sfence_vma_ready       (memory_fence_i_ready),
         .head_branch_taken      (rob_head_branch_taken),
         .head_branch_target     (rob_head_branch_target),
         .head_branch_mispredict (rob_head_branch_mispredict),

@@ -3,12 +3,11 @@
 Date: May 10, 2026
 
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
-phase, but Linux kernel debug is now parked behind a higher-priority RV64GC
-instruction compliance gate. L0 platform smoke, L1 OpenSBI platform-probe, and
-directed Sv48 MMU/PTW/TLB milestones are working through the ASIC-style core
-boundary. The first trimmed Linux image boot reaches the OpenSBI S-mode handoff
-and exposes an early `setup_vm` load-queue stall, but that stall must not drive
-the next RTL work until full RV64GC compliance is proven.
+phase. The RV64GC instruction compliance prerequisite is closed on the current
+RTL candidate, the DS/CM hard performance gate is clean, and the trimmed
+OpenSBI plus Linux image now reaches the Linux early console milestone through
+the ASIC-style core boundary. The next Linux target is continuing beyond
+`earlycon:` toward timer, UART-driver, kernel-init, and userspace milestones.
 
 ## Goal
 
@@ -42,10 +41,11 @@ platform simulation stack:
 
 ## Highest Priority: RV64GC Instruction Compliance Gate
 
-Linux boot is no longer the next debug target. Before resuming kernel bring-up,
-rv64gc-v2 must pass a full RV64GC instruction compliance gate. The current
-custom ISA smokes and directed VM smokes are valuable, but they are not enough
-evidence for Linux-scale execution.
+Linux kernel bring-up must stay behind a full RV64GC instruction compliance
+gate. This gate is now passing for the current RTL candidate, and it remains
+mandatory after any further RTL change. Custom ISA smokes and directed VM
+smokes are valuable, but they are not enough evidence for Linux-scale
+execution.
 
 Rationale:
 
@@ -93,18 +93,63 @@ Compliance acceptance:
   must be explicit, documented, and limited to unsupported optional extensions.
 - The existing Stage 3 DS/CM hard gate passes after every RTL change made to
   fix compliance.
-- Only after this gate passes should Stage 3 resume the Linux `setup_vm`
-  load-queue stall investigation.
+- Only after this gate passes should Stage 3 resume Linux kernel debug.
 
 Current compliance status:
 
-- v2 has custom bare-metal ISA smoke rows for a small integer and optional
-  bitmanip subset, plus one FP smoke. That is not full RV64GC compliance.
+- Full profiled RV64GC compliance passes on the current RTL candidate:
+  `benchmark_results/rv64gc_compliance_linux_frontend_scrub_profiled_20260512`
+  reports `113/113` rows with endpoint `PASS` and signoff gate `PASS`.
+- The compliance audit is captured in
+  `doc/rv64gc_compliance_audit_2026-05-12.md`.
 - v2 has directed Sv48 MMU, permission, A/D, fault, and canonical-address
   smokes. These prove important privileged-memory contracts but do not replace
   instruction compliance.
-- The Linux `setup_vm` trace and UART logs are preserved as evidence, but Linux
-  kernel debug is parked until this compliance gate is complete.
+- Linux kernel debug may proceed only while this compliance gate and the DS/CM
+  hard performance gate stay clean after each RTL change.
+
+## Current Linux Evidence
+
+Latest validated Linux milestone:
+
+- Artifact:
+  `linux_boot_results/stage3_linux_scrub_early_console_dsim_20260512`.
+- Result: `PASS`, target milestone `linux_early_console`.
+- UART reached `earlycon:` at cycle `3,970,023`.
+- The same run prints the OpenSBI banner, OpenSBI platform probe data, Linux
+  version line, machine model, SBI extension detection, and Linux early
+  console marker.
+
+SATP interpretation:
+
+- A long window with `satp=0` is not by itself a deadlock. OpenSBI runs in
+  M-mode with `satp=0`, and early Linux can still be executing identity-mapped
+  S-mode setup code before enabling the final page table.
+- The useful liveness signal is commit progress. In the latest passing run, the
+  `2,000,000` cycle status line has `priv=1`, `satp=0`,
+  `last_commit_cyc=1999998`, `commit_count=1`, active UART traffic, and no
+  trap. This is forward progress, not a deadlock.
+- Treat repeated identical `satp` values as a blocker only when paired with a
+  stalled `last_commit_cyc`, no UART/MMIO movement, or a stable frontend/backend
+  stall signature.
+
+Frontend fix note:
+
+- A broad predicted-control ICQ flush fixed the stale fallthrough boot hang but
+  caused a large DS/CM regression. It is rejected and must not be revived as a
+  full response-queue flush.
+- The accepted candidate is a targeted redirect scrub in `ifu_line_fetch.sv`:
+  after a predicted-control redirect it drains only queued current-owner lines
+  whose line address does not match the redirected work line. This preserves
+  Linux early-console progress without perturbing steady-state I-cache response
+  delivery.
+- Guard artifact:
+  `benchmark_results/stage3_linux_frontend_scrub_guard_20260512` passes the
+  Stage 3 DS/CM hard gate:
+  DS100 `18,080` cycles, `3.147964 DMIPS/MHz`;
+  DS300 `53,047` cycles, `3.218761 DMIPS/MHz`;
+  CM1 `150,394` cycles, `6.649201 CM/MHz`;
+  CM10 `1,454,994` cycles, `6.872881 CM/MHz`.
 
 ## Hard RTL Modification Gate
 
@@ -313,9 +358,9 @@ Implemented methodology adjustment for v2:
 | Core boundary | `rv64gc_core_top.sv` exposes memory request/response, interrupt inputs, and `time_val`; no fixed `tohost` port | Good ASIC-style boundary to preserve |
 | Reset | frontend reset vector is `0x80000000` | Compatible with OpenSBI `FW_TEXT_START=0x80000000` |
 | Privilege CSRs | `csr_file.sv` has M/S privilege state, delegation CSRs, `satp`, traps, `mret`, `sret`, interrupt inputs, `SUM`, `MXR`, and `MPRV` state | Basic OpenSBI trap and handoff validation now passes; Sv48 permission behavior is now covered by directed VM smoke rows |
-| RV64GC ISA | Integer, atomics, compressed, and now F/D floating point are integrated in the core RTL and advertised through `misa`, but full RV64GC instruction compliance is not yet proven | Highest priority is now a full RV64GC compliance gate before more Linux kernel debug; keep FP support in the ASIC-style core datapath and do not emulate FP in the testbench |
+| RV64GC ISA | Integer, atomics, compressed, and F/D floating point are integrated in the core RTL and advertised through `misa`; full profiled RV64GC compliance now passes `113/113` rows | Keep FP support in the ASIC-style core datapath and rerun full compliance after any RTL change that can affect ISA, CSR, memory, frontend delivery, or exception behavior |
 | MMU | `src/rtl/core/mmu/` now contains Sv39/Sv48 ITLB, DTLB, and shared PTW blocks; instruction and data translation are wired through `rv64gc_core_top.sv` | Directed Sv48 data, instruction, fault, A/D, permission, superpage, and canonical-address smokes pass; remaining MMU work is broader coverage and Linux-scale integration |
-| Platform devices | L0 `tb_linux` now has an uncached MMIO path, polling UART, and CLINT timer/software interrupt block; PLIC is only a reserved zero-response range | OpenSBI platform probing now passes; first Linux image boot reaches S-mode handoff and early `setup_vm` before blocking on a load-queue stall |
+| Platform devices | L0 `tb_linux` now has an uncached MMIO path, polling UART, and CLINT timer/software interrupt block; PLIC is only a reserved zero-response range | OpenSBI platform probing and Linux early console now pass; next work is Linux timekeeping, UART-driver bind, kernel init, and userspace handoff |
 | Simulation memory | `sim_memory.sv` defaults to 2 MB for benchmark sims and is parameterized; `tb_linux.sv` raises the Linux platform instance to 64 MB | Enough for the trimmed OpenSBI plus Linux `fw_payload` image, initramfs, and DTB at `0x82000000`; benchmark harness memory sizing is unchanged |
 | Interrupt hookup | `tb_linux.sv` connects CLINT `mtime`, `mtip`, and `msip`; the existing benchmark `tb_top.sv` still ties interrupts low | OpenSBI reaches platform probing with the CLINT path present; Linux timer and external interrupt validation remain ahead |
 | Endpoint | Current bare-metal rows use testbench-observed stores to configurable `TOHOST_ADDR` | Keep for bare-metal tests only; Stage 3 uses UART/log/syscon milestones |

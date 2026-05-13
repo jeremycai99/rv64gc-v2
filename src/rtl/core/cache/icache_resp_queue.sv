@@ -89,16 +89,16 @@ module icache_resp_queue
     // so the queue acts like a wire for the steady-state F1/F2-lockstep case.
     // Storage only fires for genuine buffering (decode backpressure or runahead).
     logic bypass_path_c;
-    assign bypass_path_c = empty && resp_valid_i && deq_ready_i;
+    assign bypass_path_c = !flush && empty && resp_valid_i && deq_ready_i;
 
-    assign deq_valid_o = !empty || resp_valid_i;
+    assign deq_valid_o = !flush && (!empty || resp_valid_i);
 
     // A response can arrive while the queue is full in the same cycle F2
     // retires the head line. Accept that replacement response; otherwise a
     // one-cycle icache response can be dropped even though a slot is freed at
     // the clock edge.
-    assign enq_fire_c = resp_valid_i && (!full || deq_fire_c) && !bypass_path_c;
-    assign deq_fire_c = !empty && deq_ready_i;  // pop only from mem; bypass uses no slot
+    assign enq_fire_c = !flush && resp_valid_i && (!full || deq_fire_c) && !bypass_path_c;
+    assign deq_fire_c = !flush && !empty && deq_ready_i;  // pop only from mem; bypass uses no slot
 
     // Output the head entry (combinational, with bypass when empty)
     always_comb begin
@@ -111,7 +111,7 @@ module icache_resp_queue
             deq_ftq_epoch_o     = mem_r[rd_ptr_r].ftq_epoch;
             deq_ftq_alloc_tag_o = mem_r[rd_ptr_r].ftq_alloc_tag;
             deq_ftq_entry_o     = mem_r[rd_ptr_r].ftq_entry;
-        end else if (resp_valid_i) begin
+        end else if (!flush && resp_valid_i) begin
             // Bypass: empty queue passes the incoming response straight to F2
             deq_data_o          = resp_data_i;
             deq_hit_o           = resp_hit_i;

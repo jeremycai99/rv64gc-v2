@@ -604,11 +604,15 @@ module dcache
     logic [LINE_SIZE*8-1:0]   st_wt_enq_data;
     logic                     st_wt_deq_valid;
     logic                     st_wt_deq_fire;
+    logic                     st_wt_merge_ready;
+    logic                     st_wt_merge_fire;
+    logic                     st_wt_push_fire;
 
     localparam int WT_DEPTH      = 4;
     localparam int WT_IDX_BITS   = $clog2(WT_DEPTH);
     localparam int WT_COUNT_BITS = $clog2(WT_DEPTH + 1);
 
+    logic [WT_IDX_BITS-1:0]      wt_tail_prev;
     logic [WT_IDX_BITS-1:0]      wt_head_q;
     logic [WT_IDX_BITS-1:0]      wt_tail_q;
     logic [WT_COUNT_BITS-1:0]    wt_count_q;
@@ -705,8 +709,17 @@ module dcache
     assign st_wt_deq_fire = (l2_state_q == L2_IDLE) &&
                              st_wt_deq_valid &&
                              l2_req_ready;
-    assign st_wt_enq_ready = (wt_count_q < WT_COUNT_BITS'(WT_DEPTH)) ||
+    assign wt_tail_prev = wt_tail_q - WT_IDX_BITS'(1);
+    assign st_wt_merge_ready =
+        (wt_count_q != '0) &&
+        !(st_wt_deq_fire && (wt_count_q == WT_COUNT_BITS'(1))) &&
+        (wt_addr_q[wt_tail_prev][63:LINE_BITS] ==
+         st_wt_enq_addr[63:LINE_BITS]);
+    assign st_wt_enq_ready = st_wt_merge_ready ||
+                             (wt_count_q < WT_COUNT_BITS'(WT_DEPTH)) ||
                              st_wt_deq_fire;
+    assign st_wt_merge_fire = st_wt_enq_valid && st_wt_merge_ready;
+    assign st_wt_push_fire  = st_wt_enq_valid && !st_wt_merge_ready;
     assign store_wt_busy = (wt_count_q != '0) || st_wt_enq_valid;
 
     // =========================================================================
@@ -1130,7 +1143,9 @@ module dcache
             l2_state_q       <= l2_state_d;
             l2_active_mshr_q <= l2_active_mshr_d;
 
-            if (st_wt_enq_valid) begin
+            if (st_wt_merge_fire) begin
+                wt_data_q[wt_tail_prev] <= st_wt_enq_data;
+            end else if (st_wt_push_fire) begin
                 wt_addr_q[wt_tail_q] <= st_wt_enq_addr;
                 wt_data_q[wt_tail_q] <= st_wt_enq_data;
                 wt_tail_q <= wt_tail_q + WT_IDX_BITS'(1);
@@ -1138,7 +1153,7 @@ module dcache
             if (st_wt_deq_fire) begin
                 wt_head_q <= wt_head_q + WT_IDX_BITS'(1);
             end
-            case ({st_wt_enq_valid, st_wt_deq_fire})
+            case ({st_wt_push_fire, st_wt_deq_fire})
                 2'b10: wt_count_q <= wt_count_q + WT_COUNT_BITS'(1);
                 2'b01: wt_count_q <= wt_count_q - WT_COUNT_BITS'(1);
                 default: wt_count_q <= wt_count_q;

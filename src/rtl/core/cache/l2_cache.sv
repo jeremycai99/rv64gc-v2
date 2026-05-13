@@ -203,6 +203,7 @@ module l2_cache
     // Eviction / fill helpers
     logic need_evict;         // victim is dirty, must write back first
     logic [2:0] victim_way;
+    logic mem_resp_dirty_victim;
 
     // =========================================================================
     // PLRU tree: standard binary tree for 8-way (7 bits)
@@ -268,6 +269,35 @@ module l2_cache
         victim_way  = plru_victim;
         need_evict  = valid_ram[lookup_set][victim_way] &&
                       dirty_ram[lookup_set][victim_way];
+    end
+
+    always_comb begin
+        logic [L2_SET_BITS-1:0] resp_fill_set;
+        logic [6:0]             resp_plru_state;
+        logic [2:0]             resp_fill_victim;
+
+        resp_fill_set       = mshr[mshr_resp_idx].addr[INDEX_HI:INDEX_LO];
+        resp_plru_state     = plru_state[resp_fill_set];
+        resp_fill_victim    = 3'd0;
+        mem_resp_dirty_victim = 1'b0;
+
+        if (!resp_plru_state[0]) begin
+            if (!resp_plru_state[1])
+                resp_fill_victim = resp_plru_state[3] ? 3'd1 : 3'd0;
+            else
+                resp_fill_victim = resp_plru_state[4] ? 3'd3 : 3'd2;
+        end else begin
+            if (!resp_plru_state[2])
+                resp_fill_victim = resp_plru_state[5] ? 3'd5 : 3'd4;
+            else
+                resp_fill_victim = resp_plru_state[6] ? 3'd7 : 3'd6;
+        end
+
+        if (mem_resp_valid && mshr_resp_found) begin
+            mem_resp_dirty_victim =
+                valid_ram[resp_fill_set][resp_fill_victim] &&
+                dirty_ram[resp_fill_set][resp_fill_victim];
+        end
     end
 
     // =========================================================================
@@ -448,8 +478,7 @@ module l2_cache
 
     assign respq_can_accept    = (respq_count_q != 3'(RESPQ_DEPTH)) ||
                                  respq_deq;
-    assign mem_resp_capture    = mem_resp_valid && mshr_resp_found &&
-                                 !inv_wb_pending;
+    assign mem_resp_capture    = mem_resp_valid && mshr_resp_found;
     assign mem_resp_source     = mshr[mshr_resp_idx].source;
 
     always_comb begin
@@ -809,7 +838,9 @@ module l2_cache
             // ------------------------------------------------------------------
             // 4. Clear inv_wb_pending when memory accepts the writeback
             // ------------------------------------------------------------------
-            if (inv_wb_pending && mem_req_ready) begin
+            if (inv_wb_pending && mem_req_ready &&
+                !(mem_resp_capture && respq_can_accept &&
+                  mem_resp_dirty_victim)) begin
                 inv_wb_pending <= 1'b0;
             end
 

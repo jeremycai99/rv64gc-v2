@@ -412,8 +412,10 @@ module icache
     // =========================================================================
     // Response outputs (combinational)
     // =========================================================================
-    // Priority: 1) cache hit, 2) MSHR fill-forward (just-completed fill
-    // whose address matches the current request).
+    // Priority: 1) MSHR fill-forward, 2) cache hit.
+    // A fill response matching the current s1 request is the freshest copy
+    // of the line. Prefer it over SRAM hit data so a same-line fill/read
+    // hazard cannot expose stale data from the victim way.
     //
     // Fill-forward from MSHR: when a fill response arrives this cycle AND
     // the current req_addr matches the MSHR being filled, forward the data
@@ -452,14 +454,14 @@ module icache
         resp_hit   = 1'b0;
         resp_data  = '0;
 
-        if (s1_valid && cache_hit && !invalidate_all) begin
-            resp_valid = 1'b1;
-            resp_hit   = 1'b1;
-            resp_data  = hit_data;
-        end else if (mshr_fwd_valid) begin
+        if (mshr_fwd_valid) begin
             resp_valid = 1'b1;
             resp_hit   = 1'b0;
             resp_data  = mshr_fwd_data;
+        end else if (s1_valid && cache_hit && !invalidate_all) begin
+            resp_valid = 1'b1;
+            resp_hit   = 1'b1;
+            resp_data  = hit_data;
         end
     end
 

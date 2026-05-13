@@ -33,6 +33,7 @@ module commit
     input  logic [PIPE_WIDTH-1:0]   head_is_wfi,
     input  logic [PIPE_WIDTH-1:0]   head_is_fused,
     input  logic                    fence_i_ready,
+    input  logic                    sfence_vma_ready,
     input  logic [PIPE_WIDTH-1:0]   head_branch_taken,
     input  logic [63:0]             head_branch_target [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   head_branch_mispredict,
@@ -202,6 +203,12 @@ module commit
             // FENCE.I is only allowed to retire once older committed stores
             // have drained into the instruction-visible backing hierarchy.
             else if (head_is_fence_i[i] && !fence_i_ready) begin
+                scan_stopped = 1'b1;
+            end
+            // SFENCE.VMA orders prior software page-table stores before the
+            // core's implicit PTW reads. Hold it until those stores are visible
+            // to the backing hierarchy used by the PTW.
+            else if (head_is_sfence_vma[i] && !sfence_vma_ready) begin
                 scan_stopped = 1'b1;
             end
             // Memory ordering violation: do NOT commit, flush from this entry

@@ -131,6 +131,7 @@ module fusion_detector
                 fused_uop[0]            = dec_in[0];
                 fused_uop[0].fu_type    = FU_BRU;
                 fused_uop[0].br_op      = BR_JALR;
+                fused_uop[0].is_branch  = 1'b1;
                 fused_uop[0].is_jalr    = 1'b1;
                 fused_uop[0].rd_arch    = dec_in[1].rd_arch;
                 fused_uop[0].rd_valid   = dec_in[1].rd_valid;
@@ -397,6 +398,7 @@ module fusion_detector
                 fused_uop[1]            = dec_in[1];
                 fused_uop[1].fu_type    = FU_BRU;
                 fused_uop[1].br_op      = BR_JALR;
+                fused_uop[1].is_branch  = 1'b1;
                 fused_uop[1].is_jalr    = 1'b1;
                 fused_uop[1].rd_arch    = dec_in[2].rd_arch;
                 fused_uop[1].rd_valid   = dec_in[2].rd_valid;
@@ -632,6 +634,7 @@ module fusion_detector
                 fused_uop[2]            = dec_in[2];
                 fused_uop[2].fu_type    = FU_BRU;
                 fused_uop[2].br_op      = BR_JALR;
+                fused_uop[2].is_branch  = 1'b1;
                 fused_uop[2].is_jalr    = 1'b1;
                 fused_uop[2].rd_arch    = dec_in[3].rd_arch;
                 fused_uop[2].rd_valid   = dec_in[3].rd_valid;

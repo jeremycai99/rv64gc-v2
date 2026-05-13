@@ -74,8 +74,10 @@ module bru
         endcase
     end
 
-    // Select between standard and fused paths
-    assign taken = is_fused ? fused_taken : std_taken;
+    // AUIPC plus JALR macro fusion is still an unconditional control transfer.
+    // The fused compare path applies only to conditional branch fusions.
+    assign taken = ((op == BR_JAL) || (op == BR_JALR)) ? std_taken :
+                   is_fused ? fused_taken : std_taken;
 
     // =========================================================================
     // Target computation
