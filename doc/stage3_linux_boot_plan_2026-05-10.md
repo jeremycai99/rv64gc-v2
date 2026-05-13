@@ -113,12 +113,21 @@ Current compliance status:
 Latest validated Linux milestone:
 
 - Artifact:
-  `linux_boot_results/stage3_linux_scrub_early_console_dsim_20260512`.
+  `linux_boot_results/stage3_linux_clean_version_early_console_dsim_20260512`.
 - Result: `PASS`, target milestone `linux_early_console`.
-- UART reached `earlycon:` at cycle `3,970,023`.
+- UART reached `earlycon:` at cycle `3,973,283`.
 - The same run prints the OpenSBI banner, OpenSBI platform probe data, Linux
   version line, machine model, SBI extension detection, and Linux early
   console marker.
+- Kernel version metadata is intentionally pinned by
+  `sw/linux_boot/build_linux_boot.sh`: `CONFIG_LOCALVERSION="-rv64gc-v2-sim"`,
+  `CONFIG_LOCALVERSION_AUTO=n`, `KBUILD_BUILD_USER=rv64gc-v2`,
+  `KBUILD_BUILD_HOST=linux-sim`, and a deterministic
+  `KBUILD_BUILD_TIMESTAMP`. This keeps the UART banner tied to the v2 Linux
+  simulation image instead of leaking the reused v1 Linux tree's SCM dirty
+  state.
+- Current UART banner:
+  `Linux version 6.6.130-rv64gc-v2-sim (rv64gc-v2@linux-sim) ... #18 Tue May 12 12:52:57 PDT 2026`.
 
 SATP interpretation:
 

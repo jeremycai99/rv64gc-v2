@@ -43,7 +43,20 @@ OPENSBI_PAYLOAD_OFFSET="${OPENSBI_PAYLOAD_OFFSET:-0x100000}"
 OPENSBI_FDT_ADDR="${OPENSBI_FDT_ADDR:-0x80180000}"
 LINUX_PAYLOAD_OFFSET="${LINUX_PAYLOAD_OFFSET:-0x200000}"
 LINUX_FDT_ADDR="${LINUX_FDT_ADDR:-0x82000000}"
+LINUX_LOCALVERSION="${LINUX_LOCALVERSION:--rv64gc-v2-sim}"
+KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-rv64gc-v2}"
+KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-linux-sim}"
+KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-Tue May 12 12:52:57 PDT 2026}"
 NPROC="${NPROC:-$(nproc)}"
+
+linux_make() {
+    make -C "$LINUX_DIR" ARCH=riscv CROSS_COMPILE="$CROSS_LINUX" \
+        LOCALVERSION= \
+        KBUILD_BUILD_USER="$KBUILD_BUILD_USER" \
+        KBUILD_BUILD_HOST="$KBUILD_BUILD_HOST" \
+        KBUILD_BUILD_TIMESTAMP="$KBUILD_BUILD_TIMESTAMP" \
+        "$@"
+}
 
 need_tool() {
     local tool="$1"
@@ -74,6 +87,9 @@ prepare_linux_tree() {
     fi
     if [[ -d "$LINUX_DIR/usr" ]]; then
         find "$LINUX_DIR/usr" -maxdepth 1 -type f -exec chmod u+x {} + 2>/dev/null || true
+    fi
+    if [[ -f "$LINUX_DIR/init/build-version" ]]; then
+        chmod u+x "$LINUX_DIR/init/build-version" 2>/dev/null || true
     fi
 }
 
@@ -198,6 +214,9 @@ build_linux() {
 CONFIG_SMP=n
 CONFIG_MODULES=n
 CONFIG_PRINTK=y
+CONFIG_LOCALVERSION="$LINUX_LOCALVERSION"
+CONFIG_LOCALVERSION_AUTO=n
+CONFIG_DEFAULT_HOSTNAME="rv64gc-v2"
 CONFIG_MMU=y
 CONFIG_NONPORTABLE=y
 CONFIG_PORTABLE=n
@@ -241,13 +260,13 @@ CONFIG_COMPAT=n
 CONFIG_DEBUG_INFO_NONE=y
 SIMCFG
 
-    make -C "$LINUX_DIR" ARCH=riscv CROSS_COMPILE="$CROSS_LINUX" defconfig -j"$NPROC"
+    linux_make defconfig -j"$NPROC"
     (
         cd "$LINUX_DIR"
         scripts/kconfig/merge_config.sh -m .config "$simcfg"
     )
-    make -C "$LINUX_DIR" ARCH=riscv CROSS_COMPILE="$CROSS_LINUX" olddefconfig
-    make -C "$LINUX_DIR" ARCH=riscv CROSS_COMPILE="$CROSS_LINUX" -j"$NPROC" Image
+    linux_make olddefconfig
+    linux_make -j"$NPROC" Image
 
     local kernel_image="$LINUX_DIR/arch/riscv/boot/Image"
     local opensbi_build_dir="$OUT_DIR/opensbi_linux_build"
