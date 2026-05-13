@@ -1258,6 +1258,76 @@ Validation after the ICQ future-line ordering fix:
   CM1 6.649201 CM/MHz, CM10 6.872881 CM/MHz. This is within the Stage 3
   0.01% regression gate and preserves the committed performance baseline.
 
+### Current Linux CPU-Node And Timebase Blocker
+
+The old frontend-owner Oops should no longer be treated as the current Linux
+blocker. The active kernel-visible issue is now a device-tree discovery failure
+after Linux early console:
+
+- Older `#18` image runs such as
+  `linux_boot_results/stage3_linux_oops_regs_dsim_20260513` did hit a real
+  `Oops [#1]`. The faulting instruction was `0xffffffff805c5b54`, symbolizing
+  to `__pi_memcpy`, with a NULL source address in the printk ringbuffer path.
+  That evidence was useful for the frontend owner-line and runahead-successor
+  fixes, but it is not the signature of the latest image.
+- Later runs with the ICQ future-line fix no longer reproduce that Oops. The
+  longer run
+  `linux_boot_results/stage3_linux_50m_icq_future_line_fix_dsim_20260513a`
+  instead reaches Linux early console, prints memory-zone setup, reports
+  `Unable to find cpu node` twice, leaves the RISC-V ISA capability strings
+  empty, then panics in `time_init()` with
+  `RISC-V system with no 'timebase-frequency' in DTS`.
+- `dtc` on `build/linux_boot/rv64gc_v2_linux.dtb` shows that the generated DTB
+  does contain `/cpus`, `/cpus/timebase-frequency = <1000000>`, and
+  `/cpus/cpu@0` with `reg = <0>`, `compatible = "riscv"`, and
+  `riscv,isa = "rv64imafdc_zicsr_zifencei"`. The failure is therefore not a
+  missing source-DTS CPU node.
+- The v2 OpenSBI platform split is necessary hygiene but not sufficient to fix
+  the kernel issue. The diagnostic run
+  `linux_boot_results/stage3_linux_v2_fdt_fixup_split_clocksource_dsim_20260513a`
+  skips OpenSBI's final FDT mutation for `rv64gc-v2-sim`, reserves the M-mode
+  firmware ranges in the DTB, still reaches Linux early console, and still
+  prints `Unable to find cpu node` with empty ISA capabilities.
+- A focused handoff trace in
+  `linux_boot_results/stage3_linux_handoff_regs_dsim_20260513a` proves the
+  OpenSBI to Linux entry ABI is correct at `pc=0x80200000`:
+  `a0=0x0`, `a1=0x82000000`, `priv=S`, and `satp=0`. This rules out a bad
+  hart-id argument or a bad DTB pointer at Linux entry as the primary cause.
+- The current Linux config still shows `CONFIG_PGTABLE_LEVELS=5` even though
+  the build fragment requests four levels; the boot line uses `no5lvl` and the
+  log prints `Disabled 5-level paging`. This is configuration debt to close,
+  but it does not explain why `/cpus` is invisible after unflattening.
+
+Working hypothesis:
+
+The kernel can read enough of the early flat DTB to print the model, memory
+ranges, and reserved-memory ranges, but the later unflattened OF tree or the
+CPU-hart matching data is wrong by the time `riscv_fill_hwcap()` and
+`time_init()` run. The next debug should distinguish these cases:
+
+1. `boot_cpu_hartid` was corrupted after `head.S` stored `a0=0`.
+2. The unflattened OF tree lacks `/cpus` or has a corrupted `/cpus` property
+   block even though the flat DTB was valid at entry.
+3. The flat DTB memory at `0x82000000` or the unflattened node allocation was
+   overwritten during early paging, memblock, memset, or page-table setup.
+
+Next diagnostic step before RTL changes:
+
+- Add a temporary Linux-debug or simulation-boundary probe around
+  `riscv_fill_hwcap()`, `of_get_cpu_node(0)`, `of_find_node_by_path("/cpus")`,
+  and `boot_cpu_hartid`. Capture whether `/cpus` exists in the unflattened
+  tree, whether `cpu@0/reg` is readable, and whether `boot_cpu_hartid` is still
+  zero.
+- If `/cpus` is missing or corrupted, trace writes to the DTB physical range
+  and the unflattened OF allocation range. If only hart matching fails, trace
+  `boot_cpu_hartid` and CPU logical-to-hart mapping. If both are intact, then
+  add modern `riscv,isa-base` and `riscv,isa-extensions` properties as a DTB
+  binding cleanup, but do not treat that as the root fix for the current
+  `Unable to find cpu node` signature.
+- Do not promote any RTL change from this path until the impacted VM or Linux
+  smoke passes and the Stage 3 DS/CM hard guard remains within the 0.01%
+  metric-regression gate.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -1309,16 +1379,21 @@ DS/CM performance gate.
   console. The previous Oops path is fixed by frontend owner-line identity
   and runahead-successor ordering repairs, and the later 11.668M frontend
   no-progress point is fixed by ICQ future-line capture/drop for active and
-  next FTQ owners.
+  next FTQ owners. The active blocker is now Linux device-tree CPU-node and
+  timebase discovery after early console: the generated DTB and handoff
+  registers are valid, but the kernel later cannot find `/cpus` or `cpu@0`
+  through the unflattened OF path.
 - v2 does not yet reach the Linux `riscv_clocksource` milestone, Linux-visible
   PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
 The next Stage 3 implementation should continue Linux boot debug from the
-current early-console state. The immediate target is forward progress from the
-15M initmem and memory auto-init region to the `riscv_clocksource` milestone.
-Any RTL change on that path must still pass impacted compliance tests and the
-DS/CM hard guard before promotion. Sv39 should stay as a directed-test subset,
-but the primary Linux path is four-level Sv48 because that matches the
-intended Linux signoff configuration.
+current early-console state, but the immediate target is no longer generic
+forward progress through memset. First resolve the CPU-node and timebase
+visibility failure with a temporary Linux-debug or simulation-boundary probe of
+`boot_cpu_hartid`, `of_get_cpu_node(0)`, and
+`of_find_node_by_path("/cpus")`. Any RTL change on that path must still pass
+impacted compliance tests and the DS/CM hard guard before promotion. Sv39
+should stay as a directed-test subset, but the primary Linux path is four-level
+Sv48 because that matches the intended Linux signoff configuration.

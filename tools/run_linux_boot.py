@@ -306,6 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.build_mode == "smoke" and args.image is not None:
+        image_name = args.image.name
+        if image_name == "fw_payload.hex":
+            args.build_mode = "linux"
+        elif image_name == "fw_payload_opensbi_banner.hex":
+            args.build_mode = "opensbi"
+
     if args.image is None:
         image_name = {
             "smoke": "m_mode_uart_smoke.hex",

@@ -75,6 +75,24 @@ prepare_opensbi_tree() {
     fi
 }
 
+check_opensbi_v2_platform_split() {
+    local platform_c="$OPENSBI_DIR/platform/generic/platform.c"
+    if [[ ! -f "$platform_c" ]]; then
+        echo "ERROR: OpenSBI generic platform source not found: $platform_c" >&2
+        exit 1
+    fi
+    if ! grep -q "rv64gc-v2-sim" "$platform_c" ||
+       ! grep -q "generic_is_rv64gc_v2_sim" "$platform_c"; then
+        cat >&2 <<EOF
+ERROR: OpenSBI tree is missing the rv64gc-v2 platform split.
+The v2 Linux flow requires root compatible "rv64gc-v2-sim" to skip OpenSBI's
+final FDT mutation while keeping UART and CLINT discovery on the normal FDT path.
+Patch $platform_c before rebuilding fw_payload.hex.
+EOF
+        exit 1
+    fi
+}
+
 prepare_linux_tree() {
     if [[ -d "$LINUX_DIR/scripts" ]]; then
         find "$LINUX_DIR/scripts" -type f -exec chmod u+x {} + 2>/dev/null || true
@@ -96,7 +114,7 @@ prepare_linux_tree() {
 build_dtb() {
     mkdir -p "$OUT_DIR"
     need_tool dtc
-    dtc -I dts -O dtb -o "$DTB" "$DTS"
+    dtc -I dts -O dtb -p 4096 -o "$DTB" "$DTS"
     echo "DTB: $DTB ($(wc -c < "$DTB") bytes)"
 }
 
@@ -155,6 +173,7 @@ build_opensbi_banner() {
     need_tool "${OPENSBI_CROSS}objcopy"
     need_tool "${OPENSBI_CROSS}objdump"
     prepare_opensbi_tree
+    check_opensbi_v2_platform_split
 
     build_dtb
     build_smode_hang_payload
@@ -197,6 +216,8 @@ build_linux() {
     need_tool "${CROSS_LINUX}objcopy"
     need_tool "${CROSS_LINUX}objdump"
     prepare_linux_tree
+    prepare_opensbi_tree
+    check_opensbi_v2_platform_split
 
     build_dtb
 
@@ -270,7 +291,6 @@ SIMCFG
 
     local kernel_image="$LINUX_DIR/arch/riscv/boot/Image"
     local opensbi_build_dir="$OUT_DIR/opensbi_linux_build"
-    prepare_opensbi_tree
     rm -rf "$opensbi_build_dir"
     make -C "$OPENSBI_DIR" O="$opensbi_build_dir" CROSS_COMPILE="$OPENSBI_CROSS" PLATFORM=generic \
         PLATFORM_RISCV_ISA="$OPENSBI_MARCH" \
