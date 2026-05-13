@@ -135,12 +135,14 @@ module ifu_line_fetch
     ftq_entry_t   ic_req_ftq_pipe_entry_r;
     logic         icq_deq_current_owner_match_c;
     logic         icq_deq_next_owner_match_c;
+    logic         icq_deq_future_owner_match_c;
     logic         icq_deq_unowned_stale_c;
     logic         icq_deq_prior_owner_line_c;
     logic         icq_line_matches_work_c;
     logic         icq_deq_redirect_stale_c;
     logic         icq_deq_stale_c;
     logic         icq_future_capture_c;
+    logic         icq_future_overflow_drop_c;
     logic         icq_deq_ready_c;
     logic         redirect_scrub_r;
     logic         line_state_valid_r;
@@ -221,6 +223,9 @@ module ifu_line_fetch
         (icq_deq_ftq_epoch_o == current_epoch_i) &&
         (icq_deq_ftq_alloc_tag_o == ftq_next_owner_tag_i);
     assign icq_deq_owner_match_o = icq_deq_current_owner_match_c;
+    assign icq_deq_future_owner_match_c =
+        icq_deq_current_owner_match_c ||
+        icq_deq_next_owner_match_c;
     assign icq_deq_unowned_stale_c =
         icq_deq_valid_o &&
         icq_deq_ftq_valid_o &&
@@ -247,12 +252,19 @@ module ifu_line_fetch
         icq_deq_valid_o &&
         !icq_line_matches_work_c &&
         !icq_deq_stale_c &&
-        icq_deq_next_owner_match_c &&
+        icq_deq_future_owner_match_c &&
         !future_line_valid_r;
+    assign icq_future_overflow_drop_c =
+        icq_deq_valid_o &&
+        !icq_line_matches_work_c &&
+        !icq_deq_stale_c &&
+        icq_deq_future_owner_match_c &&
+        future_line_valid_r;
     assign icq_deq_ready_c =
         icq_line_matches_work_c ||
         icq_deq_stale_c ||
-        icq_future_capture_c;
+        icq_future_capture_c ||
+        icq_future_overflow_drop_c;
     assign future_line_match_c =
         future_line_valid_r &&
         work_line_valid_i &&

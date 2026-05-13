@@ -1215,6 +1215,49 @@ Validation after the fix:
   CM1 6.649201 CM/MHz, CM10 6.872881 CM/MHz. Loop buffer and standalone
   decoded-op replay remained inactive.
 
+### Current Linux Frontend Progress Status
+
+The previous Oops path remains fixed. A later 50M status run exposed a
+different frontend no-progress condition, not a kernel panic:
+
+- Failing run:
+  `linux_boot_results/stage3_linux_50m_frontend_oops_fix_dsim_20260513a`
+  reached Linux early console and memory-zone enumeration with no `Oops`, no
+  `Kernel panic`, and no `Unable to handle` signature.
+- It then stopped retiring after cycle 11,668,002 while the backend was empty.
+  The frozen state was `work_pc=0xffffffff8060da00`, `last_commit_pc=
+  0xffffffff8060d9fa`, `icq_count=4`, and ICQ head PC
+  `0xffffffff80611626`. Those PCs symbolize into
+  `get_pfn_range_for_nid` / `__next_mem_pfn_range`.
+- Root cause: the ICQ could hold a future same-owner or next-owner line in
+  front of the current required line. If the one-entry future-line side buffer
+  was already occupied, `icq_deq_ready` stopped popping speculative future
+  entries, so a mandatory current-owner line could not enter the ICQ.
+- Fix: `ifu_line_fetch.sv` now treats non-current-line ICQ entries belonging
+  to the active IFU owner or the next IFU owner as future-line candidates. The
+  first such line is captured into the future-line side buffer; overflow future
+  entries are dropped because they are speculative and can be refetched. Current
+  matching lines still deliver normally, stale lines still use the existing
+  stale-drop path.
+
+Validation after the ICQ future-line ordering fix:
+
+- `linux_boot_results/stage3_linux_icq_future_capture_any_owner_dsim_15m_20260513a`
+  ran to 15M cycles with no Oops or panic and did not reproduce the
+  `8060da00` freeze. It advanced beyond the old 12M deadlock point, reaching
+  `minstret=12,860,114` and Linux log output through initmem setup, CPU ISA
+  fallback parsing, per-CPU allocation, dentry/inode hash setup, zonelist
+  build, and memory auto-init.
+- The 15M run still timed out before `riscv_clocksource`. At the cap it was
+  still retiring (`last_commit_cycle=14,999,999`) with an active ROB, so the
+  next debug target is later Linux boot progress rather than frontend
+  no-progress at the old site.
+- DS/CM hard guard after the RTL change passed:
+  `benchmark_results/stage3_rtl_guard_stage3_linux_icq_future_capture_any_owner_dsim_20260513a`.
+  Results: DS100 3.150055 DMIPS/MHz, DS300 3.218761 DMIPS/MHz,
+  CM1 6.649201 CM/MHz, CM10 6.872881 CM/MHz. This is within the Stage 3
+  0.01% regression gate and preserves the committed performance baseline.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -1263,16 +1306,18 @@ DS/CM performance gate.
   open.
 - v2 now has a first 64 MB trimmed Linux image path and can execute OpenSBI
   through S-mode payload handoff from that image. It reaches Linux early
-  console, and the previous Oops path is fixed by frontend owner-line identity
-  and runahead-successor ordering repairs.
+  console. The previous Oops path is fixed by frontend owner-line identity
+  and runahead-successor ordering repairs, and the later 11.668M frontend
+  no-progress point is fixed by ICQ future-line capture/drop for active and
+  next FTQ owners.
 - v2 does not yet reach the Linux `riscv_clocksource` milestone, Linux-visible
   PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
 The next Stage 3 implementation should continue Linux boot debug from the
-current early-console state. The immediate target is forward progress through
-the long kernel `__memset` region and then the `riscv_clocksource` milestone.
+current early-console state. The immediate target is forward progress from the
+15M initmem and memory auto-init region to the `riscv_clocksource` milestone.
 Any RTL change on that path must still pass impacted compliance tests and the
 DS/CM hard guard before promotion. Sv39 should stay as a directed-test subset,
 but the primary Linux path is four-level Sv48 because that matches the
