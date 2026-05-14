@@ -1310,11 +1310,12 @@ Validation after the ICQ future-line ordering fix:
 ### Current Linux Clocksource Status
 
 The v1 reference console makes `clocksource: riscv_clocksource` the right next
-v2 milestone. The latest v2 evidence now reaches Linux `time_init()` and the
-RISC-V timer probe with coherent 128M DRAM, so the old pre-clocksource
-memory-clear uncertainty and the 64M page-allocation blocker are resolved. The
-current blocker is the post-irq-domain RISC-V timer path after
-`timer_common domain=...`; it is not an observed RTL trap.
+v2 milestone. The latest instrumented v2 evidence reached Linux `time_init()`
+and the RISC-V timer probe with coherent 128M DRAM, so the old
+pre-clocksource memory-clear uncertainty and the 64M page-allocation blocker
+are resolved. The clean-image proof is not closed yet: after debug-log cleanup,
+the next short run must first reconfirm `/cpus/timebase-frequency` before
+resuming the post-irq-domain RISC-V timer path after `timer_common domain=...`.
 
 Evidence summary:
 
@@ -1326,9 +1327,9 @@ Evidence summary:
   advanced into Linux memory setup and device-tree parsing.
 - The current generated DTB contains `/cpus`,
   `/cpus/timebase-frequency = <1000000>`, `/cpus/cpu@0`, CLINT at
-  `0x02000000`, and UART at `0x10000000`. Linux debug output confirms the
-  unflattened OF tree contains `/cpus`, `/cpus/cpu@0`, and
-  `timebase=1000000`.
+  `0x02000000`, and UART at `0x10000000`. The instrumented Linux OF-base probe
+  confirmed the unflattened OF tree contains `/cpus`, `/cpus/cpu@0`, and
+  `timebase=1000000`; this still needs a clean-image reconfirmation.
 - The OpenSBI platform path is clean for timer discovery. Current runs show
   CLINT matched for IPI and timer, then OpenSBI reports
   `Platform Timer Device     : aclint-mtimer @ 1000000Hz`. Linux also reports
@@ -1410,6 +1411,52 @@ Next diagnostic step before RTL changes:
    smoke passes and the Stage 3 DS/CM hard guard remains within the 0.01%
    metric-regression gate.
 
+### Clean Log And Guard Status, May 13
+
+Before continuing Linux long runs, the Stage 3 hard performance gate was rerun
+on the current RTL:
+
+- Run: `benchmark_results/stage3_rtl_guard_clean_uart_gate_20260513`.
+- Result: PASS within the 0.01% metric regression tolerance.
+- DS100: 18,068 cycles, 3.150055 DMIPS/MHz.
+- DS300: 53,047 cycles, 3.218761 DMIPS/MHz.
+- CM1: 150,394 cycles, 6.649201 CM/MHz.
+- CM10: 1,454,994 cycles, 6.872881 CM/MHz.
+
+The Linux and OpenSBI software trees were then cleaned of temporary UART/debug
+instrumentation:
+
+- Removed Linux OF path-walk, root-child, `time_init()`, and
+  `riscv_timer_init_dt()` debug prints.
+- Removed temporary OpenSBI `[rv64gc]` FDT/IPI/timer/coldboot/ecall trace
+  prints.
+- Rebuilt `build/linux_boot/fw_payload.hex` after the cleanup.
+
+The first clean-image DSim attempt
+`linux_boot_results/stage3_linux_128m_clean_uart_dsim_50m_20260513a` was
+stopped early because it reproduced the stale clean-image
+`timebase-frequency` panic while the previously instrumented OF-base probe had
+already proven that the generated DTB and unflattened OF tree can contain
+`/cpus`, `/cpus/cpu@0`, and `timebase-frequency = 1000000`. After removing the
+remaining stale software debug prints and rebuilding, the short clean rebuild
+check
+`linux_boot_results/stage3_linux_clean_rebuild_timebase_check_dsim_20m_20260513a`
+was intentionally stopped at the user's request before the long proof point.
+Its UART log was clean through OpenSBI platform reporting, with no `[rv64gc]`
+debug stream.
+
+Current execution rule:
+
+- Do not start a 50M run until the next session.
+- Next run should first be a targeted clean checkpoint through Linux
+  `time_init()` and `riscv_timer_init_dt()`, using the rebuilt clean payload.
+- If the clean payload still panics on `timebase-frequency`, treat that as an
+  RTL exposed OF path execution problem and debug it directly; do not mask it by
+  hard-coding the timebase in Linux.
+- If the clean payload passes `time_init()`, resume the clocksource path from
+  `timer_common domain=...` and keep the DS/CM guard as the hard RTL promotion
+  gate.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -1461,24 +1508,24 @@ DS/CM performance gate.
   console. The previous Oops path is fixed by frontend owner-line identity
   and runahead-successor ordering repairs, and the later 11.668M frontend
   no-progress point is fixed by ICQ future-line capture/drop for active and
-  next FTQ owners. The CPU-node/timebase discovery blocker is also resolved in
-  the latest OF-base probe: Linux can find `/cpus`, `/cpus/cpu@0`, and
-  `timebase-frequency = 1000000` after unflattening. The 64M early timer
-  allocator failure is also fixed by making the DTS and simulation DRAM match
-  the 128M linker region. The active Linux-debug target is now the next RISC-V
+  next FTQ owners. The instrumented OF-base probe showed Linux can find
+  `/cpus`, `/cpus/cpu@0`, and `timebase-frequency = 1000000` after
+  unflattening, but the cleaned payload has not yet reconfirmed that point. The
+  64M early timer allocator failure is fixed by making the DTS and simulation
+  DRAM match the 128M linker region. Once the clean payload reconfirms
+  timebase discovery, the active Linux-debug target returns to the next RISC-V
   timekeeping milestone after `timer_common domain=...`. Current evidence
-  therefore does not prove a v1-style clocksource stuck issue; it proves that
-  `clocksource: riscv_clocksource` has not been reached by the 50M cap while
-  the core continues retiring instructions.
+  therefore does not prove a v1-style clocksource stuck issue.
 - v2 does not yet reach the Linux `riscv_clocksource` milestone, Linux-visible
   PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 implementation should continue Linux boot debug from the
-current `timer_common domain=...` state. Use Linux-only probes first to
-determine whether the remaining gap is irq-domain/timer IRQ mapping, CSR `time`
-access, `clocksource_register_hz()`, `sched_clock_register()`, CLINT/SBI timer
+The next Stage 3 implementation should run a short clean checkpoint through
+Linux `time_init()` first. If that passes, continue Linux boot debug from the
+current `timer_common domain=...` state and use Linux-only probes to determine
+whether the remaining gap is irq-domain/timer IRQ mapping, CSR `time` access,
+`clocksource_register_hz()`, `sched_clock_register()`, CLINT/SBI timer
 programming, memory/L2 progress, or DSim runtime behavior. Any RTL change on
 that path must still pass impacted compliance tests and the DS/CM hard guard
 before promotion. Sv39 should stay as a directed-test subset, but the primary
