@@ -32,6 +32,9 @@ dsim*.jou
 metrics.db
 *.mxd
 
+# Verilator simulator artefacts
+verilator_linux_work/
+
 # xsim simulator artefacts
 xsim.dir/
 xsim*.jou

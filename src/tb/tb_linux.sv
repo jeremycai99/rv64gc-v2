@@ -86,7 +86,7 @@ module tb_linux;
     );
 
     sim_memory #(
-        .MEM_SIZE_BYTES(64 * 1024 * 1024)
+        .MEM_SIZE_BYTES(128 * 1024 * 1024)
     ) u_mem (
         .clk            (clk),
         .rst_n          (rst_n),

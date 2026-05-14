@@ -149,6 +149,40 @@ Next milestone attempt:
   interleaving so the actual fault `sepc/scause/stval` and the full Linux Oops
   register dump are captured.
 
+Latest clocksource investigation:
+
+- The v1 reference boot log reaches `clocksource: riscv_clocksource`,
+  `sched_clock`, and delay-loop calibration after `riscv-intc`. That sequence
+  is the right next v2 milestone, but current v2 evidence does not yet prove a
+  clocksource bug.
+- The latest full-memory v2 clocksource probe,
+  `linux_boot_results/stage3_linux_clocksource_probe_dsim_30m_retry2_20260513a`,
+  was stopped after 15M cycles while still before the Linux clocksource path.
+  UART reached Linux memory setup through `Initmem setup node 0
+  [mem 0x80000000-0x83ffffff]`; it did not reach `Memory:`, `SLUB`,
+  `NR_IRQS`, `riscv-intc`, `time_init`, or
+  `clocksource: riscv_clocksource`.
+- The same run shows no architectural deadlock at the stop point:
+  `last_commit_cyc` tracked current cycle, no trap was reported, `time`
+  advanced every cycle, `timecmp` remained disabled, and PCs symbolized into
+  memory initialization (`memmap_init_range` and `__memset`). This is
+  pre-clocksource forward progress, not a proven CLINT or Linux clocksource
+  stall.
+- OpenSBI timer evidence is clean in the current v2 image. OpenSBI discovers
+  the CLINT path for IPI and timer and reports
+  `Platform Timer Device     : aclint-mtimer @ 1000000Hz`. Linux also prints
+  `SBI TIME extension detected` before the long memory-init region.
+- Temporary `mem=24M` and `mem=48M` DTS probes are invalid for the clocksource
+  milestone. Both enter Linux and recover from the expected MMU relocation
+  exception, but then panic before `time_init()`:
+  `Kernel panic - not syncing: memory_present: Failed to allocate 16777216 bytes
+  align=0x40`. These runs prove the shorter memory cap is too small for the
+  current kernel sparse-memory configuration; they do not implicate
+  clocksource, CLINT, or CSR `time`.
+- Do not use sub-64M memory-cap runs as clocksource evidence unless the kernel
+  sparse-memory configuration is changed and the image proves it can pass
+  `memory_present`.
+
 SATP interpretation:
 
 - A long window with `satp=0` is not by itself a deadlock. OpenSBI runs in
@@ -216,11 +250,18 @@ bottleneck plusargs, then reports timed-cycle deltas and checks metrics against
 the table above using the default `--max-regression-pct 0.01` tolerance. It also
 overrides the per-row simulator timeout with a generous `--sim-max-cycles`
 budget, so `MAX_CYCLES` is only a liveness guard and not a performance threshold.
-Use `--runner xsim-sh` when DSim is blocked by license availability.
-The current OpenSBI platform-probe slice used that fallback for the hard DS/CM
-gate because the DSim benchmark row hit a simulator scheduler iteration limit
-on CoreMark before the timed window completed, while XSim completed all four
-rows cleanly.
+
+Simulator backend policy:
+- DSim remains the main simulator for Stage 3 and the preferred source for
+  promoted RTL evidence.
+- Verilator is approved to replace XSim as the current Stage 3 turnaround
+  fallback only when DSim is blocked by license availability. Its purpose is to
+  accelerate Linux boot/debug iteration, not to lower the signoff bar.
+- XSim is demoted to a last-resort cross-check because it is too slow for this
+  workload.
+- Any RTL slice debugged with Verilator still needs the locked DS/CM guard to
+  remain clean, with DSim evidence preferred before promotion whenever the
+  license is available.
 
 The equivalent expanded command remains:
 
@@ -433,11 +474,17 @@ Current L0 RTL slice:
   milestones. UART TX capture and pass/fail matching stay in `tb_linux.sv`.
 - `build_dsim_linux.sh` builds a separate `tb_linux` DSim image so Linux
   bring-up does not disturb the existing benchmark harness image.
-- `build_xsim_linux.sh` and `run_xsim_linux.sh` provide an equivalent XSim
-  `tb_linux` snapshot for workflow fallback when the single DSim cloud lease is
-  unavailable. DSim remains the practical long-run backend for now; the XSim
-  Linux snapshot builds but is too slow for promoted OpenSBI milestone evidence
-  on the current host.
+- Verilator is the approved Stage 3 Linux boot/debug fallback when the single
+  DSim cloud lease is unavailable. It replaces XSim for normal fallback
+  turnaround on this workload. DSim remains the authoritative simulator for
+  promoted evidence, and XSim is retained only as a last-resort cross-check
+  because it is too slow for current Linux boot iteration.
+- The Verilator Linux fallback is wired through `build_verilator_linux.sh`,
+  `run_verilator_linux.sh`, and `tools/run_linux_boot.py --simulator verilator`.
+  The binary builds, but first execution currently aborts before reset on a
+  Verilator active-region convergence failure from existing `UNOPTFLAT`
+  combinational-settle loops. Treat this as a fallback-enablement blocker, not
+  Linux boot evidence, until the loop source is isolated or DSim is available.
 - The M-mode UART smoke now passes through the platform path:
   `linux_boot_results/stage3_l0_uart_smoke_clint_lane_fix`.
 - The required DS/CM RTL guard passed after the L0 RTL slice:
@@ -1159,9 +1206,11 @@ python3 tools/run_rv64gc_compliance.py --build --suite riscv-tests --runner dsim
 python3 tools/run_rv64gc_compliance.py --run --isa rv64gc --runner dsim
 ```
 
-Use `--runner xsim-sh` or an equivalent XSim path when DSim is blocked. The
-runner must archive per-test logs, the ELF/hex provenance, and a summary table
-with pass, fail, timeout, and first failing PC or trap when available.
+Use the Verilator fallback only when DSim is blocked by license availability.
+XSim should only be used as a last-resort cross-check because it is too slow for
+this workload. The runner must archive per-test logs, the ELF/hex provenance,
+and a summary table with pass, fail, timeout, and first failing PC or trap when
+available.
 
 The Linux runner can now run the M-mode UART smoke and has a dedicated OpenSBI
 banner mode. It records reached milestones and the last reached milestone in
@@ -1258,75 +1307,108 @@ Validation after the ICQ future-line ordering fix:
   CM1 6.649201 CM/MHz, CM10 6.872881 CM/MHz. This is within the Stage 3
   0.01% regression gate and preserves the committed performance baseline.
 
-### Current Linux CPU-Node And Timebase Blocker
+### Current Linux Clocksource Status
 
-The old frontend-owner Oops should no longer be treated as the current Linux
-blocker. The active kernel-visible issue is now a device-tree discovery failure
-after Linux early console:
+The v1 reference console makes `clocksource: riscv_clocksource` the right next
+v2 milestone. The latest v2 evidence now reaches Linux `time_init()` and the
+RISC-V timer probe with coherent 128M DRAM, so the old pre-clocksource
+memory-clear uncertainty and the 64M page-allocation blocker are resolved. The
+current blocker is the post-irq-domain RISC-V timer path after
+`timer_common domain=...`; it is not an observed RTL trap.
+
+Evidence summary:
 
 - Older `#18` image runs such as
   `linux_boot_results/stage3_linux_oops_regs_dsim_20260513` did hit a real
-  `Oops [#1]`. The faulting instruction was `0xffffffff805c5b54`, symbolizing
-  to `__pi_memcpy`, with a NULL source address in the printk ringbuffer path.
-  That evidence was useful for the frontend owner-line and runahead-successor
-  fixes, but it is not the signature of the latest image.
-- Later runs with the ICQ future-line fix no longer reproduce that Oops. The
-  longer run
-  `linux_boot_results/stage3_linux_50m_icq_future_line_fix_dsim_20260513a`
-  instead reaches Linux early console, prints memory-zone setup, reports
-  `Unable to find cpu node` twice, leaves the RISC-V ISA capability strings
-  empty, then panics in `time_init()` with
-  `RISC-V system with no 'timebase-frequency' in DTS`.
-- `dtc` on `build/linux_boot/rv64gc_v2_linux.dtb` shows that the generated DTB
-  does contain `/cpus`, `/cpus/timebase-frequency = <1000000>`, and
-  `/cpus/cpu@0` with `reg = <0>`, `compatible = "riscv"`, and
-  `riscv,isa = "rv64imafdc_zicsr_zifencei"`. The failure is therefore not a
-  missing source-DTS CPU node.
-- The v2 OpenSBI platform split is necessary hygiene but not sufficient to fix
-  the kernel issue. The diagnostic run
-  `linux_boot_results/stage3_linux_v2_fdt_fixup_split_clocksource_dsim_20260513a`
-  skips OpenSBI's final FDT mutation for `rv64gc-v2-sim`, reserves the M-mode
-  firmware ranges in the DTB, still reaches Linux early console, and still
-  prints `Unable to find cpu node` with empty ISA capabilities.
-- A focused handoff trace in
-  `linux_boot_results/stage3_linux_handoff_regs_dsim_20260513a` proves the
-  OpenSBI to Linux entry ABI is correct at `pc=0x80200000`:
-  `a0=0x0`, `a1=0x82000000`, `priv=S`, and `satp=0`. This rules out a bad
-  hart-id argument or a bad DTB pointer at Linux entry as the primary cause.
-- The current Linux config still shows `CONFIG_PGTABLE_LEVELS=5` even though
-  the build fragment requests four levels; the boot line uses `no5lvl` and the
-  log prints `Disabled 5-level paging`. This is configuration debt to close,
-  but it does not explain why `/cpus` is invisible after unflattening.
+  `Oops [#1]` in the printk path. That evidence drove the frontend owner-line
+  and runahead-successor fixes, but it is not the latest signature.
+- Later runs with the ICQ future-line fix no longer reproduce that Oops. They
+  advanced into Linux memory setup and device-tree parsing.
+- The current generated DTB contains `/cpus`,
+  `/cpus/timebase-frequency = <1000000>`, `/cpus/cpu@0`, CLINT at
+  `0x02000000`, and UART at `0x10000000`. Linux debug output confirms the
+  unflattened OF tree contains `/cpus`, `/cpus/cpu@0`, and
+  `timebase=1000000`.
+- The OpenSBI platform path is clean for timer discovery. Current runs show
+  CLINT matched for IPI and timer, then OpenSBI reports
+  `Platform Timer Device     : aclint-mtimer @ 1000000Hz`. Linux also reports
+  `SBI TIME extension detected`.
+- The earlier full-memory DSim clocksource probe,
+  `linux_boot_results/stage3_linux_clocksource_probe_dsim_30m_retry2_20260513a`,
+  was stopped after 15M cycles. It had not reached `Memory:`, `SLUB`,
+  `NR_IRQS`, `riscv-intc`, `time_init`, or
+  `clocksource: riscv_clocksource`. The last PCs symbolize to
+  `memmap_init_range` and `__memset`, and `last_commit_cyc` kept advancing.
+  That is pre-clocksource forward progress, not a proven CLINT or Linux
+  clocksource deadlock.
+- The 50M-default-memory DSim run
+  `linux_boot_results/stage3_linux_default64_dsim_50m_20260513a` was stopped
+  after the first real software blocker was captured. It reached `Memory:`,
+  `SLUB`, `NR_IRQS`, `riscv-intc`, `time_init before timer_probe`,
+  `riscv_timer_init_dt()`, and `timer_common domain=...`. RTL status remained
+  clean (`trap=0`, no pending interrupt, recent `last_commit_cyc`) through the
+  sampled path. The run then printed `swapper: page allocation failure` from
+  `riscv_timer_init_dt -> irq_create_mapping_affinity -> __irq_alloc_descs`.
+  The kernel reported `free:0`, so this is memory exhaustion during early timer
+  IRQ descriptor allocation, not a core exception.
+- The root platform mismatch was that `sw/linux_boot/link.ld` already uses a
+  128M DRAM region, while `sw/linux_boot/dts/rv64gc_v2_linux.dts` and
+  `src/tb/tb_linux.sv` still exposed only 64M. The boot platform has been
+  aligned to 128M for the next run.
+- The coherent 128M DSim run
+  `linux_boot_results/stage3_linux_128m_dsim_50m_20260513a` rebuilt the current
+  RTL and Linux payload, exposed `Memory: 93544K/131072K available`, reached
+  `SLUB`, `NR_IRQS`, `riscv-intc`, `time_init before timer_probe`,
+  `riscv_timer_init_dt()`, and `timer_common domain=ffffaf8001454000`, and did
+  not reproduce the 64M `swapper: page allocation failure`. It timed out at the
+  intentional 50M cycle cap before `clocksource: riscv_clocksource`. The final
+  status was still architecturally active: `mcycle=50000000`,
+  `minstret=45018326`, `IPC=0.900367`, `last_commit_cycle=49999992`,
+  `trap=0`, `irq_pending=0`, `mtip=0`, `msip=0`, no SVA ordering violations,
+  and no `Oops`, `BUG`, `Kernel panic`, or `Unable to handle` signature.
+- The `mem=24M` and `mem=48M` acceleration probes are invalid for this
+  milestone. Both boot into Linux and recover from the expected MMU relocation
+  exception, but both panic before `time_init()` with
+  `memory_present: Failed to allocate 16777216 bytes align=0x40`. These are
+  kernel sparse-memory configuration failures caused by the temporary memory
+  cap, not clocksource failures.
 
-Working hypothesis:
+Working verdict:
 
-The kernel can read enough of the early flat DTB to print the model, memory
-ranges, and reserved-memory ranges, but the later unflattened OF tree or the
-CPU-hart matching data is wrong by the time `riscv_fill_hwcap()` and
-`time_init()` run. The next debug should distinguish these cases:
-
-1. `boot_cpu_hartid` was corrupted after `head.S` stored `a0=0`.
-2. The unflattened OF tree lacks `/cpus` or has a corrupted `/cpus` property
-   block even though the flat DTB was valid at entry.
-3. The flat DTB memory at `0x82000000` or the unflattened node allocation was
-   overwritten during early paging, memblock, memset, or page-table setup.
+- Do not claim that v2 has the v1-style clocksource stuck issue. The current
+  evidence reaches `time_init()` and enters the timer probe.
+- Do not claim that v2 clocksource is proven good yet. The latest valid run
+  reached timer setup with coherent 128M memory but did not print the standard
+  `clocksource: riscv_clocksource` banner by the 50M cap.
+- The immediate blocker is now narrower: instrument and classify the path after
+  `timer_common domain=...`, especially IRQ mapping, `rdtime`,
+  `clocksource_register_hz()`, `sched_clock_register()`,
+  `request_percpu_irq()`, and timer CPU hotplug setup. The current evidence
+  indicates forward progress through 50M, not a hard RTL deadlock.
 
 Next diagnostic step before RTL changes:
 
-- Add a temporary Linux-debug or simulation-boundary probe around
-  `riscv_fill_hwcap()`, `of_get_cpu_node(0)`, `of_find_node_by_path("/cpus")`,
-  and `boot_cpu_hartid`. Capture whether `/cpus` exists in the unflattened
-  tree, whether `cpu@0/reg` is readable, and whether `boot_cpu_hartid` is still
-  zero.
-- If `/cpus` is missing or corrupted, trace writes to the DTB physical range
-  and the unflattened OF allocation range. If only hart matching fails, trace
-  `boot_cpu_hartid` and CPU logical-to-hart mapping. If both are intact, then
-  add modern `riscv,isa-base` and `riscv,isa-extensions` properties as a DTB
-  binding cleanup, but do not treat that as the root fix for the current
-  `Unable to find cpu node` signature.
-- Do not promote any RTL change from this path until the impacted VM or Linux
-  smoke passes and the Stage 3 DS/CM hard guard remains within the 0.01%
-  metric-regression gate.
+1. Keep DSim as the primary evidence source. XSim is only a last-resort
+   cross-check, and Verilator is not Linux evidence until the existing
+   convergence issue is fixed.
+2. Do not use sub-128M `mem=` caps with the current kernel config. The 64M
+   default run reached timer setup but ran out of early kernel memory; the 24M
+   and 48M caps fail even earlier in `memory_present`.
+3. Continue the Linux-only probes in `arch/riscv/kernel/time.c` and
+   `drivers/clocksource/timer-riscv.c`: `time_init()` before and after
+   `of_clk_init()`, before and after `timer_probe()`, `riscv_timer_init_dt()`,
+   irq-domain discovery, `clocksource_register_hz()`, explicit `rdtime`,
+   `sched_clock_register()`, `request_percpu_irq()`, and CPU hotplug timer
+   setup.
+4. Preserve `vmlinux` or `System.map` from the Linux build in the next payload
+   rebuild so final PCs such as `ffffffff80157664` can be symbolized instead of
+   inferred from UART progress alone.
+5. Do not change core RTL until a valid run proves whether the failure is in
+   software time-init, CSR `time`, CLINT/SBI timer programming, memory/L2
+   progress, or simulator runtime behavior.
+6. Do not promote any RTL change from this path until the impacted VM or Linux
+   smoke passes and the Stage 3 DS/CM hard guard remains within the 0.01%
+   metric-regression gate.
 
 ## Near-Term Non-Goals
 
@@ -1374,26 +1456,31 @@ DS/CM performance gate.
   superpage-alignment faults, and Sv48 canonical-address faulting are now
   covered by directed Sv48 smokes. Broader privileged/MMU directed tests remain
   open.
-- v2 now has a first 64 MB trimmed Linux image path and can execute OpenSBI
+- v2 now has a coherent 128 MB trimmed Linux image path and can execute OpenSBI
   through S-mode payload handoff from that image. It reaches Linux early
   console. The previous Oops path is fixed by frontend owner-line identity
   and runahead-successor ordering repairs, and the later 11.668M frontend
   no-progress point is fixed by ICQ future-line capture/drop for active and
-  next FTQ owners. The active blocker is now Linux device-tree CPU-node and
-  timebase discovery after early console: the generated DTB and handoff
-  registers are valid, but the kernel later cannot find `/cpus` or `cpu@0`
-  through the unflattened OF path.
+  next FTQ owners. The CPU-node/timebase discovery blocker is also resolved in
+  the latest OF-base probe: Linux can find `/cpus`, `/cpus/cpu@0`, and
+  `timebase-frequency = 1000000` after unflattening. The 64M early timer
+  allocator failure is also fixed by making the DTS and simulation DRAM match
+  the 128M linker region. The active Linux-debug target is now the next RISC-V
+  timekeeping milestone after `timer_common domain=...`. Current evidence
+  therefore does not prove a v1-style clocksource stuck issue; it proves that
+  `clocksource: riscv_clocksource` has not been reached by the 50M cap while
+  the core continues retiring instructions.
 - v2 does not yet reach the Linux `riscv_clocksource` milestone, Linux-visible
   PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
 The next Stage 3 implementation should continue Linux boot debug from the
-current early-console state, but the immediate target is no longer generic
-forward progress through memset. First resolve the CPU-node and timebase
-visibility failure with a temporary Linux-debug or simulation-boundary probe of
-`boot_cpu_hartid`, `of_get_cpu_node(0)`, and
-`of_find_node_by_path("/cpus")`. Any RTL change on that path must still pass
-impacted compliance tests and the DS/CM hard guard before promotion. Sv39
-should stay as a directed-test subset, but the primary Linux path is four-level
-Sv48 because that matches the intended Linux signoff configuration.
+current `timer_common domain=...` state. Use Linux-only probes first to
+determine whether the remaining gap is irq-domain/timer IRQ mapping, CSR `time`
+access, `clocksource_register_hz()`, `sched_clock_register()`, CLINT/SBI timer
+programming, memory/L2 progress, or DSim runtime behavior. Any RTL change on
+that path must still pass impacted compliance tests and the DS/CM hard guard
+before promotion. Sv39 should stay as a directed-test subset, but the primary
+Linux path is four-level Sv48 because that matches the intended Linux signoff
+configuration.

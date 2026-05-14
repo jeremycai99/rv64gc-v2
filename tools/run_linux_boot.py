@@ -212,11 +212,11 @@ def default_run_dir() -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", action="store_true", help="Build software image first.")
-    parser.add_argument("--build-sim", action="store_true", help="Build Stage 3 DSim platform image.")
+    parser.add_argument("--build-sim", action="store_true", help="Build the selected Stage 3 platform image.")
     parser.add_argument("--run", action="store_true", help="Run the simulator image.")
     parser.add_argument(
         "--simulator",
-        choices=("dsim", "xsim"),
+        choices=("dsim", "verilator", "xsim"),
         default="dsim",
         help="Simulator backend for the Stage 3 platform run.",
     )
@@ -254,6 +254,12 @@ def main(argv: list[str] | None = None) -> int:
         default=REPO_ROOT / "xsim_linux_parallel",
     )
     parser.add_argument("--xsim-snapshot-name", default="tb_linux_sim")
+    parser.add_argument(
+        "--verilator-bin",
+        type=Path,
+        default=REPO_ROOT / "verilator_linux_work" / "Vtb_linux",
+        help="Stage 3 Verilator Linux simulation binary.",
+    )
     parser.add_argument(
         "--run-dir",
         type=Path,
@@ -337,10 +343,12 @@ def main(argv: list[str] | None = None) -> int:
 
     build_log = run_dir / "build.log"
     if args.build_sim:
-        sim_build_script = REPO_ROOT / (
-            "build_xsim_linux.sh" if args.simulator == "xsim"
-            else "build_dsim_linux.sh"
-        )
+        sim_build_scripts = {
+            "dsim": "build_dsim_linux.sh",
+            "verilator": "build_verilator_linux.sh",
+            "xsim": "build_xsim_linux.sh",
+        }
+        sim_build_script = REPO_ROOT / sim_build_scripts[args.simulator]
         sim_build_rc = run_cmd(
             ["bash", str(sim_build_script)],
             REPO_ROOT,
@@ -404,9 +412,14 @@ def main(argv: list[str] | None = None) -> int:
     sim_image = args.sim_image if args.sim_image.is_absolute() else REPO_ROOT / args.sim_image
     sim_work_dir = args.sim_work_dir if args.sim_work_dir.is_absolute() else REPO_ROOT / args.sim_work_dir
     xsim_work_dir = args.xsim_work_dir if args.xsim_work_dir.is_absolute() else REPO_ROOT / args.xsim_work_dir
+    verilator_bin = args.verilator_bin if args.verilator_bin.is_absolute() else REPO_ROOT / args.verilator_bin
     xsim_snapshot = xsim_work_dir / "xsim.dir" / args.xsim_snapshot_name
     uart_log = args.uart_log or (run_dir / "uart.log")
-    sim_log = run_dir / ("xsim.log" if args.simulator == "xsim" else "dsim.log")
+    sim_log = run_dir / {
+        "dsim": "dsim.log",
+        "verilator": "verilator.log",
+        "xsim": "xsim.log",
+    }[args.simulator]
 
     if not image.exists():
         summarize(
@@ -444,6 +457,21 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "status": "BLOCKED",
                 "reason": f"Stage 3 XSim snapshot not built yet: {xsim_snapshot}",
+                "image": str(image),
+                "uart_log": str(uart_log),
+                "sim_log": str(sim_log),
+                "target_milestone": args.target_milestone,
+                "last_milestone": "",
+                "milestones_reached": [],
+            },
+        )
+        return 2
+    if args.simulator == "verilator" and not verilator_bin.exists():
+        summarize(
+            run_dir,
+            {
+                "status": "BLOCKED",
+                "reason": f"Stage 3 Verilator binary not built yet: {verilator_bin}",
                 "image": str(image),
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
@@ -512,7 +540,7 @@ def main(argv: list[str] | None = None) -> int:
             shlex.join(raw_cmd),
         ]
         cmd = ["bash", "-lc", "\n".join(shell_lines)]
-    else:
+    elif args.simulator == "xsim":
         xsim_runner_log = run_dir / "xsim_runner.log"
         raw_cmd = [
             "bash",
@@ -527,7 +555,15 @@ def main(argv: list[str] | None = None) -> int:
             f"{shlex.join(raw_cmd)} > {shlex.quote(str(xsim_runner_log))} 2>&1",
         ]
         cmd = ["bash", "-lc", "\n".join(shell_lines)]
-    rc = run_cmd(cmd, REPO_ROOT, sim_log if args.simulator == "dsim" else None)
+    else:
+        cmd = [
+            "bash",
+            str(REPO_ROOT / "run_verilator_linux.sh"),
+            str(image),
+            str(args.max_cycles),
+            *raw_plusargs,
+        ]
+    rc = run_cmd(cmd, REPO_ROOT, sim_log if args.simulator != "xsim" else None)
     uart_text = read_text(uart_log)
     sim_text = read_text(sim_log)
     classification = classify_log(
@@ -551,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
             "uart_log": str(uart_log),
             "sim_log": str(sim_log),
             "sim_returncode": rc,
+            "simulator": args.simulator,
             "target_milestone": args.target_milestone,
             "last_milestone": classification.get("last_milestone", ""),
             "milestones_reached": classification.get("milestones_reached", []),
