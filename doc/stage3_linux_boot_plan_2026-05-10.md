@@ -481,10 +481,10 @@ Current L0 RTL slice:
   because it is too slow for current Linux boot iteration.
 - The Verilator Linux fallback is wired through `build_verilator_linux.sh`,
   `run_verilator_linux.sh`, and `tools/run_linux_boot.py --simulator verilator`.
-  The binary builds, but first execution currently aborts before reset on a
-  Verilator active-region convergence failure from existing `UNOPTFLAT`
-  combinational-settle loops. Treat this as a fallback-enablement blocker, not
-  Linux boot evidence, until the loop source is isolated or DSim is available.
+  As of May 14, the binary builds from the current RTL and is approved for
+  short Linux-debug turnarounds when the DSim lease is unavailable. DSim remains
+  the preferred evidence source for promoted RTL, and any Verilator-debugged RTL
+  slice still needs the locked DS/CM guard before commit.
 - The M-mode UART smoke now passes through the platform path:
   `linux_boot_results/stage3_l0_uart_smoke_clint_lane_fix`.
 - The required DS/CM RTL guard passed after the L0 RTL slice:
@@ -1390,8 +1390,8 @@ Working verdict:
 Next diagnostic step before RTL changes:
 
 1. Keep DSim as the primary evidence source. XSim is only a last-resort
-   cross-check, and Verilator is not Linux evidence until the existing
-   convergence issue is fixed.
+   cross-check, and Verilator is the approved short-turnaround fallback when
+   the DSim lease is unavailable.
 2. Do not use sub-128M `mem=` caps with the current kernel config. The 64M
    default run reached timer setup but ran out of early kernel memory; the 24M
    and 48M caps fail even earlier in `memory_present`.
@@ -1457,6 +1457,60 @@ Current execution rule:
   `timer_common domain=...` and keep the DS/CM guard as the hard RTL promotion
   gate.
 
+### Current OF Timebase Root Cause, May 14
+
+The clean-image `timebase-frequency` panic is no longer classified as a DTS or
+Linux-software problem. The generated DTB is correct, and the failing path is a
+core execution bug exposed by Linux OF lookup:
+
+- The clean Linux payload panicked with
+  `Kernel panic - not syncing: RISC-V system with no 'timebase-frequency' in DTS`.
+- DSim trace showed `of_find_node_opts_by_path("/cpus")` returning null even
+  though the DTB contains `/cpus` and `timebase-frequency = <1000000>`.
+- The decisive trace is in
+  `linux_boot_results/stage3_linux_of_lookup_trace_dsim_165m_20260514a`.
+  In `__of_find_node_by_path`, `strcspn("/cpus", "/")` returns `4`, then the
+  compiler emits `addiw s3,a0,0` followed by `beqz s3,...`. The trace commits
+  the branch PC but not a separate producer PC because the pair was macro-fused.
+  Later `mv a2,s3` still observes stale `s3=0`, so `strncmp()` compares length
+  zero and the OF path walk fails to match `/cpus`.
+- Root cause: fused compare-and-branch uops such as `SEXT.W + BEQ/BNE`,
+  `SLT/SLTU + BEQ/BNE`, and `SLTI/SLTIU + BEQ/BNE` retired as two
+  instructions but dropped the producer's architectural destination writeback.
+  That is illegal when later code reads the producer register.
+
+Fix candidate:
+
+- `fusion_detector.sv` now keeps the producer destination valid for fused
+  compare branches while still inheriting branch metadata from the branch slot.
+- `bru.sv` now returns the producer result on fused compare branches:
+  `SLT/SLTU/SLTI/SLTIU` produce `0/1`, and `SEXT.W` produces the sign-extended
+  word result. JAL/JALR fusion continues to return the link address.
+- This is a general macro-fusion correctness repair, not a Linux or benchmark
+  special case.
+
+Validation status:
+
+- Directed probe:
+  `tests/asm/probe_linux_beq_after_call.S` now includes the Linux-shaped
+  `call; addiw s3,a0,0; beqz s3; mv a2,s3` case.
+- XSim rebuilt from the current RTL and passed the directed probe:
+  `benchmark_results/stage3_linux_debug_beq_after_call_xsim_fusionfix_20260514a`
+  reports `PASS`.
+- DSim Stage 3 DS/CM guard passed after the BRU result repair and after the
+  `fused_imm` port-width cleanup:
+  `benchmark_results/stage3_rtl_guard_fusion_bru_result_immfix_dsim_20260514a`.
+  Locked guard metrics were preserved within the 0.01% regression tolerance:
+  DS100 `3.150055 DMIPS/MHz`, DS300 `3.218761 DMIPS/MHz`,
+  CoreMark iter1 `6.649201 CM/MHz`, and CoreMark iter10 `6.872881 CM/MHz`.
+- The Linux DSim image rebuild passed after the final RTL cleanup:
+  `linux_boot_results/stage3_linux_fusionfix_build_dsim_20260514a`.
+- A bounded 200M DSim Linux run was started from the rebuilt image but stopped
+  intentionally before kernel progress because the long Linux checkpoint was
+  deferred. Its UART only contains the Stage 3 smoke banner, so
+  `linux_boot_results/stage3_linux_fusionfix_200m_dsim_20260514a` is not Linux
+  boot evidence.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -1508,14 +1562,16 @@ DS/CM performance gate.
   console. The previous Oops path is fixed by frontend owner-line identity
   and runahead-successor ordering repairs, and the later 11.668M frontend
   no-progress point is fixed by ICQ future-line capture/drop for active and
-  next FTQ owners. The instrumented OF-base probe showed Linux can find
-  `/cpus`, `/cpus/cpu@0`, and `timebase-frequency = 1000000` after
-  unflattening, but the cleaned payload has not yet reconfirmed that point. The
-  64M early timer allocator failure is fixed by making the DTS and simulation
-  DRAM match the 128M linker region. Once the clean payload reconfirms
-  timebase discovery, the active Linux-debug target returns to the next RISC-V
-  timekeeping milestone after `timer_common domain=...`. Current evidence
-  therefore does not prove a v1-style clocksource stuck issue.
+  next FTQ owners. The latest clean-payload `timebase-frequency` panic is now
+  traced to a macro-fusion correctness bug: fused compare-and-branch uops
+  retired as two instructions but dropped the producer register writeback.
+  A general BRU/fusion-detector fix is in place and passes both the directed
+  Linux-shaped probe and the full DS/CM regression guard. The 64M early timer
+  allocator failure is fixed by making the DTS and simulation DRAM match the
+  128M linker region. The next Linux run must reconfirm timebase discovery from
+  the clean payload before moving back to the RISC-V timekeeping milestone after
+  `timer_common domain=...`. Current evidence therefore does not prove a
+  v1-style clocksource stuck issue.
 - v2 does not yet reach the Linux `riscv_clocksource` milestone, Linux-visible
   PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style

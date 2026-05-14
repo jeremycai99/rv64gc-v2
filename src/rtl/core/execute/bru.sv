@@ -15,7 +15,7 @@ module bru
     input  br_op_e      op,
     input  logic        is_fused,      // fused compare-and-branch uop
     input  logic [2:0]  fusion_type,   // which fused pattern
-    input  logic [63:0] fused_imm,      // first-op immediate for fused SLTI/SLTIU
+    input  logic [31:0] fused_imm,      // first-op immediate for fused SLTI/SLTIU
     input  logic        bp_taken,      // predicted taken
     input  logic [63:0] bp_target,     // predicted target
     input  logic        is_rvc,        // compressed instruction (PC+2 for link)
@@ -51,19 +51,27 @@ module bru
     // Fusion patterns combine SLT/SLTU/SLTI/SLTIU + BEQ/BNE into a single uop.
     // Conditional-branch imm remains the redirect offset; fused_imm carries the
     // compare immediate for SLTI/SLTIU forms.
-    logic fused_taken;
-    logic fused_slti_signed_lt;
-    logic fused_sltiu_lt;
-    assign fused_slti_signed_lt = ($signed(operand_a) < $signed(fused_imm));
-    assign fused_sltiu_lt       = (operand_a < fused_imm);
+    logic        fused_taken;
+    logic        fused_slt_signed_lt;
+    logic        fused_sltu_lt;
+    logic        fused_slti_signed_lt;
+    logic        fused_sltiu_lt;
+    logic [63:0] fused_imm64;
+    logic [63:0] fused_result;
+    logic [63:0] link_result;
+    assign fused_slt_signed_lt  = ($signed(operand_a) < $signed(operand_b));
+    assign fused_sltu_lt        = (operand_a < operand_b);
+    assign fused_imm64          = {{32{fused_imm[31]}}, fused_imm};
+    assign fused_slti_signed_lt = ($signed(operand_a) < $signed(fused_imm64));
+    assign fused_sltiu_lt       = (operand_a < fused_imm64);
 
     always_comb begin
         fused_taken = 1'b0;
         case (fusion_type)
-            3'd0: fused_taken = ($signed(operand_a) < $signed(operand_b));   // SLT + BNE  -> branch if a < b signed
-            3'd1: fused_taken = (operand_a < operand_b);                     // SLTU + BNE -> branch if a < b unsigned
-            3'd2: fused_taken = ($signed(operand_a) >= $signed(operand_b));  // SLT + BEQ  -> branch if a >= b signed
-            3'd3: fused_taken = (operand_a >= operand_b);                    // SLTU + BEQ -> branch if a >= b unsigned
+            3'd0: fused_taken = fused_slt_signed_lt;                         // SLT + BNE  -> branch if a < b signed
+            3'd1: fused_taken = fused_sltu_lt;                               // SLTU + BNE -> branch if a < b unsigned
+            3'd2: fused_taken = !fused_slt_signed_lt;                        // SLT + BEQ  -> branch if a >= b signed
+            3'd3: fused_taken = !fused_sltu_lt;                              // SLTU + BEQ -> branch if a >= b unsigned
             3'd4: fused_taken = (op == BR_EQ) ? !fused_slti_signed_lt
                                                :  fused_slti_signed_lt;       // SLTI + BEQ/BNE
             3'd5: fused_taken = (op == BR_EQ) ? !fused_sltiu_lt
@@ -116,7 +124,27 @@ module bru
     // =========================================================================
     // Link address (PC + 4 for 32-bit, PC + 2 for RVC)
     // =========================================================================
-    assign result = pc + (is_rvc ? 64'd2 : 64'd4);
+    assign link_result = pc + (is_rvc ? 64'd2 : 64'd4);
+
+    always_comb begin
+        fused_result = 64'd0;
+        case (fusion_type)
+            3'd0: fused_result = {63'd0, fused_slt_signed_lt};
+            3'd1: fused_result = {63'd0, fused_sltu_lt};
+            3'd2: fused_result = {63'd0, fused_slt_signed_lt};
+            3'd3: fused_result = {63'd0, fused_sltu_lt};
+            3'd4: fused_result = {63'd0, fused_slti_signed_lt};
+            3'd5: fused_result = {63'd0, fused_sltiu_lt};
+            3'd6: fused_result = {{32{operand_a[31]}}, operand_a[31:0]};
+            3'd7: fused_result = {{32{operand_a[31]}}, operand_a[31:0]};
+            default: fused_result = 64'd0;
+        endcase
+    end
+
+    assign result =
+        (is_fused && (op != BR_JAL) && (op != BR_JALR))
+            ? fused_result
+            : link_result;
 
     // =========================================================================
     // Mispredict detection

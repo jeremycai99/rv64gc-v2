@@ -1,0 +1,15 @@
+{
+  "notes": "Stage 3 Linux boot directed debug probes. These rows are functional RTL diagnostics, not performance signoff rows.",
+  "benchmarks": [
+    {
+      "name": "probe_linux_beq_after_call",
+      "kind": "generic",
+      "hex": "tests/hex/probe_linux_beq_after_call.hex",
+      "max_cycles": 100000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Mirrors the Linux OF lookup shape where a call result in a0 is compared against s3 by a following BEQ."
+    }
+  ]
+}

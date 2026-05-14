@@ -362,12 +362,16 @@ module tb_linux;
                                      u_core.commit_count,
                                      u_core.csr_priv_mode);
                             if (linux_trace_regs_en != 0) begin
-                                $display("[LINUX_REGS] cyc=%0d pc=%016h ra=%016h sp=%016h tp=%016h a0=%016h a1=%016h a2=%016h a3=%016h a4=%016h a5=%016h satp=%016h",
+                                $display("[LINUX_REGS] cyc=%0d pc=%016h ra=%016h sp=%016h tp=%016h s1=%016h s2=%016h s3=%016h s4=%016h a0=%016h a1=%016h a2=%016h a3=%016h a4=%016h a5=%016h satp=%016h",
                                          sim_cycle,
                                          u_core.rob_head_pc[ci],
                                          u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[1]],
                                          u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[2]],
                                          u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[4]],
+                                         u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[9]],
+                                         u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[18]],
+                                         u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[19]],
+                                         u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[20]],
                                          u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[10]],
                                          u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[11]],
                                          u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[12]],
@@ -899,15 +903,18 @@ module tb_linux;
                 if (u_core.bru_issue &&
                     (u_core.iq0_issue_data[0].pc >= linux_trace_commit_lo) &&
                     (u_core.iq0_issue_data[0].pc < linux_trace_commit_hi)) begin
-                    $display("[LINUX_BRU0] cyc=%0d pc=%016h rob=%0d op=%0d fused=%0b ckpt=%0b rs1p=%0d rs1=%016h imm=%016h bp_taken=%0b bp_target=%016h taken=%0b target=%016h taken_target=%016h link=%016h misp=%0b",
+                    $display("[LINUX_BRU0] cyc=%0d pc=%016h rob=%0d op=%0d fused=%0b ftype=%0d ckpt=%0b rs1p=%0d rs1=%016h rs2p=%0d rs2=%016h imm=%016h bp_taken=%0b bp_target=%016h taken=%0b target=%016h taken_target=%016h link=%016h misp=%0b",
                              sim_cycle,
                              u_core.iq0_issue_data[0].pc,
                              u_core.iq0_issue_data[0].rob_idx,
                              u_core.iq0_issue_data[0].br_op,
                              u_core.iq0_issue_data[0].is_fused,
+                             u_core.iq0_issue_data[0].fusion_type,
                              u_core.iq0_issue_data[0].uses_checkpoint,
                              u_core.iq0_issue_data[0].rs1_phys,
                              u_core.bypassed_data[0],
+                             u_core.iq0_issue_data[0].rs2_phys,
+                             u_core.bypassed_data[1],
                              u_core.iq0_issue_data[0].imm,
                              u_core.iq0_issue_data[0].bp_taken,
                              u_core.iq0_issue_data[0].bp_target,
@@ -920,15 +927,18 @@ module tb_linux;
                 if (u_core.bru1_issue &&
                     (u_core.iq0_issue_data[1].pc >= linux_trace_commit_lo) &&
                     (u_core.iq0_issue_data[1].pc < linux_trace_commit_hi)) begin
-                    $display("[LINUX_BRU1] cyc=%0d pc=%016h rob=%0d op=%0d fused=%0b ckpt=%0b rs1p=%0d rs1=%016h imm=%016h bp_taken=%0b bp_target=%016h taken=%0b target=%016h taken_target=%016h link=%016h misp=%0b",
+                    $display("[LINUX_BRU1] cyc=%0d pc=%016h rob=%0d op=%0d fused=%0b ftype=%0d ckpt=%0b rs1p=%0d rs1=%016h rs2p=%0d rs2=%016h imm=%016h bp_taken=%0b bp_target=%016h taken=%0b target=%016h taken_target=%016h link=%016h misp=%0b",
                              sim_cycle,
                              u_core.iq0_issue_data[1].pc,
                              u_core.iq0_issue_data[1].rob_idx,
                              u_core.iq0_issue_data[1].br_op,
                              u_core.iq0_issue_data[1].is_fused,
+                             u_core.iq0_issue_data[1].fusion_type,
                              u_core.iq0_issue_data[1].uses_checkpoint,
                              u_core.iq0_issue_data[1].rs1_phys,
                              u_core.bypassed_data[2],
+                             u_core.iq0_issue_data[1].rs2_phys,
+                             u_core.bypassed_data[3],
                              u_core.iq0_issue_data[1].imm,
                              u_core.iq0_issue_data[1].bp_taken,
                              u_core.iq0_issue_data[1].bp_target,

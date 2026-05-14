@@ -367,6 +367,8 @@ module fusion_detector
             if (w_is_auipc[0] && w_is_jalr[1] &&
                 (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
                 fused_uop[0].imm = dec_in[0].pc + dec_in[0].imm + dec_in[1].imm;
+            end else begin
+                fused_uop[0].rd_valid = dec_in[0].rd_valid;
             end
         end
     end : pair_0_1
@@ -603,6 +605,8 @@ module fusion_detector
             if (w_is_auipc[1] && w_is_jalr[2] &&
                 (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
                 fused_uop[1].imm = dec_in[1].pc + dec_in[1].imm + dec_in[2].imm;
+            end else begin
+                fused_uop[1].rd_valid = dec_in[1].rd_valid;
             end
         end
     end : pair_1_2
@@ -839,6 +843,8 @@ module fusion_detector
             if (w_is_auipc[2] && w_is_jalr[3] &&
                 (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
                 fused_uop[2].imm = dec_in[2].pc + dec_in[2].imm + dec_in[3].imm;
+            end else begin
+                fused_uop[2].rd_valid = dec_in[2].rd_valid;
             end
         end
     end : pair_2_3
