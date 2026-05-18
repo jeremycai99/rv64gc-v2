@@ -29,6 +29,11 @@ FAIL_PATTERNS = [
     "trap loop",
     "fatal",
 ]
+DSIM_LICENSE_BLOCK_PATTERNS = [
+    "License not obtained",
+    "Already at maxLeases",
+    "No DSim license configured",
+]
 MILESTONES = [
     {
         "id": "m_mode_uart_smoke",
@@ -99,6 +104,10 @@ def read_text(path: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def dsim_license_blocked(log_text: str) -> bool:
+    return any(pattern in log_text for pattern in DSIM_LICENSE_BLOCK_PATTERNS)
 
 
 def summarize(run_dir: Path, payload: dict[str, Any]) -> None:
@@ -216,9 +225,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run", action="store_true", help="Run the simulator image.")
     parser.add_argument(
         "--simulator",
-        choices=("dsim", "verilator", "xsim"),
-        default="dsim",
-        help="Simulator backend for the Stage 3 platform run.",
+        choices=("auto", "dsim", "verilator", "xsim"),
+        default="auto",
+        help=(
+            "Simulator backend for the Stage 3 platform run. "
+            "'auto' tries DSim first and falls back to Verilator when the "
+            "DSim lease is unavailable."
+        ),
     )
     parser.add_argument(
         "--build-script",
@@ -341,6 +354,19 @@ def main(argv: list[str] | None = None) -> int:
         run_dir = REPO_ROOT / run_dir
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    auto_simulator = args.simulator == "auto"
+    selected_simulator = args.simulator
+    sim_image_probe = args.sim_image if args.sim_image.is_absolute() else REPO_ROOT / args.sim_image
+    verilator_bin_probe = args.verilator_bin if args.verilator_bin.is_absolute() else REPO_ROOT / args.verilator_bin
+
+    if auto_simulator and not args.build_sim:
+        if sim_image_probe.exists():
+            selected_simulator = "dsim"
+        elif verilator_bin_probe.exists():
+            selected_simulator = "verilator"
+        else:
+            selected_simulator = "dsim"
+
     build_log = run_dir / "build.log"
     if args.build_sim:
         sim_build_scripts = {
@@ -348,21 +374,42 @@ def main(argv: list[str] | None = None) -> int:
             "verilator": "build_verilator_linux.sh",
             "xsim": "build_xsim_linux.sh",
         }
-        sim_build_script = REPO_ROOT / sim_build_scripts[args.simulator]
-        sim_build_rc = run_cmd(
-            ["bash", str(sim_build_script)],
-            REPO_ROOT,
-            run_dir / "sim_build.log",
-        )
+        build_order = ["dsim", "verilator"] if auto_simulator else [selected_simulator]
+        sim_build_rc = 1
+        sim_build_log = run_dir / "sim_build.log"
+        for build_idx, build_sim in enumerate(build_order):
+            sim_build_log = (
+                run_dir / f"sim_build_{build_sim}.log"
+                if auto_simulator else
+                run_dir / "sim_build.log"
+            )
+            sim_build_script = REPO_ROOT / sim_build_scripts[build_sim]
+            sim_build_rc = run_cmd(
+                ["bash", str(sim_build_script)],
+                REPO_ROOT,
+                sim_build_log,
+            )
+            if sim_build_rc == 0:
+                selected_simulator = build_sim
+                break
+            if not (
+                auto_simulator and
+                build_idx == 0 and
+                build_sim == "dsim" and
+                dsim_license_blocked(read_text(sim_build_log))
+            ):
+                selected_simulator = build_sim
+                break
         if sim_build_rc != 0:
             summarize(
                 run_dir,
                 {
                     "status": "FAIL",
-                    "reason": f"sim build failed, see {run_dir / 'sim_build.log'}",
+                    "reason": f"sim build failed, see {sim_build_log}",
                     "image": str(args.image),
                     "uart_log": "",
                     "sim_log": "",
+                    "simulator": selected_simulator,
                     "target_milestone": args.target_milestone,
                     "last_milestone": "",
                     "milestones_reached": [],
@@ -396,11 +443,12 @@ def main(argv: list[str] | None = None) -> int:
         summarize(
             run_dir,
             {
-                "status": "BUILT" if args.build else "NOOP",
+                "status": "BUILT" if (args.build or args.build_sim) else "NOOP",
                 "reason": "run not requested",
                 "image": str(args.image),
                 "uart_log": "",
                 "sim_log": "",
+                "simulator": selected_simulator,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
@@ -419,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
         "dsim": "dsim.log",
         "verilator": "verilator.log",
         "xsim": "xsim.log",
-    }[args.simulator]
+    }[selected_simulator]
 
     if not image.exists():
         summarize(
@@ -436,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         return 2
-    if args.simulator == "dsim" and not sim_image.exists():
+    if selected_simulator == "dsim" and not sim_image.exists():
         summarize(
             run_dir,
             {
@@ -445,13 +493,14 @@ def main(argv: list[str] | None = None) -> int:
                 "image": str(image),
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
+                "simulator": selected_simulator,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
             },
         )
         return 2
-    if args.simulator == "xsim" and not xsim_snapshot.exists():
+    if selected_simulator == "xsim" and not xsim_snapshot.exists():
         summarize(
             run_dir,
             {
@@ -460,13 +509,14 @@ def main(argv: list[str] | None = None) -> int:
                 "image": str(image),
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
+                "simulator": selected_simulator,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
             },
         )
         return 2
-    if args.simulator == "verilator" and not verilator_bin.exists():
+    if selected_simulator == "verilator" and not verilator_bin.exists():
         summarize(
             run_dir,
             {
@@ -475,6 +525,7 @@ def main(argv: list[str] | None = None) -> int:
                 "image": str(image),
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
+                "simulator": selected_simulator,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
@@ -511,7 +562,7 @@ def main(argv: list[str] | None = None) -> int:
     for plusarg in args.sim_plusarg:
         raw_plusargs.append(plusarg if plusarg.startswith("+") else f"+{plusarg}")
 
-    if args.simulator == "dsim":
+    if selected_simulator == "dsim":
         raw_cmd = [
             "dsim",
             "-work",
@@ -540,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
             shlex.join(raw_cmd),
         ]
         cmd = ["bash", "-lc", "\n".join(shell_lines)]
-    elif args.simulator == "xsim":
+    elif selected_simulator == "xsim":
         xsim_runner_log = run_dir / "xsim_runner.log"
         raw_cmd = [
             "bash",
@@ -563,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
             str(args.max_cycles),
             *raw_plusargs,
         ]
-    rc = run_cmd(cmd, REPO_ROOT, sim_log if args.simulator != "xsim" else None)
+    rc = run_cmd(cmd, REPO_ROOT, sim_log if selected_simulator != "xsim" else None)
     uart_text = read_text(uart_log)
     sim_text = read_text(sim_log)
     classification = classify_log(
@@ -587,7 +638,8 @@ def main(argv: list[str] | None = None) -> int:
             "uart_log": str(uart_log),
             "sim_log": str(sim_log),
             "sim_returncode": rc,
-            "simulator": args.simulator,
+            "simulator": selected_simulator,
+            "requested_simulator": args.simulator,
             "target_milestone": args.target_milestone,
             "last_milestone": classification.get("last_milestone", ""),
             "milestones_reached": classification.get("milestones_reached", []),

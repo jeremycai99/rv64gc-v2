@@ -47,6 +47,7 @@ module decode_slice
         // --- Default all fields ---
         decoded.valid          = 1'b1;
         decoded.pc             = pc;
+        decoded.trap_pc        = pc;
         decoded.insn           = insn;
         decoded.rs1_arch       = rs1_f;
         decoded.rs2_arch       = rs2_f;

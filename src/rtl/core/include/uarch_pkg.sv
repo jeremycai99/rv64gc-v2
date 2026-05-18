@@ -136,6 +136,7 @@ package uarch_pkg;
     typedef struct packed {
         logic               valid;
         logic [63:0]        pc;
+        logic [63:0]        trap_pc;        // first architectural PC for precise trap restart
         logic [31:0]        insn;           // raw instruction bits
         // Source/destination registers
         logic [4:0]         rs1_arch;

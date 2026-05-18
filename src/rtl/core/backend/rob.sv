@@ -21,6 +21,7 @@ module rob
     input  logic [63:0]             alloc_exc_tval [0:PIPE_WIDTH-1],
     // Data to write at allocation time (per-entry fields)
     input  logic [63:0]             alloc_pc [0:PIPE_WIDTH-1],
+    input  logic [63:0]             alloc_trap_pc [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   alloc_is_branch,
     input  logic [2:0]             alloc_bpu_type [0:PIPE_WIDTH-1],
     input  logic [PIPE_WIDTH-1:0]   alloc_is_store,
@@ -104,6 +105,7 @@ module rob
     output logic [PIPE_WIDTH-1:0]             head_valid,     // which of the 6 head entries are valid
     output logic [PIPE_WIDTH-1:0]             head_ready,     // which are completed (ready to retire)
     output logic [63:0]                       head_pc [0:PIPE_WIDTH-1],
+    output logic [63:0]                       head_trap_pc [0:PIPE_WIDTH-1],
     output logic [PIPE_WIDTH-1:0]             head_has_exception,
     output logic [3:0]                        head_exc_code [0:PIPE_WIDTH-1],
     output logic [63:0]                       head_exc_tval [0:PIPE_WIDTH-1],
@@ -221,6 +223,7 @@ module rob
     // invalidated — the CDB writeback never arrives).
     reg [11:0]                   rob_head_watchdog;
     reg [64*ROB_DEPTH-1:0]       pc_packed;
+    reg [64*ROB_DEPTH-1:0]       trap_pc_packed;
     reg [ROB_DEPTH-1:0]          has_exc_r;
     reg [4*ROB_DEPTH-1:0]        exc_code_packed;
     reg [64*ROB_DEPTH-1:0]       exc_tval_packed;
@@ -506,6 +509,7 @@ module rob
                 head_ready[i] = head_ready[i] | head_ready_wb_bypass_allowed[i];
 `endif
             head_pc[i]               = pc_packed[head_idx_w[i]*64 +: 64];
+            head_trap_pc[i]          = trap_pc_packed[head_idx_w[i]*64 +: 64];
             head_has_exception[i]    = has_exc_r[head_idx_w[i]];
             head_exc_code[i]         = exc_code_packed[head_idx_w[i]*4 +: 4];
             head_exc_tval[i]         = exc_tval_packed[head_idx_w[i]*64 +: 64];
@@ -645,6 +649,7 @@ module rob
             fp_fflags_packed     <= '0;
             /* verilator lint_off WIDTHCONCAT */
             pc_packed            <= '0;
+            trap_pc_packed       <= '0;
             exc_code_packed      <= '0;
             exc_tval_packed      <= '0;
             branch_target_packed <= '0;
@@ -846,6 +851,7 @@ module rob
                     store_addr_done_r[ai_w[i]] <= 1'b0;
                     store_data_done_r[ai_w[i]] <= 1'b0;
                     pc_packed[ai_w[i]*64 +: 64]       <= alloc_pc[i];
+                    trap_pc_packed[ai_w[i]*64 +: 64]  <= alloc_trap_pc[i];
                     has_exc_r[ai_w[i]]                <= alloc_has_exception[i];
                     exc_code_packed[ai_w[i]*4 +: 4]   <= alloc_exc_code[i];
                     exc_tval_packed[ai_w[i]*64 +: 64] <= alloc_exc_tval[i];

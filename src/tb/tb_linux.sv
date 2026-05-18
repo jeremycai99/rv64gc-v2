@@ -135,10 +135,31 @@ module tb_linux;
     logic [63:0] last_commit_pc;
     logic [63:0] last_commit_cycle;
     integer last_commit_count;
+    localparam int LINUX_TRACE_RING_DEPTH = 32;
+    integer linux_commit_ring_wr;
+    integer linux_commit_ring_count;
+    logic [63:0] linux_commit_ring_cycle [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [63:0] linux_commit_ring_pc [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [2:0]  linux_commit_ring_slot [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [2:0]  linux_commit_ring_group_count [0:LINUX_TRACE_RING_DEPTH-1];
+    integer linux_bru_ring_wr;
+    integer linux_bru_ring_count;
+    logic [63:0] linux_bru_ring_cycle [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [63:0] linux_bru_ring_pc [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [63:0] linux_bru_ring_bp_target [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [63:0] linux_bru_ring_target [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [ROB_IDX_BITS-1:0] linux_bru_ring_rob [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [2:0]  linux_bru_ring_port [0:LINUX_TRACE_RING_DEPTH-1];
+    logic [2:0]  linux_bru_ring_op [0:LINUX_TRACE_RING_DEPTH-1];
+    logic        linux_bru_ring_bp_taken [0:LINUX_TRACE_RING_DEPTH-1];
+    logic        linux_bru_ring_taken [0:LINUX_TRACE_RING_DEPTH-1];
+    logic        linux_bru_ring_misp [0:LINUX_TRACE_RING_DEPTH-1];
     integer linux_trace_load_pc_en;
     logic [63:0] linux_trace_load_pc;
     integer linux_trace_line_en;
     logic [63:0] linux_trace_line;
+    integer linux_trace_pa_line_en;
+    logic [63:0] linux_trace_pa_line;
     integer linux_trace_l2_en;
     integer linux_trace_trap_en;
     integer linux_trace_fault_only_en;
@@ -146,6 +167,17 @@ module tb_linux;
     integer linux_trace_amo_en;
     integer linux_trace_commit_range_en;
     integer linux_trace_regs_en;
+    integer linux_trace_sscratch_en;
+    integer linux_stop_on_sscratch_nonzero_en;
+    integer linux_stop_on_bad_kernel_sscratch_en;
+    integer linux_stop_store_pc_en;
+    integer linux_stop_store_data_above_en;
+    logic [63:0] linux_stop_store_pc;
+    logic [63:0] linux_stop_store_data_above;
+    integer linux_stop_commit_rd_en;
+    integer linux_stop_commit_data_above_en;
+    logic [4:0] linux_stop_commit_rd;
+    logic [63:0] linux_stop_commit_data_above;
     integer linux_trace_pipe_en;
     integer linux_trace_bru_en;
     integer linux_trace_mmu_en;
@@ -178,11 +210,22 @@ module tb_linux;
     logic [63:0]             trace_load_pc [0:TRACE_LOAD_TRACK-1];
     logic [63:0]             trace_load_addr [0:TRACE_LOAD_TRACK-1];
     wire                     linux_trace_cycle_on;
+    wire                     linux_trace_any_line_en;
 
     assign linux_trace_cycle_on =
         (linux_trace_cycle_window_en == 0) ||
         ((sim_cycle >= linux_trace_cycle_lo) &&
          (sim_cycle <= linux_trace_cycle_hi));
+    assign linux_trace_any_line_en =
+        (linux_trace_line_en != 0) || (linux_trace_pa_line_en != 0);
+
+    function automatic logic linux_trace_line_match(input logic [63:0] addr);
+        linux_trace_line_match =
+            ((linux_trace_line_en != 0) &&
+             ({addr[63:6], 6'd0} == linux_trace_line)) ||
+            ((linux_trace_pa_line_en != 0) &&
+             ({addr[63:6], 6'd0} == linux_trace_pa_line));
+    endfunction
 
     initial begin
         max_cycles = 100000;
@@ -194,6 +237,8 @@ module tb_linux;
         linux_trace_load_pc = 64'd0;
         linux_trace_line_en = 0;
         linux_trace_line = 64'd0;
+        linux_trace_pa_line_en = 0;
+        linux_trace_pa_line = 64'd0;
         linux_trace_l2_en = 0;
         linux_trace_trap_en = 0;
         linux_trace_fault_only_en = 0;
@@ -201,6 +246,17 @@ module tb_linux;
         linux_trace_amo_en = 0;
         linux_trace_commit_range_en = 0;
         linux_trace_regs_en = 0;
+        linux_trace_sscratch_en = 0;
+        linux_stop_on_sscratch_nonzero_en = 0;
+        linux_stop_on_bad_kernel_sscratch_en = 0;
+        linux_stop_store_pc_en = 0;
+        linux_stop_store_data_above_en = 0;
+        linux_stop_store_pc = 64'd0;
+        linux_stop_store_data_above = 64'd0;
+        linux_stop_commit_rd_en = 0;
+        linux_stop_commit_data_above_en = 0;
+        linux_stop_commit_rd = 5'd0;
+        linux_stop_commit_data_above = 64'd0;
         linux_trace_pipe_en = 0;
         linux_trace_bru_en = 0;
         linux_trace_mmu_en = 0;
@@ -241,6 +297,10 @@ module tb_linux;
             linux_trace_line_en = 1;
             linux_trace_line[5:0] = 6'd0;
         end
+        if ($value$plusargs("LINUX_TRACE_PA_LINE=%h", linux_trace_pa_line)) begin
+            linux_trace_pa_line_en = 1;
+            linux_trace_pa_line[5:0] = 6'd0;
+        end
         if ($test$plusargs("LINUX_TRACE_L2"))
             linux_trace_l2_en = 1;
         if ($test$plusargs("LINUX_TRACE_TRAP"))
@@ -253,6 +313,20 @@ module tb_linux;
             linux_trace_amo_en = 1;
         if ($test$plusargs("LINUX_TRACE_REGS"))
             linux_trace_regs_en = 1;
+        if ($test$plusargs("LINUX_TRACE_SSCRATCH"))
+            linux_trace_sscratch_en = 1;
+        if ($test$plusargs("LINUX_STOP_ON_SSCRATCH_NONZERO"))
+            linux_stop_on_sscratch_nonzero_en = 1;
+        if ($test$plusargs("LINUX_STOP_ON_BAD_KERNEL_SSCRATCH"))
+            linux_stop_on_bad_kernel_sscratch_en = 1;
+        if ($value$plusargs("LINUX_STOP_STORE_PC=%h", linux_stop_store_pc))
+            linux_stop_store_pc_en = 1;
+        if ($value$plusargs("LINUX_STOP_STORE_DATA_ABOVE=%h", linux_stop_store_data_above))
+            linux_stop_store_data_above_en = 1;
+        if ($value$plusargs("LINUX_STOP_COMMIT_RD=%d", linux_stop_commit_rd))
+            linux_stop_commit_rd_en = 1;
+        if ($value$plusargs("LINUX_STOP_COMMIT_DATA_ABOVE=%h", linux_stop_commit_data_above))
+            linux_stop_commit_data_above_en = 1;
         if ($test$plusargs("LINUX_TRACE_PIPE"))
             linux_trace_pipe_en = 1;
         if ($test$plusargs("LINUX_TRACE_BRU"))
@@ -309,6 +383,10 @@ module tb_linux;
             last_commit_pc <= 64'd0;
             last_commit_cycle <= 64'd0;
             last_commit_count <= 0;
+            linux_commit_ring_wr <= 0;
+            linux_commit_ring_count <= 0;
+            linux_bru_ring_wr <= 0;
+            linux_bru_ring_count <= 0;
             mem_read_addr_r <= 64'd0;
             mem_read_pending_r <= 1'b0;
             clear_bss_post_flush_pending <= 1'b0;
@@ -323,6 +401,22 @@ module tb_linux;
                 trace_load_pdst[ti] <= '0;
                 trace_load_pc[ti] <= 64'd0;
                 trace_load_addr[ti] <= 64'd0;
+            end
+            for (int ri = 0; ri < LINUX_TRACE_RING_DEPTH; ri++) begin
+                linux_commit_ring_cycle[ri] <= 64'd0;
+                linux_commit_ring_pc[ri] <= 64'd0;
+                linux_commit_ring_slot[ri] <= 3'd0;
+                linux_commit_ring_group_count[ri] <= 3'd0;
+                linux_bru_ring_cycle[ri] <= 64'd0;
+                linux_bru_ring_pc[ri] <= 64'd0;
+                linux_bru_ring_bp_target[ri] <= 64'd0;
+                linux_bru_ring_target[ri] <= 64'd0;
+                linux_bru_ring_rob[ri] <= '0;
+                linux_bru_ring_port[ri] <= 3'd0;
+                linux_bru_ring_op[ri] <= 3'd0;
+                linux_bru_ring_bp_taken[ri] <= 1'b0;
+                linux_bru_ring_taken[ri] <= 1'b0;
+                linux_bru_ring_misp[ri] <= 1'b0;
             end
         end else begin
             sim_cycle <= sim_cycle + 1;
@@ -351,6 +445,18 @@ module tb_linux;
                 for (int ci = 0; ci < PIPE_WIDTH; ci++) begin
                     if (ci < int'(u_core.commit_count)) begin
                         last_commit_pc <= u_core.rob_head_pc[ci];
+                        linux_commit_ring_cycle[
+                            (linux_commit_ring_wr + ci) % LINUX_TRACE_RING_DEPTH] <=
+                            64'(sim_cycle);
+                        linux_commit_ring_pc[
+                            (linux_commit_ring_wr + ci) % LINUX_TRACE_RING_DEPTH] <=
+                            u_core.rob_head_pc[ci];
+                        linux_commit_ring_slot[
+                            (linux_commit_ring_wr + ci) % LINUX_TRACE_RING_DEPTH] <=
+                            ci[2:0];
+                        linux_commit_ring_group_count[
+                            (linux_commit_ring_wr + ci) % LINUX_TRACE_RING_DEPTH] <=
+                            u_core.commit_count;
                         if ((linux_trace_commit_range_en != 0) &&
                             linux_trace_cycle_on &&
                             (u_core.rob_head_pc[ci] >= linux_trace_commit_lo) &&
@@ -413,6 +519,303 @@ module tb_linux;
                                 u_core.u_int_prf.regfile_copy0[
                                     u_core.commit_out[ci].pdst];
                         end
+                        if ((linux_stop_commit_rd_en != 0) &&
+                            (linux_stop_commit_data_above_en != 0) &&
+                            linux_trace_cycle_on &&
+                            u_core.commit_out[ci].valid &&
+                            u_core.commit_out[ci].rd_valid &&
+                            (u_core.commit_out[ci].rd_arch == linux_stop_commit_rd) &&
+                            (u_core.u_int_prf.regfile_copy0[
+                                u_core.commit_out[ci].pdst] >
+                             linux_stop_commit_data_above)) begin
+                            $display("[LINUX_STOP_COMMIT_DATA_ABOVE] cyc=%0d slot=%0d pc=%016h rd=%0d pdst=%0d data=%016h limit=%016h priv=%0d commit_count=%0d flush=%0b/%0b redirect=%016h",
+                                     sim_cycle,
+                                     ci,
+                                     u_core.rob_head_pc[ci],
+                                     u_core.commit_out[ci].rd_arch,
+                                     u_core.commit_out[ci].pdst,
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.commit_out[ci].pdst],
+                                     linux_stop_commit_data_above,
+                                     u_core.csr_priv_mode,
+                                     u_core.commit_count,
+                                     u_core.flush_out.valid,
+                                     u_core.flush_out.full_flush,
+                                     u_core.flush_out.redirect_pc);
+                            for (int cj = 0; cj < PIPE_WIDTH; cj++) begin
+                                if (cj < int'(u_core.commit_count)) begin
+                                    $display("[LINUX_STOP_COMMIT_SLOT] cyc=%0d slot=%0d pc=%016h head_v=%0b ready=%0b out_v=%0b rdv=%0b rd=%0d pdst=%0d old=%0d data=%016h exc=%0b br=%0b misp=%0b sret=%0b mret=%0b",
+                                             sim_cycle,
+                                             cj,
+                                             u_core.rob_head_pc[cj],
+                                             u_core.rob_head_valid[cj],
+                                             u_core.rob_head_ready[cj],
+                                             u_core.commit_out[cj].valid,
+                                             u_core.commit_out[cj].rd_valid,
+                                             u_core.commit_out[cj].rd_arch,
+                                             u_core.commit_out[cj].pdst,
+                                             u_core.commit_out[cj].old_pdst,
+                                             u_core.u_int_prf.regfile_copy0[
+                                                 u_core.commit_out[cj].pdst],
+                                             u_core.rob_head_has_exception[cj],
+                                             u_core.rob_head_is_branch[cj],
+                                             u_core.rob_head_branch_mispredict[cj],
+                                             u_core.rob_head_is_sret[cj],
+                                             u_core.rob_head_is_mret[cj]);
+                                end
+                            end
+                            $display("[LINUX_COMMIT_RING_BEGIN] cyc=%0d count=%0d wr=%0d",
+                                     sim_cycle,
+                                     linux_commit_ring_count,
+                                     linux_commit_ring_wr);
+                            for (int rk = 0; rk < LINUX_TRACE_RING_DEPTH; rk++) begin
+                                if (rk < linux_commit_ring_count) begin
+                                    $display("[LINUX_COMMIT_RING] ord=%0d cyc=%0d slot=%0d group=%0d pc=%016h",
+                                             rk,
+                                             linux_commit_ring_cycle[
+                                                 (linux_commit_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_commit_ring_count +
+                                                  rk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_commit_ring_slot[
+                                                 (linux_commit_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_commit_ring_count +
+                                                  rk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_commit_ring_group_count[
+                                                 (linux_commit_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_commit_ring_count +
+                                                  rk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_commit_ring_pc[
+                                                 (linux_commit_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_commit_ring_count +
+                                                  rk) % LINUX_TRACE_RING_DEPTH]);
+                                end
+                            end
+                            $display("[LINUX_BRU_RING_BEGIN] cyc=%0d count=%0d wr=%0d",
+                                     sim_cycle,
+                                     linux_bru_ring_count,
+                                     linux_bru_ring_wr);
+                            for (int bk = 0; bk < LINUX_TRACE_RING_DEPTH; bk++) begin
+                                if (bk < linux_bru_ring_count) begin
+                                    $display("[LINUX_BRU_RING] ord=%0d cyc=%0d port=%0d pc=%016h rob=%0d op=%0d bp=%0b/%016h taken=%0b target=%016h misp=%0b",
+                                             bk,
+                                             linux_bru_ring_cycle[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_port[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_pc[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_rob[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_op[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_bp_taken[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_bp_target[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_taken[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_target[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH],
+                                             linux_bru_ring_misp[
+                                                 (linux_bru_ring_wr +
+                                                  LINUX_TRACE_RING_DEPTH -
+                                                  linux_bru_ring_count +
+                                                  bk) % LINUX_TRACE_RING_DEPTH]);
+                                end
+                            end
+                            $finish;
+                        end
+                    end
+                end
+                linux_commit_ring_wr <=
+                    (linux_commit_ring_wr + int'(u_core.commit_count)) %
+                    LINUX_TRACE_RING_DEPTH;
+                if ((linux_commit_ring_count + int'(u_core.commit_count)) >
+                    LINUX_TRACE_RING_DEPTH) begin
+                    linux_commit_ring_count <= LINUX_TRACE_RING_DEPTH;
+                end else begin
+                    linux_commit_ring_count <=
+                        linux_commit_ring_count + int'(u_core.commit_count);
+                end
+            end
+
+            if (u_core.bru_issue) begin
+                linux_bru_ring_cycle[linux_bru_ring_wr] <= 64'(sim_cycle);
+                linux_bru_ring_pc[linux_bru_ring_wr] <= u_core.iq0_issue_data[0].pc;
+                linux_bru_ring_bp_target[linux_bru_ring_wr] <=
+                    u_core.iq0_issue_data[0].bp_target;
+                linux_bru_ring_target[linux_bru_ring_wr] <= u_core.bru_target;
+                linux_bru_ring_rob[linux_bru_ring_wr] <=
+                    u_core.iq0_issue_data[0].rob_idx;
+                linux_bru_ring_port[linux_bru_ring_wr] <= 3'd0;
+                linux_bru_ring_op[linux_bru_ring_wr] <= u_core.iq0_issue_data[0].br_op;
+                linux_bru_ring_bp_taken[linux_bru_ring_wr] <=
+                    u_core.iq0_issue_data[0].bp_taken;
+                linux_bru_ring_taken[linux_bru_ring_wr] <= u_core.bru_taken;
+                linux_bru_ring_misp[linux_bru_ring_wr] <= u_core.bru_mispredict;
+            end
+            if (u_core.bru1_issue) begin
+                linux_bru_ring_cycle[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= 64'(sim_cycle);
+                linux_bru_ring_pc[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= u_core.iq0_issue_data[1].pc;
+                linux_bru_ring_bp_target[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= u_core.iq0_issue_data[1].bp_target;
+                linux_bru_ring_target[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= u_core.bru1_target;
+                linux_bru_ring_rob[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= u_core.iq0_issue_data[1].rob_idx;
+                linux_bru_ring_port[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= 3'd1;
+                linux_bru_ring_op[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= u_core.iq0_issue_data[1].br_op;
+                linux_bru_ring_bp_taken[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= u_core.iq0_issue_data[1].bp_taken;
+                linux_bru_ring_taken[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= u_core.bru1_taken;
+                linux_bru_ring_misp[
+                    (linux_bru_ring_wr + (u_core.bru_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH] <= u_core.bru1_mispredict;
+            end
+            if (u_core.bru_issue || u_core.bru1_issue) begin
+                linux_bru_ring_wr <=
+                    (linux_bru_ring_wr +
+                     (u_core.bru_issue ? 1 : 0) +
+                     (u_core.bru1_issue ? 1 : 0)) %
+                    LINUX_TRACE_RING_DEPTH;
+                if ((linux_bru_ring_count +
+                     (u_core.bru_issue ? 1 : 0) +
+                     (u_core.bru1_issue ? 1 : 0)) >
+                    LINUX_TRACE_RING_DEPTH) begin
+                    linux_bru_ring_count <= LINUX_TRACE_RING_DEPTH;
+                end else begin
+                    linux_bru_ring_count <= linux_bru_ring_count +
+                        (u_core.bru_issue ? 1 : 0) +
+                        (u_core.bru1_issue ? 1 : 0);
+                end
+            end
+
+            if (((linux_trace_sscratch_en != 0) ||
+                 (linux_stop_on_bad_kernel_sscratch_en != 0)) &&
+                linux_trace_cycle_on) begin
+                if ((linux_trace_sscratch_en != 0) &&
+                    (u_core.trap_valid || u_core.sret_commit || u_core.mret_commit)) begin
+                    $display("[LINUX_SSCRATCH_EVENT] cyc=%0d trap=%0b irq=%0b trap_pc=%016h cause=%016h to_s=%0b sret=%0b mret=%0b head_pc=%016h priv=%0d mstatus=%016h spp=%0b spie=%0b sie=%0b sscratch=%016h sepc=%016h scause=%016h",
+                             sim_cycle,
+                             u_core.trap_valid,
+                             u_core.trap_is_interrupt,
+                             u_core.trap_pc,
+                             u_core.trap_cause,
+                             u_core.commit_trap_to_supervisor,
+                             u_core.sret_commit,
+                             u_core.mret_commit,
+                             u_core.rob_head_pc[0],
+                             u_core.csr_priv_mode,
+                             u_core.u_csr_file.mstatus_r,
+                             u_core.u_csr_file.mstatus_r[8],
+                             u_core.u_csr_file.mstatus_r[5],
+                             u_core.u_csr_file.mstatus_r[1],
+                             u_core.u_csr_file.sscratch_r,
+                             u_core.csr_sepc,
+                             u_core.u_csr_file.scause_r);
+                end
+                if ((linux_trace_sscratch_en != 0) &&
+                    u_core.iq2_issue_valid[0] &&
+                    (u_core.iq2_issue_data[0].fu_type == FU_CSR) &&
+                    (u_core.iq2_issue_data[0].csr_addr == CSR_SSCRATCH)) begin
+                    $display("[LINUX_SSCRATCH_CSR_ISSUE] cyc=%0d pc=%016h rob=%0d addr=%03h op=%0d wdata=%016h rdata=%016h illegal=%0b priv=%0d mstatus=%016h sscratch=%016h",
+                             sim_cycle,
+                             u_core.iq2_issue_data[0].pc,
+                             u_core.iq2_issue_data[0].rob_idx,
+                             u_core.iq2_issue_data[0].csr_addr,
+                             u_core.iq2_issue_data[0].csr_op,
+                             u_core.csr_exec_wdata,
+                             u_core.csr_read_data,
+                             u_core.csr_access_illegal,
+                             u_core.csr_priv_mode,
+                             u_core.u_csr_file.mstatus_r,
+                             u_core.u_csr_file.sscratch_r);
+                end
+                if (u_core.csr_commit_valid &&
+                    (u_core.csr_commit_addr == CSR_SSCRATCH)) begin
+                    if (linux_trace_sscratch_en != 0) begin
+                        $display("[LINUX_SSCRATCH_CSR_COMMIT] cyc=%0d pc=%016h addr=%03h op=%0d wdata=%016h priv=%0d mstatus_before=%016h sscratch_before=%016h",
+                                 sim_cycle,
+                                 u_core.rob_head_pc[0],
+                                 u_core.csr_commit_addr,
+                                 u_core.csr_commit_op,
+                                 u_core.csr_commit_wdata,
+                                 u_core.csr_priv_mode,
+                                 u_core.u_csr_file.mstatus_r,
+                                 u_core.u_csr_file.sscratch_r);
+                    end
+                    if ((linux_stop_on_bad_kernel_sscratch_en != 0) &&
+                        (u_core.rob_head_pc[0] == 64'hffff_ffff_805d_abf0) &&
+                        u_core.u_csr_file.mstatus_r[8] &&
+                        (u_core.u_csr_file.sscratch_r != 64'd0)) begin
+                        $display("[LINUX_STOP_BAD_KERNEL_SSCRATCH] cyc=%0d pc=%016h wdata=%016h mstatus=%016h sscratch_before=%016h sepc=%016h scause=%016h",
+                                 sim_cycle,
+                                 u_core.rob_head_pc[0],
+                                 u_core.csr_commit_wdata,
+                                 u_core.u_csr_file.mstatus_r,
+                                 u_core.u_csr_file.sscratch_r,
+                                 u_core.csr_sepc,
+                                 u_core.u_csr_file.scause_r);
+                        $finish;
+                    end
+                    if ((linux_stop_on_sscratch_nonzero_en != 0) &&
+                        (u_core.csr_commit_wdata != 64'd0)) begin
+                        $display("[LINUX_STOP_SSCRATCH_NONZERO] cyc=%0d pc=%016h wdata=%016h mstatus=%016h spp=%0b spie=%0b sie=%0b sepc=%016h scause=%016h",
+                                 sim_cycle,
+                                 u_core.rob_head_pc[0],
+                                 u_core.csr_commit_wdata,
+                                 u_core.u_csr_file.mstatus_r,
+                                 u_core.u_csr_file.mstatus_r[8],
+                                 u_core.u_csr_file.mstatus_r[5],
+                                 u_core.u_csr_file.mstatus_r[1],
+                                 u_core.csr_sepc,
+                                 u_core.u_csr_file.scause_r);
+                        $finish;
                     end
                 end
             end
@@ -1149,9 +1552,9 @@ module tb_linux;
                 end
             end
 
-            if (linux_trace_line_en != 0) begin
+            if (linux_trace_any_line_en != 0) begin
                 if (u_core.u_lsu.sta_issue_valid &&
-                    ({u_core.u_lsu.sta_eff_addr[63:6], 6'd0} == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.u_lsu.sta_eff_addr)) begin
                     $display("[LINUX_STA_ISSUE] cyc=%0d pc=%016h rob=%0d sq=%0d addr=%016h size=%0d older0=%0b older1=%0b flush=%0b",
                              sim_cycle,
                              u_core.u_lsu.sta_issue_data.pc,
@@ -1165,8 +1568,7 @@ module tb_linux;
                 end
                 if (u_core.u_lsu.std_issue_valid &&
                     u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr_valid &&
-                    ({u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr[63:6], 6'd0}
-                     == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr)) begin
                     $display("[LINUX_STD_ISSUE] cyc=%0d pc=%016h rob=%0d sq=%0d addr=%016h data=%016h mask=%02h flush=%0b",
                              sim_cycle,
                              u_core.u_lsu.std_issue_data.pc,
@@ -1185,6 +1587,72 @@ module tb_linux;
                              u_core.u_lsu.sta_issue_data.pc,
                              u_core.u_lsu.sta_eff_addr);
                 end
+            end
+
+            if ((linux_trace_commit_range_en != 0) && linux_trace_cycle_on) begin
+                if (u_core.u_lsu.sta_issue_valid &&
+                    (u_core.u_lsu.sta_issue_data.pc >= linux_trace_commit_lo) &&
+                    (u_core.u_lsu.sta_issue_data.pc <= linux_trace_commit_hi)) begin
+                    $display("[LINUX_STA_PC] cyc=%0d pc=%016h rob=%0d sq=%0d va=%016h pa=%016h size=%0d accept=%0b qv=%0b qrob=%0d qav=%0b qdv=%0b qcomm=%0b dtlb_v=%0b dtlb_va=%016h hit=%0b fault=%0b code=%0d flush=%0b",
+                             sim_cycle,
+                             u_core.u_lsu.sta_issue_data.pc,
+                             u_core.u_lsu.sta_issue_data.rob_idx,
+                             u_core.u_lsu.sta_issue_data.sq_idx,
+                             u_core.u_lsu.sta_eff_addr,
+                             u_core.u_lsu.sta_mem_addr,
+                             u_core.u_lsu.sta_issue_data.mem_size,
+                             u_core.u_lsu.u_store_queue.sta_fill_accept,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].rob_idx,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].addr_valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].data_valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].committed,
+                             u_core.dtlb_lookup_valid,
+                             u_core.dtlb_lookup_va,
+                             u_core.dtlb_hit,
+                             u_core.dtlb_fault,
+                             u_core.dtlb_fault_code,
+                             u_core.flush_out.valid);
+                end
+                if (u_core.u_lsu.std_issue_valid &&
+                    (u_core.u_lsu.std_issue_data.pc >= linux_trace_commit_lo) &&
+                    (u_core.u_lsu.std_issue_data.pc <= linux_trace_commit_hi)) begin
+                    $display("[LINUX_STD_PC] cyc=%0d pc=%016h rob=%0d sq=%0d data=%016h mask=%02h accept=%0b qv=%0b qrob=%0d qav=%0b qaddr=%016h qdv=%0b qdata=%016h qmask=%02h qcomm=%0b flush=%0b",
+                             sim_cycle,
+                             u_core.u_lsu.std_issue_data.pc,
+                             u_core.u_lsu.std_issue_data.rob_idx,
+                             u_core.u_lsu.std_issue_data.sq_idx,
+                             u_core.u_lsu.std_rs2,
+                             u_core.u_lsu.std_byte_mask,
+                             u_core.u_lsu.u_store_queue.std_fill_accept,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].rob_idx,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr_valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].data_valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].data,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].byte_mask,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].committed,
+                             u_core.flush_out.valid);
+                end
+            end
+
+            if ((linux_stop_store_pc_en != 0) &&
+                (linux_stop_store_data_above_en != 0) &&
+                linux_trace_cycle_on &&
+                u_core.u_lsu.std_issue_valid &&
+                (u_core.u_lsu.std_issue_data.pc == linux_stop_store_pc) &&
+                (u_core.u_lsu.std_rs2 > linux_stop_store_data_above)) begin
+                $display("[LINUX_STOP_STORE_DATA_ABOVE] cyc=%0d pc=%016h rob=%0d sq=%0d data=%016h limit=%016h mask=%02h flush=%0b",
+                         sim_cycle,
+                         u_core.u_lsu.std_issue_data.pc,
+                         u_core.u_lsu.std_issue_data.rob_idx,
+                         u_core.u_lsu.std_issue_data.sq_idx,
+                         u_core.u_lsu.std_rs2,
+                         linux_stop_store_data_above,
+                         u_core.u_lsu.std_byte_mask,
+                         u_core.flush_out.valid);
+                $finish;
             end
 
             if ((linux_trace_load_pc_en != 0) && linux_trace_cycle_on) begin
@@ -1294,8 +1762,10 @@ module tb_linux;
                             for (int si = 0; si < SQ_DEPTH; si++) begin
                                 if (u_core.u_lsu.u_store_queue.queue[si].valid &&
                                     u_core.u_lsu.u_store_queue.queue[si].addr_valid &&
-                                    (u_core.u_lsu.u_store_queue.queue[si].addr[63:3] ==
-                                     u_core.u_lsu.load_eff_addr[0][63:3])) begin
+                                    ((u_core.u_lsu.u_store_queue.queue[si].addr[63:3] ==
+                                      u_core.u_lsu.load_eff_addr[0][63:3]) ||
+                                     ((linux_trace_any_line_en != 0) &&
+                                      linux_trace_line_match(u_core.u_lsu.u_store_queue.queue[si].addr)))) begin
                                     $display("[LINUX_SQ_MATCH] cyc=%0d idx=%0d rob=%0d committed=%0b data_v=%0b data=%016h mask=%02h",
                                              sim_cycle,
                                              si,
@@ -1308,8 +1778,10 @@ module tb_linux;
                             end
                             for (int ci = 0; ci < CSB_DEPTH; ci++) begin
                                 if (u_core.u_lsu.u_csb.buf_q[ci].valid &&
-                                    (u_core.u_lsu.u_csb.buf_q[ci].addr[63:3] ==
-                                     u_core.u_lsu.load_eff_addr[0][63:3])) begin
+                                    ((u_core.u_lsu.u_csb.buf_q[ci].addr[63:3] ==
+                                      u_core.u_lsu.load_eff_addr[0][63:3]) ||
+                                     ((linux_trace_any_line_en != 0) &&
+                                      linux_trace_line_match(u_core.u_lsu.u_csb.buf_q[ci].addr)))) begin
                                     $display("[LINUX_CSB_MATCH] cyc=%0d idx=%0d data=%016h mask=%02h",
                                              sim_cycle,
                                              ci,
@@ -1320,8 +1792,8 @@ module tb_linux;
                         end
                     end
                     if (u_core.dc_load_req_valid[li] &&
-                        (linux_trace_line_en != 0) &&
-                        ({u_core.dc_load_req_addr[li][63:6], 6'd0} == linux_trace_line)) begin
+                        (linux_trace_any_line_en != 0) &&
+                        linux_trace_line_match(u_core.dc_load_req_addr[li])) begin
                         $display("[LINUX_DC_REQ] cyc=%0d p%0d addr=%016h size=%0d resp_valid=%0b hit=%0b",
                                  sim_cycle, li,
                                  u_core.dc_load_req_addr[li],
@@ -1348,8 +1820,8 @@ module tb_linux;
                     end
                 end
                 if (u_core.dc_fill_snoop_valid &&
-                    (linux_trace_line_en != 0) &&
-                    ({u_core.dc_fill_snoop_addr[63:6], 6'd0} == linux_trace_line)) begin
+                    (linux_trace_any_line_en != 0) &&
+                    linux_trace_line_match(u_core.dc_fill_snoop_addr)) begin
                     $display("[LINUX_DC_FILL] cyc=%0d addr=%016h",
                              sim_cycle, u_core.dc_fill_snoop_addr);
                 end
@@ -1462,10 +1934,9 @@ module tb_linux;
                 end
             end
 
-            if (linux_trace_line_en != 0) begin
+            if (linux_trace_any_line_en != 0) begin
                 if (u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_req_valid &&
-                    ({u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_req_addr[63:6], 6'd0}
-                     == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_req_addr)) begin
                     $display("[LINUX_IC_L2_REQ] cyc=%0d addr=%016h accepted=%0b ready=%0b s1_v=%0b s1_addr=%016h hit=%0b m0_v=%0b m0_addr=%016h m0_sent=%0b m0_done=%0b m1_v=%0b m1_addr=%016h m1_sent=%0b m1_done=%0b need=%0b req_idx=%0d match=%0b",
                              sim_cycle,
                              u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_req_addr,
@@ -1487,8 +1958,7 @@ module tb_linux;
                              u_core.u_fetch_top.u_ifu_line_fetch.u_icache.ic_mshr_addr_match);
                 end
                 if (u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_resp_valid &&
-                    ({u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_resp_addr[63:6], 6'd0}
-                     == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_resp_addr)) begin
                     $display("[LINUX_IC_L2_RESP] cyc=%0d addr=%016h sc_inst=%0b sc_idx=%0d mshr_fwd=%0b resp_v=%0b resp_hit=%0b icq_full=%0b icq_count=%0d",
                              sim_cycle,
                              u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_resp_addr,
@@ -1501,22 +1971,20 @@ module tb_linux;
                              u_core.u_fetch_top.u_ifu_line_fetch.icq_count_o);
                 end
                 if (u_core.u_fetch_top.pf_l2_req_valid &&
-                    ({u_core.u_fetch_top.pf_l2_req_addr[63:6], 6'd0}
-                     == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.u_fetch_top.pf_l2_req_addr)) begin
                     $display("[LINUX_PF_L2_REQ] cyc=%0d addr=%016h ready=%0b",
                              sim_cycle,
                              u_core.u_fetch_top.pf_l2_req_addr,
                              u_core.u_fetch_top.pf_l2_req_ready);
                 end
                 if (u_core.u_fetch_top.u_ifu_line_fetch.pf_l2_resp_valid &&
-                    ({u_core.u_fetch_top.u_ifu_line_fetch.pf_l2_resp_addr[63:6], 6'd0}
-                     == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.u_fetch_top.u_ifu_line_fetch.pf_l2_resp_addr)) begin
                     $display("[LINUX_PF_L2_RESP] cyc=%0d addr=%016h",
                              sim_cycle,
                              u_core.u_fetch_top.u_ifu_line_fetch.pf_l2_resp_addr);
                 end
                 if (u_core.u_dcache.ld0_new_miss_req &&
-                    (u_core.u_dcache.ld0_line_addr == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.u_dcache.ld0_line_addr)) begin
                     $display("[LINUX_DMISS0] cyc=%0d line=%016h free=%0b alloc=%0b merge=%0b l2_state=%0d active=%0d fill_avail=%0b fill_idx=%0d wb_avail=%0b wb_idx=%0d",
                              sim_cycle, u_core.u_dcache.ld0_line_addr,
                              u_core.u_dcache.mshr_free_avail,
@@ -1530,7 +1998,7 @@ module tb_linux;
                              u_core.u_dcache.wb_mshr_idx);
                 end
                 if (u_core.u_dcache.ld0_miss_merge_req &&
-                    (u_core.u_dcache.ld0_line_addr == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.u_dcache.ld0_line_addr)) begin
                     $display("[LINUX_DMERGE0] cyc=%0d line=%016h match_idx=%0d m0_valid=%0b m0_addr=%016h m0_fill_pend=%0b m0_wb_pend=%0b m0_done=%0b m0_store=%0b m1_valid=%0b m1_addr=%016h m1_fill_pend=%0b m1_wb_pend=%0b m1_done=%0b m1_store=%0b l2_state=%0d active=%0d fill_avail=%0b fill_idx=%0d wb_avail=%0b wb_idx=%0d",
                              sim_cycle, u_core.u_dcache.ld0_line_addr,
                              u_core.u_dcache.mshr_match_idx,
@@ -1554,18 +2022,45 @@ module tb_linux;
                              u_core.u_dcache.wb_mshr_idx);
                 end
                 if (u_core.dc_l2_req_valid &&
-                    ({u_core.dc_l2_req_addr[63:6], 6'd0} == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.dc_l2_req_addr)) begin
                     $display("[LINUX_DC_L2_REQ] cyc=%0d we=%0b addr=%016h ready=%0b",
                              sim_cycle, u_core.dc_l2_req_we,
                              u_core.dc_l2_req_addr, u_core.dc_l2_req_ready);
                 end
                 if (u_core.dc_l2_resp_valid &&
-                    ({u_core.dc_l2_resp_addr[63:6], 6'd0} == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.dc_l2_resp_addr)) begin
                     $display("[LINUX_DC_L2_RESP] cyc=%0d addr=%016h",
                              sim_cycle, u_core.dc_l2_resp_addr);
                 end
+                if (u_core.u_lsu.sq_drain_valid &&
+                    linux_trace_line_match(u_core.u_lsu.sq_drain_entry.addr)) begin
+                    $display("[LINUX_SQ_DRAIN] cyc=%0d ready=%0b rob=%0d addr=%016h data=%016h mask=%02h size=%0d head=%0d count=%0d",
+                             sim_cycle,
+                             u_core.u_lsu.sq_drain_ready,
+                             u_core.u_lsu.sq_drain_entry.rob_idx,
+                             u_core.u_lsu.sq_drain_entry.addr,
+                             u_core.u_lsu.sq_drain_entry.data,
+                             u_core.u_lsu.sq_drain_entry.byte_mask,
+                             u_core.u_lsu.sq_drain_entry.size,
+                             u_core.u_lsu.u_store_queue.head_r,
+                             u_core.u_lsu.u_store_queue.count_r);
+                end
+                if (u_core.u_lsu.csb_deq_valid &&
+                    linux_trace_line_match(u_core.u_lsu.csb_deq_addr)) begin
+                    $display("[LINUX_CSB_DEQ] cyc=%0d ack=%0b addr=%016h data=%016h mask=%02h size=%0d head=%0d count=%0d split=%0b active=%0b",
+                             sim_cycle,
+                             u_core.u_lsu.csb_deq_ack,
+                             u_core.u_lsu.csb_deq_addr,
+                             u_core.u_lsu.csb_deq_data,
+                             u_core.u_lsu.csb_deq_byte_mask,
+                             u_core.u_lsu.csb_deq_size,
+                             u_core.u_lsu.u_csb.head_r,
+                             u_core.u_lsu.u_csb.count_r,
+                             u_core.u_lsu.csb_deq_cross_line,
+                             u_core.u_lsu.split_store_active_r);
+                end
                 if (u_core.dc_store_req_valid &&
-                    ({u_core.dc_store_req_addr[63:6], 6'd0} == linux_trace_line)) begin
+                    linux_trace_line_match(u_core.dc_store_req_addr)) begin
                     $display("[LINUX_DC_STORE] cyc=%0d addr=%016h data=%016h mask=%02h ack=%0b",
                              sim_cycle,
                              u_core.dc_store_req_addr,
@@ -1574,7 +2069,7 @@ module tb_linux;
                              u_core.dc_store_ack);
                 end
                 if (mem_req_valid && !mem_req_we &&
-                    ({mem_req_addr[63:6], 6'd0} == linux_trace_line)) begin
+                    linux_trace_line_match(mem_req_addr)) begin
                     $display("[LINUX_MEM_REQ] cyc=%0d addr=%016h ready=%0b issue_idx=%0d issue_src=%0d respq_count=%0d",
                              sim_cycle,
                              mem_req_addr,
@@ -1584,7 +2079,7 @@ module tb_linux;
                              u_core.u_l2_cache.respq_count_q);
                 end
                 if (mem_resp_valid && mem_read_pending_r &&
-                    ({mem_read_addr_r[63:6], 6'd0} == linux_trace_line)) begin
+                    linux_trace_line_match(mem_read_addr_r)) begin
                     $display("[LINUX_MEM_RESP] cyc=%0d addr=%016h resp_found=%0b resp_idx=%0d resp_src=%0d respq_count=%0d direct=%0b enq=%0b deq=%0b",
                              sim_cycle,
                              mem_read_addr_r,

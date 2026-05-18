@@ -104,9 +104,9 @@ module uop_cache
 
     // Compute the start-of-next-group PC from a 4-wide group of decoded µops
     // and a count.  If the last µop is a taken branch, use its target; else
-    // PC + (4 if non-RVC, 2 if RVC).  Fused µops still carry the original
-    // first-half PC and is_rvc reflects the head insn; for fused control
-    // pairs the bp_taken/bp_target carry the full chain target.
+    // PC + (4 if non-RVC, 2 if RVC).  Fused control µops carry the control
+    // instruction PC in pc for branch recovery and the first architectural PC
+    // in trap_pc for precise trap restart.
     function automatic logic [63:0] next_group_pc(
         input decoded_insn_t group [0:PIPE_WIDTH-1],
         input logic [2:0]    count
@@ -362,6 +362,7 @@ module uop_cache
         end
     end
 
+    logic emit_valid_c;
     logic emit_c;
     logic stream_exit_c;
     logic emit_has_cond_c;
@@ -369,9 +370,10 @@ module uop_cache
     logic emit_has_jalr_c;
     logic emit_has_pred_taken_c;
 
-    assign emit_c =
+    assign emit_valid_c =
         en && hit_c && !hit_data_unplayable_c &&
-        !stall && !redirect_valid && !invalidate;
+        !redirect_valid && !invalidate;
+    assign emit_c = emit_valid_c && !stall;
 
     assign stream_exit_c =
         (state_r == UOC_PLAYING) &&
@@ -416,7 +418,7 @@ module uop_cache
         else        state_r <= state_next_c;
     end
 
-    assign active = emit_c;
+    assign active = emit_valid_c;
 
     // =========================================================================
     // Output mux: when active, drive uoc_insn/uoc_count from hit_data
@@ -445,7 +447,7 @@ module uop_cache
     always_comb begin
         if (redirect_valid) begin
             predicted_next_pc_c = redirect_pc;
-        end else if (active) begin
+        end else if (emit_c) begin
             predicted_next_pc_c = next_group_pc(hit_data_c, hit_count_c);
         end else if ((state_r == UOC_IDLE) && (fused_count != 3'd0)) begin
             predicted_next_pc_c = next_group_pc(fused_insn, fused_count);

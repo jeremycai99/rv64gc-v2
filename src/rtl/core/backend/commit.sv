@@ -87,6 +87,9 @@ module commit
     // Interrupt
     input  logic                    irq_pending,
     input  logic [63:0]             irq_cause,
+    input  logic                    irq_to_supervisor,
+    output logic                    interrupt_taken,
+    output logic                    trap_to_supervisor,
 
     // Performance counter
     output logic [3:0]              insn_retired_count  // architectural instructions for minstret
@@ -135,8 +138,6 @@ module commit
 
     wire        exception_delegated =
         (priv_mode != PRIV_M) && medeleg[{2'b00, exception_cause_code}];
-    wire        interrupt_delegated =
-        (priv_mode != PRIV_M) && mideleg[{1'b0, irq_cause[4:0]}];
     wire        trap_delegated = found_exception && exception_delegated;
     wire [63:0] trap_vector    = trap_delegated ? stvec_base : mtvec_base;
 
@@ -145,7 +146,7 @@ module commit
                              mtvec_base + {56'd0, irq_cause[5:0], 2'b00} : mtvec_base;
     wire [63:0] irq_stvec = (stvec[1:0] == 2'b01) ?
                              stvec_base + {56'd0, irq_cause[5:0], 2'b00} : stvec_base;
-    wire [63:0] irq_vector = interrupt_delegated ? irq_stvec : irq_mtvec;
+    wire [63:0] irq_vector = irq_to_supervisor ? irq_stvec : irq_mtvec;
 
     // =========================================================================
     // Commit scan: determine how many entries can retire (combinational)
@@ -299,11 +300,13 @@ module commit
         !head_has_exception[0];
     wire vm_serial_redirect = vm_state_csr_commit || sfence_vma_commit;
     wire take_interrupt = irq_pending &&
+                          head_valid[0] &&
                           !found_exception &&
                           !found_mispredict &&
                           !found_ret &&
                           !found_replay &&
                           !serializing_at_head;
+    wire [2:0] effective_scan_count = take_interrupt ? 3'd0 : scan_count;
 
     localparam logic [1:0] RAS_NONE = 2'd0;
     localparam logic [1:0] RAS_PUSH = 2'd1;
@@ -336,7 +339,7 @@ module commit
     always_comb begin
         flush_tail_sum =
             {1'b0, head_idx} +
-            {{(ROB_IDX_BITS-2){1'b0}}, scan_count};
+            {{(ROB_IDX_BITS-2){1'b0}}, effective_scan_count};
         if (flush_tail_sum >= (ROB_IDX_BITS+1)'(ROB_DEPTH))
             flush_tail_idx =
                 ROB_IDX_BITS'(flush_tail_sum - (ROB_IDX_BITS+1)'(ROB_DEPTH));
@@ -358,6 +361,7 @@ module commit
         flush_out.ras_top_restore_addr  = 64'd0;
         flush_out.ghr_restore_valid = 1'b0;
         flush_out.ghr_restore_val   = '0;
+        trap_to_supervisor          = 1'b0;
 
         if (found_replay) begin
             // Memory ordering replay: full flush, redirect to the load's PC.
@@ -371,6 +375,7 @@ module commit
             flush_out.valid       = 1'b1;
             flush_out.full_flush  = 1'b1;
             flush_out.redirect_pc = trap_vector;
+            trap_to_supervisor    = trap_delegated;
         end else if (found_mispredict) begin
             // Branch mispredict: full flush.  The BRU may have already
             // redirected fetch to the correct target (early redirect).
@@ -422,16 +427,18 @@ module commit
             flush_out.valid       = 1'b1;
             flush_out.full_flush  = 1'b1;
             flush_out.redirect_pc = irq_vector;
+            trap_to_supervisor    = irq_to_supervisor;
         end
     end
 
     // =========================================================================
     // Commit count output
     // =========================================================================
-    assign commit_count      = scan_count;
-    assign store_commit_count = store_cnt;
-    assign load_commit_count  = load_cnt;
-    assign insn_retired_count = retired_inst_count;
+    assign commit_count       = effective_scan_count;
+    assign store_commit_count = take_interrupt ? 3'd0 : store_cnt;
+    assign load_commit_count  = take_interrupt ? 3'd0 : load_cnt;
+    assign insn_retired_count = take_interrupt ? 4'd0 : retired_inst_count;
+    assign interrupt_taken    = take_interrupt;
 
     // =========================================================================
     // CSR commit output (at most 1 per cycle, serialized at slot 0)
@@ -442,7 +449,7 @@ module commit
         csr_commit_wdata = 64'd0;
         csr_commit_op    = 2'd0;
 
-        if (scan_count > 3'd0 && head_is_csr[0] && head_csr_we[0] &&
+        if (effective_scan_count > 3'd0 && head_is_csr[0] && head_csr_we[0] &&
             !head_has_exception[0]) begin
             csr_commit_valid = 1'b1;
             csr_commit_addr  = head_csr_addr[0];
@@ -456,7 +463,7 @@ module commit
     // =========================================================================
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            commit_out[i].valid    = slot_can_commit[i];
+            commit_out[i].valid    = slot_can_commit[i] & !take_interrupt;
             commit_out[i].rob_idx  = '0; // ROB manages its own head advancement
             commit_out[i].pdst     = head_pdst[i];
             commit_out[i].old_pdst = head_old_pdst[i];
@@ -472,7 +479,8 @@ module commit
     // =========================================================================
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
-            release_checkpoint[i]    = slot_can_commit[i] & head_uses_checkpoint[i];
+            release_checkpoint[i]    =
+                slot_can_commit[i] & head_uses_checkpoint[i] & !take_interrupt;
             release_checkpoint_id[i] = head_checkpoint_id[i];
         end
     end
@@ -528,11 +536,13 @@ module commit
         end else begin
             trace_commit_cycle <= trace_commit_cycle + 1;
             cmt_leak_cyc <= cmt_leak_cyc + 1;
-            total_commits <= total_commits + scan_count;
-            total_store_commits  <= total_store_commits  + store_cnt;
-            total_load_commits   <= total_load_commits   + load_cnt;
+            total_commits <= total_commits + effective_scan_count;
+            total_store_commits <= total_store_commits +
+                (take_interrupt ? 3'd0 : store_cnt);
+            total_load_commits <= total_load_commits +
+                (take_interrupt ? 3'd0 : load_cnt);
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (slot_can_commit[i] && head_is_branch[i])
+                if (slot_can_commit[i] && head_is_branch[i] && !take_interrupt)
                     total_branch_commits <= total_branch_commits + 1;
             end
             if (trace_flush_en && flush_out.valid) begin

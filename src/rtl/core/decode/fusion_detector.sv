@@ -360,6 +360,7 @@ module fusion_detector
             fused_uop[0].bp_ras_top = dec_in[1].bp_ras_top;
             fused_uop[0].bp_ghr   = dec_in[1].bp_ghr;
             fused_uop[0].pc        = dec_in[1].pc;
+            fused_uop[0].trap_pc   = dec_in[0].trap_pc;
             fused_uop[0].is_rvc    = dec_in[1].is_rvc;
 
             // AUIPC+JALR folds the producer's PC into the fused immediate
@@ -600,6 +601,7 @@ module fusion_detector
             fused_uop[1].bp_ras_top = dec_in[2].bp_ras_top;
             fused_uop[1].bp_ghr   = dec_in[2].bp_ghr;
             fused_uop[1].pc        = dec_in[2].pc;
+            fused_uop[1].trap_pc   = dec_in[1].trap_pc;
             fused_uop[1].is_rvc    = dec_in[2].is_rvc;
 
             if (w_is_auipc[1] && w_is_jalr[2] &&
@@ -838,6 +840,7 @@ module fusion_detector
             fused_uop[2].bp_ras_top = dec_in[3].bp_ras_top;
             fused_uop[2].bp_ghr   = dec_in[3].bp_ghr;
             fused_uop[2].pc        = dec_in[3].pc;
+            fused_uop[2].trap_pc   = dec_in[2].trap_pc;
             fused_uop[2].is_rvc    = dec_in[3].is_rvc;
 
             if (w_is_auipc[2] && w_is_jalr[3] &&

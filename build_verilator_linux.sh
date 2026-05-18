@@ -10,6 +10,7 @@ JOBS="${VERILATOR_JOBS:-0}"
 CONVERGE_LIMIT="${VERILATOR_CONVERGE_LIMIT:-5000}"
 FLATTEN="${VERILATOR_FLATTEN:-1}"
 X_MODE="${VERILATOR_X_MODE:-0}"
+REPORT_UNOPTFLAT="${VERILATOR_REPORT_UNOPTFLAT:-0}"
 
 if ! command -v "$VERILATOR_BIN" >/dev/null 2>&1; then
     echo "ERROR: Verilator not found: $VERILATOR_BIN"
@@ -41,6 +42,11 @@ if [[ "$FLATTEN" != "0" ]]; then
     FLATTEN_ARGS=("--flatten")
 fi
 
+UNOPTFLAT_ARGS=("-Wno-UNOPTFLAT")
+if [[ "$REPORT_UNOPTFLAT" != "0" ]]; then
+    UNOPTFLAT_ARGS=("-Wwarn-UNOPTFLAT" "--report-unoptflat" "-Wno-fatal")
+fi
+
 "$VERILATOR_BIN" --binary --timing --trace "${FLATTEN_ARGS[@]}" \
     --converge-limit "$CONVERGE_LIMIT" \
     --x-assign "$X_MODE" \
@@ -51,7 +57,7 @@ fi
     -Wno-WIDTHEXPAND \
     -Wno-WIDTHTRUNC \
     -Wno-UNUSEDSIGNAL \
-    -Wno-UNOPTFLAT \
+    "${UNOPTFLAT_ARGS[@]}" \
     -Wno-CASEINCOMPLETE \
     -Wno-UNSIGNED \
     -Wno-MULTIDRIVEN \

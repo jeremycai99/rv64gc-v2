@@ -2,6 +2,16 @@
   "notes": "Stage 3 Linux boot directed debug probes. These rows are functional RTL diagnostics, not performance signoff rows.",
   "benchmarks": [
     {
+      "name": "rvc_addi16sp_712d_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/rvc_addi16sp_712d_smoke.hex",
+      "max_cycles": 100000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Directed check for Linux entry instruction 0x712d, C.ADDI16SP, which must expand to addi sp, sp, -288."
+    },
+    {
       "name": "probe_linux_beq_after_call",
       "kind": "generic",
       "hex": "tests/hex/probe_linux_beq_after_call.hex",

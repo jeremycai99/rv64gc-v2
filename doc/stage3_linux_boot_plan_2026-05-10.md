@@ -5,9 +5,10 @@ Date: May 10, 2026
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
 phase. The RV64GC instruction compliance prerequisite is closed on the current
 RTL candidate, the DS/CM hard performance gate is clean, and the trimmed
-OpenSBI plus Linux image now reaches the Linux early console milestone through
+OpenSBI plus Linux image now reaches the RISC-V clocksource milestone through
 the ASIC-style core boundary. The next Linux target is continuing beyond
-`earlycon:` toward timer, UART-driver, kernel-init, and userspace milestones.
+`sched_clock` and delay-loop setup toward UART-driver, kernel-init, and
+userspace milestones.
 
 ## Goal
 
@@ -87,8 +88,10 @@ Compliance infrastructure direction:
 
 Compliance acceptance:
 
-- All required RV64GC rows pass on a rebuilt DSim or XSim image from the
-  current working tree.
+- All required RV64GC rows pass on a rebuilt DSim image from the current
+  working tree. Verilator is the Stage 3 Linux-debug fallback when the DSim
+  lease is unavailable, but it does not lower the compliance or DS/CM
+  promotion bar.
 - No hidden allowlist is permitted for required RV64GC failures. Any waiver
   must be explicit, documented, and limited to unsupported optional extensions.
 - The existing Stage 3 DS/CM hard gate passes after every RTL change made to
@@ -128,6 +131,19 @@ Latest validated Linux milestone:
   state.
 - Current UART banner:
   `Linux version 6.6.130-rv64gc-v2-sim (rv64gc-v2@linux-sim) ... #18 Tue May 12 12:52:57 PDT 2026`.
+
+Latest focused Linux evidence:
+
+- Artifact:
+  `linux_boot_results/stage3_linux_trappc_dsim_17m_20260517a`.
+- Result: `TIMEOUT` at the 17M-cycle cap because the target remained
+  `boot_ok`, but the run reached the `riscv_clocksource` milestone and
+  passed the previous bad-stack crash window.
+- UART reached `clocksource: riscv_clocksource`, `sched_clock`, delay-loop
+  calibration, PID setup, and LSM initialization without `Oops` or
+  `Kernel panic`.
+- The focused stop for `rd=x2` above `ffffffff80e04000` did not fire. This
+  replaces the earlier bad-`sp` signature as the current evidence point.
 
 Next milestone attempt:
 
@@ -182,6 +198,179 @@ Latest clocksource investigation:
 - Do not use sub-64M memory-cap runs as clocksource evidence unless the kernel
   sparse-memory configuration is changed and the image proves it can pass
   `memory_present`.
+
+May 14 timer interrupt blocker:
+
+- The current DSim Linux boot blocker is after Linux reaches the RISC-V
+  clocksource path, not in the earlier OF or timebase setup. The UART reaches:
+  `clocksource: riscv_clocksource` and `sched_clock`.
+- The failing signature is:
+  S-mode timer interrupt at a valid kernel PC
+  `pc=ffffffff805c5e16 cause=8000000000000007`, followed by an M-mode illegal
+  instruction trap at `pc=0000000000000000`, and OpenSBI reports
+  `sbi_trap_error ... mepc=0x0000000000000000`.
+- The reproduced artifact is
+  `linux_boot_results/stage3_linux_interrupt_boundary_30m_dsim_20260514a`.
+  This run did not rebuild the Linux DSim image, so it is baseline failure
+  evidence only. Do not use it as evidence for any pending RTL fix.
+- Root-cause hypothesis: the core's CSR trap update path must be tied to the
+  commit block's actual interrupt acceptance, not merely to any full flush
+  while an interrupt is pending. A full flush can also be caused by exceptions,
+  returns, replays, fences, VM state changes, or branch recovery.
+- Current candidate RTL makes interrupt acceptance explicit at commit, prevents
+  normal retirement side effects on the interrupt cycle, and updates CSR trap
+  state only when the commit block accepted the interrupt.
+- Performance gate for that candidate passed before Linux rebuild was available:
+  `benchmark_results/stage3_rtl_guard_interrupt_trap_boundary_dsim_20260514b`.
+  DS100 `3.150055 DMIPS/MHz`, DS300 `3.218761 DMIPS/MHz`,
+  CM1 `6.649201 CM/MHz`, CM10 `6.872881 CM/MHz`.
+- Linux validation is still pending. Two DSim Linux rebuild attempts,
+  `linux_boot_results/stage3_linux_timer_pc0_trace_dsim_20260514a` and
+  `linux_boot_results/stage3_linux_interrupt_boundary_build_dsim_20260514b`,
+  were blocked by the shared DSim cloud lease:
+  `Already at maxLeases (1)`.
+- Do not commit or promote the interrupt-boundary RTL until a rebuilt DSim
+  Linux image either passes the previous 16.54M cycle failure window or produces
+  a sharper failure signature from the rebuilt image.
+
+May 14 trap-frame overwrite root cause update:
+
+- Rebuilt DSim Linux evidence is now available:
+  `linux_boot_results/stage3_linux_trapframe_store_lifecycle_dsim_20260514a`.
+  This run includes focused testbench-only tracing for the failing trap-frame
+  line and reproduces the same post-`sched_clock` Oops within the 16.7M cycle
+  cap.
+- The prior CDB3 bypass candidate did not fix the panic. The focused trace
+  rules out the earlier CSR-to-store-data hypothesis for the first failing
+  trap frame:
+  - `pc=ffffffff805dac78` (`sd s1,256(sp)`) issues at cycle `16604028`.
+  - STA translates `va=ffffffff80e04070` to `pa=0000000081004070`.
+  - STD captures `data=0000000200000120`, `mask=ff`, and SQ accept is `1`.
+  - The later return load from `pc=ffffffff805dacd8` reads
+    `addr=ffffffff80e04070` and writes back `0`.
+- The missing value is not caused by a simple RVC `c.addi16sp` immediate bug.
+  Directed smoke `tests/asm/rvc_addi16sp_712d_smoke.S` proves compressed
+  instruction `0x712d` updates `sp` by `-288`, matching Linux
+  `addi sp, sp, -PT_SIZE_ON_STACK`.
+- The same trace shows a more important software-visible overwrite before
+  trap return:
+  - `pc=ffffffff8007d03a` stores to `ffffffff80e04070`.
+  - `pc=ffffffff8007d044` stores to `ffffffff80e04078`.
+  - These PCs are inside Linux `update_vsyscall`, which writes
+    `vdso_data_store + 112` and `vdso_data_store + 120`.
+- Symbol evidence from the current kernel image:
+  - `init_stack` and `init_thread_union` start at `ffffffff80e00000`.
+  - `__end_init_task` and `vdso_data_store` start at `ffffffff80e04000`.
+  - The trap frame is being placed at `ffffffff80e03f70`, so
+    `PT_STATUS(sp)` is `ffffffff80e04070`, overlapping `vdso_data_store`.
+- Current verdict: the post-`sched_clock` panic is not yet proven to be an RTL
+  memory-data corruption. The latest evidence points to a Linux image or stack
+  contract problem: the active idle-task kernel stack pointer used at interrupt
+  entry leaves the `pt_regs` save area overlapping the adjacent
+  `vdso_data_store` object. `update_vsyscall` then legitimately overwrites the
+  trap-frame status and EPC-adjacent slots, causing return with corrupted
+  `sstatus` or `sepc`.
+- Additional May 14 evidence narrows the fault one step earlier. The failing
+  trap frame is created from an already suspicious interrupted stack pointer:
+  the save-context trace stores `PT_SP=ffffffff80e04090`, while
+  `init_stack/init_thread_union` ends at `ffffffff80e04000` and
+  `vdso_data_store` starts at that same boundary. This means the next root
+  cause target is the first producer of an out-of-range architectural `sp`,
+  not `strcmp` and not the later `update_vsyscall` store itself.
+- The previous v1 successful Linux log reaches past the same clocksource path:
+  `clocksource: riscv_clocksource`, `sched_clock`, clocksource switch,
+  `Freeing unused kernel image`, and `Run /init as init process`. Therefore
+  clocksource bring-up is a milestone already known to be passable by the
+  methodology, and the v2 blocker should be treated as a stack/trap-return
+  correctness issue until disproven.
+- Current debug instrumentation is testbench-only:
+  - `+LINUX_STOP_ON_BAD_KERNEL_SSCRATCH` stops if a kernel trap enters
+    `handle_exception` with stale nonzero `sscratch`.
+  - `+LINUX_STOP_STORE_PC=<pc>` plus
+    `+LINUX_STOP_STORE_DATA_ABOVE=<limit>` stops on a suspicious store-data
+    value at a selected store PC.
+  - `+LINUX_STOP_COMMIT_RD=<rd>` plus
+    `+LINUX_STOP_COMMIT_DATA_ABOVE=<limit>` stops on the first suspicious
+    architectural register commit, used for `rd=2` to find the bad `sp`
+    producer.
+- Verilator is useful as a build sanity check for these hooks, but it still
+  aborts on longer Linux runs with `Active region did not converge`. Do not use
+  Verilator Linux execution as promotion evidence until that remaining
+  convergence issue is fixed. The current DSim lease may remain blocked
+  briefly after a killed run; retry only one focused DSim run at a time.
+- Two directed Sv48 smokes are useful regression probes:
+  - `tests/asm/vm_strap_frame_sv48_smoke.S` passes the simple S-mode interrupt
+    trap-frame save/restore path.
+  - `tests/asm/vm_dcache_eviction_sv48_smoke.S` passes a dirty-line eviction
+    probe for the high-half trap-frame slot.
+  - `tests/asm/vm_linux_save_context_pressure_sv48_smoke.S` immediate-forward
+    mode passed, but the delayed drain variant times out because it currently
+    spins after one interrupt. Keep it as diagnostic work-in-progress, not as a
+    promoted compliance row.
+- Completed May 17 action: the cycle-windowed DSim stop for the first bad `sp`
+  producer used:
+  `+LINUX_STOP_COMMIT_RD=2`,
+  `+LINUX_STOP_COMMIT_DATA_ABOVE=ffffffff80e04000`,
+  `+LINUX_TRACE_CYCLE_LO=16600680`, and
+  `+LINUX_TRACE_CYCLE_HI=16600820`. That run found the stale-RA fused-call
+  restart bug described below. The Linux stack-layout hypothesis is no longer
+  the primary root cause for the May 14 Oops, though the directed stack/trap
+  smokes remain useful regression probes.
+
+May 17 fused-uop precise-trap root cause and fix:
+
+- The bad `sp` was not produced by a valid Linux stack adjustment. The prior
+  focused trace showed wrong-path execution of the `initcall_blacklisted`
+  epilogue:
+  - `ffffffff806005f4: ld s4,688(sp)`
+  - `ffffffff806005f8: addi sp,sp,736`
+  - `ffffffff806005fc: ret`
+- The wrong-path entry came from `start_kernel` after returning from an
+  interrupt into the second half of a fused `AUIPC+JALR` call at
+  `ffffffff80600c98`. Before the fix, the fused uop stored only the branch
+  execution PC in the ROB. An interrupt before the fused uop retired therefore
+  wrote `sepc=ffffffff80600c98`, skipping the unretired `AUIPC` at
+  `ffffffff80600c94`. On `sret`, `ra` still held the older
+  `ffffffff80600c6e` value, so the JALR target became the wrong
+  `ffffffff806005f4`.
+- RTL fix: keep the existing fused branch execution PC in `pc` for BRU,
+  branch recovery, and BPU update, and add a separate `trap_pc` sideband that
+  carries the first architectural PC of the fused uop through decode, rename,
+  and ROB. Commit/CSR trap generation now uses `rob_head_trap_pc`; branch
+  execution still uses `rob_head_pc` and IQ `pc`.
+- Validation:
+  - DSim rebuilt from the patched tree.
+  - Focused run `stage3_linux_trappc_dsim_17m_20260517a` passes the previous
+    cycle window. At cycle `16600782`, fused `AUIPC+JALR` at
+    `ffffffff80600c98` computes target `ffffffff8061461a`, not the old wrong
+    `ffffffff806005f4`.
+  - `sepc` at the preceding `sret` is `ffffffff80600c94`, proving the restart
+    now points at the first unretired architectural instruction.
+  - No `LINUX_STOP_COMMIT_DATA_ABOVE` event appears before the 17M timeout.
+- Required DS/CM hard gate passed after the RTL change:
+  `benchmark_results/stage3_rtl_guard_20260517_trappc_precise_fused_interrupt`.
+  Results are unchanged from the current Stage 3 baseline:
+  DS100 `18,068` cycles, `3.150055 DMIPS/MHz`;
+  DS300 `53,047` cycles, `3.218761 DMIPS/MHz`;
+  CM1 `150,394` cycles, `6.649201 CM/MHz`;
+  CM10 `1,454,994` cycles, `6.872881 CM/MHz`.
+
+Next validation command:
+
+```bash
+python3 tools/run_linux_boot.py --run --simulator dsim \
+  --build-mode linux \
+  --run-dir linux_boot_results/stage3_linux_post_trappc_clean_50m_dsim_<date> \
+  --max-cycles 50000000 \
+  --target-milestone uart_driver \
+  --status-interval 5000000 \
+  --no-trace-trap
+```
+
+Do not carry the focused `LINUX_STOP_COMMIT_*` or cycle-window trace plusargs
+into the next clean milestone run. If the clean run exposes a new RTL issue,
+fix it with the same rule: rebuild, rerun the focused Linux reproducer, then
+rerun the Stage 3 DS/CM hard gate before promotion.
 
 SATP interpretation:
 
@@ -257,8 +446,16 @@ Simulator backend policy:
 - Verilator is approved to replace XSim as the current Stage 3 turnaround
   fallback only when DSim is blocked by license availability. Its purpose is to
   accelerate Linux boot/debug iteration, not to lower the signoff bar.
+- Current caveat: Verilator builds the Linux platform, but Linux execution still
+  aborts around 50K cycles with `Active region did not converge`
+  (`linux_boot_results/stage3_linux_trappc_verilator_conv50k_100k_20260517a`).
+  Treat Verilator as compile-only for this slice until that convergence issue is
+  fixed.
 - XSim is demoted to a last-resort cross-check because it is too slow for this
   workload.
+- The Linux boot runner default is now `--simulator auto`, which tries DSim
+  first and falls back to Verilator on a DSim lease block. Use explicit
+  `--simulator dsim` only when DSim evidence is required for promotion.
 - Any RTL slice debugged with Verilator still needs the locked DS/CM guard to
   remain clean, with DSim evidence preferred before promotion whenever the
   license is available.
@@ -480,11 +677,12 @@ Current L0 RTL slice:
   promoted evidence, and XSim is retained only as a last-resort cross-check
   because it is too slow for current Linux boot iteration.
 - The Verilator Linux fallback is wired through `build_verilator_linux.sh`,
-  `run_verilator_linux.sh`, and `tools/run_linux_boot.py --simulator verilator`.
-  As of May 14, the binary builds from the current RTL and is approved for
-  short Linux-debug turnarounds when the DSim lease is unavailable. DSim remains
-  the preferred evidence source for promoted RTL, and any Verilator-debugged RTL
-  slice still needs the locked DS/CM guard before commit.
+  `run_verilator_linux.sh`, and `tools/run_linux_boot.py --simulator auto`.
+  `auto` attempts DSim first and switches to Verilator only for a DSim lease
+  block. Direct `--simulator verilator` is allowed for known DSim outages.
+  DSim remains the preferred evidence source for promoted RTL, and any
+  Verilator-debugged RTL slice still needs the locked DS/CM guard before
+  commit.
 - The M-mode UART smoke now passes through the platform path:
   `linux_boot_results/stage3_l0_uart_smoke_clint_lane_fix`.
 - The required DS/CM RTL guard passed after the L0 RTL slice:
@@ -1208,9 +1406,10 @@ python3 tools/run_rv64gc_compliance.py --run --isa rv64gc --runner dsim
 
 Use the Verilator fallback only when DSim is blocked by license availability.
 XSim should only be used as a last-resort cross-check because it is too slow for
-this workload. The runner must archive per-test logs, the ELF/hex provenance,
-and a summary table with pass, fail, timeout, and first failing PC or trap when
-available.
+this workload. For Linux boot, prefer `tools/run_linux_boot.py --simulator auto`
+so DSim remains first choice and Verilator replaces XSim as the backup. The
+runner must archive per-test logs, the ELF/hex provenance, and a summary table
+with pass, fail, timeout, and first failing PC or trap when available.
 
 The Linux runner can now run the M-mode UART smoke and has a dedicated OpenSBI
 banner mode. It records reached milestones and the last reached milestone in
@@ -1389,9 +1588,9 @@ Working verdict:
 
 Next diagnostic step before RTL changes:
 
-1. Keep DSim as the primary evidence source. XSim is only a last-resort
-   cross-check, and Verilator is the approved short-turnaround fallback when
-   the DSim lease is unavailable.
+1. Keep DSim as the primary evidence source. Verilator replaces XSim as the
+   approved short-turnaround fallback when the DSim lease is unavailable.
+   XSim is only a last-resort cross-check.
 2. Do not use sub-128M `mem=` caps with the current kernel config. The 64M
    default run reached timer setup but ran out of early kernel memory; the 24M
    and 48M caps fail even earlier in `memory_present`.
@@ -1511,6 +1710,108 @@ Validation status:
   `linux_boot_results/stage3_linux_fusionfix_200m_dsim_20260514a` is not Linux
   boot evidence.
 
+### Current Trap Frame Store Data Candidate, May 14
+
+The next real Linux failure is past the earlier OF timebase issue. The valid
+DSim run
+`linux_boot_results/stage3_linux_irq_target_fix_18m_dsim_20260514a` reaches:
+
+- `clocksource: riscv_clocksource`
+- `sched_clock`
+
+It then panics while printing the later Oops path:
+
+- `Unable to handle kernel paging request at virtual address ffffffff805c5dec`
+- `Kernel panic - not syncing: Attempted to kill the idle task!`
+
+The trace evidence narrows this to Linux trap-frame corruption, not a missing
+kernel mapping:
+
+- The faulting return path executes `ld a0,256(sp); csrw sstatus,a0; sret`.
+- At the failing return, `a0` is zero after `ld a0,256(sp)`, so `sret` returns
+  with the wrong previous privilege state.
+- The corresponding trap entry previously executed
+  `csrrc s1,sstatus,t0; sd s1,256(sp)`.
+- The saved architectural `s1` value at trap entry was correct
+  (`0x0000000200000120`), but the later stack load observes zero.
+
+Root-cause candidate:
+
+- `issue_queue.sv` wakes consumers from all four CDB lanes.
+- The integer operand bypass network only had CDB0, CDB1, CDB2, Load0, and
+  Load1 as sources.
+- CDB3 carries ALU3, DIV, CSR, and FPU results. A consumer awakened by a CSR
+  result on CDB3 could issue before the integer PRF read saw the write, with no
+  matching CDB3 bypass source.
+- The Linux-shaped sequence `csrrc s1,sstatus,t0; sd s1,256(sp)` matches this
+  failure mode exactly: the store-data uop can be awakened by the CSR result
+  but read stale store data.
+
+RTL candidate in the working tree:
+
+- `NUM_BYPASS_SRCS` is widened from 5 to 6.
+- `rv64gc_core_top.sv` now wires registered CDB3 into bypass slot 3 and moves
+  Load0/Load1 to bypass slots 4/5.
+- `bypass_network.sv` comments now describe the CDB0..3 plus Load0/Load1
+  contract.
+- This is a general wakeup and operand-delivery contract repair, not a Linux or
+  benchmark special case.
+
+Validation status:
+
+- `./build_dsim_linux.sh` rebuilt the Stage 3 DSim Linux image successfully
+  from the current RTL candidate.
+- A rebuilt DSim Linux run with the CDB3 bypass candidate reached the same
+  post-clocksource failure:
+  `linux_boot_results/stage3_linux_cdb3_bypass_200m_dsim_20260514a`.
+  The UART reaches `clocksource: riscv_clocksource` and `sched_clock`, then
+  reports `Unable to handle kernel paging request at virtual address
+  ffffffff805c5dec`, `Oops [#1]`, and
+  `Kernel panic - not syncing: Attempted to kill the idle task!`.
+- The run was stopped after reproducing the panic. It is valid failure
+  evidence from the rebuilt RTL image, but it is not a Linux progress
+  milestone and does not validate the CDB3 bypass candidate.
+- The Verilator Linux fallback was rebuilt successfully from the current RTL,
+  but the platform run aborts at time zero with
+  `Active region did not converge`:
+  `linux_boot_results/stage3_linux_cdb3_bypass_20m_verilator_20260514a`.
+  This is not Linux boot evidence.
+- Do not commit or promote the current RTL candidate until a narrower trace
+  proves the remaining trap-frame corruption root cause, the Linux panic is
+  removed, and the Stage 3 DS/CM hard guard passes within the 0.01% metric
+  regression gate.
+
+Next debug command:
+
+```bash
+python3 tools/run_linux_boot.py \
+  --run \
+  --simulator auto \
+  --build-mode linux \
+  --run-dir linux_boot_results/stage3_linux_trapframe_trace_auto_<timestamp> \
+  --max-cycles 18000000 \
+  --target-milestone uart_driver \
+  --no-status \
+  --sim-plusarg LINUX_TRACE_REGS \
+  --sim-plusarg LINUX_TRACE_PIPE \
+  --sim-plusarg LINUX_TRACE_LINE=ffffffff80e04070 \
+  --sim-plusarg LINUX_TRACE_LOAD_PC=ffffffff805dacd8 \
+  --sim-plusarg LINUX_TRACE_COMMIT_LO=ffffffff805dac40 \
+  --sim-plusarg LINUX_TRACE_COMMIT_HI=ffffffff805dad40 \
+  --sim-plusarg LINUX_TRACE_CYCLE_LO=16603000 \
+  --sim-plusarg LINUX_TRACE_CYCLE_HI=16609000
+```
+
+The trace must distinguish:
+
+- whether `sd s1,256(sp)` issues with the expected `s1` data,
+- whether the store queue captures and drains that data to
+  `sp + 256 == ffffffff80e04070`,
+- whether `ld a0,256(sp)` forwards from the store queue or reloads from the
+  D-cache,
+- and whether the corruption is in operand delivery, store queue state, memory
+  writeback, or load/forwarding.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -1568,22 +1869,25 @@ DS/CM performance gate.
   A general BRU/fusion-detector fix is in place and passes both the directed
   Linux-shaped probe and the full DS/CM regression guard. The 64M early timer
   allocator failure is fixed by making the DTS and simulation DRAM match the
-  128M linker region. The next Linux run must reconfirm timebase discovery from
-  the clean payload before moving back to the RISC-V timekeeping milestone after
-  `timer_common domain=...`. Current evidence therefore does not prove a
-  v1-style clocksource stuck issue.
-- v2 does not yet reach the Linux `riscv_clocksource` milestone, Linux-visible
-  PLIC/external interrupts, or validated Linux timer behavior.
+  128M linker region. The latest valid Linux run reaches
+  `clocksource: riscv_clocksource` and `sched_clock`, then panics on a trap
+  return path. The current RTL candidate repairs the general CDB3 wakeup versus
+  bypass contract, which was a plausible explanation for the observed
+  `csrrc s1,sstatus,t0` to `sd s1,256(sp)` trap-frame corruption. A rebuilt
+  DSim Linux run still reproduces the same panic, so the remaining root cause
+  is deeper in the trap-frame store/load path and must be isolated before any
+  RTL candidate is promoted. The Verilator fallback still aborts at time zero
+  on this platform.
+- v2 has reached the Linux `riscv_clocksource` console banner in the latest
+  failing path, but it does not yet reach the UART driver milestone,
+  Linux-visible PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 implementation should run a short clean checkpoint through
-Linux `time_init()` first. If that passes, continue Linux boot debug from the
-current `timer_common domain=...` state and use Linux-only probes to determine
-whether the remaining gap is irq-domain/timer IRQ mapping, CSR `time` access,
-`clocksource_register_hz()`, `sched_clock_register()`, CLINT/SBI timer
-programming, memory/L2 progress, or DSim runtime behavior. Any RTL change on
-that path must still pass impacted compliance tests and the DS/CM hard guard
-before promotion. Sv39 should stay as a directed-test subset, but the primary
-Linux path is four-level Sv48 because that matches the intended Linux signoff
-configuration.
+The next Stage 3 implementation should use a narrow testbench-only trace around
+the `csrrc` producer, `sd s1,256(sp)` store-data issue, store queue capture and
+drain, and `ld a0,256(sp)` reload. Do not add debug logic to synthesizable core
+RTL. Any RTL change on that path must still pass impacted compliance tests and
+the DS/CM hard guard before promotion. Sv39 should stay as a directed-test
+subset, but the primary Linux path is four-level Sv48 because that matches the
+intended Linux signoff configuration.

@@ -170,8 +170,9 @@ module rv64gc_core_top
     logic [3:0]               load_wb_exc_code_r [0:1];
 
     // =========================================================================
-    // Bypass sources (NUM_BYPASS_SRCS=5: ALU0/BRU, ALU1/BRU1, ALU2/MUL, Load0, Load1)
-    // ALU3/DIV/CSR is not bypassed; consumers fall back to PRF.
+    // Bypass sources (NUM_BYPASS_SRCS=6: CDB0..3 plus Load0, Load1).
+    // Integer PRF reads are not write-first, so every CDB wakeup lane must
+    // have a matching registered bypass lane.
     // =========================================================================
     logic [NUM_BYPASS_SRCS-1:0]    bypass_valid;
     logic [PHYS_REG_BITS-1:0]      bypass_tag  [0:NUM_BYPASS_SRCS-1];
@@ -569,6 +570,7 @@ module rv64gc_core_top
     logic [PIPE_WIDTH-1:0]   rob_head_valid;
     logic [PIPE_WIDTH-1:0]   rob_head_ready;
     logic [63:0]             rob_head_pc          [0:PIPE_WIDTH-1];
+    logic [63:0]             rob_head_trap_pc     [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]   rob_head_has_exception;
     logic [3:0]              rob_head_exc_code    [0:PIPE_WIDTH-1];
     logic [63:0]             rob_head_exc_tval    [0:PIPE_WIDTH-1];
@@ -1413,6 +1415,7 @@ module rv64gc_core_top
     // 5b. ROB alloc data from rename
     // =========================================================================
     logic [63:0]            rob_alloc_pc         [0:PIPE_WIDTH-1];
+    logic [63:0]            rob_alloc_trap_pc    [0:PIPE_WIDTH-1];
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_branch;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_store;
     logic [PIPE_WIDTH-1:0]  rob_alloc_is_load;
@@ -1439,6 +1442,7 @@ module rv64gc_core_top
     always_comb begin
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             rob_alloc_pc[i]          = ren_insn[i].base.pc;
+            rob_alloc_trap_pc[i]     = ren_insn[i].base.trap_pc;
             rob_alloc_is_branch[i]   = ren_insn[i].base.is_branch;
 
             // Compute BTB branch type for BPU update at commit:
@@ -1562,6 +1566,7 @@ module rv64gc_core_top
         .alloc_exc_code         (rob_alloc_exc_code),
         .alloc_exc_tval         (rob_alloc_exc_tval),
         .alloc_pc               (rob_alloc_pc),
+        .alloc_trap_pc          (rob_alloc_trap_pc),
         .alloc_is_branch        (rob_alloc_is_branch),
         .alloc_bpu_type         (rob_alloc_bpu_type),
         .alloc_is_store         (rob_alloc_is_store),
@@ -1614,6 +1619,7 @@ module rv64gc_core_top
         .head_valid             (rob_head_valid),
         .head_ready             (rob_head_ready),
         .head_pc                (rob_head_pc),
+        .head_trap_pc           (rob_head_trap_pc),
         .head_has_exception     (rob_head_has_exception),
         .head_exc_code          (rob_head_exc_code),
         .head_exc_tval          (rob_head_exc_tval),
@@ -4171,26 +4177,20 @@ module rv64gc_core_top
     assign fp_prf_wdata[3] = 64'd0;
 
     // =========================================================================
-    // Bypass source wiring (4-wide: NUM_BYPASS_SRCS=5)
+    // Bypass source wiring (4-wide: NUM_BYPASS_SRCS=6)
     //   [0]: ALU0/BRU (registered CDB[0])
     //   [1]: ALU1/BRU1 (registered CDB[1])
     //   [2]: ALU2/MUL (registered CDB[2])
-    //   [3]: Load0 (combinational load_wb[0] — 2-cycle load latency)
-    //   [4]: Load1 (combinational load_wb[1] — 2-cycle load latency)
+    //   [3]: ALU3/DIV/CSR/FPU (registered CDB[3])
+    //   [4]: Load0 (combinational load_wb[0] — 2-cycle load latency)
+    //   [5]: Load1 (combinational load_wb[1] — 2-cycle load latency)
     //
-    // Dropped vs 6-wide:
-    //   - ALU3/DIV/CSR (CDB[3]): DIV is multi-cycle, bypass rarely fires;
-    //     CSR is infrequent and serialised; consumers fall back to PRF read.
-    //   - Load1 (CDB[5]): second load port consumers fall back to PRF read
-    //     (adds 1 cycle latency on load-use for the second load port only).
-    //
-    // For ALU sources [0..2]: use REGISTERED CDB.  ALU producers wake their
+    // For CDB sources [0..3]: use REGISTERED CDB.  Producers wake their
     // consumers via the registered cdb_r path (1 cycle after compute), and
-    // by then the PRF write has already latched, so bypass-from-cdb_r is
-    // semantically equivalent to PRF read but cuts the read mux.  No
-    // combinational loop because cdb_r is registered.
+    // the integer PRF does not perform write-first reads.  No combinational
+    // loop exists because cdb_r is registered.
     //
-    // For LOAD source [3]: use COMBINATIONAL CDB.  A load AGU at T+0
+    // For LOAD sources [4:5]: use COMBINATIONAL writeback.  A load AGU at T+0
     // sets spec_wakeup at T+1 (load _r stage), the IQ latches src1_ready at
     // T+2 (next clock edge), and the consumer issues at T+2 — exactly the
     // cycle the load result is on the combinational CDB (load_wb fires at
@@ -4200,21 +4200,24 @@ module rv64gc_core_top
     //
     // Suppress bypass for p0 (hardwired zero register) — CDB may carry
     // non-zero data for instructions with pdst=p0 (e.g., JAL x0).
-    assign bypass_valid = {load_wb_prf_valid_live[1] && (load_wb_pdst[1]  != '0),  // [4] Load1
-                           load_wb_prf_valid_live[0] && (load_wb_pdst[0]  != '0),  // [3] Load0
-                           cdb_wakeup_valid_r[2] && (cdb_tag_r[2] != '0),  // [2] ALU2/MUL
-                           cdb_wakeup_valid_r[1] && (cdb_tag_r[1] != '0),  // [1] ALU1/BRU1
+    assign bypass_valid = {load_wb_prf_valid_live[1] && (load_wb_pdst[1] != '0),  // [5] Load1
+                           load_wb_prf_valid_live[0] && (load_wb_pdst[0] != '0),  // [4] Load0
+                           cdb_wakeup_valid_r[3] && (cdb_tag_r[3] != '0), // [3] ALU3/DIV/CSR/FPU
+                           cdb_wakeup_valid_r[2] && (cdb_tag_r[2] != '0), // [2] ALU2/MUL
+                           cdb_wakeup_valid_r[1] && (cdb_tag_r[1] != '0), // [1] ALU1/BRU1
                            cdb_wakeup_valid_r[0] && (cdb_tag_r[0] != '0)}; // [0] ALU0/BRU
     assign bypass_tag[0]  = cdb_tag_r[0];
     assign bypass_tag[1]  = cdb_tag_r[1];
     assign bypass_tag[2]  = cdb_tag_r[2];
-    assign bypass_tag[3]  = load_wb_pdst[0];    // Load0 combinational
-    assign bypass_tag[4]  = load_wb_pdst[1];    // Load1 combinational
+    assign bypass_tag[3]  = cdb_tag_r[3];
+    assign bypass_tag[4]  = load_wb_pdst[0];    // Load0 combinational
+    assign bypass_tag[5]  = load_wb_pdst[1];    // Load1 combinational
     assign bypass_data[0] = cdb_data_r[0];
     assign bypass_data[1] = cdb_data_r[1];
     assign bypass_data[2] = cdb_data_r[2];
-    assign bypass_data[3] = load_wb_data[0];    // Load0 combinational
-    assign bypass_data[4] = load_wb_data[1];    // Load1 combinational
+    assign bypass_data[3] = cdb_data_r[3];
+    assign bypass_data[4] = load_wb_data[0];    // Load0 combinational
+    assign bypass_data[5] = load_wb_data[1];    // Load1 combinational
 
     // =========================================================================
     // PRF Ready Table
@@ -4973,6 +4976,9 @@ module rv64gc_core_top
     logic [1:0]  csr_priv_mode;
     logic        csr_irq_pending;
     logic [63:0] csr_irq_cause;
+    logic        csr_irq_to_supervisor;
+    logic        commit_interrupt_taken;
+    logic        commit_trap_to_supervisor;
 
     commit u_commit (
         .clk                    (clk),
@@ -5039,6 +5045,9 @@ module rv64gc_core_top
         .mideleg                (csr_mideleg),
         .irq_pending            (csr_irq_pending),
         .irq_cause              (csr_irq_cause),
+        .irq_to_supervisor      (csr_irq_to_supervisor),
+        .interrupt_taken        (commit_interrupt_taken),
+        .trap_to_supervisor     (commit_trap_to_supervisor),
         .insn_retired_count     (insn_retired_count)
     );
 
@@ -5251,7 +5260,7 @@ module rv64gc_core_top
         trap_val          = 64'd0;
         trap_is_interrupt = 1'b0;
 
-        if (flush_out.valid && flush_out.full_flush) begin
+        if (commit_flush.valid && commit_flush.full_flush) begin
             // Check if this is an exception commit
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (commit_out[i].valid && rob_head_has_exception[i] && !trap_valid) begin
@@ -5264,15 +5273,15 @@ module rv64gc_core_top
                             default: trap_cause = {60'd0, EXC_ECALL_M};
                         endcase
                     end
-                    trap_pc     = rob_head_pc[i];
+                    trap_pc     = rob_head_trap_pc[i];
                     trap_val    = rob_head_exc_tval[i];
                 end
             end
             // Check for interrupt
-            if (csr_irq_pending && !trap_valid) begin
+            if (commit_interrupt_taken && !trap_valid) begin
                 trap_valid        = 1'b1;
                 trap_cause        = csr_irq_cause;
-                trap_pc           = rob_head_pc[0];
+                trap_pc           = rob_head_trap_pc[0];
                 trap_val          = 64'd0;
                 trap_is_interrupt = 1'b1;
             end
@@ -5303,6 +5312,7 @@ module rv64gc_core_top
         .trap_pc            (trap_pc),
         .trap_val           (trap_val),
         .trap_is_interrupt  (trap_is_interrupt),
+        .trap_to_supervisor (commit_trap_to_supervisor),
         .mret_valid         (mret_commit),
         .sret_valid         (sret_commit),
         .mtvec              (csr_mtvec),
@@ -5313,6 +5323,7 @@ module rv64gc_core_top
         .frm_out            (csr_frm),
         .irq_pending        (csr_irq_pending),
         .irq_cause          (csr_irq_cause),
+        .irq_to_supervisor  (csr_irq_to_supervisor),
         .insn_retired_count (insn_retired_count),
         .mcycle_val         (csr_mcycle_val),
         .minstret_val       (csr_minstret_val),

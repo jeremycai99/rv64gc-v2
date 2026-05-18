@@ -35,6 +35,7 @@ module csr_file
     input  logic [63:0] trap_pc,        // PC of faulting/interrupting instruction
     input  logic [63:0] trap_val,       // mtval/stval value
     input  logic        trap_is_interrupt,
+    input  logic        trap_to_supervisor,
 
     // Return from trap
     input  logic        mret_valid,
@@ -51,6 +52,7 @@ module csr_file
     // Interrupt outputs
     output logic        irq_pending,
     output logic [63:0] irq_cause,
+    output logic        irq_to_supervisor,
 
     // Performance counters
     input  logic [3:0]  insn_retired_count,  // architectural instructions from commit
@@ -170,8 +172,9 @@ module csr_file
     // Interrupt pending / cause logic
     // =========================================================================
     always_comb begin
-        irq_pending = 1'b0;
-        irq_cause   = 64'd0;
+        irq_pending       = 1'b0;
+        irq_cause         = 64'd0;
+        irq_to_supervisor = 1'b0;
 
         if (mip_eff[IRQ_M_EXT] && mie_r[IRQ_M_EXT] &&
             ((priv_r != PRIV_M) || mstatus_r[3])) begin
@@ -188,8 +191,9 @@ module csr_file
         end else if (mip_eff[IRQ_S_EXT] && mie_r[IRQ_S_EXT]) begin
             if (mideleg_r[IRQ_S_EXT] && (priv_r != PRIV_M) &&
                 ((priv_r == PRIV_U) || mstatus_r[1])) begin
-                irq_pending = 1'b1;
-                irq_cause   = 64'h8000_0000_0000_0000 | {58'd0, IRQ_S_EXT};
+                irq_pending       = 1'b1;
+                irq_cause         = 64'h8000_0000_0000_0000 | {58'd0, IRQ_S_EXT};
+                irq_to_supervisor = 1'b1;
             end else if (!mideleg_r[IRQ_S_EXT] &&
                          ((priv_r != PRIV_M) || mstatus_r[3])) begin
                 irq_pending = 1'b1;
@@ -198,8 +202,9 @@ module csr_file
         end else if (mip_eff[IRQ_S_SOFT] && mie_r[IRQ_S_SOFT]) begin
             if (mideleg_r[IRQ_S_SOFT] && (priv_r != PRIV_M) &&
                 ((priv_r == PRIV_U) || mstatus_r[1])) begin
-                irq_pending = 1'b1;
-                irq_cause   = 64'h8000_0000_0000_0000 | {58'd0, IRQ_S_SOFT};
+                irq_pending       = 1'b1;
+                irq_cause         = 64'h8000_0000_0000_0000 | {58'd0, IRQ_S_SOFT};
+                irq_to_supervisor = 1'b1;
             end else if (!mideleg_r[IRQ_S_SOFT] &&
                          ((priv_r != PRIV_M) || mstatus_r[3])) begin
                 irq_pending = 1'b1;
@@ -208,8 +213,9 @@ module csr_file
         end else if (mip_eff[IRQ_S_TIMER] && mie_r[IRQ_S_TIMER]) begin
             if (mideleg_r[IRQ_S_TIMER] && (priv_r != PRIV_M) &&
                 ((priv_r == PRIV_U) || mstatus_r[1])) begin
-                irq_pending = 1'b1;
-                irq_cause   = 64'h8000_0000_0000_0000 | {58'd0, IRQ_S_TIMER};
+                irq_pending       = 1'b1;
+                irq_cause         = 64'h8000_0000_0000_0000 | {58'd0, IRQ_S_TIMER};
+                irq_to_supervisor = 1'b1;
             end else if (!mideleg_r[IRQ_S_TIMER] &&
                          ((priv_r != PRIV_M) || mstatus_r[3])) begin
                 irq_pending = 1'b1;
@@ -469,20 +475,6 @@ module csr_file
     end
 
     // =========================================================================
-    // Trap delegation: to S-mode or M-mode?
-    // =========================================================================
-    logic trap_to_s;
-    always_comb begin
-        if (trap_is_interrupt)
-            trap_to_s = mideleg_r[{1'b0, trap_cause[4:0]}] &&
-                        (priv_r != PRIV_M) &&
-                        ((priv_r == PRIV_U) || mstatus_r[1]);
-        else
-            trap_to_s = medeleg_r[{2'b00, trap_cause[3:0]}] &&
-                        (priv_r != PRIV_M);
-    end
-
-    // =========================================================================
     // Sequential write logic
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
@@ -524,7 +516,7 @@ module csr_file
 
             // Priority: trap > mret/sret > csr-write
             if (trap_valid) begin
-                if (trap_to_s) begin
+                if (trap_to_supervisor) begin
                     sepc_r           <= trap_pc;
                     scause_r         <= trap_cause;
                     stval_r          <= trap_val;

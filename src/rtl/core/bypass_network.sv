@@ -10,8 +10,7 @@
 module bypass_network
     import rv64gc_pkg::*;
 (
-    // NUM_BYPASS_SRCS bypass sources (ALU0-2, MUL/DIV/CSR, Load0, Load1
-    // for 4-wide: 4 sources total driven by CDB_WIDTH slots)
+    // NUM_BYPASS_SRCS bypass sources: CDB0..3 plus two load writeback lanes.
     input  logic [NUM_BYPASS_SRCS-1:0]    bypass_valid,
     input  logic [PHYS_REG_BITS-1:0]      bypass_tag  [0:NUM_BYPASS_SRCS-1],
     input  logic [63:0]                    bypass_data [0:NUM_BYPASS_SRCS-1],
