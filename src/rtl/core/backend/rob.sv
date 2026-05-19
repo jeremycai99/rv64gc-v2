@@ -610,6 +610,27 @@ module rob
         end
     end
 
+    logic sideband_exc_alloc_conflict;
+    logic sideband_exc_not_flushed;
+    logic sideband_exc_fire;
+    always_comb begin
+        sideband_exc_alloc_conflict = 1'b0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            if ((alloc_count > i[2:0]) &&
+                (ai_w[i] == sideband_exc_rob_idx)) begin
+                sideband_exc_alloc_conflict = 1'b1;
+            end
+        end
+    end
+    assign sideband_exc_not_flushed =
+        !flush_valid ||
+        (!flush_full && !rob_in_range[sideband_exc_rob_idx]);
+    assign sideband_exc_fire =
+        sideband_exc_valid &&
+        valid_r[sideband_exc_rob_idx] &&
+        !sideband_exc_alloc_conflict &&
+        sideband_exc_not_flushed;
+
     // =========================================================================
     // Sequential logic: allocate, writeback, commit, flush
     // Pointer updates (next_tail, next_head) are computed inline to avoid
@@ -818,7 +839,7 @@ module rob
                 end
             end
 
-            if (sideband_exc_valid) begin
+            if (sideband_exc_fire) begin
                 ready_r[sideband_exc_rob_idx] <= 1'b1;
                 has_exc_r[sideband_exc_rob_idx] <= 1'b1;
                 exc_code_packed[sideband_exc_rob_idx*4 +: 4] <= sideband_exc_code;
@@ -945,7 +966,7 @@ module rob
                 end
             end
 
-            if (sideband_exc_valid) begin
+            if (sideband_exc_fire) begin
                 ready_r[sideband_exc_rob_idx] <= 1'b1;
                 has_exc_r[sideband_exc_rob_idx] <= 1'b1;
                 exc_code_packed[sideband_exc_rob_idx*4 +: 4] <= sideband_exc_code;

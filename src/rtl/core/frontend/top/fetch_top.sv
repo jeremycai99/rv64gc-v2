@@ -31,6 +31,8 @@ module fetch_top
     input  logic        backend_stall,
     // Frontend quiesce while decoded-op replay owns rename input.
     input  logic        frontend_hold,
+    // Stop new fetch work while preserving decode-side IBuffer drain.
+    input  logic        frontend_fetch_halt,
     // Avoid packet fast-pathing while a replay structure is forming a
     // candidate, including the cycle that starts a replay window.
     input  logic        frontend_replay_blocking,
@@ -76,6 +78,7 @@ module fetch_top
     input  logic [4:0]  ras_restore_tos,
     input  logic        ras_restore_top_valid,
     input  logic [63:0] ras_restore_top_addr,
+    input  logic        ras_context_clear,
 
     // Memory interface (I-cache to L2)
     output logic        icache_fill_req_valid,
@@ -314,7 +317,8 @@ module fetch_top
         .rst_n                                    (rst_n),
         .redirect_i                               (redirect_valid),
         .redirect_pc_i                            (redirect_pc),
-        .frontend_hold_i                          (frontend_hold),
+        .frontend_hold_i                          (frontend_hold ||
+                                                   frontend_fetch_halt),
         .translation_stall_i                      (instr_translation_stall),
         .packet_buf_full_i                        (packet_buf_full),
         .icq_full_i                               (icq_full),
@@ -610,6 +614,7 @@ module fetch_top
             recovery_headroom_ok <=
                 !backend_stall &&
                 !frontend_hold &&
+                !frontend_fetch_halt &&
                 !packet_buf_full &&
                 (packet_buf_count <= RECOVERY_IBUF_HEADROOM_MAX);
         end
@@ -747,6 +752,7 @@ module fetch_top
         .ras_pop_valid_i             (ras_pop_valid),
         .ras_pop_addr_o              (ras_pop_addr),
         .ras_tos_o                   (ras_tos),
+        .ras_clear_i                 (ras_context_clear),
         .ras_restore_valid_i         (ras_restore_valid),
         .ras_restore_tos_i           (ras_restore_tos),
         .ras_restore_top_valid_i     (ras_restore_top_valid),
@@ -1016,7 +1022,9 @@ module fetch_top
         .packet_ready_i               (packet_buf_enq_ready),
         .line_straddle_advance_i      (line_straddle_advance_c),
         .redirect_i                   (redirect_valid),
-        .frontend_hold_i              (frontend_hold || fe_stall),
+        .frontend_hold_i              (frontend_hold ||
+                                       frontend_fetch_halt ||
+                                       fe_stall),
         .ftq_idx_i                    (f2_work_ftq_idx_c),
         .ftq_epoch_i                  (f2_work_ftq_epoch_c),
         .ftq_alloc_tag_i              (f2_work_ftq_alloc_tag_c),

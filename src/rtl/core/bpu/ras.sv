@@ -14,6 +14,7 @@ module ras
     input  logic        pop_valid,     // RET detected (JALR with rs1=x1/x5, rd=x0)
     output logic [63:0] pop_addr,      // predicted return target (top of stack)
     output logic [4:0]  tos,           // top-of-stack pointer (for checkpoint save)
+    input  logic        clear,
     // Restore on mispredict
     input  logic        restore_valid,
     input  logic [4:0]  restore_tos,   // saved TOS pointer from checkpoint
@@ -49,6 +50,11 @@ module ras
     // =========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            tos_r <= 5'd0;
+            for (int i = 0; i < RAS_DEPTH; i++) begin
+                stack[i] <= 64'd0;
+            end
+        end else if (clear) begin
             tos_r <= 5'd0;
             for (int i = 0; i < RAS_DEPTH; i++) begin
                 stack[i] <= 64'd0;

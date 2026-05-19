@@ -100,6 +100,36 @@
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "notes": "Enables Sv48 in S-mode, triggers an M-mode timer interrupt, and verifies the vectored mtvec fetch executes as physical M-mode code while satp remains active."
+    },
+    {
+      "name": "vm_mtimer_ras_context_sv48_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/vm_mtimer_ras_context_sv48_smoke.hex",
+      "max_cycles": 500000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Leaves an M-mode return slot in the RAS before mret, then executes an S-mode ret under Sv48. The S-mode return must not fetch or fault on the M-mode physical address."
+    },
+    {
+      "name": "vm_mtimer_to_stimer_sv48_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/vm_mtimer_to_stimer_sv48_smoke.hex",
+      "max_cycles": 500000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Mimics the Linux and OpenSBI timer handoff under Sv48: M-mode handles MTIP, clears mtimecmp, injects STIP, and S-mode takes the delegated timer interrupt through translated stvec."
+    },
+    {
+      "name": "vm_auipc_ld_fault_precision_sv48_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/vm_auipc_ld_fault_precision_sv48_smoke.hex",
+      "max_cycles": 500000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Linux bad_range diagnostic: verifies AUIPC+LD macro fusion preserves precise load page fault state, including stval and the architecturally completed AUIPC destination register."
     }
   ]
 }

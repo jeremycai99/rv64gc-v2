@@ -281,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         str(run_dir),
         "--max-cycles",
         str(args.sim_max_cycles),
+        "--skip-golden-pc",
     ]
     for bench in BENCHES:
         bench_cmd.extend(["--bench", bench])

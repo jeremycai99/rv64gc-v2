@@ -126,7 +126,8 @@ module fusion_detector
             // Tier 1b: AUIPC rd + JALR ra, rd, imm  => PC-relative call
             // ---------------------------------------------------------------
             end else if (w_is_auipc[0] && w_is_jalr[1] &&
-                (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
+                (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
+                (dec_in[0].rd_arch == dec_in[1].rd_arch)) begin
                 fusable[0]              = 1'b1;
                 fused_uop[0]            = dec_in[0];
                 fused_uop[0].fu_type    = FU_BRU;
@@ -154,35 +155,9 @@ module fusion_detector
                 fused_uop[0].is_fused   = 1'b1;
                 fused_uop[0].fusion_type = 3'd0;
 
-            // ---------------------------------------------------------------
-            // Tier 1d: AUIPC rd + LD rd, imm(rd)  => PC-relative load
-            // ---------------------------------------------------------------
-            end else if (w_is_auipc[0] && w_is_load_insn[1] &&
-                (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
-                fusable[0]              = 1'b1;
-                fused_uop[0]            = dec_in[1];
-                fused_uop[0].pc         = dec_in[0].pc;
-                fused_uop[0].imm        = dec_in[0].imm + dec_in[1].imm;
-                fused_uop[0].fused_imm  = 32'(dec_in[1].imm);
-                fused_uop[0].rs1_arch   = dec_in[0].rs1_arch;
-                fused_uop[0].rs1_valid  = 1'b0;  // no gpr source; uses PC
-                fused_uop[0].is_fused   = 1'b1;
-                fused_uop[0].fusion_type = 3'd0;
-
-            // ---------------------------------------------------------------
-            // Tier 1e: AUIPC rd + SD/SW/SH/SB rs, imm(rd) => PC-relative store
-            // ---------------------------------------------------------------
-            end else if (w_is_auipc[0] && w_is_store_insn[1] &&
-                (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
-                fusable[0]              = 1'b1;
-                fused_uop[0]            = dec_in[1];
-                fused_uop[0].pc         = dec_in[0].pc;
-                fused_uop[0].imm        = dec_in[0].imm + dec_in[1].imm;
-                fused_uop[0].fused_imm  = 32'(dec_in[1].imm);
-                fused_uop[0].rs1_arch   = dec_in[0].rs1_arch;
-                fused_uop[0].rs1_valid  = 1'b0;
-                fused_uop[0].is_fused   = 1'b1;
-                fused_uop[0].fusion_type = 3'd0;
+            // AUIPC plus load or store is intentionally left unfused. This
+            // pipeline has one destination per uop and no partial commit path,
+            // so memory faults or store forms would lose the AUIPC result.
 
             // ---------------------------------------------------------------
             // Tier 2a: SLT rd, rs1, rs2 + BNE rd, x0  => fused signed lt-branch
@@ -366,7 +341,8 @@ module fusion_detector
             // AUIPC+JALR folds the producer's PC into the fused immediate
             // because the BRU's JALR target path computes operand_a + imm.
             if (w_is_auipc[0] && w_is_jalr[1] &&
-                (dec_in[0].rd_arch == dec_in[1].rs1_arch)) begin
+                (dec_in[0].rd_arch == dec_in[1].rs1_arch) &&
+                (dec_in[0].rd_arch == dec_in[1].rd_arch)) begin
                 fused_uop[0].imm = dec_in[0].pc + dec_in[0].imm + dec_in[1].imm;
             end else begin
                 fused_uop[0].rd_valid = dec_in[0].rd_valid;
@@ -396,7 +372,8 @@ module fusion_detector
                 fused_uop[1].fusion_type = 3'd0;
 
             end else if (w_is_auipc[1] && w_is_jalr[2] &&
-                (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
+                (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
+                (dec_in[1].rd_arch == dec_in[2].rd_arch)) begin
                 fusable[1]              = 1'b1;
                 fused_uop[1]            = dec_in[1];
                 fused_uop[1].fu_type    = FU_BRU;
@@ -418,30 +395,6 @@ module fusion_detector
                 fused_uop[1]            = dec_in[1];
                 fused_uop[1].imm        = dec_in[1].imm + dec_in[2].imm;
                 fused_uop[1].fused_imm  = 32'(dec_in[2].imm);
-                fused_uop[1].is_fused   = 1'b1;
-                fused_uop[1].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[1] && w_is_load_insn[2] &&
-                (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
-                fusable[1]              = 1'b1;
-                fused_uop[1]            = dec_in[2];
-                fused_uop[1].pc         = dec_in[1].pc;
-                fused_uop[1].imm        = dec_in[1].imm + dec_in[2].imm;
-                fused_uop[1].fused_imm  = 32'(dec_in[2].imm);
-                fused_uop[1].rs1_arch   = dec_in[1].rs1_arch;
-                fused_uop[1].rs1_valid  = 1'b0;
-                fused_uop[1].is_fused   = 1'b1;
-                fused_uop[1].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[1] && w_is_store_insn[2] &&
-                (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
-                fusable[1]              = 1'b1;
-                fused_uop[1]            = dec_in[2];
-                fused_uop[1].pc         = dec_in[1].pc;
-                fused_uop[1].imm        = dec_in[1].imm + dec_in[2].imm;
-                fused_uop[1].fused_imm  = 32'(dec_in[2].imm);
-                fused_uop[1].rs1_arch   = dec_in[1].rs1_arch;
-                fused_uop[1].rs1_valid  = 1'b0;
                 fused_uop[1].is_fused   = 1'b1;
                 fused_uop[1].fusion_type = 3'd0;
 
@@ -605,7 +558,8 @@ module fusion_detector
             fused_uop[1].is_rvc    = dec_in[2].is_rvc;
 
             if (w_is_auipc[1] && w_is_jalr[2] &&
-                (dec_in[1].rd_arch == dec_in[2].rs1_arch)) begin
+                (dec_in[1].rd_arch == dec_in[2].rs1_arch) &&
+                (dec_in[1].rd_arch == dec_in[2].rd_arch)) begin
                 fused_uop[1].imm = dec_in[1].pc + dec_in[1].imm + dec_in[2].imm;
             end else begin
                 fused_uop[1].rd_valid = dec_in[1].rd_valid;
@@ -635,7 +589,8 @@ module fusion_detector
                 fused_uop[2].fusion_type = 3'd0;
 
             end else if (w_is_auipc[2] && w_is_jalr[3] &&
-                (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
+                (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
+                (dec_in[2].rd_arch == dec_in[3].rd_arch)) begin
                 fusable[2]              = 1'b1;
                 fused_uop[2]            = dec_in[2];
                 fused_uop[2].fu_type    = FU_BRU;
@@ -657,30 +612,6 @@ module fusion_detector
                 fused_uop[2]            = dec_in[2];
                 fused_uop[2].imm        = dec_in[2].imm + dec_in[3].imm;
                 fused_uop[2].fused_imm  = 32'(dec_in[3].imm);
-                fused_uop[2].is_fused   = 1'b1;
-                fused_uop[2].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[2] && w_is_load_insn[3] &&
-                (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
-                fusable[2]              = 1'b1;
-                fused_uop[2]            = dec_in[3];
-                fused_uop[2].pc         = dec_in[2].pc;
-                fused_uop[2].imm        = dec_in[2].imm + dec_in[3].imm;
-                fused_uop[2].fused_imm  = 32'(dec_in[3].imm);
-                fused_uop[2].rs1_arch   = dec_in[2].rs1_arch;
-                fused_uop[2].rs1_valid  = 1'b0;
-                fused_uop[2].is_fused   = 1'b1;
-                fused_uop[2].fusion_type = 3'd0;
-
-            end else if (w_is_auipc[2] && w_is_store_insn[3] &&
-                (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
-                fusable[2]              = 1'b1;
-                fused_uop[2]            = dec_in[3];
-                fused_uop[2].pc         = dec_in[2].pc;
-                fused_uop[2].imm        = dec_in[2].imm + dec_in[3].imm;
-                fused_uop[2].fused_imm  = 32'(dec_in[3].imm);
-                fused_uop[2].rs1_arch   = dec_in[2].rs1_arch;
-                fused_uop[2].rs1_valid  = 1'b0;
                 fused_uop[2].is_fused   = 1'b1;
                 fused_uop[2].fusion_type = 3'd0;
 
@@ -844,7 +775,8 @@ module fusion_detector
             fused_uop[2].is_rvc    = dec_in[3].is_rvc;
 
             if (w_is_auipc[2] && w_is_jalr[3] &&
-                (dec_in[2].rd_arch == dec_in[3].rs1_arch)) begin
+                (dec_in[2].rd_arch == dec_in[3].rs1_arch) &&
+                (dec_in[2].rd_arch == dec_in[3].rd_arch)) begin
                 fused_uop[2].imm = dec_in[2].pc + dec_in[2].imm + dec_in[3].imm;
             end else begin
                 fused_uop[2].rd_valid = dec_in[2].rd_valid;

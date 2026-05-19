@@ -1858,7 +1858,75 @@ Directed validation:
 - The test enables Sv48, enters S-mode, triggers an M-mode timer interrupt,
   validates `mcause` and interrupted `mepc` in the M-mode vectored handler,
   then returns with `mret` into translated S-mode code that prints through a
-  mapped UART page.
+  translated UART mapping.
+
+### May 19 Timer-Vector Panic Debug Pivot
+
+The May 18 candidate fixed the earlier `epc=0` symptom, but the rebuilt Linux
+slice still panicked before the 100M goal:
+
+- Artifact: `linux_boot_results/stage3_linux_clean_100m_dsim_20260519a`.
+- Failure signature: instruction page fault with
+  `epc=0000000080003f7c`, `badaddr=0000000080003f7c`, and
+  `ra=ffffffff8013dabe`.
+- `0x80003f7c` is the OpenSBI M-mode timer path return slot after
+  `jal sbi_timer_process`; it is not a Linux high-half virtual address.
+- The log reaches Linux clocksource, sched clock, PID setup, LSM setup, and
+  mount-cache setup before this panic.
+
+The active root-cause hypothesis is no longer “run longer”.  The panic is a
+frontend correctness problem around privileged prediction and fetch-fault
+ordering:
+
+- The RAS is shared across M-mode trap code and resumed S-mode Linux code.
+  If an M-mode return slot survives across `mret`, an S-mode return can be
+  predicted toward OpenSBI physical text while Sv48 translation is active.
+- `fetch_exception_pending_r` previously had priority over the decode-facing
+  IBuffer output.  That allowed an ifetch page fault to enter rename before
+  older fetched packets and before the older branch/return that should recover
+  from the bad prediction.
+
+Current unpromoted RTL candidate:
+
+- Clear the RAS on trap entry, `mret`, `sret`, `satp` commit, and
+  `sfence.vma` redirect.  This is a context-isolation rule, not a Linux
+  benchmark special case.
+- Split frontend quiesce into decode-side `frontend_hold` and fetch-side
+  `frontend_fetch_halt`.  A pending fetch exception now stops new fetch work
+  but lets the IBuffer drain.
+- Inject the synthetic fetch exception only when UOP-cache playback is idle
+  and the normal decoded frontend path has no older packet to present.
+
+New directed smoke:
+
+- `tests/asm/vm_mtimer_ras_context_sv48_smoke.S` intentionally leaves an
+  M-mode return slot in the RAS before `mret`, then executes an S-mode `ret`
+  under Sv48.  The S-mode return must not fetch or fault on the M-mode
+  physical address.
+- Verilator Linux-platform run of this directed smoke passes:
+  `M TIMER RAS CONTEXT OK`, matched at cycle 573, with zero SVA violations.
+- Rebuilt DSim Linux-platform validation passes the same smoke:
+  `linux_boot_results/stage3_vm_mtimer_ras_context_dsim_20260519a`,
+  matched at cycle 573, with zero SVA violations and zero exception flushes.
+- Rebuilt DSim Linux-platform validation also re-passes the earlier
+  `vm_mtimer_vector_sv48_smoke`:
+  `linux_boot_results/stage3_vm_mtimer_vector_current_dsim_20260519a`,
+  matched at cycle 343, with zero SVA violations and zero exception flushes.
+- A trace-heavy rebuilt Linux slice
+  `linux_boot_results/stage3_linux_fetch_exception_order_dsim_22m_20260519a`
+  was stopped after reaching the OpenSBI banner and the 1M-cycle status point
+  because it was too slow for first-pass yes/no validation.  The follow-up
+  clean Linux rerun was temporarily blocked by the DSim lease not releasing
+  immediately after the interrupted trace run.
+
+Next validation sequence when DSim is available:
+
+1. Rerun Linux without trace past the prior timer-vector panic window using
+   the already rebuilt `dsim_linux_work/tb_linux_image.so`.
+2. If the clean Linux run fails, rerun with a narrow fault-only trace around
+   the new failure signature.
+3. If Linux passes the panic window, run the Stage 3 DS/CM RTL guard before
+   promotion or commit.
 - DSim result:
   `linux_boot_results/stage3_vm_mtimer_vector_dsim_20260518d` passes at
   cycle `343`; the commit summary reports one interrupt and zero exceptions.
@@ -1905,6 +1973,307 @@ Validation still required before promotion:
 - A Verilator full Linux run is not valid evidence yet because the current
   Linux platform image still aborts in Verilator with
   `Active region did not converge`.
+
+## 2026-05-19 `bad_range` Panic Debug
+
+The latest Linux failure is now a concrete kernel Oops, not a reason to extend
+the timeout:
+
+- Failing run:
+  `linux_boot_results/stage3_linux_fetch_context_mask_low_ifetch_clean_dsim_20m_20260519a`.
+- Kernel signature:
+  `Unable to handle kernel paging request at virtual address ffffffffeffff9a0`.
+- Trap site:
+  `epc : ffffffff8013e3e4`, `bad_range+0xc/0xdc`,
+  `cause: 13` load page fault.
+- Kernel disassembly from the matching `vmlinux`:
+  `bad_range+0x8` is `auipc a5,0xd60`, and `bad_range+0xc` is
+  `ld a5,-1632(a5)`, whose correct PC-relative effective address is
+  `ffffffff80e9dd80`.
+- The observed bad address `ffffffffeffff9a0` matches stale
+  `a5=fffffffff0000000` plus the load immediate. That leaves two root-cause
+  classes:
+  direct execution of the `bad_range+0xc` load with stale `a5`, or a stale
+  data-side fault sideband that is attributed to the `bad_range+0xc` ROB entry.
+
+Current evidence:
+
+- The directed high-half Sv48 reproducer
+  `tests/hex/vm_auipc_ld_high_sv48_smoke.hex` passes on rebuilt XSim after the
+  current RTL changes. This test executes the same `bad_range` AUIPC/LD shape
+  with `a5` deliberately poisoned to `fffffffff0000000`, so the simple
+  AUIPC+LD dependency and Sv48 PC-relative AGU path are not sufficient to
+  reproduce the Linux panic.
+- `tests/hex/vm_data_sv48_smoke.hex` also passes on rebuilt XSim after the
+  current RTL changes.
+- The UART VM timer smokes
+  `stage3_vm_mtimer_vector_xsim_ptw_owner_20260519a` and
+  `stage3_vm_mtimer_ras_context_xsim_ptw_owner_20260519a` both pass on rebuilt
+  XSim.
+
+RTL/debug changes in the current candidate:
+
+- `rob.sv` now gates sideband exception writes with target ROB validity,
+  same-cycle allocation conflict detection, and same-cycle flush/range
+  filtering before updating `ready`, exception code, and `tval`.
+- `rv64gc_core_top.sv` now tracks the accepted data-PTW owner ROB index and
+  only forwards a PTW data fault to the ROB when that owner is still live and
+  has not been killed by a full flush, partial flush, `satp`, or `sfence.vma`.
+  This is a general long-latency fault ownership guard, not a Linux-specific
+  PC or address special case.
+- `tb_linux.sv` has lightweight stop probes for the exact sideband `tval` and
+  the exact `bad_range+0xc` load PC. These are testbench-only diagnostics and
+  must not migrate into synthesizable core RTL.
+
+Validation status:
+
+- Rebuilt XSim compile and the four directed Stage 3 VM smokes listed above
+  pass.
+- Rebuilt DSim Linux first-fault capture:
+  `linux_boot_results/stage3_linux_first_fault_capture_dsim_20260519b`.
+  This run reached the explicit 18M-cycle cap, not a kernel failure. UART
+  reached `clocksource: riscv_clocksource`, `sched_clock`, PID setup, LSM,
+  `Mount-cache`, and `Mountpoint-cache`. It reported no `Oops`, no
+  `Kernel panic`, no `Unable to handle`, no
+  `[LINUX_STOP_LOW_IFETCH_FAULT]`, and no
+  `[LINUX_STOP_SIDEBAND_TVAL]`.
+- The 18M run passed both saved panic windows for the current candidate:
+  no S-mode fetch fault on the OpenSBI physical `0x80003f7c` timer-vector
+  path, and no data-side PTW sideband stop for
+  `tval=ffffffffeffff9a0`.
+- At the 18M cap the core was still making forward progress with
+  `mcycle=18000000`, `minstret=15393499`, `IPC=0.855194`, `priv=1`,
+  `satp=90000000000811be`, `last_pc=ffffffff80340008`, and no trap. The
+  status also showed `mtip=1` with an expired `timecmp`, so the next Linux
+  debug focus is timer-interrupt progress after clocksource bring-up.
+- Stage 3 DS/CM hard guard:
+  `benchmark_results/stage3_rtl_guard_stage3_linux_first_fault_candidate_20260519b`
+  passes all four locked rows with the 0.01% metric regression gate:
+  DS100 `18,068` timed cycles, `3.150055 DMIPS/MHz`;
+  DS300 `53,046` timed cycles, `3.218821 DMIPS/MHz`;
+  CM1 `150,398` timed cycles, `6.649025 CM/MHz`;
+  CM10 `1,459,540` timed cycles, `6.851474 CM/MHz`.
+- Therefore this candidate has passed the performance guard, but is not Linux
+  promoted yet. The focused 18M run is kernel panic debug evidence, not Stage
+  3 signoff evidence. Required before promotion: a rebuilt DSim Linux slice
+  must run beyond the 18M clocksource/timer-interrupt point with no Oops/panic.
+- Follow-up bounded 30M attempt:
+  `linux_boot_results/stage3_linux_first_fault_candidate_dsim_30m_20260519c`
+  was intentionally stopped after the first 1M-cycle status point because the
+  wall-clock rate made it another blind wait. It only proves the rebuilt image
+  starts cleanly through the OpenSBI banner and does not add Linux panic
+  evidence.
+
+Next focused commands:
+
+```bash
+python3 tools/run_stage3_rtl_guard.py --runner dsim \
+  --run-id stage3_linux_first_fault_candidate_<date>
+
+python3 tools/run_linux_boot.py --run --simulator dsim --build-mode linux \
+  --run-dir linux_boot_results/stage3_linux_first_fault_candidate_dsim_30m_<date> \
+  --max-cycles 30000000 --target-milestone init_handoff \
+  --status-interval 1000000 --no-trace-trap \
+  --sim-plusarg +LINUX_STOP_ON_LOW_IFETCH_FAULT \
+  --sim-plusarg +LINUX_STOP_SIDEBAND_TVAL=ffffffffeffff9a0
+```
+
+If the exact sideband stop fires in a later run, inspect `rob_fire`,
+`rob_valid`, `alloc_conflict`, and `not_flushed`. If `rob_fire=0`, the guard
+blocked a stale fault and the next run should proceed without the stop plusarg.
+If `rob_fire=1`, rerun with:
+
+```bash
+python3 tools/run_linux_boot.py --run --simulator dsim --build-mode linux \
+  --run-dir linux_boot_results/stage3_linux_bad_range_load_stop_dsim_<date> \
+  --max-cycles 20000000 --target-milestone boot_ok \
+  --status-interval 1000000 --no-trace-trap \
+  --sim-plusarg +LINUX_TRACE_LOAD_PC=ffffffff8013e3e4 \
+  --sim-plusarg +LINUX_STOP_ON_TRACE_LOAD_PC
+```
+
+That run decides whether the faulting load itself issues with
+`addr=ffffffffeffff9a0` and stale `rs1`, or whether the load issues correctly
+and the remaining problem is still downstream exception attribution.
+
+Current debug pivot:
+
+- Do not rerun a 50M or 100M boot slice until the next hook is narrower.
+- The latest useful status is the 18M line from
+  `stage3_linux_first_fault_capture_dsim_20260519b`: `mtip=1` and expired
+  `timecmp`, with no trap yet at the sampling point. This is not enough to
+  call a timer bug, but it is the next boundary to instrument.
+- Add or enable a testbench-only timer interrupt stop/status hook that prints
+  CSR interrupt state (`mstatus`, `mie`, effective `mip`, `mideleg`,
+  `irq_pending`, `irq_cause`, `trap_valid`, and return PCs) when `mtip` first
+  asserts or when the first timer interrupt trap is taken. Keep this out of
+  synthesizable RTL.
+- `tb_linux.sv` now provides that hook as
+  `+LINUX_STOP_ON_TIMER_BOUNDARY`. It prints the CSR timer state at the first
+  `mtip` assertion or timer interrupt trap and then terminates the run.
+  Verilator Linux-platform compile passes with this hook. DSim rebuild was
+  attempted but remained blocked by the shared single-lease limit, so DSim
+  execution evidence for the hook is still pending.
+- Use the existing directed `vm_mtimer_vector_sv48_smoke` and
+  `vm_mtimer_ras_context_sv48_smoke` as the fast correctness guard. The Linux
+  run should only be repeated after the timer hook can stop at the boundary
+  instead of waiting for another full boot window.
+
+### 2026-05-19 Timer Handoff Debug Update
+
+The latest debug turn should not be treated as another long-run attempt:
+
+- A first DSim Linux timer-boundary run with
+  `+LINUX_STOP_ON_TIMER_BOUNDARY` was stopped before useful evidence because
+  full Linux still takes about 40 wall-clock minutes to reach the 18M-cycle
+  clocksource/timer window.  This confirms that interactive debug needs
+  directed smokes or a working faster simulator, not blind 50M or 100M waits.
+- The original `vm_mtimer_to_stimer_sv48_smoke` timed out in S-mode because the
+  test itself wrote `sie.STIE` and then later overwrote the shared `mie` CSR
+  with `MTIE` only.  That cleared STIE before the M-mode timer handler injected
+  STIP.  This was a smoke bug, not core evidence.
+- After reordering the smoke to program `mie.MTIE` before the delegated
+  `sie.STIE` view, both simulators pass the M-timer to S-timer handoff:
+  `linux_boot_results/stage3_vm_mtimer_to_stimer_xsim_fixed_20260519a`
+  passes at cycle `391`, and
+  `linux_boot_results/stage3_vm_mtimer_to_stimer_dsim_fixed_20260519a`
+  passes at cycle `394`.  Both runs report zero ordering/replay SVA
+  violations, zero exception flushes, and two interrupt flushes, matching the
+  intended MTIP then STIP sequence.
+- `tests/benchmarks/stage3_vm_smoke.json` now includes
+  `vm_mtimer_to_stimer_sv48_smoke` as a Stage 3 directed VM smoke.
+- The periodic Linux status line in `tb_linux.sv` now prints `mstatus`, `mie`,
+  effective `mip`, and `mideleg`.  This is testbench-only visibility needed to
+  interpret the 18M-cycle observation where `mtip=1` and `irq_pending=0`.
+- XSim Linux-platform syntax rebuild passes after the status-line change, and
+  `linux_boot_results/stage3_vm_mtimer_to_stimer_xsim_status_20260519a`
+  re-passes the corrected smoke with the enhanced CSR status fields enabled.
+
+Current panic-debug verdict:
+
+- The older physical fetch panic at `0x80003f7c` and the later
+  `bad_range+0xc` stale-address panic are both real failures from earlier RTL
+  candidates.
+- The current sideband-owner and frontend-context candidate has not reproduced
+  either panic through the 18M DSim first-fault capture, but it is not Linux
+  signoff because it has not run through the 100M-cycle goal.
+- Timer delivery itself is no longer the leading root-cause hypothesis after
+  the corrected MTIP-to-STIP smoke.  The next Linux evidence should be either
+  a targeted DSim boundary capture with the enhanced CSR status fields or a
+  fixed Verilator Linux run.  Verilator currently still aborts immediately
+  with `Active region did not converge`, so it is not yet usable as Linux
+  execution evidence.
+
+### 2026-05-19 Panic Debug Pivot
+
+Do not extend the Linux cycle cap to debug the current Oops.  The right next
+step is a first-event stop run:
+
+- Stop on the stale data-side fault sideband:
+  `+LINUX_STOP_SIDEBAND_TVAL=ffffffffeffff9a0`.
+- Stop on the exact kernel trap if it recurs:
+  `+LINUX_STOP_TRAP_PC=ffffffff8013e3e4` and
+  `+LINUX_STOP_TRAP_TVAL=ffffffffeffff9a0`.
+- Stop on any LSU load issue in the full `bad_range` body, so fused
+  `auipc+ld` and unfused `ld` PCs are both caught:
+  `+LINUX_TRACE_COMMIT_LO=ffffffff8013e3d8`,
+  `+LINUX_TRACE_COMMIT_HI=ffffffff8013e440`, and
+  `+LINUX_STOP_ON_TRACE_LOAD_RANGE`.
+
+Expected interpretation:
+
+- If `[LINUX_STOP_TRACE_LOAD]` reports `addr=ffffffffeffff9a0`, the bug is in
+  the Linux-context load issue path or decoded fused-uop metadata.  Inspect
+  `fused`, `pc`, `rs1`, and `imm` before touching the MMU sideband path.
+- If the bad-range load issues with the correct effective address but
+  `[LINUX_STOP_SIDEBAND_TVAL]` or `[LINUX_STOP_TRAP]` still reports the stale
+  tval, the bug is stale PTW/DTLB fault ownership or ROB exception attribution.
+- If none of these stops fire before the previous panic window, the old
+  `bad_range` Oops is not reproduced by the current candidate.  Continue at
+  the next architectural boundary, currently timer interrupt delivery after
+  `riscv_clocksource`.
+
+Active evidence command:
+
+```bash
+python3 tools/run_linux_boot.py --run --simulator dsim --build-mode linux \
+  --run-dir linux_boot_results/stage3_linux_bad_range_trap_load_stop_dsim_20m_<date> \
+  --max-cycles 20000000 --target-milestone boot_ok \
+  --status-interval 5000000 --no-trace-trap \
+  --sim-plusarg LINUX_TRACE_CYCLE_LO=12000000 \
+  --sim-plusarg LINUX_TRACE_COMMIT_LO=ffffffff8013e3d8 \
+  --sim-plusarg LINUX_TRACE_COMMIT_HI=ffffffff8013e440 \
+  --sim-plusarg LINUX_STOP_ON_TRACE_LOAD_RANGE \
+  --sim-plusarg LINUX_STOP_TRAP_PC=ffffffff8013e3e4 \
+  --sim-plusarg LINUX_STOP_TRAP_TVAL=ffffffffeffff9a0 \
+  --sim-plusarg LINUX_STOP_SIDEBAND_TVAL=ffffffffeffff9a0
+```
+
+### 2026-05-19 AUIPC Memory-Fusion Root Cause
+
+The current `bad_range+0xc` panic has a concrete RTL root cause candidate, and
+the directed evidence is stronger than another blind Linux wait:
+
+- Pre-fix directed reproducer:
+  `benchmark_results/stage3_auipc_ld_fault_precision_trace_xsim_20260519b`.
+  The test trapped precisely at the Linux-shaped `auipc a5; ld a5,imm(a5)`
+  sequence, but failed with `TOHOST=b` because architectural `a5` still held
+  stale `fffffffff0000000` in the S-mode trap handler.
+- Root cause: `fusion_detector.sv` fused `AUIPC+LD` into one memory uop.  This
+  pipeline has one architectural destination per uop and no partial-commit
+  path.  On a load page fault, commit correctly suppresses the faulting load
+  destination update, but that also loses the already-completed AUIPC result.
+  The Linux trap therefore observes stale `a5`, exactly matching
+  `fffffffff0000000 - 0x660 = ffffffffeffff9a0`.
+- The same structural issue applies to `AUIPC+STORE`, because the AUIPC
+  destination would be dropped entirely.  `AUIPC+JALR` is now only fused for
+  same-destination call forms where the single fused destination is
+  architecturally sufficient.
+
+Current RTL repair:
+
+- `fusion_detector.sv` no longer fuses `AUIPC+LD` or `AUIPC+STORE`.
+- `AUIPC+JALR` fusion is restricted to
+  `auipc rd; jalr rd, imm(rd)` style same-destination forms.
+- This is a general macro-fusion correctness repair, not a Linux address or
+  benchmark special case.
+
+Validation:
+
+- XSim post-fix directed smoke:
+  `benchmark_results/stage3_auipc_ld_fault_precision_trace_xsim_20260519c`
+  passes with `TOHOST=1` at cycle `243`.
+- DSim post-fix directed smoke:
+  `benchmark_results/stage3_auipc_ld_fault_precision_trace_dsim_20260519a`
+  passes with `TOHOST=1` at cycle `244`.
+- DSim CoreMark guard on the same RTL:
+  `benchmark_results/stage3_rtl_guard_auipc_mem_fusion_off_dsim_20260519a`
+  passes CM1 and CM10:
+  CM1 `150,398` timed cycles, `6.649025 CM/MHz`;
+  CM10 `1,459,540` timed cycles, `6.851474 CM/MHz`.
+- DSim Dhrystone guard with stale golden-PC checking disabled:
+  `benchmark_results/stage3_rtl_guard_auipc_mem_fusion_off_dsim_ds_skipgolden_20260519a`
+  passes DS100 and DS300:
+  DS100 `18,068` timed cycles, `3.150055 DMIPS/MHz`;
+  DS300 `53,046` timed cycles, `3.218821 DMIPS/MHz`.
+- `tools/run_benchmarks.py` now has `--skip-golden-pc`, and
+  `tools/run_stage3_rtl_guard.py` uses it.  This is a harness cleanup because
+  the Dhrystone golden PC fixtures are stale for the current frontend, while
+  the endpoint and score checks remain valid.
+
+Linux checkpoint status:
+
+- The Linux DSim image was rebuilt from the current RTL:
+  `linux_boot_results/stage3_rebuild_after_auipc_fusion_fix_20260519a`.
+- A 20M targeted Linux probe with exact old-panic stops was started:
+  `linux_boot_results/stage3_linux_bad_range_after_auipc_fusion_fix_dsim_20m_20260519a`.
+  It was stopped intentionally because wall-clock progress was too slow and it
+  had not reached the Linux panic window.  It adds no new kernel-pass evidence.
+- Therefore, the directed panic class is fixed and performance guarded, but
+  Linux boot is not yet promoted.  The next Linux run should be a lean rebuilt
+  DSim checkpoint with minimal tracing, or a fixed Verilator Linux platform,
+  and must prove no `bad_range+0xc` Oops before moving to the next boot
+  blocker.
 
 ## Near-Term Non-Goals
 

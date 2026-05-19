@@ -153,8 +153,8 @@ module lsu
     logic            p0_dcache_hit_valid;
     logic            p1_normal_wb_valid;
     logic            p0_fwd_spill_to_p1;
-    logic            p1_fast_fwd_fire;
     logic            fwd_hold_blocked;
+    logic            p1_misalign_hold_valid_r;
     logic            lmb_wb_port_free;
     logic            mmio_resp_hold_valid_r;
     logic            mmio_load0_block;
@@ -1453,21 +1453,13 @@ module lsu
     logic            split_load_busy;
     logic            split_load_start;
     logic            split_load_wb_fire;
-`ifdef SIMULATION
-    logic            sim_p1_fast_fwd_enable;
-    initial begin
-        sim_p1_fast_fwd_enable = $test$plusargs("LSU_P1_FAST_FWD");
-    end
-`else
-    localparam logic sim_p1_fast_fwd_enable = 1'b0;
-`endif
 
     assign p0_dcache_hit_valid = !flush_in.valid
                                && dcache_load_resp_valid[0]
                                && load_issue_valid_r[0]
                                && !load_nocache_r[0]
                                && !load_issue_data_r[0].is_amo;
-    assign p1_normal_wb_valid  = (load_issue_valid[1] && load_addr_misaligned[1] && !flush_in.valid)
+    assign p1_normal_wb_valid  = p1_misalign_hold_valid_r
                                || (!flush_in.valid
                                    && dcache_load_resp_valid[1]
                                    && load_issue_valid_r[1]
@@ -1477,18 +1469,6 @@ module lsu
     assign lmb_wb_port_free    = !p0_dcache_hit_valid &&
                                   !fwd_hold_valid_r &&
                                   !amo_wb_valid_r;
-    assign p1_fast_fwd_fire    =
-        sim_p1_fast_fwd_enable &&
-        p1_eff_valid &&
-        !p1_eff_misalign &&
-        p1_any_fwd_hit &&
-        !p1_sq_order_wait_block &&
-        !p1_partial_fwd_wait &&
-        !sta_issue_valid &&
-        !p1_normal_wb_valid &&
-        !p0_fwd_spill_to_p1 &&
-        !p1_fwd_hold_valid_r;
-
     assign amo_busy = amo_wait_load_r | amo_store_valid_r | amo_wb_valid_r;
     assign amo_serial_block =
         amo_busy |
@@ -2986,7 +2966,6 @@ module lsu
     // delta-cycle loop on dsim (CoreMark iter>=2 hits IterLimit at cyc 316,161).
     // Registering breaks the loop at the cost of 1 cycle latency on the
     // (rare) misalign exception path.
-    logic                     p1_misalign_hold_valid_r;
     logic [ROB_IDX_BITS-1:0]  p1_misalign_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] p1_misalign_hold_pdst_r;
 
@@ -3049,8 +3028,7 @@ module lsu
                 p1_fwd_hold_valid_r <= 1'b0;
             end
 
-            if (!p1_fast_fwd_fire &&
-                !p1_fwd_hold_valid_r &&
+            if (!p1_fwd_hold_valid_r &&
                 p1_eff_valid &&
                 !p1_eff_misalign &&
                 p1_any_fwd_hit &&
@@ -3203,14 +3181,6 @@ module lsu
             load_wb_pdst[1]          = load_issue_data_r[1].pdst;
             load_wb_data[1]          = load_extracted_dc[1];
             load_wb_mem_size[1]      = load_issue_data_r[1].mem_size;
-            load_wb_has_exception[1] = 1'b0;
-            load_wb_exc_code[1]      = '0;
-        end else if (p1_fast_fwd_fire) begin
-            load_wb_valid[1]         = 1'b1;
-            load_wb_rob_idx[1]       = p1_eff_data.rob_idx;
-            load_wb_pdst[1]          = p1_eff_data.pdst;
-            load_wb_data[1]          = p1_extracted_fwd;
-            load_wb_mem_size[1]      = p1_eff_data.mem_size;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
         end else if (p0_fwd_spill_to_p1) begin

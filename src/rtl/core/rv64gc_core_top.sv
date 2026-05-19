@@ -216,6 +216,7 @@ module rv64gc_core_top
     logic [4:0]          ras_restore_tos_fe;
     logic                ras_restore_top_valid_fe;
     logic [63:0]         ras_restore_top_addr_fe;
+    logic                ras_context_clear_fe;
     logic        icache_fill_req_valid;
     logic [63:0] icache_fill_req_addr;
     logic        l2_icache_req_accepted;
@@ -337,7 +338,10 @@ module rv64gc_core_top
     logic        fetch_exception_pending_r;
     logic [63:0] fetch_exception_pc_r;
     logic [3:0]  fetch_exception_code_r;
+    logic        fetch_exception_inject_c;
     logic        fetch_exception_fire_c;
+    logic [1:0]  fetch_exception_context_mask_r;
+    logic        fetch_exception_accept_c;
     localparam int SELECTIVE_RECOVERY_COOLDOWN_CYCLES = 32;
     localparam int SELECTIVE_RECOVERY_COOLDOWN_BITS =
         $clog2(SELECTIVE_RECOVERY_COOLDOWN_CYCLES + 1);
@@ -366,7 +370,8 @@ module rv64gc_core_top
         .backend_stall          (frontend_backend_stall),
         // When UOP-cache playback owns rename input, quiesce fetch traffic and
         // let the stream-exit redirect restart the live frontend.
-        .frontend_hold          (uoc_active || fetch_exception_pending_r),
+        .frontend_hold          (uoc_active),
+        .frontend_fetch_halt    (fetch_exception_pending_r),
         .frontend_replay_blocking(1'b0),
         .frontend_replay_start   (1'b0),
         .recovery_headroom_ok   (frontend_recovery_headroom_ok),
@@ -402,6 +407,7 @@ module rv64gc_core_top
         .ras_restore_tos        (ras_restore_tos_fe),
         .ras_restore_top_valid  (ras_restore_top_valid_fe),
         .ras_restore_top_addr   (ras_restore_top_addr_fe),
+        .ras_context_clear      (ras_context_clear_fe),
         .icache_fill_req_valid  (icache_fill_req_valid),
         .icache_fill_req_addr   (icache_fill_req_addr),
         .icache_fill_req_accepted(l2_icache_req_accepted),
@@ -506,7 +512,7 @@ module rv64gc_core_top
             for (int i = 0; i < PIPE_WIDTH; i++)
                 rename_dec_in[i] = '0;
             rename_dec_count = 3'd0;
-        end else if (fetch_exception_pending_r) begin
+        end else if (fetch_exception_inject_c) begin
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 rename_dec_in[i] = '0;
             end
@@ -5377,26 +5383,63 @@ module rv64gc_core_top
     logic [ROB_IDX_BITS-1:0] ptw_fault_rob_idx;
     logic [63:0]             ptw_fault_va;
     logic                    ptw_data_fault_valid;
+    logic                    ptw_data_fault_killed;
+    logic                    lsu_dtlb_exc_killed;
+    logic                    ptw_data_fault_sideband_valid;
+    logic                    lsu_dtlb_exc_sideband_valid;
+    logic                    ptw_data_owner_valid_r;
+    logic [ROB_IDX_BITS-1:0] ptw_data_owner_rob_idx_r;
+    logic                    ptw_data_req_accept_c;
+    logic                    ptw_data_owner_killed_c;
+    logic                    ptw_data_fault_owner_match_c;
 
     assign ptw_data_fault_valid =
         ptw_fault_valid && !ptw_fault_is_itlb;
-    assign fetch_exception_fire_c =
+    assign ptw_data_req_accept_c =
+        dtlb_miss_valid && ptw_dtlb_req_ready;
+    assign ptw_data_owner_killed_c =
+        translation_tlb_invalidate ||
+        (flush_out.valid &&
+         (flush_out.full_flush ||
+          (ptw_data_owner_valid_r &&
+           rename_buf_partial_clear[ptw_data_owner_rob_idx_r])));
+    assign ptw_data_fault_owner_match_c =
+        ptw_data_owner_valid_r &&
+        (ptw_fault_rob_idx == ptw_data_owner_rob_idx_r) &&
+        !ptw_data_owner_killed_c;
+    assign ptw_data_fault_killed =
+        flush_out.valid &&
+        (flush_out.full_flush || rename_buf_partial_clear[ptw_fault_rob_idx]);
+    assign lsu_dtlb_exc_killed =
+        flush_out.valid &&
+        (flush_out.full_flush || rename_buf_partial_clear[lsu_dtlb_exc_rob_idx]);
+    assign ptw_data_fault_sideband_valid =
+        ptw_data_fault_valid &&
+        ptw_data_fault_owner_match_c &&
+        !ptw_data_fault_killed;
+    assign lsu_dtlb_exc_sideband_valid =
+        lsu_dtlb_exc_valid && !lsu_dtlb_exc_killed;
+    assign fetch_exception_inject_c =
         fetch_exception_pending_r &&
+        !uoc_active &&
+        (fused_count == 3'd0);
+    assign fetch_exception_fire_c =
+        fetch_exception_inject_c &&
         (ren_count_w != 3'd0) &&
         ren_insn[0].base.valid &&
         ren_insn[0].base.has_exception &&
-        (ren_insn[0].base.exc_code == fetch_exception_code_r) &&
-        (ren_insn[0].base.exc_tval == fetch_exception_pc_r);
+            (ren_insn[0].base.exc_code == fetch_exception_code_r) &&
+            (ren_insn[0].base.exc_tval == fetch_exception_pc_r);
     assign rob_sideband_exc_valid =
-        ptw_data_fault_valid || lsu_dtlb_exc_valid;
+        ptw_data_fault_sideband_valid || lsu_dtlb_exc_sideband_valid;
     assign rob_sideband_exc_rob_idx =
-        ptw_data_fault_valid ? ptw_fault_rob_idx : lsu_dtlb_exc_rob_idx;
+        ptw_data_fault_sideband_valid ? ptw_fault_rob_idx : lsu_dtlb_exc_rob_idx;
     assign rob_sideband_exc_code =
-        ptw_data_fault_valid
+        ptw_data_fault_sideband_valid
             ? (ptw_fault_is_store ? EXC_STORE_PAGE_FAULT : EXC_LOAD_PAGE_FAULT)
             : lsu_dtlb_exc_code;
     assign rob_sideband_exc_tval =
-        ptw_data_fault_valid ? ptw_fault_va : lsu_dtlb_exc_va;
+        ptw_data_fault_sideband_valid ? ptw_fault_va : lsu_dtlb_exc_va;
 
     assign satp_vm_enabled = (csr_satp[63:60] == 4'd8) ||
                              (csr_satp[63:60] == 4'd9);
@@ -5438,6 +5481,47 @@ module rv64gc_core_top
                                rob_head_is_sfence_vma[0];
     assign satp_commit_valid = csr_commit_valid && (csr_commit_addr == CSR_SATP);
     assign translation_tlb_invalidate = sfence_vma_commit || satp_commit_valid;
+    assign ras_context_clear_fe =
+        frontend_flush_valid &&
+        ((commit_flush.valid &&
+          commit_flush.full_flush &&
+          !frontend_late_flush_redundant &&
+          (trap_valid || mret_commit || sret_commit)) ||
+         satp_commit_valid ||
+         sfence_vma_commit);
+    assign fetch_exception_accept_c =
+        (fetch_exception_context_mask_r == 2'd0) &&
+        !ras_context_clear_fe;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ptw_data_owner_valid_r   <= 1'b0;
+            ptw_data_owner_rob_idx_r <= '0;
+        end else if (ptw_data_owner_killed_c) begin
+            ptw_data_owner_valid_r   <= 1'b0;
+            ptw_data_owner_rob_idx_r <= '0;
+        end else if (ptw_data_fault_valid && ptw_data_fault_owner_match_c) begin
+            ptw_data_owner_valid_r   <= 1'b0;
+            ptw_data_owner_rob_idx_r <= '0;
+        end else if (ptw_dtlb_fill_valid) begin
+            ptw_data_owner_valid_r   <= 1'b0;
+            ptw_data_owner_rob_idx_r <= '0;
+        end else if (ptw_data_req_accept_c) begin
+            ptw_data_owner_valid_r   <= 1'b1;
+            ptw_data_owner_rob_idx_r <= dtlb_miss_rob_idx;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            fetch_exception_context_mask_r <= 2'd0;
+        end else if (ras_context_clear_fe) begin
+            fetch_exception_context_mask_r <= 2'd2;
+        end else if (fetch_exception_context_mask_r != 2'd0) begin
+            fetch_exception_context_mask_r <=
+                fetch_exception_context_mask_r - 2'd1;
+        end
+    end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || flush_out.valid) begin
@@ -5448,7 +5532,7 @@ module rv64gc_core_top
             fetch_exception_pending_r <= 1'b0;
             fetch_exception_pc_r      <= 64'd0;
             fetch_exception_code_r    <= 4'd0;
-        end else if (!fetch_exception_pending_r) begin
+        end else if (!fetch_exception_pending_r && fetch_exception_accept_c) begin
             if (ptw_fault_valid && ptw_fault_is_itlb) begin
                 fetch_exception_pending_r <= 1'b1;
                 fetch_exception_pc_r      <= ptw_fault_va;

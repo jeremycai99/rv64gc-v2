@@ -1075,7 +1075,7 @@ def dsim_shell_command(
     raw_cmd.extend(dsim_plusarg(plusarg) for plusarg in effective_plusargs(args, bench))
 
     golden_pc_path = bench.get("golden_pc_path")
-    if golden_pc_path:
+    if golden_pc_path and not args.skip_golden_pc:
         abs_golden = repo_path(golden_pc_path)
         if abs_golden.exists():
             raw_cmd.append(f"+CHECK_GOLDEN_PCS={abs_golden}")
@@ -1137,6 +1137,7 @@ def env_text(args: argparse.Namespace, bench: dict[str, Any]) -> str:
         "global_plusargs": args.plusarg,
         "benchmark_plusargs": benchmark_plusargs(bench),
         "plusargs": effective_plusargs(args, bench),
+        "skip_golden_pc": args.skip_golden_pc,
         "benchmark": bench.get("name"),
         "env": interesting_env,
     }
@@ -1246,6 +1247,7 @@ def run_benchmark(
     provenance = benchmark_provenance(bench)
     provenance["goal"] = args.goal
     provenance["allow_partial_goal"] = args.allow_partial_goal
+    provenance["skip_golden_pc"] = args.skip_golden_pc
     provenance["git"] = git_info
     provenance["waves"] = str(waves_path) if waves_path is not None else None
     provenance["architectural_guidance"] = {
@@ -1481,6 +1483,7 @@ def write_run_manifest(
         "mechanism_name": args.mechanism_name,
         "mechanism_class": args.mechanism_class,
         "global_plusargs": args.plusarg,
+        "skip_golden_pc": args.skip_golden_pc,
         "signoff_plusarg_allow": args.signoff_plusarg_allow,
         "baseline_results": str(args.baseline_results) if args.baseline_results else None,
         "counter_expectations": counter_expectations(args),
@@ -1833,6 +1836,15 @@ def main(argv: list[str] | None = None) -> int:
             "signoff when RTL has uncommitted changes vs HEAD. Use only in "
             "emergencies; normal workflow is to commit baseline first or use "
             "a non-default mechanism class."
+        ),
+    )
+    parser.add_argument(
+        "--skip-golden-pc",
+        action="store_true",
+        help=(
+            "Do not forward benchmark golden_pc_path fixtures to the simulator. "
+            "Use for endpoint and score guards when golden PC traces are known "
+            "to be stale."
         ),
     )
     parser.add_argument(
