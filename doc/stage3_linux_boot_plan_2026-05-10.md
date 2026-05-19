@@ -2265,15 +2265,21 @@ Validation status:
 - OpenSBI UART smoke with `+LINUX_STOP_ON_LOW_VM_FETCH` reaches the
   `opensbi_banner` milestone without a false stop:
   `linux_boot_results/stage3_low_vm_fetch_hook_smoke_verilator_20260519a`.
-- DSim rebuild is temporarily blocked by the shared single-lease limit:
-  `Already at maxLeases (1)`.  No DSim evidence has been collected for the new
-  hook yet.
+- DSim Linux-platform rebuild passes after the hook addition.
 - A Verilator 20M repro attempt with the new hook was stopped after it remained
   in the early OpenSBI window without reaching the first 1M-cycle status line
   quickly enough for interactive debug.  Treat that as non-evidence for Linux
   progress.
+- A DSim 20M repro attempt with the new hook reached the 1M OpenSBI status
+  point cleanly and was then stopped because it was not producing the next
+  checkpoint quickly enough for an interactive turn.  Treat it as OpenSBI
+  smoke evidence only, not Linux panic evidence.
+- Static symbol correlation of the old low-fetch panic confirms
+  `0x80003f7c` is in OpenSBI `sbi_trap_handler`, immediately after
+  `jal sbi_timer_process`.  That keeps the debug focus on privileged frontend
+  target ownership if this signature recurs on current RTL.
 
-Next focused DSim command when the lease releases:
+Next focused DSim command:
 
 ```bash
 python3 tools/run_linux_boot.py --run --simulator dsim --build-mode linux \
