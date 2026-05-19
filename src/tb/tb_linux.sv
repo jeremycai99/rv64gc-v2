@@ -183,6 +183,7 @@ module tb_linux;
     integer linux_stop_on_sscratch_nonzero_en;
     integer linux_stop_on_bad_kernel_sscratch_en;
     integer linux_stop_on_low_ifetch_fault_en;
+    integer linux_stop_on_low_vm_fetch_en;
     integer linux_stop_on_timer_boundary_en;
     logic   linux_timer_boundary_seen_r;
     integer linux_stop_store_pc_en;
@@ -222,6 +223,8 @@ module tb_linux;
     string uart_fail_bug_pattern;
 
     localparam int TRACE_LOAD_TRACK = 8;
+    localparam logic [63:0] OPENSBI_TEXT_LO = 64'h0000_0000_8000_0000;
+    localparam logic [63:0] OPENSBI_TEXT_HI = 64'h0000_0000_8006_0000;
     logic                    trace_load_valid [0:TRACE_LOAD_TRACK-1];
     logic [ROB_IDX_BITS-1:0] trace_load_rob [0:TRACE_LOAD_TRACK-1];
     logic [PHYS_REG_BITS-1:0] trace_load_pdst [0:TRACE_LOAD_TRACK-1];
@@ -277,6 +280,7 @@ module tb_linux;
         linux_stop_on_sscratch_nonzero_en = 0;
         linux_stop_on_bad_kernel_sscratch_en = 0;
         linux_stop_on_low_ifetch_fault_en = 0;
+        linux_stop_on_low_vm_fetch_en = 0;
         linux_stop_on_timer_boundary_en = 0;
         linux_stop_store_pc_en = 0;
         linux_stop_store_data_above_en = 0;
@@ -365,6 +369,8 @@ module tb_linux;
             linux_stop_on_bad_kernel_sscratch_en = 1;
         if ($test$plusargs("LINUX_STOP_ON_LOW_IFETCH_FAULT"))
             linux_stop_on_low_ifetch_fault_en = 1;
+        if ($test$plusargs("LINUX_STOP_ON_LOW_VM_FETCH"))
+            linux_stop_on_low_vm_fetch_en = 1;
         if ($test$plusargs("LINUX_STOP_ON_TIMER_BOUNDARY"))
             linux_stop_on_timer_boundary_en = 1;
         if ($value$plusargs("LINUX_STOP_STORE_PC=%h", linux_stop_store_pc))
@@ -475,15 +481,15 @@ module tb_linux;
                     (u_core.frontend_fetch_priv_r != PRIV_M) &&
                     (((u_core.itlb_lookup_valid &&
                        u_core.itlb_fault &&
-                       (u_core.itlb_lookup_va >= 64'h0000_0000_8000_0000) &&
-                       (u_core.itlb_lookup_va < 64'h0000_0000_8006_0000)) ||
+                       (u_core.itlb_lookup_va >= OPENSBI_TEXT_LO) &&
+                       (u_core.itlb_lookup_va < OPENSBI_TEXT_HI)) ||
                       (u_core.ptw_fault_valid &&
                        u_core.ptw_fault_is_itlb &&
-                       (u_core.ptw_fault_va >= 64'h0000_0000_8000_0000) &&
-                       (u_core.ptw_fault_va < 64'h0000_0000_8006_0000)) ||
+                       (u_core.ptw_fault_va >= OPENSBI_TEXT_LO) &&
+                       (u_core.ptw_fault_va < OPENSBI_TEXT_HI)) ||
                       (u_core.fetch_exception_pending_r &&
-                       (u_core.fetch_exception_pc_r >= 64'h0000_0000_8000_0000) &&
-                       (u_core.fetch_exception_pc_r < 64'h0000_0000_8006_0000))))) begin
+                       (u_core.fetch_exception_pc_r >= OPENSBI_TEXT_LO) &&
+                       (u_core.fetch_exception_pc_r < OPENSBI_TEXT_HI))))) begin
                     $display("[LINUX_STOP_LOW_IFETCH_FAULT] cyc=%0d priv=%0d fe_priv=%0d redir_priv=%0d instr_vm=%0b satp=%016h itlb_v=%0b itlb_fault=%0b itlb_va=%016h ptw_fault=%0b ptw_i=%0b ptw_va=%016h fe_pending=%0b fe_pc=%016h fe_code=%0d fe_mask=%0d fe_inject=%0b flush=%0b/%0b redirect=%016h trap=%0b mret=%0b sret=%0b ras_clear=%0b ras_tos=%0d ras_top=%016h ras_push=%0b/%016h ras_pop=%0b/%016h ras_restore=%0b/%0d/%0b/%016h f1=%016h req=%016h work_v=%0b work=%016h ic_req=%0b ic_addr=%016h pkt_count=%0d ftq_count=%0d",
                              sim_cycle,
                              u_core.csr_priv_mode,
@@ -525,6 +531,69 @@ module tb_linux;
                              u_core.u_fetch_top.f2_work_pc_c,
                              u_core.u_fetch_top.ic_req_valid,
                              u_core.u_fetch_top.ic_req_addr,
+                             u_core.u_fetch_top.packet_buf_count,
+                             u_core.u_fetch_top.ftq_count_ifu_to_wb);
+                    $finish;
+                end
+            end
+
+            if (linux_stop_on_low_vm_fetch_en != 0) begin
+                if (u_core.instr_vm_active &&
+                    (u_core.frontend_fetch_priv_r != PRIV_M) &&
+                    (((u_core.u_fetch_top.f1_valid &&
+                       (u_core.u_fetch_top.f1_pc >= OPENSBI_TEXT_LO) &&
+                       (u_core.u_fetch_top.f1_pc < OPENSBI_TEXT_HI)) ||
+                      (u_core.u_fetch_top.f2_work_valid_c &&
+                       (u_core.u_fetch_top.f2_work_pc_c >= OPENSBI_TEXT_LO) &&
+                       (u_core.u_fetch_top.f2_work_pc_c < OPENSBI_TEXT_HI)) ||
+                      (u_core.u_fetch_top.req_redirect_c &&
+                       (u_core.u_fetch_top.req_pc_c >= OPENSBI_TEXT_LO) &&
+                       (u_core.u_fetch_top.req_pc_c < OPENSBI_TEXT_HI)) ||
+                      (u_core.flush_out.valid &&
+                       (u_core.frontend_redirect_priv_c != PRIV_M) &&
+                       (u_core.flush_out.redirect_pc >= OPENSBI_TEXT_LO) &&
+                       (u_core.flush_out.redirect_pc < OPENSBI_TEXT_HI))))) begin
+                    $display("[LINUX_STOP_LOW_VM_FETCH] cyc=%0d priv=%0d fe_priv=%0d redir_priv=%0d instr_vm=%0b satp=%016h f1_v=%0b f1=%016h work_v=%0b work=%016h req_redir=%0b req=%016h bpu_redir=%0b bpu=%016h flush=%0b/%0b redirect=%016h trap=%0b mret=%0b sret=%0b ras_clear=%0b ras_tos=%0d ras_top=%016h ras_push=%0b/%016h ras_pop=%0b/%016h ras_restore=%0b/%0d/%0b/%016h bru0=%0b/%016h bru1=%0b/%016h quarantine=%0b last_pc=%016h last_commit_cyc=%0d rob_head=%0d rob_tail=%0d pkt_count=%0d ftq_count=%0d",
+                             sim_cycle,
+                             u_core.csr_priv_mode,
+                             u_core.frontend_fetch_priv_r,
+                             u_core.frontend_redirect_priv_c,
+                             u_core.instr_vm_active,
+                             u_core.csr_satp,
+                             u_core.u_fetch_top.f1_valid,
+                             u_core.u_fetch_top.f1_pc,
+                             u_core.u_fetch_top.f2_work_valid_c,
+                             u_core.u_fetch_top.f2_work_pc_c,
+                             u_core.u_fetch_top.req_redirect_c,
+                             u_core.u_fetch_top.req_pc_c,
+                             u_core.u_fetch_top.f2_bpu_redirect,
+                             u_core.u_fetch_top.f2_bpu_target,
+                             u_core.flush_out.valid,
+                             u_core.flush_out.full_flush,
+                             u_core.flush_out.redirect_pc,
+                             u_core.trap_valid,
+                             u_core.mret_commit,
+                             u_core.sret_commit,
+                             u_core.ras_context_clear_fe,
+                             u_core.u_fetch_top.ras_tos,
+                             u_core.u_fetch_top.ras_pop_addr,
+                             u_core.u_fetch_top.ras_push_valid,
+                             u_core.u_fetch_top.ras_push_addr,
+                             u_core.u_fetch_top.ras_pop_valid,
+                             u_core.u_fetch_top.ras_pop_addr,
+                             u_core.ras_restore_valid_fe,
+                             u_core.ras_restore_tos_fe,
+                             u_core.ras_restore_top_valid_fe,
+                             u_core.ras_restore_top_addr_fe,
+                             u_core.bru0_early_redirect,
+                             u_core.bru_target,
+                             u_core.bru1_early_redirect,
+                             u_core.bru1_target,
+                             u_core.bru_redirect_quarantine_r,
+                             last_commit_pc,
+                             last_commit_cycle,
+                             u_core.rob_head_idx,
+                             u_core.rob_tail_idx,
                              u_core.u_fetch_top.packet_buf_count,
                              u_core.u_fetch_top.ftq_count_ifu_to_wb);
                     $finish;

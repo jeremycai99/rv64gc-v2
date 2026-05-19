@@ -2238,6 +2238,70 @@ Validation:
   backup Linux execution speed. Rebuild with `VERILATOR_TRACE=1` only when
   waveform capture is required.
 
+### 2026-05-19 Low VM Fetch First-Event Hook
+
+The current panic debug should stop before Linux prints the final Oops.  The
+most actionable earlier symptom for the `0x80003f7c` panic class is any
+frontend fetch or frontend redirect into the OpenSBI physical text window while
+Sv48 translation is active and the frontend fetch privilege is not M-mode.
+
+New testbench-only hook:
+
+- `+LINUX_STOP_ON_LOW_VM_FETCH` stops on low OpenSBI-range frontend PCs before
+  the instruction page fault is converted into a Linux kernel Oops.
+- The guarded range is `0x8000_0000..0x8005_ffff`, matching the OpenSBI
+  reserved text and data region in the generated DTB.
+- The stop prints frontend privilege, redirect privilege, `satp`, F1 PC, IFU
+  work PC, predicted redirect PC, architectural flush redirect PC, trap and
+  return state, RAS state, BRU early redirect state, ROB head and tail, packet
+  buffer occupancy, and FTQ count.
+- This hook is in `tb_linux.sv` only.  It is not part of the ASIC-style core
+  RTL and must not be used as a core behavior fix.
+
+Validation status:
+
+- Verilator Linux-platform rebuild passes with the hook compiled into the
+  testbench.
+- OpenSBI UART smoke with `+LINUX_STOP_ON_LOW_VM_FETCH` reaches the
+  `opensbi_banner` milestone without a false stop:
+  `linux_boot_results/stage3_low_vm_fetch_hook_smoke_verilator_20260519a`.
+- DSim rebuild is temporarily blocked by the shared single-lease limit:
+  `Already at maxLeases (1)`.  No DSim evidence has been collected for the new
+  hook yet.
+- A Verilator 20M repro attempt with the new hook was stopped after it remained
+  in the early OpenSBI window without reaching the first 1M-cycle status line
+  quickly enough for interactive debug.  Treat that as non-evidence for Linux
+  progress.
+
+Next focused DSim command when the lease releases:
+
+```bash
+python3 tools/run_linux_boot.py --run --simulator dsim --build-mode linux \
+  --image build/linux_boot/fw_payload.hex \
+  --run-dir linux_boot_results/stage3_low_vm_fetch_repro_dsim_20m_<date> \
+  --max-cycles 20000000 --target-milestone boot_ok \
+  --status-interval 1000000 --no-trace-trap \
+  --sim-plusarg LINUX_STOP_ON_LOW_VM_FETCH \
+  --sim-plusarg LINUX_STOP_ON_LOW_IFETCH_FAULT \
+  --sim-plusarg LINUX_STOP_SIDEBAND_TVAL=ffffffffeffff9a0 \
+  --sim-plusarg LINUX_STOP_TRAP_PC=ffffffff8013e3e4 \
+  --sim-plusarg LINUX_STOP_TRAP_TVAL=ffffffffeffff9a0
+```
+
+Interpretation:
+
+- If `[LINUX_STOP_LOW_VM_FETCH]` fires before the old UART Oops, debug the
+  redirect source first.  A low `req` or `bpu` target points to BPU or RAS
+  ownership.  A low architectural `redirect` points to trap, return, or commit
+  flush context.  A low `f1` or `work` PC without a low redirect points to IFU
+  cursor ownership.
+- If only `[LINUX_STOP_LOW_IFETCH_FAULT]` fires, the low target entered the
+  frontend before this hook saw the producer.  Re-run with a tighter frontend
+  cycle-window trace around the reported cycle.
+- If neither low-fetch hook fires and UART still reports a kernel Oops, treat
+  the new fault address as the real next blocker instead of assuming the old
+  OpenSBI physical fetch bug.
+
 ### 2026-05-19 AUIPC Memory-Fusion Root Cause
 
 The current `bad_range+0xc` panic has a concrete RTL root cause candidate, and
