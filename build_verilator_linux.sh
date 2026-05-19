@@ -10,6 +10,7 @@ JOBS="${VERILATOR_JOBS:-0}"
 CONVERGE_LIMIT="${VERILATOR_CONVERGE_LIMIT:-5000}"
 FLATTEN="${VERILATOR_FLATTEN:-1}"
 X_MODE="${VERILATOR_X_MODE:-0}"
+TRACE="${VERILATOR_TRACE:-0}"
 REPORT_UNOPTFLAT="${VERILATOR_REPORT_UNOPTFLAT:-0}"
 
 if ! command -v "$VERILATOR_BIN" >/dev/null 2>&1; then
@@ -47,7 +48,12 @@ if [[ "$REPORT_UNOPTFLAT" != "0" ]]; then
     UNOPTFLAT_ARGS=("-Wwarn-UNOPTFLAT" "--report-unoptflat" "-Wno-fatal")
 fi
 
-"$VERILATOR_BIN" --binary --timing --trace "${FLATTEN_ARGS[@]}" \
+TRACE_ARGS=()
+if [[ "$TRACE" != "0" ]]; then
+    TRACE_ARGS=("--trace")
+fi
+
+"$VERILATOR_BIN" --binary --timing "${TRACE_ARGS[@]}" "${FLATTEN_ARGS[@]}" \
     --converge-limit "$CONVERGE_LIMIT" \
     --x-assign "$X_MODE" \
     --x-initial "$X_MODE" \
@@ -77,3 +83,6 @@ fi
 echo
 echo "Verilator Linux platform build OK. Binary at $WORK_DIR/Vtb_linux"
 echo "Run with: ./run_verilator_linux.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]"
+if [[ "$TRACE" == "0" ]]; then
+    echo "Waveform tracing disabled. Rebuild with VERILATOR_TRACE=1 when waveforms are required."
+fi

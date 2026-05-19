@@ -2209,6 +2209,35 @@ python3 tools/run_linux_boot.py --run --simulator dsim --build-mode linux \
   --sim-plusarg LINUX_STOP_SIDEBAND_TVAL=ffffffffeffff9a0
 ```
 
+### 2026-05-19 UART Failure Stop Harness
+
+The Linux boot harness now treats a kernel Oops or panic as an immediate debug
+event instead of allowing the simulator to continue to `MAX_CYCLES`.
+
+- `tb_linux.sv` tracks UART output for `Oops`, `Kernel panic`, and `BUG:`.
+- On a match it prints `[LINUX_STOP_UART_FAILURE]` with the current cycle,
+  last committed PC, `satp`, trap state, and ROB head/tail, then finishes the
+  simulation.
+- The stop deliberately does not terminate on the first words
+  `Unable to handle`, because that would cut off the faulting virtual address
+  that follows on the same UART line. Stopping at `Oops` preserves the fault
+  address while still ending the run promptly.
+- The monitor is testbench-only. It does not add Linux-specific logic to the
+  ASIC-style core RTL.
+- The stop can be disabled with `+LINUX_KEEP_RUNNING_AFTER_UART_FAILURE` only
+  when collecting a deliberately longer post-panic UART log.
+
+Validation:
+
+- Verilator Linux-platform rebuild passes with the monitor enabled:
+  `./build_verilator_linux.sh`.
+- OpenSBI UART smoke passes with no false failure stop:
+  `linux_boot_results/stage3_uart_failure_stop_smoke_verilator_20260519a`
+  reaches the `opensbi_banner` milestone.
+- `build_verilator_linux.sh` now disables waveform tracing by default for
+  backup Linux execution speed. Rebuild with `VERILATOR_TRACE=1` only when
+  waveform capture is required.
+
 ### 2026-05-19 AUIPC Memory-Fusion Root Cause
 
 The current `bad_range+0xc` panic has a concrete RTL root cause candidate, and

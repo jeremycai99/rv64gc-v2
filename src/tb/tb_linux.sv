@@ -128,6 +128,10 @@ module tb_linux;
     integer uart_stdout_en;
     integer smoke_check_en;
     integer smoke_idx;
+    integer uart_fail_stop_en;
+    integer uart_fail_panic_idx;
+    integer uart_fail_oops_idx;
+    integer uart_fail_bug_idx;
     integer linux_trace_mmio_en;
     integer mmio_req_count;
     integer mmio_uart_rd_count;
@@ -213,6 +217,9 @@ module tb_linux;
     logic        clear_bss_exit_branch_seen_r;
     string uart_log_path;
     string smoke_pattern;
+    string uart_fail_panic_pattern;
+    string uart_fail_oops_pattern;
+    string uart_fail_bug_pattern;
 
     localparam int TRACE_LOAD_TRACK = 8;
     logic                    trace_load_valid [0:TRACE_LOAD_TRACK-1];
@@ -243,6 +250,7 @@ module tb_linux;
         uart_log_fd = 0;
         uart_stdout_en = 1;
         smoke_check_en = 0;
+        uart_fail_stop_en = 1;
         linux_trace_mmio_en = 0;
         linux_trace_load_pc_en = 0;
         linux_stop_on_trace_load_pc_en = 0;
@@ -294,6 +302,9 @@ module tb_linux;
         status_interval = 1000000;
         uart_log_path = "";
         smoke_pattern = "RV64GC-V2 STAGE3 UART OK";
+        uart_fail_panic_pattern = "Kernel panic";
+        uart_fail_oops_pattern = "Oops";
+        uart_fail_bug_pattern = "BUG:";
 
         void'($value$plusargs("MAX_CYCLES=%d", max_cycles));
         void'($value$plusargs("STATUS_INTERVAL=%d", status_interval));
@@ -311,6 +322,8 @@ module tb_linux;
         end else begin
             smoke_check_en = $test$plusargs("UART_SMOKE_CHECK") ? 1 : 0;
         end
+        if ($test$plusargs("LINUX_KEEP_RUNNING_AFTER_UART_FAILURE"))
+            uart_fail_stop_en = 0;
         linux_trace_mmio_en = $test$plusargs("LINUX_TRACE_MMIO") ? 1 : 0;
         if ($value$plusargs("LINUX_TRACE_LOAD_PC=%h", linux_trace_load_pc))
             linux_trace_load_pc_en = 1;
@@ -2436,6 +2449,74 @@ module tb_linux;
                         smoke_idx <= 1;
                     end else begin
                         smoke_idx <= 0;
+                    end
+                end
+
+                if (uart_fail_stop_en != 0) begin
+                    if (uart_tx_data == uart_fail_panic_pattern[uart_fail_panic_idx]) begin
+                        uart_fail_panic_idx <= uart_fail_panic_idx + 1;
+                        if ((uart_fail_panic_idx + 1) == uart_fail_panic_pattern.len()) begin
+                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
+                                     uart_fail_panic_pattern,
+                                     sim_cycle,
+                                     last_commit_pc,
+                                     u_core.csr_satp,
+                                     u_core.trap_valid,
+                                     u_core.trap_cause,
+                                     u_core.trap_val,
+                                     u_core.rob_head_idx,
+                                     u_core.rob_tail_idx,
+                                     last_commit_cycle);
+                            $finish;
+                        end
+                    end else if (uart_tx_data == uart_fail_panic_pattern[0]) begin
+                        uart_fail_panic_idx <= 1;
+                    end else begin
+                        uart_fail_panic_idx <= 0;
+                    end
+
+                    if (uart_tx_data == uart_fail_oops_pattern[uart_fail_oops_idx]) begin
+                        uart_fail_oops_idx <= uart_fail_oops_idx + 1;
+                        if ((uart_fail_oops_idx + 1) == uart_fail_oops_pattern.len()) begin
+                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
+                                     uart_fail_oops_pattern,
+                                     sim_cycle,
+                                     last_commit_pc,
+                                     u_core.csr_satp,
+                                     u_core.trap_valid,
+                                     u_core.trap_cause,
+                                     u_core.trap_val,
+                                     u_core.rob_head_idx,
+                                     u_core.rob_tail_idx,
+                                     last_commit_cycle);
+                            $finish;
+                        end
+                    end else if (uart_tx_data == uart_fail_oops_pattern[0]) begin
+                        uart_fail_oops_idx <= 1;
+                    end else begin
+                        uart_fail_oops_idx <= 0;
+                    end
+
+                    if (uart_tx_data == uart_fail_bug_pattern[uart_fail_bug_idx]) begin
+                        uart_fail_bug_idx <= uart_fail_bug_idx + 1;
+                        if ((uart_fail_bug_idx + 1) == uart_fail_bug_pattern.len()) begin
+                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
+                                     uart_fail_bug_pattern,
+                                     sim_cycle,
+                                     last_commit_pc,
+                                     u_core.csr_satp,
+                                     u_core.trap_valid,
+                                     u_core.trap_cause,
+                                     u_core.trap_val,
+                                     u_core.rob_head_idx,
+                                     u_core.rob_tail_idx,
+                                     last_commit_cycle);
+                            $finish;
+                        end
+                    end else if (uart_tx_data == uart_fail_bug_pattern[0]) begin
+                        uart_fail_bug_idx <= 1;
+                    end else begin
+                        uart_fail_bug_idx <= 0;
                     end
                 end
             end
