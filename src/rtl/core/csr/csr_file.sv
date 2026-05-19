@@ -69,6 +69,7 @@ module csr_file
     // Privileged translation state
     output logic        mstatus_mprv,
     output logic [1:0]  mstatus_mpp,
+    output logic        mstatus_spp,
     output logic [1:0]  mstatus_fs,
     output logic        mstatus_sum,
     output logic        mstatus_mxr,
@@ -145,6 +146,7 @@ module csr_file
     assign frm_out     = frm_r;
     assign mstatus_mprv = mstatus_r[17];
     assign mstatus_mpp = mstatus_r[12:11];
+    assign mstatus_spp = mstatus_r[8];
     assign mstatus_fs  = mstatus_r[14:13];
     assign mstatus_sum = mstatus_r[18];
     assign mstatus_mxr = mstatus_r[19];

@@ -5,7 +5,7 @@ LD = $(PREFIX)-ld
 OBJCOPY = $(PREFIX)-objcopy
 
 CFLAGS = -march=rv64gc_zba_zbb_zbs_zicond -mabi=lp64d -nostdlib -nostartfiles -I.
-LDFLAGS = -T link.ld
+LDFLAGS = -melf64lriscv -T link.ld
 
 ELF2HEX = python3 ../scripts/elf2hex.py
 

@@ -1812,6 +1812,100 @@ The trace must distinguish:
 - and whether the corruption is in operand delivery, store queue state, memory
   writeback, or load/forwarding.
 
+### May 18 Timer Vector Panic Debug
+
+The latest clean 100M DSim attempt exposed a sharper timer-vector panic before
+the run cap:
+
+- Artifact:
+  `linux_boot_results/stage3_linux_clean_100m_dsim_20260518a`.
+- UART reaches OpenSBI, Linux early console, memory setup,
+  `clocksource: riscv_clocksource`, `sched_clock`, delay-loop calibration,
+  PID setup, LSM setup, and mount-cache setup.
+- Failure:
+  `Unable to handle kernel paging request at virtual address 0000000080003f7c`,
+  `badaddr=0000000080003f7c`, `cause=12`, and `epc=0`.
+- `0x80003f7c` symbolizes inside OpenSBI's M-mode timer trap vector path
+  (`sbi_trap_handler`, machine timer vector slot). It is not a Linux kernel
+  virtual address.
+
+Root-cause findings from the RTL audit:
+
+- Fetch exceptions injected through `fetch_exception_pending_r` set `pc` and
+  `exc_tval` but left `trap_pc` zero. That explains the Linux Oops reporting
+  `epc=0` for an instruction page fault.
+- The frontend used live `csr_priv_mode` as the instruction translation
+  context. Trap and return redirects need the privilege of the redirected
+  fetch target, not a potentially cycle-mismatched live CSR value.
+- `ifu_line_fetch` could still issue an I-cache request during a redirect
+  flush. Redirect cycles must not launch stale requests under the old
+  fetch context.
+
+Current RTL candidate:
+
+- `csr_file.sv` exposes `mstatus_spp` so SRET target privilege can be derived
+  outside the CSR block without adding simulation-only logic.
+- `rv64gc_core_top.sv` tracks `frontend_fetch_priv_r` and updates it on
+  trap, MRET, SRET, and normal redirects. The ITLB privilege input and
+  `instr_vm_active` now use this frontend fetch privilege.
+- The synthetic fetch-exception uop now sets `trap_pc=fetch_exception_pc_r`.
+- `ifu_line_fetch.sv` gates I-cache request launch with `!flush_i`.
+
+Directed validation:
+
+- New directed smoke:
+  `tests/asm/vm_mtimer_vector_sv48_smoke.S`.
+- The test enables Sv48, enters S-mode, triggers an M-mode timer interrupt,
+  validates `mcause` and interrupted `mepc` in the M-mode vectored handler,
+  then returns with `mret` into translated S-mode code that prints through a
+  mapped UART page.
+- DSim result:
+  `linux_boot_results/stage3_vm_mtimer_vector_dsim_20260518d` passes at
+  cycle `343`; the commit summary reports one interrupt and zero exceptions.
+- Verilator result:
+  `linux_boot_results/stage3_vm_mtimer_vector_verilator_20260518c` also
+  passes at cycle `343`. This is useful backup evidence only.
+- Fetch-exception EPC cross-check:
+  `benchmark_results/stage3_vm_fault_contract_xsim_20260518a` passes
+  `vm_ifetch_fault_sv48_smoke` and `vm_canonical_sv48_smoke` on a rebuilt
+  XSim snapshot from the current RTL. These rows confirm instruction page
+  faults report the faulting virtual PC instead of a zero EPC in the existing
+  `tohost` VM-fault smoke harness.
+- DSim fault-contract retry after the lease released:
+  `benchmark_results/stage3_vm_ifetch_fault_dsim_retry_20260518a` passes
+  `vm_ifetch_fault_sv48_smoke`, and
+  `benchmark_results/stage3_vm_canonical_dsim_retry_20260518a` passes
+  `vm_canonical_sv48_smoke`.
+- Stage 3 DS/CM hard guard:
+  `benchmark_results/stage3_rtl_guard_timer_fetch_priv_epc_fix_20260518a`
+  passes all four locked rows with the 0.01% metric regression gate:
+  DS100 `18,068` cycles, `3.150055 DMIPS/MHz`;
+  DS300 `53,046` cycles, `3.218821 DMIPS/MHz`;
+  CM1 `150,398` cycles, `6.649025 CM/MHz`;
+  CM10 `1,459,540` cycles, `6.851474 CM/MHz`.
+
+Linux rerun status:
+
+- A focused DSim Linux rerun was started at
+  `linux_boot_results/stage3_linux_timer_fix_clean_dsim_20m_20260518a` and
+  reached the OpenSBI UART banner. It was intentionally stopped because at the
+  observed DSim speed it would have been a long wait to the previous Linux
+  panic window. Do not count this interrupted run as Linux pass evidence.
+- The first DSim VM-smoke retries were blocked by the shared cloud lease after
+  stopping the Linux run (`Already at maxLeases (1)`), but the later single-row
+  DSim retries passed. Use one focused DSim Linux rerun when the lease is free;
+  use Verilator only for UART milestone smokes until its full-Linux convergence
+  issue is fixed.
+
+Validation still required before promotion:
+
+- Rebuilt DSim Linux must rerun past the previous panic window and show no
+  `badaddr=0000000080003f7c`, no `epc=0` fetch-exception report, and no
+  kernel panic before the next milestone.
+- A Verilator full Linux run is not valid evidence yet because the current
+  Linux platform image still aborts in Verilator with
+  `Active region did not converge`.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -1870,24 +1964,25 @@ DS/CM performance gate.
   Linux-shaped probe and the full DS/CM regression guard. The 64M early timer
   allocator failure is fixed by making the DTS and simulation DRAM match the
   128M linker region. The latest valid Linux run reaches
-  `clocksource: riscv_clocksource` and `sched_clock`, then panics on a trap
-  return path. The current RTL candidate repairs the general CDB3 wakeup versus
-  bypass contract, which was a plausible explanation for the observed
-  `csrrc s1,sstatus,t0` to `sd s1,256(sp)` trap-frame corruption. A rebuilt
-  DSim Linux run still reproduces the same panic, so the remaining root cause
-  is deeper in the trap-frame store/load path and must be isolated before any
-  RTL candidate is promoted. The Verilator fallback still aborts at time zero
-  on this platform.
+  `clocksource: riscv_clocksource`, `sched_clock`, and mount-cache setup, then
+  panics on an instruction page fault against the OpenSBI M-mode timer vector.
+  A new frontend fetch-privilege and fetch-exception EPC candidate is in place,
+  passes the new DSim directed mtimer Sv48 smoke, passes rebuilt DSim and XSim
+  instruction-fetch fault smokes, and passes the Stage 3 DS/CM hard guard. It
+  still needs a rebuilt DSim Linux rerun past the previous timer-vector panic
+  window before promotion.
 - v2 has reached the Linux `riscv_clocksource` console banner in the latest
   failing path, but it does not yet reach the UART driver milestone,
   Linux-visible PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 implementation should use a narrow testbench-only trace around
-the `csrrc` producer, `sd s1,256(sp)` store-data issue, store queue capture and
-drain, and `ld a0,256(sp)` reload. Do not add debug logic to synthesizable core
-RTL. Any RTL change on that path must still pass impacted compliance tests and
-the DS/CM hard guard before promotion. Sv39 should stay as a directed-test
-subset, but the primary Linux path is four-level Sv48 because that matches the
-intended Linux signoff configuration.
+The next Stage 3 action is not to wait blindly. When the DSim lease is free,
+rerun one clean rebuilt Linux slice past the prior timer-vector panic window.
+If it fails, capture the first `scause/stval/sepc` or `mcause/mtval/mepc`
+signature with a narrow testbench-only trace and build the next directed smoke
+from that contract. Do not add debug logic to synthesizable core RTL. Any RTL
+change on that path must still pass impacted compliance tests and the DS/CM
+hard guard before promotion. Sv39 should stay as a directed-test subset, but
+the primary Linux path is four-level Sv48 because that matches the intended
+Linux signoff configuration.

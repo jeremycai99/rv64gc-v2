@@ -512,6 +512,7 @@ module rv64gc_core_top
             end
             rename_dec_in[0].valid         = 1'b1;
             rename_dec_in[0].pc            = fetch_exception_pc_r;
+            rename_dec_in[0].trap_pc       = fetch_exception_pc_r;
             rename_dec_in[0].insn          = 32'h0000_0013;
             rename_dec_in[0].fu_type       = FU_ALU;
             rename_dec_in[0].alu_op        = ALU_ADD;
@@ -5225,8 +5226,11 @@ module rv64gc_core_top
     logic [63:0] csr_satp;
     logic        csr_mstatus_mprv;
     logic [1:0]  csr_mstatus_mpp;
+    logic        csr_mstatus_spp;
     logic        csr_mstatus_sum;
     logic        csr_mstatus_mxr;
+    logic [1:0]  frontend_fetch_priv_r;
+    logic [1:0]  frontend_redirect_priv_c;
     logic        fp_fflags_commit_valid;
     logic [4:0]  fp_fflags_commit_bits;
     logic        fp_state_dirty_commit;
@@ -5336,6 +5340,7 @@ module rv64gc_core_top
         .seip               (seip),
         .mstatus_mprv       (csr_mstatus_mprv),
         .mstatus_mpp        (csr_mstatus_mpp),
+        .mstatus_spp        (csr_mstatus_spp),
         .mstatus_fs         (csr_mstatus_fs),
         .mstatus_sum        (csr_mstatus_sum),
         .mstatus_mxr        (csr_mstatus_mxr),
@@ -5398,7 +5403,35 @@ module rv64gc_core_top
     assign csr_data_priv_mode = (csr_priv_mode == PRIV_M && csr_mstatus_mprv)
                               ? csr_mstatus_mpp
                               : csr_priv_mode;
-    assign instr_vm_active = satp_vm_enabled && (csr_priv_mode != PRIV_M);
+    always_comb begin
+        frontend_redirect_priv_c = csr_priv_mode;
+
+        if (commit_flush.valid &&
+            commit_flush.full_flush &&
+            !frontend_late_flush_redundant) begin
+            if (trap_valid) begin
+                frontend_redirect_priv_c =
+                    commit_trap_to_supervisor ? PRIV_S : PRIV_M;
+            end else if (mret_commit) begin
+                frontend_redirect_priv_c = csr_mstatus_mpp;
+            end else if (sret_commit) begin
+                frontend_redirect_priv_c =
+                    csr_mstatus_spp ? PRIV_S : PRIV_U;
+            end
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            frontend_fetch_priv_r <= PRIV_M;
+        end else if (frontend_flush_valid) begin
+            frontend_fetch_priv_r <= frontend_redirect_priv_c;
+        end else begin
+            frontend_fetch_priv_r <= csr_priv_mode;
+        end
+    end
+
+    assign instr_vm_active = satp_vm_enabled && (frontend_fetch_priv_r != PRIV_M);
     assign data_vm_active  = satp_vm_enabled && (csr_data_priv_mode != PRIV_M);
     assign sfence_vma_commit = (commit_count > 3'd0) &&
                                commit_out[0].valid &&
@@ -5433,7 +5466,7 @@ module rv64gc_core_top
         .rst_n               (rst_n),
         .lookup_valid_i      (itlb_lookup_valid),
         .va_i                (itlb_lookup_va),
-        .priv_i              (csr_priv_mode),
+        .priv_i              (frontend_fetch_priv_r),
         .asid_i              (csr_satp[59:44]),
         .hit_o               (itlb_hit),
         .pa_o                (itlb_pa),

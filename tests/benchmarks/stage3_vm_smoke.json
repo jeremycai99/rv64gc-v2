@@ -90,6 +90,16 @@
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "notes": "Verifies Sv48 noncanonical data and instruction virtual addresses raise load and instruction page faults."
+    },
+    {
+      "name": "vm_mtimer_vector_sv48_smoke",
+      "kind": "generic",
+      "hex": "tests/hex/vm_mtimer_vector_sv48_smoke.hex",
+      "max_cycles": 500000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Enables Sv48 in S-mode, triggers an M-mode timer interrupt, and verifies the vectored mtvec fetch executes as physical M-mode code while satp remains active."
     }
   ]
 }

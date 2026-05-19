@@ -177,6 +177,7 @@ module ifu_line_fetch
 
     assign icache_req_valid_c =
         req_valid_i &&
+        !flush_i &&
         (!instr_vm_active_i || vm_req_valid_r);
     assign icache_req_addr_c = instr_vm_active_i ? vm_req_pa_r : req_addr_i;
     assign icache_req_va_c   = instr_vm_active_i ? vm_req_va_r : req_addr_i;
