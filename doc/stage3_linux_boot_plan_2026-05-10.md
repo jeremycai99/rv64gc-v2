@@ -2940,6 +2940,17 @@ Debug policy from this audit:
 - If it stays clean, the next meaningful progress checkpoint is crossing the
   old `68.56M` watchdog-BUG window on the timer-divided platform.
 
+Follow-up capture attempt:
+
+- `linux_boot_results/stage3_70m_first_failure_dsim_20260520a` could not run
+  because the DSim license server denied the lease with `maxLeases=1`.
+- `linux_boot_results/stage3_70m_first_failure_verilator_20260520a` was
+  launched as backup debug evidence and then stopped because it was still in
+  early Linux after several minutes. It reached the clean `#38` Linux version
+  line and produced no panic marker before interruption.
+- This Verilator run is not signoff evidence. The boundary-clearing run still
+  needs DSim when the shared license is available.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
