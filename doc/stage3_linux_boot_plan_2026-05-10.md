@@ -2622,6 +2622,75 @@ Debug rule going forward:
   timestamp, Linux build line, and git commit against the current RTL before
   spending debug time on it.
 
+### 2026-05-20 Current Watchdog BUG Triage And Timer-Scale Fix
+
+Current failure artifact:
+
+- Run: `linux_boot_results/stage3_current_100m_goal_dsim_20260519223941`.
+- Result: stopped at cycle `68,563,458` on UART failure pattern `BUG:`.
+- Visible UART line: `[   52.017374] watchdog: BUG:`.
+- Last simulator PC while printing the line: `ffffffff8048f3ba`, which symbols
+  to `serial8250_early_out+0x92`.
+- No core trap, no stale low-VM fetch, no `Unable to handle kernel paging
+  request`, and no old scheduler-atomic panic reproduced in that current run.
+- The core was still committing at the stop point:
+  `last_commit_cyc=68563455`, three cycles before the stop.
+
+Root cause classification:
+
+- The current `watchdog: BUG:` line maps to the Linux soft-lockup detector in
+  `kernel/watchdog.c`, not to the stale paging-request panic class.
+- The platform DT advertises `timebase-frequency = <1000000>`.
+- Before the fix, `clint.sv` incremented `mtime` once per core clock, so Linux
+  interpreted `68M` simulated core cycles as tens of seconds of elapsed kernel
+  time.  That made the soft-lockup detector a simulation-timebase artifact
+  rather than direct evidence of a core pipeline deadlock.
+
+Accepted fix:
+
+- `src/rtl/platform/clint.sv` now has a synthesizable `MTIME_DIV_P` parameter.
+- `src/rtl/platform/mmio_platform.sv` instantiates the CLINT with
+  `CLINT_MTIME_DIV_P = 100`.
+- The DT remains at `1 MHz`, so the Stage 3 platform now models a 100 MHz core
+  clock with a 1 MHz CLINT timebase.  This is an ASIC-style platform-timer
+  contract, not a testbench-only watchdog suppressor and not a Linux software
+  workaround.
+
+Validation:
+
+- DSim Linux platform rebuild passed:
+  `linux_boot_results/stage3_timer_div_build_dsim_20260520a`.
+- M-mode UART smoke passed:
+  `linux_boot_results/stage3_timer_div_mmode_smoke_dsim_20260520a`.
+- Linux early-console checkpoint passed:
+  `linux_boot_results/stage3_timer_div_linux_5m_status_dsim_20260520a`.
+- Timer-scale evidence from the Linux status lines:
+  - `cyc=1,000,000`, `time=0x2710` = `10,000`.
+  - `cyc=2,000,000`, `time=0x4e20` = `20,000`.
+  - `cyc=3,000,000`, `time=0x7530` = `30,000`.
+- This confirms `mtime = mcycle / 100`, matching the 100 MHz core-clock model
+  with the advertised 1 MHz CLINT timebase.
+- Required Stage 3 DS/CM hard performance guard passed:
+  `benchmark_results/stage3_rtl_guard_20260520_clint_mtime_divider`.
+
+DS/CM guard metrics after the RTL change:
+
+| Row | Timed cycles | Metric | Gate |
+|---|---:|---:|---|
+| Dhrystone 100 | `18,068` | `3.150055 DMIPS/MHz` | pass |
+| Dhrystone 300 | `53,046` | `3.218821 DMIPS/MHz` | pass |
+| CoreMark 1 | `150,398` | `6.649025 CM/MHz` | pass |
+| CoreMark 10 | `1,459,540` | `6.851474 CM/MHz` | pass |
+
+Next debug step:
+
+- Rerun the Linux boot slice beyond the previous `68.56M` cycle point on the
+  rebuilt timer-divided platform.
+- If another current `Oops`, `BUG`, `Unable to handle`, or panic appears, debug
+  that exact signature immediately.
+- If no failure appears through the previous watchdog point, continue toward
+  the 100M-cycle unblock milestone with the same panic-stop policy.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.

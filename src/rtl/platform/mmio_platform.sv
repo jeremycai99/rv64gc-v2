@@ -35,6 +35,8 @@ module mmio_platform
     logic        resp_valid_r;
     logic [63:0] resp_data_r;
 
+    localparam int unsigned CLINT_MTIME_DIV_P = 100;
+
     wire req_fire_w = req_valid_i && req_ready_o;
     wire in_uart_w =
         (req_addr_i >= UART_BASE) && (req_addr_i < (UART_BASE + UART_SIZE));
@@ -64,7 +66,9 @@ module mmio_platform
         .irq_o        (uart_irq)
     );
 
-    clint u_clint (
+    clint #(
+        .MTIME_DIV_P  (CLINT_MTIME_DIV_P)
+    ) u_clint (
         .clk          (clk),
         .rst_n        (rst_n),
         .req_valid_i  (clint_req_valid),
