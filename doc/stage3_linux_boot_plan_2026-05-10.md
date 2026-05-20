@@ -2691,6 +2691,40 @@ Next debug step:
 - If no failure appears through the previous watchdog point, continue toward
   the 100M-cycle unblock milestone with the same panic-stop policy.
 
+### 2026-05-20 Panic Debug Recheck
+
+The active debug rule is to stop on a fresh panic, not to wait longer after a
+failure signature.  The May 20 recheck did not find a current kernel panic in
+the rebuilt timer-divided RTL artifacts:
+
+- `linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520a` was the
+  current rebuilt 100M-goal run. It was operator-stopped around the low-30M
+  cycle window for debug triage. The recorded UART/DSim logs have no `Oops`,
+  no `BUG:`, no `Unable to handle kernel`, no `Kernel panic`, and no
+  watchdog signature.
+- `linux_boot_results/stage3_linux_current_first_event_debug_dsim_20m_20260520a`
+  enabled low-VM-fetch, stale-sideband, trap, and timer-boundary stops. It
+  reached the `14M` status window, passed through the old
+  `ffffffff805c5dec`/`strcmp` area, and produced no fresh panic marker before
+  the trace-heavy run stopped making useful progress. The run was interrupted;
+  its simulator exit-code failure is not a Linux failure.
+- `linux_boot_results/stage3_linux_current_panic_debug_notrace_dsim_25m_20260520a`
+  was a lightweight replacement with UART panic detection and exact
+  `ffffffffeffff9a0` stop hooks. It reached the OpenSBI banner and the `1M`
+  status point with no failure marker, then was intentionally stopped because
+  it was too slow to add same-turn evidence.
+
+Current verdict:
+
+- The `ffffffff805c5dec`, `0000000080003f7c`, and `ffffffffeffff9a0` panic
+  signatures remain historical debug classes unless they reproduce in a
+  current rebuilt run.
+- No current May 20 artifact examined so far contains a fresh kernel panic.
+- Do not debug an old panic transcript without first checking its run
+  directory, Linux build line, and RTL commit.  If a current run prints a new
+  `Oops`, `BUG:`, `Unable to handle kernel`, or `Kernel panic`, stop that run
+  immediately and use that exact artifact as the next root-cause target.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
