@@ -114,17 +114,20 @@ Current compliance status:
 ## May 20 Panic Debug Pivot
 
 The 100M-cycle Linux run is no longer the active action item while a panic is
-suspected. The active DSim run
-`linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520b` was stopped
+suspected. The DSim timer-divided runs
+`linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520b` and
+`linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520d` were stopped
 for triage at the user's request instead of waiting for the 100M cap.
 
-Current evidence from that stopped run:
+Current evidence from those stopped runs:
 
 - The run used the rebuilt timer-divided DSim image from the current RTL.
-- UART and DSim logs are clean through the last emitted `55,000,000`-cycle
-  status checkpoint.
+- `stage3_timer_div_100m_unblock_dsim_20260520b` is clean through the last
+  emitted `55,000,000`-cycle status checkpoint.
+- `stage3_timer_div_100m_unblock_dsim_20260520d` is clean through the last
+  emitted `40,000,000`-cycle status checkpoint.
 - No current `Kernel panic`, `Oops`, `BUG:`, or `LINUX_STOP` marker is present
-  in that artifact.
+  in either artifact.
 - The old `ffffffff805c5dec` trap-frame/`strcmp` panic window is passed in the
   current run without a trap by the `10,000,000`-cycle checkpoint.
 - The old `watchdog: BUG:` artifact
@@ -147,6 +150,21 @@ Debug policy from this point:
   is the approved backup for debug-turnaround validation. The delayed-failure
   harness was rebuilt and smoke-tested with Verilator in
   `linux_boot_results/stage3_uart_fail_delay_smoke_verilator_20260520a`.
+- A current DSim rerun of the short directed panic-class smokes was attempted
+  in `benchmark_results/stage3_current_panic_class_dsim_20260520a`, but the
+  DSim lease was denied with `Already at maxLeases (1)`. This is a license
+  availability result, not RTL evidence.
+- Current Verilator backup smokes pass:
+  `linux_boot_results/stage3_current_vm_mtimer_vector_verilator_20260520a`
+  matches `M TIMER VECTOR OK`,
+  `linux_boot_results/stage3_current_vm_mtimer_to_stimer_verilator_20260520a`
+  matches `M TIMER TO STIMER OK`, and
+  `linux_boot_results/stage3_current_amo_sc_irq_verilator_20260520a` matches
+  `AMO_SC_IRQ_OK`.
+- The generic AUIPC fault-precision smoke is not valid under `tb_linux` because
+  it uses the generic `tohost` endpoint instead of UART. Keep using the
+  existing generic simulator evidence for that row until a Verilator generic
+  `tb_top` runner exists.
 
 ## Current Linux Evidence
 
