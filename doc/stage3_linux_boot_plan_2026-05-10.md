@@ -2871,6 +2871,39 @@ Current verdict:
   stop on that artifact and debug it immediately. If it stays clean, continue
   only to the next bounded progress checkpoint.
 
+### 2026-05-20 Current Panic Debug Stop
+
+The next DSim 100M-goal attempt was also stopped by operator direction to avoid
+waiting after a suspected kernel-panic report:
+
+- Run: `linux_boot_results/stage3_100m_unblock_dsim_20260520f`.
+- The DSim image was current versus the RTL at launch, and the run used the
+  timer-divided CLINT platform with UART failure detection and the old
+  `ffffffff805c5dec`, `ffffffffeffff9a0`, low-VM-fetch, and low-ifetch-fault
+  stop hooks enabled.
+- The run was interrupted manually after the latest flushed status point at
+  `cyc=45,000,000`.
+- Its UART and DSim logs contain no `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, no `watchdog`, and no `LINUX_STOP`.
+- It reached the post-clocksource Linux path through `Mount-cache`,
+  `Mountpoint-cache`, `devtmpfs`, DMA pool setup, `thermal_sys`, `cpuidle`,
+  `HugeTLB`, and `raid6` output.
+
+Current debug verdict:
+
+- There is still no fresh current-RTL kernel panic artifact from the
+  timer-divided platform to root-cause.
+- The most recent true `BUG:` artifact remains
+  `linux_boot_results/stage3_current_100m_goal_dsim_20260519223941`, where
+  Linux time advanced too quickly before the accepted CLINT `mtime` divider
+  fix. That artifact is a pre-fix timer-scale failure and should not be used
+  as current core-pipeline evidence.
+- The right debug action is not to wait after a failure marker, but also not
+  to chase stale panic transcripts. The next run must stop on the first fresh
+  current marker and preserve the exact UART, CSR, trap, and frontend context.
+  If no marker appears, the next evidence target remains crossing the old
+  `68.56M` watchdog-BUG window on the timer-divided platform.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
