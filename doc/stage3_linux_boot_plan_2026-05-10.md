@@ -130,6 +130,10 @@ Current evidence from those stopped runs:
   in either artifact.
 - The old `ffffffff805c5dec` trap-frame/`strcmp` panic window is passed in the
   current run without a trap by the `10,000,000`-cycle checkpoint.
+- The old low-physical-fetch panic at `0000000080003f7c` is also passed in the
+  current `20260520d` run: the UART log reaches `Mountpoint-cache`,
+  `devtmpfs`, `HugeTLB`, and `raid6` output without `Unable to handle`, `Oops`,
+  or `Kernel panic`.
 - The old `watchdog: BUG:` artifact
   `linux_boot_results/stage3_current_100m_goal_dsim_20260519223941` is stale
   for current RTL because it predates the CLINT `mtime` divider. In that old
