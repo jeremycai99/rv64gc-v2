@@ -111,6 +111,43 @@ Current compliance status:
 - Linux kernel debug may proceed only while this compliance gate and the DS/CM
   hard performance gate stay clean after each RTL change.
 
+## May 20 Panic Debug Pivot
+
+The 100M-cycle Linux run is no longer the active action item while a panic is
+suspected. The active DSim run
+`linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520b` was stopped
+for triage at the user's request instead of waiting for the 100M cap.
+
+Current evidence from that stopped run:
+
+- The run used the rebuilt timer-divided DSim image from the current RTL.
+- UART and DSim logs are clean through the last emitted `55,000,000`-cycle
+  status checkpoint.
+- No current `Kernel panic`, `Oops`, `BUG:`, or `LINUX_STOP` marker is present
+  in that artifact.
+- The old `ffffffff805c5dec` trap-frame/`strcmp` panic window is passed in the
+  current run without a trap by the `10,000,000`-cycle checkpoint.
+- The old `watchdog: BUG:` artifact
+  `linux_boot_results/stage3_current_100m_goal_dsim_20260519223941` is stale
+  for current RTL because it predates the CLINT `mtime` divider. In that old
+  run Linux time reached `52.017374` seconds by `68,563,458` core cycles. In
+  the current run, `mtime=mcycle/100`, and the `55,000,000`-cycle checkpoint is
+  still at Linux time `0.356237` seconds in `raid6` probing.
+
+Debug policy from this point:
+
+- Do not debug stale panic signatures unless a rebuilt current-RTL run
+  reproduces them.
+- For any fresh panic/Oops/BUG, capture the complete UART text before making an
+  RTL change. `src/tb/tb_linux.sv` now supports
+  `+LINUX_UART_FAIL_DELAY=<cycles>` so the testbench can delay `$finish` after
+  matching `Kernel panic`, `Oops`, or `BUG:`. The default remains immediate
+  stop when the plusarg is omitted.
+- DSim remains the primary simulator. When the DSim lease is blocked, Verilator
+  is the approved backup for debug-turnaround validation. The delayed-failure
+  harness was rebuilt and smoke-tested with Verilator in
+  `linux_boot_results/stage3_uart_fail_delay_smoke_verilator_20260520a`.
+
 ## Current Linux Evidence
 
 Latest validated Linux milestone:

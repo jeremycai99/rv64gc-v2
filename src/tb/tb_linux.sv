@@ -129,6 +129,9 @@ module tb_linux;
     integer smoke_check_en;
     integer smoke_idx;
     integer uart_fail_stop_en;
+    integer uart_fail_delay_cycles;
+    logic   uart_fail_pending_r;
+    integer uart_fail_cycle_r;
     integer uart_fail_panic_idx;
     integer uart_fail_oops_idx;
     integer uart_fail_bug_idx;
@@ -269,6 +272,7 @@ module tb_linux;
         uart_stdout_en = 1;
         smoke_check_en = 0;
         uart_fail_stop_en = 1;
+        uart_fail_delay_cycles = 0;
         linux_trace_mmio_en = 0;
         linux_trace_load_pc_en = 0;
         linux_stop_on_trace_load_pc_en = 0;
@@ -334,6 +338,7 @@ module tb_linux;
 
         void'($value$plusargs("MAX_CYCLES=%d", max_cycles));
         void'($value$plusargs("STATUS_INTERVAL=%d", status_interval));
+        void'($value$plusargs("LINUX_UART_FAIL_DELAY=%d", uart_fail_delay_cycles));
         void'($value$plusargs("UART_STDOUT=%d", uart_stdout_en));
         if ($value$plusargs("UART_LOGFILE=%s", uart_log_path)) begin
             uart_log_fd = $fopen(uart_log_path, "w");
@@ -467,6 +472,8 @@ module tb_linux;
             last_commit_pc <= 64'd0;
             last_commit_cycle <= 64'd0;
             last_commit_count <= 0;
+            uart_fail_pending_r <= 1'b0;
+            uart_fail_cycle_r <= 0;
             linux_commit_ring_wr <= 0;
             linux_commit_ring_count <= 0;
             linux_bru_ring_wr <= 0;
@@ -2727,13 +2734,14 @@ module tb_linux;
                     end
                 end
 
-                if (uart_fail_stop_en != 0) begin
+                if ((uart_fail_stop_en != 0) && !uart_fail_pending_r) begin
                     if (uart_tx_data == uart_fail_panic_pattern[uart_fail_panic_idx]) begin
                         uart_fail_panic_idx <= uart_fail_panic_idx + 1;
                         if ((uart_fail_panic_idx + 1) == uart_fail_panic_pattern.len()) begin
-                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
+                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d delay=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
                                      uart_fail_panic_pattern,
                                      sim_cycle,
+                                     uart_fail_delay_cycles,
                                      last_commit_pc,
                                      u_core.csr_satp,
                                      u_core.trap_valid,
@@ -2742,7 +2750,12 @@ module tb_linux;
                                      u_core.rob_head_idx,
                                      u_core.rob_tail_idx,
                                      last_commit_cycle);
-                            $finish;
+                            if (uart_fail_delay_cycles > 0) begin
+                                uart_fail_pending_r <= 1'b1;
+                                uart_fail_cycle_r <= sim_cycle;
+                            end else begin
+                                $finish;
+                            end
                         end
                     end else if (uart_tx_data == uart_fail_panic_pattern[0]) begin
                         uart_fail_panic_idx <= 1;
@@ -2753,9 +2766,10 @@ module tb_linux;
                     if (uart_tx_data == uart_fail_oops_pattern[uart_fail_oops_idx]) begin
                         uart_fail_oops_idx <= uart_fail_oops_idx + 1;
                         if ((uart_fail_oops_idx + 1) == uart_fail_oops_pattern.len()) begin
-                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
+                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d delay=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
                                      uart_fail_oops_pattern,
                                      sim_cycle,
+                                     uart_fail_delay_cycles,
                                      last_commit_pc,
                                      u_core.csr_satp,
                                      u_core.trap_valid,
@@ -2764,7 +2778,12 @@ module tb_linux;
                                      u_core.rob_head_idx,
                                      u_core.rob_tail_idx,
                                      last_commit_cycle);
-                            $finish;
+                            if (uart_fail_delay_cycles > 0) begin
+                                uart_fail_pending_r <= 1'b1;
+                                uart_fail_cycle_r <= sim_cycle;
+                            end else begin
+                                $finish;
+                            end
                         end
                     end else if (uart_tx_data == uart_fail_oops_pattern[0]) begin
                         uart_fail_oops_idx <= 1;
@@ -2775,9 +2794,10 @@ module tb_linux;
                     if (uart_tx_data == uart_fail_bug_pattern[uart_fail_bug_idx]) begin
                         uart_fail_bug_idx <= uart_fail_bug_idx + 1;
                         if ((uart_fail_bug_idx + 1) == uart_fail_bug_pattern.len()) begin
-                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
+                            $display("[LINUX_STOP_UART_FAILURE] pattern=\"%s\" cyc=%0d delay=%0d last_pc=%016h satp=%016h trap=%0b cause=%016h val=%016h rob_head=%0d rob_tail=%0d last_commit_cyc=%0d",
                                      uart_fail_bug_pattern,
                                      sim_cycle,
+                                     uart_fail_delay_cycles,
                                      last_commit_pc,
                                      u_core.csr_satp,
                                      u_core.trap_valid,
@@ -2786,7 +2806,12 @@ module tb_linux;
                                      u_core.rob_head_idx,
                                      u_core.rob_tail_idx,
                                      last_commit_cycle);
-                            $finish;
+                            if (uart_fail_delay_cycles > 0) begin
+                                uart_fail_pending_r <= 1'b1;
+                                uart_fail_cycle_r <= sim_cycle;
+                            end else begin
+                                $finish;
+                            end
                         end
                     end else if (uart_tx_data == uart_fail_bug_pattern[0]) begin
                         uart_fail_bug_idx <= 1;
@@ -2794,6 +2819,15 @@ module tb_linux;
                         uart_fail_bug_idx <= 0;
                     end
                 end
+            end
+
+            if (uart_fail_pending_r &&
+                ((sim_cycle - uart_fail_cycle_r) >= uart_fail_delay_cycles)) begin
+                $display("[LINUX_STOP_UART_FAILURE_DELAY_DONE] cyc=%0d first_failure_cyc=%0d delay=%0d",
+                         sim_cycle,
+                         uart_fail_cycle_r,
+                         uart_fail_delay_cycles);
+                $finish;
             end
 
             if ((status_en != 0) && (status_interval > 0) &&
