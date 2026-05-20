@@ -115,9 +115,10 @@ Current compliance status:
 
 The 100M-cycle Linux run is no longer the active action item while a panic is
 suspected. The DSim timer-divided runs
-`linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520b` and
-`linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520d` were stopped
-for triage at the user's request instead of waiting for the 100M cap.
+`linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520b`,
+`linux_boot_results/stage3_timer_div_100m_unblock_dsim_20260520d`, and
+`linux_boot_results/stage3_100m_unblock_dsim_20260520a` were stopped for
+triage at the user's request instead of waiting for the 100M cap.
 
 Current evidence from those stopped runs:
 
@@ -126,8 +127,11 @@ Current evidence from those stopped runs:
   emitted `55,000,000`-cycle status checkpoint.
 - `stage3_timer_div_100m_unblock_dsim_20260520d` is clean through the last
   emitted `40,000,000`-cycle status checkpoint.
-- No current `Kernel panic`, `Oops`, `BUG:`, or `LINUX_STOP` marker is present
-  in either artifact.
+- `stage3_100m_unblock_dsim_20260520a` is clean through the last emitted
+  `30,000,000`-cycle status checkpoint and was stopped before a summary file
+  was written.
+- No current `Kernel panic`, `Oops`, `BUG:`, `Unable to handle`, or
+  `LINUX_STOP` marker is present in those stopped 2026-05-20 artifacts.
 - The old `ffffffff805c5dec` trap-frame/`strcmp` panic window is passed in the
   current run without a trap by the `10,000,000`-cycle checkpoint.
 - The old low-physical-fetch panic at `0000000080003f7c` is also passed in the
@@ -140,6 +144,18 @@ Current evidence from those stopped runs:
   run Linux time reached `52.017374` seconds by `68,563,458` core cycles. In
   the current run, `mtime=mcycle/100`, and the `55,000,000`-cycle checkpoint is
   still at Linux time `0.356237` seconds in `raid6` probing.
+
+Debug verdict:
+
+- There is no fresh current-RTL panic artifact in the checked Linux run
+  directories as of May 20, 2026.
+- The latest reproducible panic-class signature in the repo is the stale
+  `watchdog: BUG:` path from May 19, 2026. Its timing is consistent with the
+  old CLINT timer running too fast relative to the DTS `timebase-frequency =
+  <1000000>`.
+- Do not make a pipeline RTL change for this stale signature. First reproduce a
+  current-RTL `Kernel panic`, `Oops`, `BUG:`, or `Unable to handle` marker with
+  delayed UART failure capture enabled, then debug that fresh artifact.
 
 Debug policy from this point:
 
