@@ -2833,6 +2833,44 @@ Current debug rule:
 - If the next current run remains clean, the next milestone is still to run
   past the old `68.56M` watchdog-BUG window on the timer-divided platform.
 
+### 2026-05-20 Latest Panic Interruption Audit
+
+The latest 100M-goal DSim run was stopped immediately after the user reported a
+kernel-panic concern:
+
+- Run: `linux_boot_results/stage3_100m_unblock_dsim_20260520c`.
+- The DSim and runner processes were interrupted intentionally, so this is not
+  a pass/fail boot milestone.
+- The stopped artifact reached `cyc=26,928,089` and had status checkpoints
+  through `25M`.
+- Its UART and DSim logs contain no `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, no `watchdog`, and no `LINUX_STOP`.
+- The kernel had reached the early Linux memory/setup path through
+  `riscv_clocksource`, `sched_clock`, `Mount-cache`, `Mountpoint-cache`,
+  `devtmpfs`, DMA pool setup, `thermal_sys`, `cpuidle`, and `HugeTLB`.
+
+The broader artifact search also found no fresh panic marker in Linux boot logs
+modified in the last three hours. The current failure signatures still separate
+into historical classes:
+
+- May 14 `ffffffff805c5dec`, instruction page fault in the old trap-frame
+  corruption window.
+- May 18/19 `0000000080003f7c`, stale low OpenSBI timer-vector fetch.
+- May 19 `ffffffffeffff9a0`, stale data-side PTW or DTLB sideband attribution.
+- May 19 `watchdog: BUG:`, stale CLINT timebase scaling before `mtime=mcycle/100`.
+
+Current verdict:
+
+- There is no current rebuilt-run kernel panic artifact to root-cause yet.
+- Do not claim Linux progress from the interrupted run, but also do not debug
+  any old panic transcript as the active blocker unless it reproduces on the
+  current rebuilt DSim image.
+- The next Linux run should be a first-failure capture slice with
+  `LINUX_UART_FAIL_DELAY`, low-VM-fetch stop, exact stale-sideband stop, and
+  exact trap stop hooks enabled. If it prints a kernel-visible failure marker,
+  stop on that artifact and debug it immediately. If it stays clean, continue
+  only to the next bounded progress checkpoint.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
