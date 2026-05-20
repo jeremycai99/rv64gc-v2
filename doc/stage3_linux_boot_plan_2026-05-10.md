@@ -2762,6 +2762,31 @@ Current verdict:
   `Oops`, `BUG:`, `Unable to handle kernel`, or `Kernel panic`, stop that run
   immediately and use that exact artifact as the next root-cause target.
 
+### 2026-05-20 User-Reported Panic Recheck
+
+The 100M-goal DSim run was stopped to pivot into panic debug instead of
+waiting for the full timeout:
+
+- Run: `linux_boot_results/stage3_timer_div_100m_panic_capture_dsim_20260520a`.
+- It reached the `30M` status point with no `Oops`, no `BUG:`, no
+  `Unable to handle kernel`, no `Kernel panic`, and no `LINUX_STOP`.
+- It passed the old `ffffffff805c5dec`/`strcmp` region without reproducing the
+  May 14 instruction-page-fault panic.
+- Its UART log also has no panic marker. The run was killed by operator
+  direction, so it is not a 100M success artifact and should not be used as a
+  boot signoff result.
+
+Current debug rule:
+
+- Do not continue a long run after a kernel-visible failure marker appears.
+- Do not debug a stale panic transcript as the current blocker without a fresh
+  rebuilt-run reproduction.
+- The next actionable failure must come from a current run directory and must
+  capture the first `Oops`, `BUG:`, panic, low-VM-fetch stop, or
+  `scause/stval/sepc` signature before any RTL modification.
+- If the next current run remains clean, the next milestone is still to run
+  past the old `68.56M` watchdog-BUG window on the timer-divided platform.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
