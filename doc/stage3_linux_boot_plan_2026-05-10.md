@@ -2587,6 +2587,41 @@ Next debug action:
   signature, or no-progress condition as the next blocker.  Build a directed
   smoke from that contract before the next RTL promotion.
 
+### 2026-05-19 100M Run Interruption Triage
+
+The first 100M DSim run after the AMO/SC commit-precision fix was intentionally
+stopped for panic triage instead of waiting to the full cap:
+
+- Commit under test: `2901e3b` (`Fix AMO SC commit precision for Linux`).
+- Artifact:
+  `linux_boot_results/stage3_amo_commit_gate_clean_100m_dsim_20260519a`.
+- The run was rebuilt from the current RTL and stopped by operator request
+  after the latest flushed status at `cyc=30000000`.
+- The stopped artifact has no `BUG`, no `Oops`, no `Unable to handle kernel`,
+  and no `Kernel panic` marker through the recorded UART/DSim logs.
+- UART had progressed past the previously saved panic windows and reached
+  `SCSI subsystem initialized`.
+
+Important stale-panic distinction:
+
+- `linux_boot_results/stage3_linux_clean_100m_dsim_20260519a` is an older
+  `#34` Linux/RTL run from before `2901e3b`.  Its
+  `badaddr=0000000080003f7c` panic is not current evidence unless reproduced
+  on `2901e3b` or later.
+- The older `ffffffff805c5dec` trap-frame panic is also a historical failure
+  class.  It should remain as root-cause documentation, not the active blocker,
+  unless it appears again in a current rebuilt run.
+
+Debug rule going forward:
+
+- Do not wait for a 50M or 100M run after a current rebuilt artifact prints
+  `Oops`, `BUG`, `Unable to handle kernel`, or `Kernel panic`.
+- Stop immediately on the first current failure signature and debug that exact
+  artifact.
+- If a panic signature comes from an older run, first compare the artifact
+  timestamp, Linux build line, and git commit against the current RTL before
+  spending debug time on it.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
