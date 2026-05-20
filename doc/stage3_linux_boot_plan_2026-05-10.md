@@ -2904,6 +2904,42 @@ Current debug verdict:
   If no marker appears, the next evidence target remains crossing the old
   `68.56M` watchdog-BUG window on the timer-divided platform.
 
+### 2026-05-20 Latest 50M Panic Debug Stop And Stale-Panic Audit
+
+The latest DSim retry was stopped deliberately so panic debug could start
+instead of waiting for the full 100M timeout:
+
+- Run: `linux_boot_results/stage3_100m_unblock_dsim_20260520_retry_2`.
+- The run used the rebuilt timer-divided CLINT platform and the current
+  `fw_payload.hex`.
+- It reached the `50M` status checkpoint cleanly before being stopped.
+- Its UART and DSim logs contain no `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, no `watchdog`, and no `LINUX_STOP`.
+- This is negative panic evidence only. It is not a 100M boot signoff result.
+
+Stale-panic audit:
+
+| Artifact | First visible signature | Symbol classification | Current verdict |
+|---|---|---|---|
+| `stage3_linux_200m_current_rtl_20260514a` | Instruction page fault, `badaddr=ffffffff805c5dec`, `cause=0xc` | `strcmp+0x4` | Historical trap-frame or fetch-identity failure. Not reproduced by May 20 rebuilt runs. |
+| `stage3_linux_clean_100m_dsim_20260519a` | Instruction page fault, `badaddr=0000000080003f7c`, `cause=0xc` | OpenSBI `sbi_trap_handler` region, reached from `kernel_init_pages+0x8c` | Historical low-fetch or stale fetch-sideband failure. Not current unless reproduced. |
+| `stage3_linux_fetch_context_mask_low_ifetch_clean_dsim_20m_20260519a` | Load page fault, `badaddr=ffffffffeffff9a0`, `cause=0xd` | Linux `bad_range+0xc`, called by `expand+0x52` in page allocator | Historical data-side PTW/DTLB or sideband-attribution failure. Not current unless reproduced. |
+| `stage3_current_100m_goal_dsim_20260519223941` | UART `watchdog: BUG:` at `cyc=68,563,458` | Linux soft-lockup detector, print PC in `serial8250_early_out+0x92` | Pre-`MTIME_DIV_P` timer-scale failure. Fixed by the accepted CLINT divider. |
+
+Debug policy from this audit:
+
+- There is no fresh current-RTL kernel panic artifact to root-cause right now.
+- Do not chase the May 14 or May 19 Oops transcripts as active blockers unless
+  they reproduce on the current rebuilt DSim image.
+- The next Linux run must remain a first-failure capture run with UART failure
+  stop, low-VM-fetch stop, low-ifetch-fault stop, and exact old-address stop
+  hooks enabled.
+- If the next current run prints `Oops`, `BUG:`, `Unable to handle kernel`,
+  `Kernel panic`, `LINUX_STOP`, or a nonzero trap signature, stop immediately
+  and debug that exact artifact.
+- If it stays clean, the next meaningful progress checkpoint is crossing the
+  old `68.56M` watchdog-BUG window on the timer-divided platform.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
