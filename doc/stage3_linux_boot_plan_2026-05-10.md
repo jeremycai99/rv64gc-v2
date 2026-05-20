@@ -154,6 +154,14 @@ Debug policy from this point:
   in `benchmark_results/stage3_current_panic_class_dsim_20260520a`, but the
   DSim lease was denied with `Already at maxLeases (1)`. This is a license
   availability result, not RTL evidence.
+- A later primary-simulator retry with the Linux platform runner passed the
+  current directed panic-class rows:
+  `linux_boot_results/stage3_current_vm_mtimer_vector_dsim_20260520a` matches
+  `M TIMER VECTOR OK`,
+  `linux_boot_results/stage3_current_vm_mtimer_to_stimer_dsim_20260520a`
+  matches `M TIMER TO STIMER OK`, and
+  `linux_boot_results/stage3_current_amo_sc_irq_dsim_20260520a` matches
+  `AMO_SC_IRQ_OK`.
 - Current Verilator backup smokes pass:
   `linux_boot_results/stage3_current_vm_mtimer_vector_verilator_20260520a`
   matches `M TIMER VECTOR OK`,
