@@ -47,6 +47,7 @@ module lsu
     output logic [ROB_IDX_BITS-1:0] std_wb_rob_idx,
 
     // Commit counts (from commit unit)
+    input logic [2:0] commit_count,
     input logic [2:0] store_commit_count,
     input logic [2:0] load_commit_count,
 
@@ -170,12 +171,15 @@ module lsu
     logic            amo_sc_issue_fire;
     logic            amo_load_hit_fire;
     logic            amo_load_fill_fire;
+    logic            amo_store_req_valid;
     logic            amo_store_ack_fire;
+    logic            amo_store_commit_fire;
     logic            amo_serial_block;
     logic            amo_forward_block;
     logic            amo_flush_kill;
     logic            amo_wait_load_r;
     logic            amo_store_valid_r;
+    logic            amo_store_committed_r;
     logic            amo_wb_valid_r;
     iq_entry_t       amo_data_r;
     logic [63:0]     amo_addr_r;
@@ -183,6 +187,7 @@ module lsu
     logic [63:0]     amo_old_value_r;
     logic [63:0]     amo_store_data_r;
     logic [7:0]      amo_store_mask_r;
+    logic [ROB_IDX_BITS:0]     amo_store_commit_delta;
     logic [ROB_IDX_BITS-1:0]  amo_wb_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] amo_wb_pdst_r;
     logic [LQ_IDX_BITS-1:0]   amo_wb_lq_idx_r;
@@ -1231,21 +1236,21 @@ module lsu
         end
     end
 
-    assign dcache_store_req_valid     = amo_store_valid_r
+    assign dcache_store_req_valid     = amo_store_req_valid
                                       ? 1'b1
                                       : (split_store_req_valid |
                                          csb_normal_store_req_valid);
-    assign dcache_store_req_addr      = amo_store_valid_r
+    assign dcache_store_req_addr      = amo_store_req_valid
                                       ? amo_addr_r
                                       : (split_store_req_valid
                                          ? split_store_req_addr
                                          : csb_deq_addr);
-    assign dcache_store_req_data      = amo_store_valid_r
+    assign dcache_store_req_data      = amo_store_req_valid
                                       ? amo_store_data_r
                                       : (split_store_req_valid
                                          ? split_store_req_data
                                          : csb_deq_data);
-    assign dcache_store_req_byte_mask = amo_store_valid_r
+    assign dcache_store_req_byte_mask = amo_store_req_valid
                                       ? amo_store_mask_r
                                       : (split_store_req_valid
                                          ? split_store_req_mask
@@ -2268,10 +2273,9 @@ module lsu
     // =========================================================================
     // Atomic memory operations
     // =========================================================================
-    // AMOs are serialized at the load issue boundary and execute through a
-    // small non-speculative read modify write engine.  The load side reads the
-    // old value, this block computes the updated value, the store side writes
-    // it back to D-cache, then the old value or SC status writes back to rd.
+    // AMOs are serialized at the load issue boundary.  The read and rd
+    // writeback may complete before retirement, but the D-cache store side
+    // effect is gated until the AMO ROB entry enters the commit window.
     logic        lr_valid_r;
     logic [63:0] lr_addr_r;
     logic [1:0]  lr_size_r;
@@ -2304,7 +2308,8 @@ module lsu
         !amo_load_hit_fire &&
         dcache_fill_valid &&
         (amo_addr_r[63:LINE_BITS] == dcache_fill_addr[63:LINE_BITS]);
-    assign amo_store_ack_fire = amo_store_valid_r && dcache_store_ack;
+    assign amo_store_req_valid = amo_store_valid_r && amo_store_committed_r;
+    assign amo_store_ack_fire = amo_store_req_valid && dcache_store_ack;
     assign amo_sc_success =
         lr_valid_r &&
         (lr_addr_r[63:2] == load_mem_addr[0][63:2]) &&
@@ -2314,6 +2319,21 @@ module lsu
         dcache_store_req_valid &&
         dcache_store_ack &&
         (dcache_store_req_addr[63:2] == lr_addr_r[63:2]);
+
+    always_comb begin
+        if (amo_data_r.rob_idx >= rob_head) begin
+            amo_store_commit_delta =
+                {1'b0, amo_data_r.rob_idx} - {1'b0, rob_head};
+        end else begin
+            amo_store_commit_delta =
+                ({1'b0, amo_data_r.rob_idx} + (ROB_IDX_BITS+1)'(ROB_DEPTH)) -
+                {1'b0, rob_head};
+        end
+        amo_store_commit_fire =
+            amo_store_valid_r &&
+            (load_commit_count != 3'd0) &&
+            (amo_store_commit_delta < (ROB_IDX_BITS+1)'(commit_count));
+    end
 
     always_comb begin
         amo_fill_dword   = dcache_fill_data[{amo_addr_r[5:3], 3'b000} * 8 +: 64];
@@ -2392,28 +2412,36 @@ module lsu
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            amo_wait_load_r     <= 1'b0;
-            amo_store_valid_r   <= 1'b0;
-            amo_wb_valid_r      <= 1'b0;
-            amo_data_r          <= '0;
-            amo_addr_r          <= 64'd0;
-            amo_rs2_r           <= 64'd0;
-            amo_old_value_r     <= 64'd0;
-            amo_store_data_r    <= 64'd0;
-            amo_store_mask_r    <= 8'd0;
-            amo_wb_rob_idx_r    <= '0;
-            amo_wb_pdst_r       <= '0;
-            amo_wb_lq_idx_r     <= '0;
-            amo_wb_data_r       <= 64'd0;
-            lr_valid_r          <= 1'b0;
-            lr_addr_r           <= 64'd0;
-            lr_size_r           <= MEM_DWORD;
+            amo_wait_load_r       <= 1'b0;
+            amo_store_valid_r     <= 1'b0;
+            amo_store_committed_r <= 1'b0;
+            amo_wb_valid_r        <= 1'b0;
+            amo_data_r            <= '0;
+            amo_addr_r            <= 64'd0;
+            amo_rs2_r             <= 64'd0;
+            amo_old_value_r       <= 64'd0;
+            amo_store_data_r      <= 64'd0;
+            amo_store_mask_r      <= 8'd0;
+            amo_wb_rob_idx_r      <= '0;
+            amo_wb_pdst_r         <= '0;
+            amo_wb_lq_idx_r       <= '0;
+            amo_wb_data_r         <= 64'd0;
+            lr_valid_r            <= 1'b0;
+            lr_addr_r             <= 64'd0;
+            lr_size_r             <= MEM_DWORD;
         end else if (amo_flush_kill) begin
             amo_wait_load_r     <= 1'b0;
-            amo_store_valid_r   <= 1'b0;
             amo_wb_valid_r      <= 1'b0;
-            if (flush_in.full_flush)
-                lr_valid_r <= 1'b0;
+            if (amo_store_ack_fire) begin
+                amo_store_valid_r     <= 1'b0;
+                amo_store_committed_r <= 1'b0;
+            end else if (amo_store_commit_fire || amo_store_committed_r) begin
+                amo_store_committed_r <= 1'b1;
+            end else begin
+                amo_store_valid_r     <= 1'b0;
+                amo_store_committed_r <= 1'b0;
+            end
+            lr_valid_r <= 1'b0;
         end else begin
             if (amo_wb_valid_r)
                 amo_wb_valid_r <= 1'b0;
@@ -2421,13 +2449,12 @@ module lsu
             if (lr_store_clear)
                 lr_valid_r <= 1'b0;
 
+            if (amo_store_commit_fire)
+                amo_store_committed_r <= 1'b1;
+
             if (amo_store_ack_fire) begin
-                amo_store_valid_r <= 1'b0;
-                amo_wb_valid_r    <= 1'b1;
-                amo_wb_rob_idx_r  <= amo_data_r.rob_idx;
-                amo_wb_pdst_r     <= amo_data_r.pdst;
-                amo_wb_lq_idx_r   <= amo_data_r.lq_idx;
-                amo_wb_data_r     <= (amo_data_r.amo_op == AMO_SC) ? 64'd0 : amo_old_value_r;
+                amo_store_valid_r     <= 1'b0;
+                amo_store_committed_r <= 1'b0;
             end
 
             if (amo_load_hit_fire || amo_load_fill_fire) begin
@@ -2443,9 +2470,15 @@ module lsu
                     amo_wb_lq_idx_r  <= amo_data_r.lq_idx;
                     amo_wb_data_r    <= amo_load_value;
                 end else begin
-                    amo_store_valid_r <= 1'b1;
-                    amo_store_data_r  <= amo_store_data_calc;
-                    amo_store_mask_r  <= amo_store_mask_calc;
+                    amo_store_valid_r     <= 1'b1;
+                    amo_store_committed_r <= 1'b0;
+                    amo_store_data_r      <= amo_store_data_calc;
+                    amo_store_mask_r      <= amo_store_mask_calc;
+                    amo_wb_valid_r        <= 1'b1;
+                    amo_wb_rob_idx_r      <= amo_data_r.rob_idx;
+                    amo_wb_pdst_r         <= amo_data_r.pdst;
+                    amo_wb_lq_idx_r       <= amo_data_r.lq_idx;
+                    amo_wb_data_r         <= amo_load_value;
                 end
             end
 
@@ -2455,9 +2488,15 @@ module lsu
                 amo_rs2_r  <= load_rs2[0];
                 lr_valid_r <= 1'b0;
                 if (amo_sc_success) begin
-                    amo_store_valid_r <= 1'b1;
-                    amo_store_data_r  <= amo_sc_store_data_calc;
-                    amo_store_mask_r  <= amo_sc_store_mask_calc;
+                    amo_store_valid_r     <= 1'b1;
+                    amo_store_committed_r <= 1'b0;
+                    amo_store_data_r      <= amo_sc_store_data_calc;
+                    amo_store_mask_r      <= amo_sc_store_mask_calc;
+                    amo_wb_valid_r        <= 1'b1;
+                    amo_wb_rob_idx_r      <= load_issue_data[0].rob_idx;
+                    amo_wb_pdst_r         <= load_issue_data[0].pdst;
+                    amo_wb_lq_idx_r       <= load_issue_data[0].lq_idx;
+                    amo_wb_data_r         <= 64'd0;
                 end else begin
                     amo_wb_valid_r   <= 1'b1;
                     amo_wb_rob_idx_r <= load_issue_data[0].rob_idx;

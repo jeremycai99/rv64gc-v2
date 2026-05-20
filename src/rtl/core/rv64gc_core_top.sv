@@ -4757,6 +4757,7 @@ module rv64gc_core_top
         .std_wb_valid           (lsu_std_wb_valid),
         .std_wb_rob_idx         (lsu_std_wb_rob_idx),
         // Commit counts
+        .commit_count           (commit_count),
         .store_commit_count     (store_commit_count),
         .load_commit_count      (load_commit_count),
         // Speculative wakeup

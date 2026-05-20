@@ -355,7 +355,143 @@ May 17 fused-uop precise-trap root cause and fix:
   CM1 `150,394` cycles, `6.649201 CM/MHz`;
   CM10 `1,454,994` cycles, `6.872881 CM/MHz`.
 
-Next validation command:
+May 19 scheduler BUG current blocker:
+
+- Do not extend the Linux run window while this blocker is present. The current
+  first actionable Linux-visible failure is not a timeout and not the older
+  `bad_range`, low OpenSBI fetch, or `ffffffff805c5dec` page-fault signature.
+- Latest full-context artifact:
+  `linux_boot_results/stage3_bug_full_context_dsim_18p2m_20260519a`.
+- The run reaches `clocksource: riscv_clocksource`, `sched_clock`,
+  delay-loop calibration, PID setup, LSM initialization, mount-cache setup, and
+  mountpoint-cache setup. It then reports:
+  `BUG: scheduling while atomic: swapper/0/0x00000002`.
+- Static symbolization points at the mutex slow path:
+  `__mutex_lock.constprop.0 -> _raw_spin_unlock ->
+  schedule_preempt_disabled -> schedule -> __schedule`. The relevant
+  preempt-count word is `8(tp)`, which currently translates to physical
+  address `000000008109f708`.
+- Focused traces already narrowed the failure:
+  `linux_boot_results/stage3_sched_bug_commit_trace_dsim_20260519a` and
+  `linux_boot_results/stage3_sched_bug_preempt_lsu_trace_dsim_20260519a`.
+  These traces show the short scheduler handoff sequence is internally
+  coherent. `_raw_spin_unlock` stores `2` to `8(tp)`,
+  `schedule_preempt_disabled` loads `2` and stores `1`, `schedule` loads `1`
+  and stores `2`, and `__schedule` correctly observes `2` before branching to
+  `__schedule_bug`.
+- Therefore the active question is no longer whether `schedule` missed the
+  immediately preceding store. The bad count exists before
+  `schedule_preempt_disabled`. The next debug target is the earlier
+  `__mutex_lock`/raw-spinlock preempt-count transition:
+  `__mutex_lock` at `ffffffff805d705c`, `_raw_spin_lock` at
+  `ffffffff805da740`, and `_raw_spin_unlock` at `ffffffff805da85c`.
+- Testbench-only hooks used for this debug slice:
+  `+LINUX_STOP_COMMIT_PC=<pc>`, `+LINUX_TRACE_LOAD_RANGE`,
+  `+LINUX_TRACE_PA_LINE=<pa>`, and
+  `+LINUX_STOP_STORE_PC=<pc>` plus
+  `+LINUX_STOP_STORE_DATA_ABOVE=<limit>`. A narrower exact-address hook,
+  `+LINUX_TRACE_PREEMPT_PA=<pa>`, records STA, STD, SQ-drain, and D-cache
+  store events for one physical word without flooding the whole cache line.
+  These hooks do not modify synthesizable core RTL and do not affect the
+  ASIC-style boundary.
+- Focused DSim reproducer used for the completed handoff evidence:
+
+```bash
+python3 tools/run_linux_boot.py --run --simulator dsim \
+  --build-mode linux \
+  --image build/linux_boot/fw_payload.hex \
+  --run-dir linux_boot_results/stage3_sched_bug_commit_trace_dsim_<date> \
+  --max-cycles 18100000 \
+  --target-milestone boot_ok \
+  --no-status \
+  --no-trace-trap \
+  --sim-plusarg LINUX_KEEP_RUNNING_AFTER_UART_FAILURE \
+  --sim-plusarg LINUX_TRACE_COMMIT_LO=ffffffff805d3eb0 \
+  --sim-plusarg LINUX_TRACE_COMMIT_HI=ffffffff805d5564 \
+  --sim-plusarg LINUX_TRACE_CYCLE_LO=17930000 \
+  --sim-plusarg LINUX_TRACE_CYCLE_HI=18020000 \
+  --sim-plusarg LINUX_TRACE_REGS \
+  --sim-plusarg LINUX_STOP_COMMIT_PC=ffffffff805d522e
+```
+
+- Next focused yes/no command once the DSim lease is available:
+
+```bash
+python3 tools/run_linux_boot.py --run --simulator dsim \
+  --build-mode linux \
+  --image build/linux_boot/fw_payload.hex \
+  --run-dir linux_boot_results/stage3_sched_bug_mutex_preempt_entry_stop_dsim_<date> \
+  --max-cycles 18100000 \
+  --target-milestone boot_ok \
+  --no-status \
+  --no-trace-trap \
+  --sim-plusarg LINUX_KEEP_RUNNING_AFTER_UART_FAILURE \
+  --sim-plusarg LINUX_STOP_STORE_PC=ffffffff805d705c \
+  --sim-plusarg LINUX_STOP_STORE_DATA_ABOVE=0000000000000001
+```
+
+- Interpretation:
+  - If it stops at `ffffffff805d705c`, `__mutex_lock` entered with
+    `preempt_count >= 1`; the extra disable predates this mutex slow path.
+  - If it does not stop before the BUG, rerun with
+    `LINUX_STOP_STORE_PC=ffffffff805da740` and limit `2` to check whether
+    `_raw_spin_lock` is creating the extra increment.
+  - If those stores are clean, prioritize wrong-path store survival or
+    duplicate store issue around the preempt-count physical line.
+- Attempted command
+  `linux_boot_results/stage3_sched_bug_mutex_preempt_entry_stop_dsim_20260519a`
+  did not run because DSim reported `License not obtained: Already at
+  maxLeases (1)` while no local simulator process was active. This is a lease
+  availability issue, not design evidence.
+- Attempted command
+  `linux_boot_results/stage3_sched_bug_mutex_preempt_entry_stop_dsim_20260519b`
+  reached Linux startup but was stopped manually because it was still a long
+  stop-at-late-PC probe. Replace it with the exact-address trace below for the
+  next run.
+- Exact-address trace hook compile status:
+  `linux_boot_results/stage3_preempt_pa_trace_build_verilator_20260519a`
+  rebuilt the Linux Verilator platform successfully. DSim rebuild attempts
+  `stage3_preempt_pa_trace_build_dsim_20260519a` and `20260519b` were blocked
+  by the stale `maxLeases (1)` lease condition, so DSim evidence is still
+  pending.
+- Next preferred focused command:
+
+```bash
+python3 tools/run_linux_boot.py --run --simulator dsim \
+  --build-mode linux \
+  --image build/linux_boot/fw_payload.hex \
+  --run-dir linux_boot_results/stage3_sched_bug_preempt_pa_trace_dsim_<date> \
+  --max-cycles 18100000 \
+  --target-milestone boot_ok \
+  --no-status \
+  --no-trace-trap \
+  --sim-plusarg LINUX_KEEP_RUNNING_AFTER_UART_FAILURE \
+  --sim-plusarg LINUX_TRACE_PREEMPT_PA=000000008109f708 \
+  --sim-plusarg LINUX_STOP_COMMIT_PC=ffffffff805d522e
+```
+
+- Expected evidence:
+  - `LINUX_PREEMPT_STD` shows every preempt-count store-data issue with PC,
+    ROB, SQ, data, and flush state.
+  - `LINUX_PREEMPT_SQ_DRAIN` shows which entries become committed memory
+    side effects.
+  - `LINUX_PREEMPT_DC_STORE` shows the final D-cache store request and ack.
+    If an extra `+1` store appears on a wrong-path or duplicate issue but also
+    drains, debug SQ/commit recovery. If only architecturally expected stores
+    drain, debug the mutex owner/lock-state path that led to sleeping in the
+    mutex slow path.
+- Verilator remains blocked for this Linux window. It builds the platform but
+  aborts after `sched_clock` with `Active region did not converge`. The
+  generated `UNOPTFLAT` evidence identifies real ready/update loops involving
+  `uoc_active`, `bru_issue`, `bru_mispredict`, issue wakeup, BPU update, and
+  frontend packet readiness. Do not use Verilator Linux results as evidence
+  until that loop is structurally cut or otherwise proven harmless.
+
+Do not run a clean long Linux milestone while the scheduler BUG is active.
+The next Linux run should be one of the focused stop-store debug commands
+above. After an RTL fix, first run the Stage 3 DS/CM regression guard, then
+rerun the focused Linux reproducer, and only then resume a clean milestone
+run. The historical clean milestone command remains:
 
 ```bash
 python3 tools/run_linux_boot.py --run --simulator dsim \
@@ -2369,10 +2505,87 @@ Linux checkpoint status:
   It was stopped intentionally because wall-clock progress was too slow and it
   had not reached the Linux panic window.  It adds no new kernel-pass evidence.
 - Therefore, the directed panic class is fixed and performance guarded, but
-  Linux boot is not yet promoted.  The next Linux run should be a lean rebuilt
-  DSim checkpoint with minimal tracing, or a fixed Verilator Linux platform,
-  and must prove no `bad_range+0xc` Oops before moving to the next boot
-  blocker.
+Linux boot is not yet promoted.  The next Linux run should be a lean rebuilt
+DSim checkpoint with minimal tracing, or a fixed Verilator Linux platform,
+and must prove no `bad_range+0xc` Oops before moving to the next boot
+blocker.
+
+### 2026-05-19 AMO/SC Commit-Precision Root Cause
+
+The later `BUG: scheduling while atomic` panic is now root-caused as an AMO/SC
+precision bug, not as a longer-timeout problem.
+
+Failing evidence:
+
+- Artifact: `linux_boot_results/stage3_sched_bug_preempt_load_context_dsim_20260519a`.
+- Linux entered `ret_from_exception`, returned to `mutex_lock`, and committed
+  `sc.d` at `ffffffff805d75ac`.
+- The following branch at `ffffffff805d75b0` saw `a4=1`, meaning the SC
+  architecturally failed.
+- The retry LR at `ffffffff805d75a6` then loaded `a5=ffffffff80e9f700` from
+  `list_lrus_mutex`, the exact owner value that the failed SC attempted to
+  store.
+- The scheduler bug branch at `ffffffff805d522e` later committed with `a5=2`
+  and `s5=1`, matching the `BUG: scheduling while atomic` path.
+
+Root cause:
+
+- The old AMO/SC path could send a successful SC or AMO store to D-cache before
+  the ROB entry reached commit.
+- If an interrupt or other full flush arrived after that early D-cache side
+  effect but before the AMO/SC retired, the architectural instruction was
+  replayed or failed while the speculative memory update remained visible.
+- This violates precise side-effect ordering.  It is especially visible in
+  Linux mutex code because a failed `sc.d` must not publish the lock owner.
+
+RTL repair:
+
+- `lsu.sv` now separates AMO/SC rd writeback from the D-cache store side
+  effect.
+- AMO/SC stores are captured in LSU state after the read/SC check, but
+  `dcache_store_req_valid` is asserted only after the AMO ROB index enters the
+  current commit window.
+- A full flush kills an uncommitted AMO store.  If the AMO store has already
+  entered the commit window, the LSU keeps it live until the D-cache store
+  acknowledges.
+- `rv64gc_core_top.sv` passes the total `commit_count` into the LSU so the AMO
+  side-effect gate can identify the current commit group.
+
+Validation:
+
+- Directed AMO/SC interrupt precision smoke passes on Verilator:
+  `linux_boot_results/stage3_amo_sc_irq_directed_verilator_20260519b`.
+- Directed AMO/SC interrupt precision smoke passes on DSim:
+  `linux_boot_results/stage3_amo_sc_irq_directed_dsim_20260519f`.
+- Focused DSim Linux panic-window run:
+  `linux_boot_results/stage3_amo_commit_gate_panic_window_dsim_20260519c`.
+  It reaches 19M cycles, passes the old `17,957,555` cycle panic window, and
+  has no `BUG`, no `Oops`, no `Unable to handle kernel`, no `Kernel panic`,
+  and no actual `[LINUX_STOP_COMMIT_PC]` stop at `ffffffff805d522e`.
+- The 19M run still stops by the intentional max-cycle timeout with last
+  milestone `riscv_clocksource`.  It is panic-window debug evidence, not full
+  Linux boot signoff.
+- Stage 3 DS/CM hard guard passes with the AMO/SC fix:
+  `benchmark_results/stage3_rtl_guard_amo_sc_commit_gate_20260519a`.
+
+Guard metrics:
+
+| Row | Timed cycles | Metric | Gate |
+|---|---:|---:|---|
+| `dhrystone_100_checkedin` | 18,068 | 3.150055 DMIPS/MHz | PASS |
+| `dhrystone_300_stage1_anchor` | 53,046 | 3.218821 DMIPS/MHz | PASS |
+| `coremark_iter1_generalization` | 150,398 | 6.649025 CM/MHz | PASS |
+| `coremark_iter10_checkedin` | 1,459,540 | 6.851474 CM/MHz | PASS |
+
+Next debug action:
+
+- Do not wait longer on the old scheduler-atomic panic signature.  That window
+  is cleared by the AMO/SC commit-precision repair.
+- Continue Linux boot from the latest clean RTL with a lean DSim checkpoint and
+  UART panic detection enabled.
+- If the next run fails, treat the first new `Oops`, `BUG`, `panic`, trap
+  signature, or no-progress condition as the next blocker.  Build a directed
+  smoke from that contract before the next RTL promotion.
 
 ## Near-Term Non-Goals
 
@@ -2425,32 +2638,25 @@ DS/CM performance gate.
   console. The previous Oops path is fixed by frontend owner-line identity
   and runahead-successor ordering repairs, and the later 11.668M frontend
   no-progress point is fixed by ICQ future-line capture/drop for active and
-  next FTQ owners. The latest clean-payload `timebase-frequency` panic is now
-  traced to a macro-fusion correctness bug: fused compare-and-branch uops
-  retired as two instructions but dropped the producer register writeback.
-  A general BRU/fusion-detector fix is in place and passes both the directed
-  Linux-shaped probe and the full DS/CM regression guard. The 64M early timer
-  allocator failure is fixed by making the DTS and simulation DRAM match the
-  128M linker region. The latest valid Linux run reaches
-  `clocksource: riscv_clocksource`, `sched_clock`, and mount-cache setup, then
-  panics on an instruction page fault against the OpenSBI M-mode timer vector.
-  A new frontend fetch-privilege and fetch-exception EPC candidate is in place,
-  passes the new DSim directed mtimer Sv48 smoke, passes rebuilt DSim and XSim
-  instruction-fetch fault smokes, and passes the Stage 3 DS/CM hard guard. It
-  still needs a rebuilt DSim Linux rerun past the previous timer-vector panic
-  window before promotion.
-- v2 has reached the Linux `riscv_clocksource` console banner in the latest
-  failing path, but it does not yet reach the UART driver milestone,
+  next FTQ owners. The clean-payload `timebase-frequency`, timer-vector,
+  `bad_range+0xc`, and scheduler-atomic panic classes each have directed
+  root-cause evidence and repaired RTL candidates with DS/CM guard coverage.
+  The latest AMO/SC commit-precision repair passes the old scheduler panic
+  window to 19M cycles and reaches `clocksource: riscv_clocksource`,
+  `sched_clock`, and mount-cache setup without a kernel panic.
+- v2 has reached the Linux `riscv_clocksource` console banner and scheduler
+  setup in the latest path, but it does not yet reach the UART driver milestone,
   Linux-visible PLIC/external interrupts, or validated Linux timer behavior.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 action is not to wait blindly. When the DSim lease is free,
-rerun one clean rebuilt Linux slice past the prior timer-vector panic window.
-If it fails, capture the first `scause/stval/sepc` or `mcause/mtval/mepc`
-signature with a narrow testbench-only trace and build the next directed smoke
-from that contract. Do not add debug logic to synthesizable core RTL. Any RTL
-change on that path must still pass impacted compliance tests and the DS/CM
-hard guard before promotion. Sv39 should stay as a directed-test subset, but
-the primary Linux path is four-level Sv48 because that matches the intended
-Linux signoff configuration.
+The next Stage 3 action is not to wait blindly. Run one clean rebuilt Linux
+slice from the AMO/SC commit-precision baseline with panic detection enabled
+and minimal tracing. If it fails, capture the first `Oops`, `BUG`, panic,
+`scause/stval/sepc`, `mcause/mtval/mepc`, or no-progress signature with a
+narrow testbench-only trace and build the next directed smoke from that
+contract. Do not add debug logic to synthesizable core RTL. Any RTL change on
+that path must still pass impacted compliance tests and the DS/CM hard guard
+before promotion. Sv39 should stay as a directed-test subset, but the primary
+Linux path is four-level Sv48 because that matches the intended Linux signoff
+configuration.

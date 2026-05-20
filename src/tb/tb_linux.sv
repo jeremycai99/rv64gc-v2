@@ -160,6 +160,7 @@ module tb_linux;
     logic        linux_bru_ring_misp [0:LINUX_TRACE_RING_DEPTH-1];
     integer linux_trace_load_pc_en;
     integer linux_stop_on_trace_load_pc_en;
+    integer linux_trace_load_range_en;
     integer linux_stop_on_trace_load_range_en;
     logic [63:0] linux_trace_load_pc;
     integer linux_stop_sideband_tval_en;
@@ -172,6 +173,10 @@ module tb_linux;
     logic [63:0] linux_trace_line;
     integer linux_trace_pa_line_en;
     logic [63:0] linux_trace_pa_line;
+    integer linux_trace_preempt_pa_en;
+    logic [63:0] linux_trace_preempt_pa;
+    integer linux_trace_preempt_va_en;
+    logic [63:0] linux_trace_preempt_va;
     integer linux_trace_l2_en;
     integer linux_trace_trap_en;
     integer linux_trace_fault_only_en;
@@ -194,6 +199,8 @@ module tb_linux;
     integer linux_stop_commit_data_above_en;
     logic [4:0] linux_stop_commit_rd;
     logic [63:0] linux_stop_commit_data_above;
+    integer linux_stop_commit_pc_en;
+    logic [63:0] linux_stop_commit_pc;
     integer linux_trace_pipe_en;
     integer linux_trace_bru_en;
     integer linux_trace_mmu_en;
@@ -248,6 +255,14 @@ module tb_linux;
              ({addr[63:6], 6'd0} == linux_trace_pa_line));
     endfunction
 
+    function automatic logic linux_trace_preempt_match(input logic [63:0] addr);
+        linux_trace_preempt_match =
+            ((linux_trace_preempt_pa_en != 0) &&
+             (addr == linux_trace_preempt_pa)) ||
+            ((linux_trace_preempt_va_en != 0) &&
+             (addr == linux_trace_preempt_va));
+    endfunction
+
     initial begin
         max_cycles = 100000;
         uart_log_fd = 0;
@@ -257,6 +272,7 @@ module tb_linux;
         linux_trace_mmio_en = 0;
         linux_trace_load_pc_en = 0;
         linux_stop_on_trace_load_pc_en = 0;
+        linux_trace_load_range_en = 0;
         linux_stop_on_trace_load_range_en = 0;
         linux_trace_load_pc = 64'd0;
         linux_stop_sideband_tval_en = 0;
@@ -269,6 +285,10 @@ module tb_linux;
         linux_trace_line = 64'd0;
         linux_trace_pa_line_en = 0;
         linux_trace_pa_line = 64'd0;
+        linux_trace_preempt_pa_en = 0;
+        linux_trace_preempt_pa = 64'd0;
+        linux_trace_preempt_va_en = 0;
+        linux_trace_preempt_va = 64'd0;
         linux_trace_l2_en = 0;
         linux_trace_trap_en = 0;
         linux_trace_fault_only_en = 0;
@@ -290,6 +310,8 @@ module tb_linux;
         linux_stop_commit_data_above_en = 0;
         linux_stop_commit_rd = 5'd0;
         linux_stop_commit_data_above = 64'd0;
+        linux_stop_commit_pc_en = 0;
+        linux_stop_commit_pc = 64'd0;
         linux_trace_pipe_en = 0;
         linux_trace_bru_en = 0;
         linux_trace_mmu_en = 0;
@@ -333,6 +355,8 @@ module tb_linux;
             linux_trace_load_pc_en = 1;
         if ($test$plusargs("LINUX_STOP_ON_TRACE_LOAD_PC"))
             linux_stop_on_trace_load_pc_en = 1;
+        if ($test$plusargs("LINUX_TRACE_LOAD_RANGE"))
+            linux_trace_load_range_en = 1;
         if ($test$plusargs("LINUX_STOP_ON_TRACE_LOAD_RANGE"))
             linux_stop_on_trace_load_range_en = 1;
         if ($value$plusargs("LINUX_STOP_SIDEBAND_TVAL=%h", linux_stop_sideband_tval))
@@ -349,6 +373,10 @@ module tb_linux;
             linux_trace_pa_line_en = 1;
             linux_trace_pa_line[5:0] = 6'd0;
         end
+        if ($value$plusargs("LINUX_TRACE_PREEMPT_PA=%h", linux_trace_preempt_pa))
+            linux_trace_preempt_pa_en = 1;
+        if ($value$plusargs("LINUX_TRACE_PREEMPT_VA=%h", linux_trace_preempt_va))
+            linux_trace_preempt_va_en = 1;
         if ($test$plusargs("LINUX_TRACE_L2"))
             linux_trace_l2_en = 1;
         if ($test$plusargs("LINUX_TRACE_TRAP"))
@@ -381,6 +409,8 @@ module tb_linux;
             linux_stop_commit_rd_en = 1;
         if ($value$plusargs("LINUX_STOP_COMMIT_DATA_ABOVE=%h", linux_stop_commit_data_above))
             linux_stop_commit_data_above_en = 1;
+        if ($value$plusargs("LINUX_STOP_COMMIT_PC=%h", linux_stop_commit_pc))
+            linux_stop_commit_pc_en = 1;
         if ($test$plusargs("LINUX_TRACE_PIPE"))
             linux_trace_pipe_en = 1;
         if ($test$plusargs("LINUX_TRACE_BRU"))
@@ -833,6 +863,41 @@ module tb_linux;
                                                   bk) % LINUX_TRACE_RING_DEPTH]);
                                 end
                             end
+                            $finish;
+                        end
+                        if ((linux_stop_commit_pc_en != 0) &&
+                            linux_trace_cycle_on &&
+                            (u_core.rob_head_pc[ci] == linux_stop_commit_pc)) begin
+                            $display("[LINUX_STOP_COMMIT_PC] cyc=%0d slot=%0d pc=%016h priv=%0d commit_count=%0d flush=%0b/%0b redirect=%016h ra=%016h sp=%016h tp=%016h a0=%016h a1=%016h a2=%016h a3=%016h a4=%016h a5=%016h s5=%016h satp=%016h",
+                                     sim_cycle,
+                                     ci,
+                                     u_core.rob_head_pc[ci],
+                                     u_core.csr_priv_mode,
+                                     u_core.commit_count,
+                                     u_core.flush_out.valid,
+                                     u_core.flush_out.full_flush,
+                                     u_core.flush_out.redirect_pc,
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[1]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[2]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[4]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[10]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[11]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[12]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[13]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[14]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[15]],
+                                     u_core.u_int_prf.regfile_copy0[
+                                         u_core.u_rename.u_rat.committed_rat[21]],
+                                     u_core.csr_satp);
                             $finish;
                         end
                     end
@@ -1878,7 +1943,7 @@ module tb_linux;
                 end
             end
 
-            if (linux_trace_any_line_en != 0) begin
+            if ((linux_trace_any_line_en != 0) && linux_trace_cycle_on) begin
                 if (u_core.u_lsu.sta_issue_valid &&
                     linux_trace_line_match(u_core.u_lsu.sta_eff_addr)) begin
                     $display("[LINUX_STA_ISSUE] cyc=%0d pc=%016h rob=%0d sq=%0d addr=%016h size=%0d older0=%0b older1=%0b flush=%0b",
@@ -1912,6 +1977,108 @@ module tb_linux;
                              u_core.u_lsu.sta_issue_data.rob_idx,
                              u_core.u_lsu.sta_issue_data.pc,
                              u_core.u_lsu.sta_eff_addr);
+                end
+            end
+
+            if ((linux_trace_preempt_pa_en != 0) && linux_trace_cycle_on) begin
+                if (u_core.u_lsu.sta_issue_valid &&
+                    linux_trace_preempt_match(u_core.u_lsu.sta_mem_addr)) begin
+                    $display("[LINUX_PREEMPT_STA] cyc=%0d pc=%016h rob=%0d sq=%0d va=%016h pa=%016h size=%0d accept=%0b qv=%0b qrob=%0d qav=%0b qdv=%0b qcomm=%0b flush=%0b/%0b ra=%016h sp=%016h tp=%016h s1=%016h s2=%016h s3=%016h s4=%016h a0=%016h a1=%016h a2=%016h a3=%016h a4=%016h a5=%016h satp=%016h",
+                             sim_cycle,
+                             u_core.u_lsu.sta_issue_data.pc,
+                             u_core.u_lsu.sta_issue_data.rob_idx,
+                             u_core.u_lsu.sta_issue_data.sq_idx,
+                             u_core.u_lsu.sta_eff_addr,
+                             u_core.u_lsu.sta_mem_addr,
+                             u_core.u_lsu.sta_issue_data.mem_size,
+                             u_core.u_lsu.u_store_queue.sta_fill_accept,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].rob_idx,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].addr_valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].data_valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.sta_issue_data.sq_idx].committed,
+                             u_core.flush_out.valid,
+                             u_core.flush_out.full_flush,
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[1]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[2]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[4]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[9]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[18]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[19]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[20]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[10]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[11]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[12]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[13]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[14]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[15]],
+                             u_core.csr_satp);
+                end
+                if (u_core.u_lsu.std_issue_valid &&
+                    u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr_valid &&
+                    linux_trace_preempt_match(u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr)) begin
+                    $display("[LINUX_PREEMPT_STD] cyc=%0d pc=%016h rob=%0d sq=%0d addr=%016h data=%016h mask=%02h accept=%0b qv=%0b qrob=%0d qcomm=%0b flush=%0b/%0b ra=%016h sp=%016h tp=%016h s1=%016h s2=%016h s3=%016h s4=%016h a0=%016h a1=%016h a2=%016h a3=%016h a4=%016h a5=%016h satp=%016h",
+                             sim_cycle,
+                             u_core.u_lsu.std_issue_data.pc,
+                             u_core.u_lsu.std_issue_data.rob_idx,
+                             u_core.u_lsu.std_issue_data.sq_idx,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].addr,
+                             u_core.u_lsu.std_rs2,
+                             u_core.u_lsu.std_byte_mask,
+                             u_core.u_lsu.u_store_queue.std_fill_accept,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].valid,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].rob_idx,
+                             u_core.u_lsu.u_store_queue.queue[u_core.u_lsu.std_issue_data.sq_idx].committed,
+                             u_core.flush_out.valid,
+                             u_core.flush_out.full_flush,
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[1]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[2]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[4]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[9]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[18]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[19]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[20]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[10]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[11]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[12]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[13]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[14]],
+                             u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[15]],
+                             u_core.csr_satp);
+                end
+                for (int lp = 0; lp < 2; lp++) begin
+                    if (u_core.u_lsu.load_issue_valid[lp] &&
+                        linux_trace_preempt_match(u_core.u_lsu.load_mem_addr[lp])) begin
+                        $display("[LINUX_PREEMPT_LD_REQ] cyc=%0d port=%0d pc=%016h rob=%0d lq=%0d va=%016h pa=%016h size=%0d pdst=%0d suppress=%0b flush=%0b/%0b",
+                                 sim_cycle,
+                                 lp,
+                                 u_core.u_lsu.load_issue_data[lp].pc,
+                                 u_core.u_lsu.load_issue_data[lp].rob_idx,
+                                 u_core.u_lsu.load_issue_data[lp].lq_idx,
+                                 u_core.u_lsu.load_eff_addr[lp],
+                                 u_core.u_lsu.load_mem_addr[lp],
+                                 u_core.u_lsu.load_issue_data[lp].mem_size,
+                                 u_core.u_lsu.load_issue_data[lp].pdst,
+                                 u_core.u_lsu.load_issue_suppress[lp],
+                                 u_core.flush_out.valid,
+                                 u_core.flush_out.full_flush);
+                    end
+                    if (u_core.u_lsu.load_wb_valid[lp] &&
+                        linux_trace_preempt_match(u_core.u_lsu.load_eff_addr_r[lp])) begin
+                        $display("[LINUX_PREEMPT_LD_WB] cyc=%0d port=%0d pc=%016h rob=%0d lq=%0d pa=%016h data=%016h pdst=%0d exc=%0b code=%0d flush=%0b/%0b",
+                                 sim_cycle,
+                                 lp,
+                                 u_core.u_lsu.load_issue_data_r[lp].pc,
+                                 u_core.u_lsu.load_wb_rob_idx[lp],
+                                 u_core.u_lsu.load_issue_data_r[lp].lq_idx,
+                                 u_core.u_lsu.load_eff_addr_r[lp],
+                                 u_core.u_lsu.load_wb_data[lp],
+                                 u_core.u_lsu.load_wb_pdst[lp],
+                                 u_core.u_lsu.load_wb_has_exception[lp],
+                                 u_core.u_lsu.load_wb_exc_code[lp],
+                                 u_core.flush_out.valid,
+                                 u_core.flush_out.full_flush);
+                    end
                 end
             end
 
@@ -1982,12 +2149,16 @@ module tb_linux;
             end
 
             if (((linux_trace_load_pc_en != 0) ||
+                 (linux_trace_load_range_en != 0) ||
                  (linux_stop_on_trace_load_range_en != 0)) &&
                 linux_trace_cycle_on) begin
                 for (int li = 0; li < 2; li++) begin
                     if (u_core.iq_load_issue_candidate_valid[li] &&
                         (((linux_trace_load_pc_en != 0) &&
                           (u_core.iq_load_issue_data[li].pc == linux_trace_load_pc)) ||
+                         ((linux_trace_load_range_en != 0) &&
+                          (u_core.iq_load_issue_data[li].pc >= linux_trace_commit_lo) &&
+                          (u_core.iq_load_issue_data[li].pc < linux_trace_commit_hi)) ||
                          ((linux_stop_on_trace_load_range_en != 0) &&
                           (u_core.iq_load_issue_data[li].pc >= linux_trace_commit_lo) &&
                           (u_core.iq_load_issue_data[li].pc < linux_trace_commit_hi))) &&
@@ -2038,6 +2209,9 @@ module tb_linux;
                     if (u_core.u_lsu.load_issue_valid[li] &&
                         (((linux_trace_load_pc_en != 0) &&
                           (u_core.u_lsu.load_issue_data[li].pc == linux_trace_load_pc)) ||
+                         ((linux_trace_load_range_en != 0) &&
+                          (u_core.u_lsu.load_issue_data[li].pc >= linux_trace_commit_lo) &&
+                          (u_core.u_lsu.load_issue_data[li].pc < linux_trace_commit_hi)) ||
                          ((linux_stop_on_trace_load_range_en != 0) &&
                           (u_core.u_lsu.load_issue_data[li].pc >= linux_trace_commit_lo) &&
                           (u_core.u_lsu.load_issue_data[li].pc < linux_trace_commit_hi)))) begin
@@ -2180,10 +2354,10 @@ module tb_linux;
                 end
             end
 
-            if (linux_trace_amo_en != 0) begin
+            if ((linux_trace_amo_en != 0) && linux_trace_cycle_on) begin
                 if (u_core.iq_load_issue_candidate_valid[0] &&
                     u_core.iq_load_issue_data[0].is_amo) begin
-                    $display("[LINUX_AMO_CAND] cyc=%0d pc=%016h rob=%0d op=%0d suppress=%0b raw=%0b valid=%0b addr=%016h dcreq=%0b p0fwd=%0b sq_hit=%0b sq_wait=%0b sq_part=%0b csb_hit=%0b sta_old=%0b busy=%0b wait=%0b store=%0b wb=%0b flush=%0b/%0b/%0d head=%0d tail=%0d partial=%0b kill=%0b",
+                    $display("[LINUX_AMO_CAND] cyc=%0d pc=%016h rob=%0d op=%0d suppress=%0b raw=%0b valid=%0b addr=%016h dcreq=%0b p0fwd=%0b sq_hit=%0b sq_wait=%0b sq_part=%0b csb_hit=%0b sta_old=%0b busy=%0b wait=%0b store=%0b committed=%0b req=%0b wb=%0b flush=%0b/%0b/%0d head=%0d tail=%0d partial=%0b kill=%0b",
                              sim_cycle,
                              u_core.iq_load_issue_data[0].pc,
                              u_core.iq_load_issue_data[0].rob_idx,
@@ -2202,6 +2376,8 @@ module tb_linux;
                              u_core.u_lsu.amo_busy,
                              u_core.u_lsu.amo_wait_load_r,
                              u_core.u_lsu.amo_store_valid_r,
+                             u_core.u_lsu.amo_store_committed_r,
+                             u_core.u_lsu.amo_store_req_valid,
                              u_core.u_lsu.amo_wb_valid_r,
                              u_core.flush_out.valid,
                              u_core.flush_out.full_flush,
@@ -2215,7 +2391,7 @@ module tb_linux;
                     (u_core.u_lsu.amo_busy ||
                      (u_core.iq_load_issue_candidate_valid[0] &&
                       u_core.iq_load_issue_data[0].is_amo))) begin
-                    $display("[LINUX_AMO_FLUSH] cyc=%0d valid=%0b full=%0b rob_tail=%0d redirect=%016h head=%0d tail=%0d busy=%0b wait=%0b store=%0b wb=%0b amo_rob=%0d kill=%0b live_wb=%0b/%0b lsu_wb=%0b/%0b",
+                    $display("[LINUX_AMO_FLUSH] cyc=%0d valid=%0b full=%0b rob_tail=%0d redirect=%016h head=%0d tail=%0d busy=%0b wait=%0b store=%0b committed=%0b req=%0b wb=%0b amo_rob=%0d kill=%0b live_wb=%0b/%0b lsu_wb=%0b/%0b",
                              sim_cycle,
                              u_core.flush_out.valid,
                              u_core.flush_out.full_flush,
@@ -2226,6 +2402,8 @@ module tb_linux;
                              u_core.u_lsu.amo_busy,
                              u_core.u_lsu.amo_wait_load_r,
                              u_core.u_lsu.amo_store_valid_r,
+                             u_core.u_lsu.amo_store_committed_r,
+                             u_core.u_lsu.amo_store_req_valid,
                              u_core.u_lsu.amo_wb_valid_r,
                              u_core.u_lsu.amo_data_r.rob_idx,
                              u_core.u_lsu.amo_flush_kill,
@@ -2257,10 +2435,13 @@ module tb_linux;
                 end
                 if (u_core.u_lsu.amo_store_valid_r ||
                     u_core.u_lsu.amo_store_ack_fire) begin
-                    $display("[LINUX_AMO_STORE] cyc=%0d valid=%0b ack=%0b rob=%0d addr=%016h data=%016h mask=%02h dc_ack=%0b flush=%0b/%0b/%0d kill=%0b",
+                    $display("[LINUX_AMO_STORE] cyc=%0d valid=%0b committed=%0b req=%0b ack=%0b commit_fire=%0b rob=%0d addr=%016h data=%016h mask=%02h dc_ack=%0b flush=%0b/%0b/%0d kill=%0b",
                              sim_cycle,
                              u_core.u_lsu.amo_store_valid_r,
+                             u_core.u_lsu.amo_store_committed_r,
+                             u_core.u_lsu.amo_store_req_valid,
                              u_core.u_lsu.amo_store_ack_fire,
+                             u_core.u_lsu.amo_store_commit_fire,
                              u_core.u_lsu.amo_data_r.rob_idx,
                              u_core.u_lsu.amo_addr_r,
                              u_core.u_lsu.amo_store_data_r,
@@ -2287,7 +2468,7 @@ module tb_linux;
                 end
             end
 
-            if (linux_trace_any_line_en != 0) begin
+            if ((linux_trace_any_line_en != 0) && linux_trace_cycle_on) begin
                 if (u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_req_valid &&
                     linux_trace_line_match(u_core.u_fetch_top.u_ifu_line_fetch.icache_fill_req_addr)) begin
                     $display("[LINUX_IC_L2_REQ] cyc=%0d addr=%016h accepted=%0b ready=%0b s1_v=%0b s1_addr=%016h hit=%0b m0_v=%0b m0_addr=%016h m0_sent=%0b m0_done=%0b m1_v=%0b m1_addr=%016h m1_sent=%0b m1_done=%0b need=%0b req_idx=%0d match=%0b",
@@ -2443,6 +2624,31 @@ module tb_linux;
                              u_core.u_l2_cache.mem_resp_direct,
                              u_core.u_l2_cache.respq_enq,
                              u_core.u_l2_cache.respq_deq);
+                end
+            end
+
+            if ((linux_trace_preempt_pa_en != 0) && linux_trace_cycle_on) begin
+                if (u_core.u_lsu.sq_drain_valid &&
+                    linux_trace_preempt_match(u_core.u_lsu.sq_drain_entry.addr)) begin
+                    $display("[LINUX_PREEMPT_SQ_DRAIN] cyc=%0d ready=%0b rob=%0d addr=%016h data=%016h mask=%02h size=%0d head=%0d count=%0d",
+                             sim_cycle,
+                             u_core.u_lsu.sq_drain_ready,
+                             u_core.u_lsu.sq_drain_entry.rob_idx,
+                             u_core.u_lsu.sq_drain_entry.addr,
+                             u_core.u_lsu.sq_drain_entry.data,
+                             u_core.u_lsu.sq_drain_entry.byte_mask,
+                             u_core.u_lsu.sq_drain_entry.size,
+                             u_core.u_lsu.u_store_queue.head_r,
+                             u_core.u_lsu.u_store_queue.count_r);
+                end
+                if (u_core.dc_store_req_valid &&
+                    linux_trace_preempt_match(u_core.dc_store_req_addr)) begin
+                    $display("[LINUX_PREEMPT_DC_STORE] cyc=%0d addr=%016h data=%016h mask=%02h ack=%0b",
+                             sim_cycle,
+                             u_core.dc_store_req_addr,
+                             u_core.dc_store_req_data,
+                             u_core.dc_store_req_byte_mask,
+                             u_core.dc_store_ack);
                 end
             end
 
