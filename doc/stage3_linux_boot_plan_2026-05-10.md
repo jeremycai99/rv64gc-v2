@@ -3180,6 +3180,39 @@ Debug verdict:
   reproduction. The correct debug loop is first-failure capture with fail-fast
   UART/trap hooks, then symbolization and a narrow directed smoke.
 
+### 2026-05-21 Latest Panic Debug Stop
+
+The active 100M DSim retry was stopped immediately after the latest
+kernel-panic report so the current artifact could be audited instead of waiting
+for a long timeout:
+
+- Run:
+  `linux_boot_results/stage3_lsu_p0_retry_100m_dsim_notrap_20260521b`.
+- The run used the current post-`LSU` port0 miss-retry RTL, the rebuilt DSim
+  Linux image, UART failure stop, low-VM-fetch/low-ifetch stops, and exact
+  old-address hooks for `ffffffff805c5dec` and `ffffffffeffff9a0`.
+- The run reached the `30M` status checkpoint before it was terminated for
+  panic triage.
+- The last checkpoint was clean: `trap=0`, `mtip=0`, `msip=0`,
+  `last_pc=ffffffff803fd506`, `time=00000000000493e0`,
+  `timecmp=000000000004a08e`, and
+  `last_commit_cyc=29,999,999`.
+- Its UART and DSim logs contain no `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, no `watchdog: BUG`, and no `LINUX_STOP`.
+- It crossed the stale `ffffffff805c5dec`/`strcmp` region at the `10M`
+  checkpoint and reached the current `raid6` calibration path.
+
+Current debug verdict:
+
+- There is still no fresh current-RTL kernel-panic artifact to root-cause.
+- The active blocker is evidence collection, not a known current RTL fix.  The
+  next run should be a bounded first-failure capture, not a blind signoff wait:
+  stop immediately on any fresh `Oops`, `BUG:`, `Unable to handle kernel`,
+  `Kernel panic`, low-fetch stop, exact-address stop, or nonzero trap marker.
+- If no fresh marker appears, the next meaningful Linux evidence point is
+  crossing the old `68.56M` watchdog-BUG window on the timer-divided platform
+  with retirement still moving.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
