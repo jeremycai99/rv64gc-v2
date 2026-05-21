@@ -210,6 +210,8 @@ module tb_linux;
     integer linux_trace_clear_bss_en;
     integer linux_trace_clear_bss_monitor_en;
     integer linux_trace_cycle_window_en;
+    integer linux_stop_on_no_commit_en;
+    integer linux_no_commit_limit;
     integer linux_trace_cycle_lo;
     integer linux_trace_cycle_hi;
     logic [63:0] boot_hartid;
@@ -265,6 +267,77 @@ module tb_linux;
             ((linux_trace_preempt_va_en != 0) &&
              (addr == linux_trace_preempt_va));
     endfunction
+
+    task linux_dump_stall_debug;
+        begin
+            $display("[LINUX_DEBUG_LSU] lq_head=%0d lq_tail=%0d lq_count=%0d lq_full=%0b lmb_any=%0b p0_retry=%0b p1_retry=%0b p0_miss_retry=%0b p1_miss_retry=%0b p0_miss=%0b p1_miss=%0b p0_fill_hit=%0b p1_fill_hit=%0b lmb_match=%0b lmb_ready=%0b lmb_wb_free=%0b",
+                     u_core.u_lsu.u_load_queue.head_r,
+                     u_core.u_lsu.u_load_queue.tail_r,
+                     u_core.u_lsu.u_load_queue.count_r,
+                     u_core.lq_full,
+                     u_core.u_lsu.lmb_any_valid,
+                     u_core.u_lsu.p0_retry_valid_r,
+                     u_core.u_lsu.p1_retry_valid_r,
+                     u_core.u_lsu.p0_miss_retry_req,
+                     u_core.u_lsu.p1_miss_retry_req,
+                     u_core.u_lsu.p0_miss_detect,
+                     u_core.u_lsu.p1_miss_detect,
+                     u_core.u_lsu.p0_miss_fill_hit,
+                     u_core.u_lsu.p1_miss_fill_hit,
+                     u_core.u_lsu.lmb_any_match,
+                     u_core.u_lsu.lmb_ready_any,
+                     u_core.u_lsu.lmb_wb_port_free);
+            $display("[LINUX_DEBUG_LOAD_PIPE] issue=%b r=%b rr=%b p0_pc=%016h p0_addr=%016h p0_lq=%0d p0_rob=%0d p1_pc=%016h p1_addr=%016h p1_lq=%0d p1_rob=%0d resp_v=%b resp_hit=%b miss_retry=%b wb_v=%b wb_rob=%0d/%0d wb_pdst=%0d/%0d",
+                     u_core.u_lsu.load_issue_valid,
+                     u_core.u_lsu.load_issue_valid_r,
+                     u_core.u_lsu.load_issue_valid_rr,
+                     u_core.u_lsu.load_issue_data_r[0].pc,
+                     u_core.u_lsu.load_eff_addr_r[0],
+                     u_core.u_lsu.load_issue_data_r[0].lq_idx,
+                     u_core.u_lsu.load_issue_data_r[0].rob_idx,
+                     u_core.u_lsu.load_issue_data_r[1].pc,
+                     u_core.u_lsu.load_eff_addr_r[1],
+                     u_core.u_lsu.load_issue_data_r[1].lq_idx,
+                     u_core.u_lsu.load_issue_data_r[1].rob_idx,
+                     u_core.dc_load_resp_valid,
+                     u_core.dc_load_resp_hit,
+                     u_core.u_lsu.dcache_load_miss_retry,
+                     u_core.lsu_load_wb_valid,
+                     u_core.lsu_load_wb_rob_idx[0],
+                     u_core.lsu_load_wb_rob_idx[1],
+                     u_core.lsu_load_wb_pdst[0],
+                     u_core.lsu_load_wb_pdst[1]);
+            for (int lqi = 0; lqi < LQ_DEPTH; lqi++) begin
+                if (u_core.u_lsu.u_load_queue.queue[lqi].valid) begin
+                    $display("[LINUX_DEBUG_LQ] idx=%0d head=%0b rob=%0d valid=%0b addr_v=%0b exec=%0b result=%0b addr=%016h size=%0d data=%016h",
+                             lqi,
+                             (lqi == u_core.u_lsu.u_load_queue.head_r),
+                             u_core.u_lsu.u_load_queue.queue[lqi].rob_idx,
+                             u_core.u_lsu.u_load_queue.queue[lqi].valid,
+                             u_core.u_lsu.u_load_queue.queue[lqi].addr_valid,
+                             u_core.u_lsu.u_load_queue.queue[lqi].executed,
+                             u_core.u_lsu.u_load_queue.queue[lqi].has_result,
+                             u_core.u_lsu.u_load_queue.queue[lqi].addr,
+                             u_core.u_lsu.u_load_queue.queue[lqi].size,
+                             u_core.u_lsu.u_load_queue.queue[lqi].data);
+                end
+            end
+            for (int lmbi = 0; lmbi < 32; lmbi++) begin
+                if (u_core.u_lsu.lmb[lmbi].valid) begin
+                    $display("[LINUX_DEBUG_LMB] idx=%0d ready=%0b line=%016h off=%0d size=%0d rob=%0d pdst=%0d lq=%0d data=%016h",
+                             lmbi,
+                             u_core.u_lsu.lmb[lmbi].ready,
+                             u_core.u_lsu.lmb[lmbi].line_addr,
+                             u_core.u_lsu.lmb[lmbi].byte_offset,
+                             u_core.u_lsu.lmb[lmbi].size,
+                             u_core.u_lsu.lmb[lmbi].rob_idx,
+                             u_core.u_lsu.lmb[lmbi].pdst,
+                             u_core.u_lsu.lmb[lmbi].lq_idx,
+                             u_core.u_lsu.lmb[lmbi].data);
+                end
+            end
+        end
+    endtask
 
     initial begin
         max_cycles = 100000;
@@ -322,6 +395,8 @@ module tb_linux;
         linux_trace_clear_bss_en = 0;
         linux_trace_clear_bss_monitor_en = 0;
         linux_trace_cycle_window_en = 0;
+        linux_stop_on_no_commit_en = 0;
+        linux_no_commit_limit = 100000;
         linux_trace_cycle_lo = 0;
         linux_trace_cycle_hi = 2147483647;
         boot_hartid = 64'd0;
@@ -433,6 +508,9 @@ module tb_linux;
             linux_trace_cycle_window_en = 1;
         if ($value$plusargs("LINUX_TRACE_CYCLE_HI=%d", linux_trace_cycle_hi))
             linux_trace_cycle_window_en = 1;
+        if ($test$plusargs("LINUX_STOP_ON_NO_COMMIT"))
+            linux_stop_on_no_commit_en = 1;
+        void'($value$plusargs("LINUX_NO_COMMIT_LIMIT=%d", linux_no_commit_limit));
         void'($value$plusargs("BOOT_HARTID=%h", boot_hartid));
         void'($value$plusargs("DTB_ADDR=%h", boot_dtb_addr));
     end
@@ -2907,6 +2985,44 @@ module tb_linux;
                          mem_resp_valid);
             end
 
+            if ((linux_stop_on_no_commit_en != 0) &&
+                (last_commit_cycle != 64'd0) &&
+                (sim_cycle > (last_commit_cycle + linux_no_commit_limit))) begin
+                $display("[LINUX_STOP_NO_COMMIT] cyc=%0d last_commit_pc=%016h last_commit_cycle=%0d idle_cycles=%0d limit=%0d priv=%0d satp=%016h mip=%016h mie=%016h mstatus=%016h rob_head=%0d rob_tail=%0d rob_free=%0d lq_full=%0b",
+                         sim_cycle,
+                         last_commit_pc,
+                         last_commit_cycle,
+                         sim_cycle - last_commit_cycle,
+                         linux_no_commit_limit,
+                         u_core.csr_priv_mode,
+                         u_core.csr_satp,
+                         u_core.u_csr_file.mip_eff,
+                         u_core.u_csr_file.mie_r,
+                         u_core.u_csr_file.mstatus_r,
+                         u_core.rob_head_idx,
+                         u_core.rob_tail_idx,
+                         u_core.rob_free_count,
+                         u_core.lq_full);
+                $display("[LINUX_DEBUG_HEAD] v=%b r=%b pc0=%016h pc1=%016h is_load=%b is_store=%b is_branch=%b is_serial=%b",
+                         u_core.rob_head_valid,
+                         u_core.rob_head_ready,
+                         u_core.rob_head_pc[0],
+                         u_core.rob_head_pc[1],
+                         u_core.rob_head_is_load,
+                         u_core.rob_head_is_store,
+                         u_core.rob_head_is_branch,
+                         (u_core.rob_head_is_csr |
+                          u_core.rob_head_is_fence |
+                          u_core.rob_head_is_fence_i |
+                          u_core.rob_head_is_mret |
+                          u_core.rob_head_is_sret |
+                          u_core.rob_head_is_sfence_vma |
+                          u_core.rob_head_is_ecall |
+                          u_core.rob_head_is_wfi));
+                linux_dump_stall_debug();
+                $finish;
+            end
+
             if (sim_cycle >= max_cycles) begin
                 $display("TIMEOUT after %0d cycles", sim_cycle);
                 $display("[LINUX_DEBUG] last_commit_pc=%016h last_commit_cycle=%0d last_commit_count=%0d",
@@ -2949,6 +3065,7 @@ module tb_linux;
                           u_core.rob_head_is_sfence_vma |
                           u_core.rob_head_is_ecall |
                           u_core.rob_head_is_wfi));
+                linux_dump_stall_debug();
                 $display("IPC: mcycle=%0d minstret=%0d IPC=%f",
                          perf_mcycle, perf_minstret,
                          $itor(perf_minstret) / $itor(perf_mcycle));

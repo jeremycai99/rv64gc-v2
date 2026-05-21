@@ -3213,6 +3213,54 @@ Current debug verdict:
   crossing the old `68.56M` watchdog-BUG window on the timer-divided platform
   with retirement still moving.
 
+### 2026-05-21 100M First-Failure Freeze
+
+The latest completed current-RTL first-failure run did not reproduce a fresh
+kernel panic:
+
+- Run:
+  `linux_boot_results/stage3_lsu_p0_retry_100m_first_failure_dsim_20260521080525`.
+- The run reached OpenSBI, Linux early console, `riscv_clocksource`,
+  `clocksource: Switched to clocksource riscv_clocksource`, `PCI: CLS 0 bytes`,
+  and `kvm [1]: hypervisor extension not available`.
+- Its UART log contains no fresh `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, and no `LINUX_STOP`.
+- It does not meet the 100M unblocked goal: retirement stops after
+  `last_commit_cyc=62,720,377`, then `minstret=59,805,393` remains constant
+  through the 100M timeout.
+- The frozen architectural state is M-mode timer handling:
+  `priv=3`, `mtip=1`, `mip=0xa0`, `mie=0x28`, `satp=90000000000811be`,
+  `last_pc=000000008000c83e`, `f1_pc/work_pc=000000008000c874`,
+  `lq_full=1`, `rob_free=27`, `rob_head=4`, `rob_tail=105`.
+- The ROB head packet is:
+  `pc0=000000008000c840`, `pc1=000000008000c842`,
+  `is_load=0101`, `ready=0110`.
+- Symbolization against `build/linux_boot/fw_payload.elf` maps
+  `0x8000c840` to the compressed `lw a3,40(a5)` in OpenSBI
+  `mtimer_event_start`; the fetch cursor at `0x8000c874` is inside the
+  neighboring `aclint_mtimer_sync` path.
+
+Current debug verdict:
+
+- The active blocker is a no-retire LSU/LQ/ROB readiness deadlock in the
+  OpenSBI M-mode timer path, not the stale May 14/May 19 kernel-panic
+  signatures.
+- The immediate root-cause question is whether the `0x8000c840` load was:
+  lost before LQ execution, captured in LMB but never filled, filled but never
+  drained to CDB/ROB, or written back while the ROB/LQ bookkeeping failed to
+  observe it.
+- A testbench-only no-commit diagnostic hook was added to `tb_linux.sv`:
+  `+LINUX_STOP_ON_NO_COMMIT +LINUX_NO_COMMIT_LIMIT=<cycles>`. It prints the
+  LQ head/tail/count, live LQ entries, LMB entries, retry state, D-cache
+  response state, and load writeback state at the first no-commit stop.
+- Verilator rebuild validates the hook syntactically and a 1M Verilator smoke
+  prints the new stall dump at timeout. Verilator is still too slow for this
+  63M repro; DSim remains the required simulator for the first-failure capture.
+- The next run should rebuild the DSim Linux image from the current worktree,
+  then run a bounded 63M DSim slice with
+  `+LINUX_STOP_ON_NO_COMMIT +LINUX_NO_COMMIT_LIMIT=50000`. Do not run another
+  blind 100M wait before collecting that LQ/LMB dump.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -3276,13 +3324,11 @@ DS/CM performance gate.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 action is not to wait blindly. Run one clean rebuilt Linux
-slice from the AMO/SC commit-precision baseline with panic detection enabled
-and minimal tracing. If it fails, capture the first `Oops`, `BUG`, panic,
-`scause/stval/sepc`, `mcause/mtval/mepc`, or no-progress signature with a
-narrow testbench-only trace and build the next directed smoke from that
-contract. Do not add debug logic to synthesizable core RTL. Any RTL change on
-that path must still pass impacted compliance tests and the DS/CM hard guard
-before promotion. Sv39 should stay as a directed-test subset, but the primary
-Linux path is four-level Sv48 because that matches the intended Linux signoff
-configuration.
+The next Stage 3 action is not to wait blindly. Rebuild the DSim Linux image
+from the current worktree and capture the no-commit LQ/LMB dump for the
+`mtimer_event_start` freeze. If a fresh UART-visible `Oops`, `BUG`, or panic
+appears instead, use that exact run as the root-cause artifact. Do not add
+debug logic to synthesizable core RTL. Any RTL change on that path must still
+pass impacted compliance tests and the DS/CM hard guard before promotion.
+Sv39 should stay as a directed-test subset, but the primary Linux path is
+four-level Sv48 because that matches the intended Linux signoff configuration.
