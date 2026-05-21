@@ -157,6 +157,68 @@ Debug verdict:
   current-RTL `Kernel panic`, `Oops`, `BUG:`, or `Unable to handle` marker with
   delayed UART failure capture enabled, then debug that fresh artifact.
 
+## May 21 Kernel Panic Debug Pivot
+
+The current action item is debug, not waiting for a longer Linux timeout.  A
+fresh 100M DSim run,
+`linux_boot_results/stage3_100m_first_failure_dsim_20260521a_retryloop`,
+did not reproduce the old `ffffffff805c5dec` Oops or the low-fetch panic, but
+it also did not prove boot progress.  It froze after the 62,720,377-cycle
+commit point:
+
+- final committed PC: `0x000000008000c83e`, in OpenSBI `mtimer_event_start`;
+- ROB head PCs: `0x8000c840`, `0x8000c842`, with the head load not ready;
+- status stayed unchanged from 65M through 100M cycles while `mtime` kept
+  advancing past `mtimecmp`.
+
+Root cause found:
+
+- D-cache can assert `load_miss_retry[0]` when a port 0 load miss cannot attach
+  to a fill source, for example when no L1D MSHR is free.
+- LSU already had a retry holder for port 1, but port 0 treated the same
+  condition as a real miss and could allocate an LMB entry even though D-cache
+  had not accepted the request into an MSHR.
+- That creates a lost-load state: no future fill is guaranteed to wake the ROB
+  head load.  This matches the stuck OpenSBI timer load in the 100M artifact.
+
+Implemented RTL repair:
+
+- `src/rtl/core/lsu/lsu.sv` now has a port 0 retry holder mirroring the port 1
+  miss-retry contract.
+- Port 0 retry requests are re-fired through D-cache port 0 before new port 0
+  loads.
+- Port 0 miss detection now excludes `dcache_load_miss_retry[0]`, so the LSU
+  does not allocate an LMB entry for a request the D-cache explicitly rejected.
+
+Validation completed before promotion:
+
+- Linux DSim image rebuild from current RTL: pass.
+- Generic DSim image rebuild from current RTL: pass.
+- Directed MSHR-pressure probe:
+  `benchmark_results/stage3_lsu_p0_retry_probe24_profile_dsim_20260521a`.
+  The probe passes with loop buffer and standalone decoded-op replay at zero.
+  It exercises the retry condition: D-cache reports `ld0 new/alloc/merge =
+  29 / 23 / 0` and `new load miss no free MSHR = 7`.
+- Stage 3 DS/CM hard regression gate:
+  `benchmark_results/stage3_rtl_guard_lsu_p0_retry_20260521a`.
+  Result: pass within the 0.01% regression tolerance.  Guard metrics were
+  DS100 `3.150055 DMIPS/MHz`, DS300 `3.218821 DMIPS/MHz`, CM1
+  `6.649025 CoreMark/MHz`, and CM10 `6.851474 CoreMark/MHz`.
+
+Remaining proof before claiming the Linux milestone:
+
+- A focused Linux image run still must cross the old 62.72M-cycle freeze point
+  with retirement moving and no fresh `Oops`, `BUG:`, `Kernel panic`, low-fetch
+  stop, or watchdog marker.
+- A 70M DSim attempt,
+  `linux_boot_results/stage3_lsu_p0_retry_70m_dsim_20260521b`, was stopped
+  deliberately because it remained in early OpenSBI output without a useful
+  status checkpoint.  This artifact is not evidence for or against the fix.
+- Verilator is useful for compile and selected directed turnaround, but the
+  current full Linux Verilator image aborts near the OpenSBI platform probe with
+  `Active region did not converge`.  Do not use that full-image Verilator path
+  as Linux milestone evidence until the testbench convergence issue is fixed.
+
 Debug policy from this point:
 
 - Do not debug stale panic signatures unless a rebuilt current-RTL run

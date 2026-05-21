@@ -20,6 +20,16 @@
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "notes": "Mirrors the Linux OF lookup shape where a call result in a0 is compared against s3 by a following BEQ."
+    },
+    {
+      "name": "probe_dcache_p0_miss_retry",
+      "kind": "generic",
+      "hex": "tests/hex/probe_dcache_p0_miss_retry.hex",
+      "max_cycles": 200000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Directed LSU/D-cache probe for the Linux mtimer deadlock class: independent cold loads pressure D-cache MSHR allocation and require load port 0 retry to preserve endpoint identity."
     }
   ]
 }

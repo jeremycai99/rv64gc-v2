@@ -148,6 +148,10 @@ module lsu
     iq_entry_t       p1_eff_data;
     logic            p1_eff_nocache;
     logic            p1_eff_addr_mmio;
+    logic            p0_retry_valid_r;
+    logic            p0_retry_fire;
+    iq_entry_t       p0_retry_data_r;
+    logic [63:0]     p0_retry_addr_r;
     logic            p0_fwd_hit;
     logic            fwd_hold_valid_r;
     logic            p1_fwd_hold_valid_r;
@@ -976,22 +980,23 @@ module lsu
                 load_eff_addr_rr[i]   <= '0;
             end
         end else begin
-            // Port 0 propagates the original issue.  Port 1 propagates the
-            // EFFECTIVE issue (which includes the retry register), so the
+            // Port 0 and port 1 propagate their effective issue.  This includes
+            // retry registers, so the
             // writeback metadata at _rr matches the cycle the dcache
             // responds for the deferred load.
-            load_issue_valid_r[0] <= load_issue_valid[0];
+            load_issue_valid_r[0] <= p0_retry_fire | load_issue_valid[0];
             load_issue_valid_r[1] <= p1_eff_valid;
-            load_issue_data_r[0]  <= load_issue_data[0];
+            load_issue_data_r[0]  <= p0_retry_fire ? p0_retry_data_r : load_issue_data[0];
             load_issue_data_r[1]  <= p1_eff_data;
-            load_eff_addr_r[0]    <= load_mem_addr[0];
+            load_eff_addr_r[0]    <= p0_retry_fire ? p0_retry_addr_r : load_mem_addr[0];
             load_eff_addr_r[1]    <= p1_eff_addr;
-            load_nocache_r[0]     <= load_issue_valid[0] &
-                                     (load_cross_line[0] |
-                                      load_addr_misaligned[0] | load_addr_mmio[0] |
-                                      load_issue_data[0].is_amo |
-                                      p0_fwd_hit |
-                                      p0_partial_fwd_wait | flush_in.valid);
+            load_nocache_r[0]     <= p0_retry_fire ? 1'b0 :
+                                     (load_issue_valid[0] &
+                                      (load_cross_line[0] |
+                                       load_addr_misaligned[0] | load_addr_mmio[0] |
+                                       load_issue_data[0].is_amo |
+                                       p0_fwd_hit |
+                                       p0_partial_fwd_wait | flush_in.valid));
             load_nocache_r[1]     <= p1_eff_valid & p1_eff_nocache;
 
             // Stage 2 retained for debug-only traces and legacy assertions.
@@ -1453,6 +1458,7 @@ module lsu
     logic            p1_retry_misalign_r;
     logic            p1_retry_load_nocache_r;
     logic            p1_retry_addr_mmio;
+    logic            p0_miss_retry_req;
     logic            p1_miss_retry_req;
     logic            p1_fwd_blocked;
     logic            split_load_busy;
@@ -1481,6 +1487,8 @@ module lsu
         lmb_any_valid |
         (load_issue_valid_r != 2'b00) |
         (load_issue_valid_rr != 2'b00) |
+        p0_retry_valid_r |
+        p0_miss_retry_req |
         p1_retry_valid_r |
         p1_miss_retry_req |
         fwd_hold_valid_r |
@@ -1510,6 +1518,8 @@ module lsu
         load_issue_candidate_valid[0] &&
         (flush_in.valid ||
          split_load_busy ||
+         p0_retry_valid_r ||
+         p0_miss_retry_req ||
          load0_tlb_miss ||
          load0_tlb_port_wait ||
          load0_tlb_fault ||
@@ -1749,6 +1759,30 @@ module lsu
            same_cycle_sta_wait1 || lq_p1_issue_block || mmio_load1_block)));
 
     assign load_issue_spec_past_addr_unknown = 2'b00;
+
+    assign p0_retry_fire =
+        p0_retry_valid_r &&
+        !flush_in.valid &&
+        !split_load_busy;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            p0_retry_valid_r <= 1'b0;
+            p0_retry_data_r  <= '0;
+            p0_retry_addr_r  <= 64'd0;
+        end else if (flush_in.valid) begin
+            p0_retry_valid_r <= 1'b0;
+        end else begin
+            if (p0_retry_fire) begin
+                p0_retry_valid_r <= 1'b0;
+            end
+            if (p0_miss_retry_req) begin
+                p0_retry_valid_r <= 1'b1;
+                p0_retry_data_r  <= load_issue_data_r[0];
+                p0_retry_addr_r  <= load_eff_addr_r[0];
+            end
+        end
+    end
 
     assign p1_retry_addr_mmio =
         ((p1_retry_addr_r >= CLINT_BASE) &&
@@ -2152,7 +2186,9 @@ module lsu
     end
 
     assign dcache_load_req_valid[0] = split_load_req_valid |
+                                      p0_retry_fire |
                                       (load_issue_valid[0]
+                                       & ~p0_retry_valid_r
                                        & ~load_addr_misaligned[0]
                                        & ~load_cross_line[0]
                                        & ~split_load_busy
@@ -2164,13 +2200,16 @@ module lsu
                                        & ~flush_in.valid);
     assign dcache_load_req_addr[0]  = split_load_req_valid
                                     ? split_load_req_addr
-                                    : load_mem_addr[0];
+                                    : (p0_retry_fire ? p0_retry_addr_r
+                                                     : load_mem_addr[0]);
     assign dcache_load_req_size[0]  = split_load_req_valid
                                     ? MEM_DWORD
-                                    : load_issue_data[0].mem_size;
+                                    : (p0_retry_fire ? p0_retry_data_r.mem_size
+                                                     : load_issue_data[0].mem_size);
     assign dcache_load_req_is_unsigned[0] = split_load_req_valid
                                           ? 1'b1
-                                          : load_issue_data[0].is_unsigned;
+                                          : (p0_retry_fire ? p0_retry_data_r.is_unsigned
+                                                           : load_issue_data[0].is_unsigned);
 
     assign dcache_load_req_valid[1] = p1_eff_valid
                                     & ~p1_eff_misalign
@@ -2184,8 +2223,10 @@ module lsu
 
     assign spec_wakeup_valid[0] = dcache_load_req_valid[0] &
                                   !split_load_req_valid &
-                                  ~load_issue_data[0].is_amo;
-    assign spec_wakeup_tag[0]   = load_issue_data[0].pdst;
+                                  ~(p0_retry_fire ? p0_retry_data_r.is_amo
+                                                  : load_issue_data[0].is_amo);
+    assign spec_wakeup_tag[0]   = p0_retry_fire ? p0_retry_data_r.pdst
+                                                 : load_issue_data[0].pdst;
     assign spec_wakeup_valid[1] = dcache_load_req_valid[1] &
                                   ~p1_eff_data.is_amo;
     assign spec_wakeup_tag[1]   = p1_eff_data.pdst;
@@ -2587,11 +2628,17 @@ module lsu
                              & ~load_nocache_r[1]
                              & ~load_issue_data_r[1].is_amo
                              & dcache_load_miss_retry[1];
+    assign p0_miss_retry_req = !flush_in.valid
+                             & load_issue_valid_r[0]
+                             & ~load_nocache_r[0]
+                             & ~load_issue_data_r[0].is_amo
+                             & dcache_load_miss_retry[0];
     assign p0_miss_detect = !flush_in.valid
                           & load_issue_valid_r[0]
                           & ~load_nocache_r[0]
                           & ~load_issue_data_r[0].is_amo
-                          & ~dcache_load_resp_valid[0];
+                          & ~dcache_load_resp_valid[0]
+                          & ~dcache_load_miss_retry[0];
     assign p1_miss_detect = !flush_in.valid
                           & load_issue_valid_r[1]
                           & ~load_nocache_r[1]
