@@ -3030,6 +3030,42 @@ Current debug verdict:
   action remains a first-failure capture run with the panic and exact-address
   stop hooks enabled, or a narrow directed test if a fresh stop marker appears.
 
+### 2026-05-20 Latest 100M Run Panic Audit Stop
+
+The active 100M-goal DSim retry was stopped immediately after the user reported
+a kernel-panic concern, so the current artifact could be audited instead of
+waiting for the full timeout:
+
+- Run: `linux_boot_results/stage3_100m_unblock_dsim_20260521b_retryloop`.
+- The run used the rebuilt timer-divided CLINT platform, current
+  `fw_payload.hex`, UART failure detection, low-VM-fetch and low-ifetch-fault
+  stops, and exact old-address stop hooks for `ffffffff805c5dec` and
+  `ffffffffeffff9a0`.
+- The run reached the `30M` status checkpoint before being stopped by operator
+  direction. Its `summary.json` reports `FAIL` only because the simulator was
+  terminated with exit code `-15`; it is not a Linux failure signature.
+- The last checkpoint was clean: `trap=0`, `mtip=0`, `msip=0`,
+  `last_pc=ffffffff803fd506`, `time=00000000000493e0`,
+  `timecmp=000000000004a08e`.
+- Its UART and DSim logs contain no `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, no `watchdog: BUG`, and no `LINUX_STOP`.
+- It passed the stale `ffffffff805c5dec`/`strcmp` window and reached the
+  current `raid6` calibration path. This is negative panic evidence only, not a
+  100M boot signoff result.
+
+Current debug verdict:
+
+- There is still no fresh current-RTL kernel-panic artifact to root-cause.
+- The most recent true failure-class artifact remains the pre-`MTIME_DIV_P`
+  `watchdog: BUG:` run, where Linux-visible time advanced too quickly before
+  the accepted CLINT divider fix.
+- Do not debug a stale May 14 or May 19 panic transcript as the active blocker
+  unless it reproduces on the current rebuilt DSim image.
+- If a new current run prints a kernel-visible failure marker, stop immediately
+  and use that exact run directory as the root-cause target. If no marker
+  appears, the next meaningful evidence point remains crossing the old
+  `68.56M` watchdog-BUG window on the timer-divided platform.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
