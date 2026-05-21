@@ -307,6 +307,27 @@ module tb_linux;
                      u_core.lsu_load_wb_rob_idx[1],
                      u_core.lsu_load_wb_pdst[0],
                      u_core.lsu_load_wb_pdst[1]);
+            $display("[LINUX_DEBUG_DCACHE] l2_state=%0d active=%0d req=%0b we=%0b req_addr=%016h ready=%0b resp=%0b resp_addr=%016h fill=%0b fill_addr=%016h free=%0b free_idx=%0d fill_avail=%0b fill_idx=%0d done_avail=%0b done_idx=%0d wb_avail=%0b wb_idx=%0d wt_count=%0d wt_deq=%0b",
+                     u_core.u_dcache.l2_state_q,
+                     u_core.u_dcache.l2_active_mshr_q,
+                     u_core.dc_l2_req_valid,
+                     u_core.dc_l2_req_we,
+                     u_core.dc_l2_req_addr,
+                     u_core.dc_l2_req_ready,
+                     u_core.dc_l2_resp_valid,
+                     u_core.dc_l2_resp_addr,
+                     u_core.dc_fill_snoop_valid,
+                     u_core.dc_fill_snoop_addr,
+                     u_core.u_dcache.mshr_free_avail,
+                     u_core.u_dcache.mshr_free_idx,
+                     u_core.u_dcache.fill_mshr_avail,
+                     u_core.u_dcache.fill_mshr_idx,
+                     u_core.u_dcache.fill_done_avail,
+                     u_core.u_dcache.fill_done_idx,
+                     u_core.u_dcache.wb_mshr_avail,
+                     u_core.u_dcache.wb_mshr_idx,
+                     u_core.u_dcache.wt_count_q,
+                     u_core.u_dcache.st_wt_deq_valid);
             for (int lqi = 0; lqi < LQ_DEPTH; lqi++) begin
                 if (u_core.u_lsu.u_load_queue.queue[lqi].valid) begin
                     $display("[LINUX_DEBUG_LQ] idx=%0d head=%0b rob=%0d valid=%0b addr_v=%0b exec=%0b result=%0b addr=%016h size=%0d data=%016h",
@@ -334,6 +355,20 @@ module tb_linux;
                              u_core.u_lsu.lmb[lmbi].pdst,
                              u_core.u_lsu.lmb[lmbi].lq_idx,
                              u_core.u_lsu.lmb[lmbi].data);
+                end
+            end
+            for (int mi = 0; mi < 16; mi++) begin
+                if (u_core.u_dcache.mshr[mi].valid) begin
+                    $display("[LINUX_DEBUG_MSHR] idx=%0d addr=%016h wb=%0b fill_pend=%0b fill_done=%0b store=%0b victim=%0d dirty=%0b evict=%016h",
+                             mi,
+                             u_core.u_dcache.mshr[mi].addr,
+                             u_core.u_dcache.mshr[mi].writeback_pend,
+                             u_core.u_dcache.mshr[mi].fill_pend,
+                             u_core.u_dcache.mshr[mi].fill_done,
+                             u_core.u_dcache.mshr[mi].store_pending,
+                             u_core.u_dcache.mshr[mi].victim,
+                             u_core.u_dcache.mshr[mi].dirty_evict,
+                             u_core.u_dcache.mshr[mi].evict_addr);
                 end
             end
         end
