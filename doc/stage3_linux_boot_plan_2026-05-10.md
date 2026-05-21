@@ -3066,6 +3066,37 @@ Current debug verdict:
   appears, the next meaningful evidence point remains crossing the old
   `68.56M` watchdog-BUG window on the timer-divided platform.
 
+### 2026-05-21 35M Panic Debug Stop
+
+The latest 72M first-failure capture was stopped after the user asked to debug
+the suspected kernel panic instead of waiting for the timeout:
+
+- Run:
+  `linux_boot_results/stage3_72m_first_failure_dsim_20260521c_retryloop`.
+- The run used the rebuilt timer-divided CLINT platform, current
+  `fw_payload.hex`, UART failure stop, low-VM-fetch/low-ifetch stops, and exact
+  old-address hooks for `ffffffff805c5dec` and `ffffffffeffff9a0`.
+- The run reached the `35M` status checkpoint before it was terminated for
+  triage.
+- Its UART and DSim logs contain no `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, no `watchdog: BUG`, and no `LINUX_STOP`.
+- It crossed the stale `ffffffff805c5dec`/`strcmp` region with `trap=0` at the
+  `10M` status checkpoint and reached the current `raid6` calibration path.
+
+Debug verdict:
+
+- The latest stopped current-RTL artifact still does not provide a fresh kernel
+  panic to root-cause.
+- The known historical signatures remain quarantined until reproduced on a
+  current rebuilt DSim image:
+  `ffffffff805c5dec` maps to Linux `strcmp`,
+  `ffffffffeffff9a0` maps to the stale `bad_range+0xc` data-side fault,
+  `0000000080003f7c` maps to the OpenSBI timer-trap return path, and
+  `watchdog: BUG:` maps to the pre-`MTIME_DIV_P` timer-scale artifact.
+- Do not make an RTL change for one of those stale signatures without a fresh
+  reproduction. The correct debug loop is first-failure capture with fail-fast
+  UART/trap hooks, then symbolization and a narrow directed smoke.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
