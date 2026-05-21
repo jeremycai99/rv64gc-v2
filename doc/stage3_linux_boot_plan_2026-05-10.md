@@ -210,6 +210,27 @@ Remaining proof before claiming the Linux milestone:
 - A focused Linux image run still must cross the old 62.72M-cycle freeze point
   with retirement moving and no fresh `Oops`, `BUG:`, `Kernel panic`, low-fetch
   stop, or watchdog marker.
+- A current no-trap DSim run from the rebuilt LSU port-0 retry RTL,
+  `linux_boot_results/stage3_lsu_p0_retry_100m_dsim_notrap_20260521a`, was
+  stopped deliberately at the user's request to pivot back to panic debug
+  instead of waiting for the 100M cap.  Its `summary.json` is stale from an
+  earlier lease failure, so use the newer `dsim.log` and `uart.log` timestamps
+  for evidence.  The run retired cleanly through the 45M-cycle status
+  checkpoint with `last_commit_cyc=44,999,994`, no trap, no `LINUX_STOP`, and no
+  UART `Unable to handle`, `Oops`, `BUG:`, or `Kernel panic` marker.  It is not
+  100M proof, but it is negative evidence for the old early panic signatures.
+- The historical `watchdog: BUG:` artifact
+  `linux_boot_results/stage3_current_100m_goal_dsim_20260519223941` remains
+  stale for current RTL.  That run reached Linux time `52.017374` seconds by
+  68,563,458 core cycles because `mtime` was advancing at core-cycle rate.  In
+  the stopped current run, `mtime=450,000` at `mcycle=45,000,000`, matching the
+  intended `mtime=mcycle/100` divider and keeping the UART log in the
+  sub-second `raid6` calibration window.
+- The historical `bad_range` page fault at virtual address
+  `ffffffffeffff9a0` and the older `ffffffff805c5dec` trap-frame Oops are not
+  current actionable RTL signatures unless a rebuilt current-RTL run
+  reproduces them.  The current run passed the corresponding early boot windows
+  without those UART markers.
 - A 70M DSim attempt,
   `linux_boot_results/stage3_lsu_p0_retry_70m_dsim_20260521b`, was stopped
   deliberately because it remained in early OpenSBI output without a useful
