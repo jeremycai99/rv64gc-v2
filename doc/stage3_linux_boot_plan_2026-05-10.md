@@ -2951,6 +2951,39 @@ Follow-up capture attempt:
 - This Verilator run is not signoff evidence. The boundary-clearing run still
   needs DSim when the shared license is available.
 
+### 2026-05-20 55M Panic Debug Stop
+
+The next DSim first-failure capture was stopped after the latest user-reported
+kernel-panic concern so the current artifact could be audited instead of
+waiting to 100M:
+
+- Run: `linux_boot_results/stage3_100m_unblock_dsim_20260520i_try1`.
+- The run used the rebuilt timer-divided CLINT platform, the current
+  `fw_payload.hex`, UART failure detection, low-VM-fetch and low-ifetch-fault
+  stops, and exact old-address stop hooks for `ffffffff805c5dec` and
+  `ffffffffeffff9a0`.
+- It reached the `55M` status checkpoint before being stopped.
+- The last checkpoint was clean: `trap=0`, `mtip=0`, `msip=0`,
+  `last_pc=ffffffff803fd0ca`, `time=0000000000086470`,
+  `timecmp=0000000000087253`.
+- Its UART and DSim logs contain no `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, no `watchdog: BUG`, and no `LINUX_STOP`.
+- It passed the stale `ffffffff805c5dec`/`strcmp` region and the current
+  `raid6` calibration output.  This is negative panic evidence only, not a
+  100M boot signoff result.
+
+Debug verdict:
+
+- There is still no fresh current-RTL kernel panic artifact to root-cause.
+- The latest true `BUG:` evidence remains the pre-`MTIME_DIV_P`
+  `stage3_current_100m_goal_dsim_20260519223941` run, where Linux-visible
+  time advanced too quickly and MTIP arrived during early boot.
+- The next actionable run should not be a blind 100M wait.  It should be a
+  bounded first-failure capture that crosses the old `68.56M` watchdog-BUG
+  window on the timer-divided platform.  If it prints a fresh `Oops`, `BUG:`,
+  `Unable to handle kernel`, `Kernel panic`, `LINUX_STOP`, or nonzero trap
+  signature, stop immediately and debug that exact artifact.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
