@@ -2992,6 +2992,44 @@ Debug verdict:
   This is a license availability result only.  No RTL or Linux evidence was
   produced by that attempt.
 
+### 2026-05-20 31M Panic Debug Stop
+
+The next bounded first-failure DSim retry was stopped deliberately after the
+kernel-panic concern so debug could focus on concrete failure artifacts rather
+than waiting for a longer timeout:
+
+- Run: `linux_boot_results/stage3_72m_first_failure_dsim_20260520c_retryloop`.
+- The run used the rebuilt timer-divided CLINT platform, current
+  `fw_payload.hex`, UART failure detection, low-VM-fetch and low-ifetch-fault
+  stops, and exact old-address stop hooks for `ffffffff805c5dec` and
+  `ffffffffeffff9a0`.
+- The run reached the `31M` status checkpoint before being stopped.
+- The last checkpoint was clean: `trap=0`, `mtip=0`, `msip=0`,
+  `last_pc=ffffffff803fd5a2`, `time=000000000004baf0`,
+  `timecmp=000000000004c017`.
+- Its UART and DSim logs contain no `Unable to handle kernel`, no `Oops`, no
+  `BUG:`, no `Kernel panic`, no `watchdog: BUG`, and no `LINUX_STOP`.
+- It passed the stale `ffffffff805c5dec`/`strcmp` window and reached the
+  current `raid6` calibration path. This is negative panic evidence only, not
+  a 72M or 100M boot signoff result.
+
+Current debug verdict:
+
+- There is still no fresh current-RTL kernel-panic artifact to root-cause.
+- The historical `ffffffff805c5dec` Oops remains classified as the old
+  trap-frame or fetch-identity failure. It is not reproduced by the May 20
+  rebuilt timer-divided runs.
+- The historical `ffffffffeffff9a0` Oops remains classified as the old
+  `AUIPC+LD` macro-fusion precise-fault bug. Current RTL keeps
+  `AUIPC+LD` and `AUIPC+STORE` unfused because this core has one destination
+  per uop and no partial-commit path.
+- The historical `watchdog: BUG:` artifact remains classified as the old CLINT
+  timebase scaling failure before `mtime=mcycle/100`.
+- Do not make a pipeline RTL change for any of those stale panic signatures
+  unless a rebuilt current-RTL run reproduces one of them. The next Linux
+  action remains a first-failure capture run with the panic and exact-address
+  stop hooks enabled, or a narrow directed test if a fresh stop marker appears.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
