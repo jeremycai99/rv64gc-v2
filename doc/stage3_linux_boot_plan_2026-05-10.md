@@ -2958,11 +2958,14 @@ kernel-panic concern so the current artifact could be audited instead of
 waiting to 100M:
 
 - Run: `linux_boot_results/stage3_100m_unblock_dsim_20260520i_try1`.
+- Follow-up retry-loop run:
+  `linux_boot_results/stage3_100m_unblock_dsim_20260521_retryloop`.
 - The run used the rebuilt timer-divided CLINT platform, the current
   `fw_payload.hex`, UART failure detection, low-VM-fetch and low-ifetch-fault
   stops, and exact old-address stop hooks for `ffffffff805c5dec` and
   `ffffffffeffff9a0`.
-- It reached the `55M` status checkpoint before being stopped.
+- Both runs reached the `55M` status checkpoint before being stopped for
+  panic triage.
 - The last checkpoint was clean: `trap=0`, `mtip=0`, `msip=0`,
   `last_pc=ffffffff803fd0ca`, `time=0000000000086470`,
   `timecmp=0000000000087253`.
@@ -2983,6 +2986,11 @@ Debug verdict:
   window on the timer-divided platform.  If it prints a fresh `Oops`, `BUG:`,
   `Unable to handle kernel`, `Kernel panic`, `LINUX_STOP`, or nonzero trap
   signature, stop immediately and debug that exact artifact.
+- The bounded DSim first-failure retry
+  `linux_boot_results/stage3_72m_first_failure_dsim_20260520b` did not run:
+  DSim returned `simulator exit code 105` with `Already at maxLeases (1)`.
+  This is a license availability result only.  No RTL or Linux evidence was
+  produced by that attempt.
 
 ## Near-Term Non-Goals
 
