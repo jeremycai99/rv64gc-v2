@@ -185,6 +185,9 @@ module tb_linux;
     integer linux_trace_fault_only_en;
     integer linux_trace_fe_en;
     integer linux_trace_amo_en;
+    integer linux_stop_lost_load_owner_en;
+    integer linux_lost_load_owner_limit;
+    integer linux_lost_load_owner_count [0:LQ_DEPTH-1];
     integer linux_trace_commit_range_en;
     integer linux_trace_regs_en;
     integer linux_trace_sscratch_en;
@@ -374,6 +377,95 @@ module tb_linux;
         end
     endtask
 
+    function automatic logic linux_lq_entry_has_owner(input int lq_idx);
+        linux_lq_entry_has_owner = 1'b0;
+
+        for (int lp = 0; lp < 2; lp++) begin
+            if (u_core.u_lsu.load_issue_valid_r[lp] &&
+                (u_core.u_lsu.load_issue_data_r[lp].lq_idx == LQ_IDX_BITS'(lq_idx)))
+                linux_lq_entry_has_owner = 1'b1;
+            if (u_core.u_lsu.load_issue_valid_rr[lp] &&
+                (u_core.u_lsu.load_issue_data_rr[lp].lq_idx == LQ_IDX_BITS'(lq_idx)))
+                linux_lq_entry_has_owner = 1'b1;
+            if (u_core.u_lsu.load_wb_valid[lp] &&
+                u_core.u_lsu.lq_result_valid_sel[lp] &&
+                (u_core.u_lsu.lq_result_idx_sel[lp] == LQ_IDX_BITS'(lq_idx)))
+                linux_lq_entry_has_owner = 1'b1;
+            if (u_core.u_lsu.lq_result_valid[lp] &&
+                (u_core.u_lsu.lq_result_idx[lp] == LQ_IDX_BITS'(lq_idx)))
+                linux_lq_entry_has_owner = 1'b1;
+        end
+
+        if (u_core.u_lsu.p0_retry_valid_r &&
+            (u_core.u_lsu.p0_retry_data_r.lq_idx == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+        if (u_core.u_lsu.p1_retry_valid_r &&
+            (u_core.u_lsu.p1_retry_data_r.lq_idx == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+
+        if (u_core.u_lsu.fwd_hold_valid_r &&
+            (u_core.u_lsu.fwd_hold_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+        if (u_core.u_lsu.p1_fwd_hold_valid_r &&
+            (u_core.u_lsu.p1_fwd_hold_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+        if (u_core.u_lsu.p1_misalign_hold_valid_r &&
+            (u_core.u_lsu.p1_misalign_hold_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+
+        if (u_core.u_lsu.split_load_busy &&
+            (u_core.u_lsu.split_load_data_r.lq_idx == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+        if (u_core.u_lsu.mmio_resp_hold_valid_r &&
+            (u_core.u_lsu.mmio_resp_load_data_r.lq_idx == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+        if (u_core.u_lsu.amo_wb_valid_r &&
+            (u_core.u_lsu.amo_wb_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+
+        for (int li = 0; li < 32; li++) begin
+            if (u_core.u_lsu.lmb[li].valid &&
+                (u_core.u_lsu.lmb[li].lq_idx == LQ_IDX_BITS'(lq_idx)))
+                linux_lq_entry_has_owner = 1'b1;
+        end
+    endfunction
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int li = 0; li < LQ_DEPTH; li++) begin
+                linux_lost_load_owner_count[li] <= 0;
+            end
+        end else if (linux_stop_lost_load_owner_en != 0) begin
+            for (int li = 0; li < LQ_DEPTH; li++) begin
+                if (u_core.u_lsu.u_load_queue.queue[li].valid &&
+                    u_core.u_lsu.u_load_queue.queue[li].executed &&
+                    !u_core.u_lsu.u_load_queue.queue[li].has_result &&
+                    !linux_lq_entry_has_owner(li)) begin
+                    linux_lost_load_owner_count[li] <=
+                        linux_lost_load_owner_count[li] + 1;
+                    if (linux_lost_load_owner_count[li] >=
+                        linux_lost_load_owner_limit) begin
+                        $display("[LINUX_STOP_LOST_LOAD_OWNER] cyc=%0d lq=%0d rob=%0d addr=%016h size=%0d pc0=%016h pc1=%016h lq_head=%0d lq_tail=%0d lq_count=%0d",
+                                 sim_cycle,
+                                 li,
+                                 u_core.u_lsu.u_load_queue.queue[li].rob_idx,
+                                 u_core.u_lsu.u_load_queue.queue[li].addr,
+                                 u_core.u_lsu.u_load_queue.queue[li].size,
+                                 u_core.rob_head_pc[0],
+                                 u_core.rob_head_pc[1],
+                                 u_core.u_lsu.u_load_queue.head_r,
+                                 u_core.u_lsu.u_load_queue.tail_r,
+                                 u_core.u_lsu.u_load_queue.count_r);
+                        linux_dump_stall_debug();
+                        $finish;
+                    end
+                end else begin
+                    linux_lost_load_owner_count[li] <= 0;
+                end
+            end
+        end
+    end
+
     initial begin
         max_cycles = 100000;
         uart_log_fd = 0;
@@ -406,6 +498,8 @@ module tb_linux;
         linux_trace_fault_only_en = 0;
         linux_trace_fe_en = 0;
         linux_trace_amo_en = 0;
+        linux_stop_lost_load_owner_en = 0;
+        linux_lost_load_owner_limit = 256;
         linux_trace_commit_range_en = 0;
         linux_trace_regs_en = 0;
         linux_trace_sscratch_en = 0;
@@ -502,6 +596,10 @@ module tb_linux;
             linux_trace_fe_en = 1;
         if ($test$plusargs("LINUX_TRACE_AMO"))
             linux_trace_amo_en = 1;
+        if ($test$plusargs("LINUX_STOP_ON_LOST_LOAD_OWNER"))
+            linux_stop_lost_load_owner_en = 1;
+        void'($value$plusargs("LINUX_LOST_LOAD_OWNER_LIMIT=%d",
+                              linux_lost_load_owner_limit));
         if ($test$plusargs("LINUX_TRACE_REGS"))
             linux_trace_regs_en = 1;
         if ($test$plusargs("LINUX_TRACE_SSCRATCH"))
@@ -2651,6 +2749,24 @@ module tb_linux;
                              u_core.u_dcache.wb_mshr_avail,
                              u_core.u_dcache.wb_mshr_idx);
                 end
+                if (u_core.u_dcache.ld1_new_miss_req &&
+                    linux_trace_line_match(u_core.u_dcache.ld1_line_addr)) begin
+                    $display("[LINUX_DMISS1] cyc=%0d line=%016h free=%0b alloc=%0b merge=%0b same_line_block=%0b diff_line_block=%0b retry=%0b l2_state=%0d active=%0d fill_avail=%0b fill_idx=%0d wb_avail=%0b wb_idx=%0d",
+                             sim_cycle,
+                             u_core.u_dcache.ld1_line_addr,
+                             u_core.u_dcache.mshr_free_avail,
+                             u_core.u_dcache.ld1_miss_alloc_sel,
+                             u_core.u_dcache.ld1_miss_merge_req,
+                             u_core.u_dcache.ld1_new_blocked_same_line,
+                             u_core.u_dcache.ld1_new_blocked_diff_line,
+                             u_core.dc_load_miss_retry[1],
+                             u_core.u_dcache.l2_state_q,
+                             u_core.u_dcache.l2_active_mshr_q,
+                             u_core.u_dcache.fill_mshr_avail,
+                             u_core.u_dcache.fill_mshr_idx,
+                             u_core.u_dcache.wb_mshr_avail,
+                             u_core.u_dcache.wb_mshr_idx);
+                end
                 if (u_core.u_dcache.ld0_miss_merge_req &&
                     linux_trace_line_match(u_core.u_dcache.ld0_line_addr)) begin
                     $display("[LINUX_DMERGE0] cyc=%0d line=%016h match_idx=%0d m0_valid=%0b m0_addr=%016h m0_fill_pend=%0b m0_wb_pend=%0b m0_done=%0b m0_store=%0b m1_valid=%0b m1_addr=%016h m1_fill_pend=%0b m1_wb_pend=%0b m1_done=%0b m1_store=%0b l2_state=%0d active=%0d fill_avail=%0b fill_idx=%0d wb_avail=%0b wb_idx=%0d",
@@ -2674,6 +2790,90 @@ module tb_linux;
                              u_core.u_dcache.fill_mshr_idx,
                              u_core.u_dcache.wb_mshr_avail,
                              u_core.u_dcache.wb_mshr_idx);
+                end
+                if (u_core.u_dcache.ld1_miss_merge_req &&
+                    linux_trace_line_match(u_core.u_dcache.ld1_line_addr)) begin
+                    $display("[LINUX_DMERGE1] cyc=%0d line=%016h match_idx=%0d m0_valid=%0b m0_addr=%016h m0_fill_pend=%0b m0_wb_pend=%0b m0_done=%0b m0_store=%0b m1_valid=%0b m1_addr=%016h m1_fill_pend=%0b m1_wb_pend=%0b m1_done=%0b m1_store=%0b l2_state=%0d active=%0d fill_avail=%0b fill_idx=%0d wb_avail=%0b wb_idx=%0d",
+                             sim_cycle, u_core.u_dcache.ld1_line_addr,
+                             u_core.u_dcache.mshr_ld1_match_idx,
+                             u_core.u_dcache.mshr[0].valid,
+                             u_core.u_dcache.mshr[0].addr,
+                             u_core.u_dcache.mshr[0].fill_pend,
+                             u_core.u_dcache.mshr[0].writeback_pend,
+                             u_core.u_dcache.mshr[0].fill_done,
+                             u_core.u_dcache.mshr[0].store_pending,
+                             u_core.u_dcache.mshr[1].valid,
+                             u_core.u_dcache.mshr[1].addr,
+                             u_core.u_dcache.mshr[1].fill_pend,
+                             u_core.u_dcache.mshr[1].writeback_pend,
+                             u_core.u_dcache.mshr[1].fill_done,
+                             u_core.u_dcache.mshr[1].store_pending,
+                             u_core.u_dcache.l2_state_q,
+                             u_core.u_dcache.l2_active_mshr_q,
+                             u_core.u_dcache.fill_mshr_avail,
+                             u_core.u_dcache.fill_mshr_idx,
+                             u_core.u_dcache.wb_mshr_avail,
+                             u_core.u_dcache.wb_mshr_idx);
+                end
+                if (u_core.u_lsu.p0_miss_detect &&
+                    linux_trace_line_match(u_core.u_lsu.load_eff_addr_r[0])) begin
+                    $display("[LINUX_LSU_MISS0] cyc=%0d pc=%016h rob=%0d lq=%0d addr=%016h retry=%0b free=%0b alloc=%0b fill_hit=%0b keep=%0b flush=%0b/%0b/%0d",
+                             sim_cycle,
+                             u_core.u_lsu.load_issue_data_r[0].pc,
+                             u_core.u_lsu.load_issue_data_r[0].rob_idx,
+                             u_core.u_lsu.load_issue_data_r[0].lq_idx,
+                             u_core.u_lsu.load_eff_addr_r[0],
+                             u_core.u_lsu.p0_lmb_retry_req,
+                             u_core.u_lsu.lmb_free_avail,
+                             u_core.u_lsu.p0_miss_detect &&
+                                 u_core.u_lsu.lmb_free_avail,
+                             u_core.u_lsu.p0_miss_fill_hit,
+                             u_core.u_lsu.load_pipe_flush_keep[0],
+                             u_core.flush_out.valid,
+                             u_core.flush_out.full_flush,
+                             u_core.flush_out.rob_idx);
+                end
+                if (u_core.u_lsu.p1_miss_detect &&
+                    linux_trace_line_match(u_core.u_lsu.load_eff_addr_r[1])) begin
+                    $display("[LINUX_LSU_MISS1] cyc=%0d pc=%016h rob=%0d lq=%0d addr=%016h retry=%0b free=%0b alloc=%0b fill_hit=%0b keep=%0b flush=%0b/%0b/%0d",
+                             sim_cycle,
+                             u_core.u_lsu.load_issue_data_r[1].pc,
+                             u_core.u_lsu.load_issue_data_r[1].rob_idx,
+                             u_core.u_lsu.load_issue_data_r[1].lq_idx,
+                             u_core.u_lsu.load_eff_addr_r[1],
+                             u_core.u_lsu.p1_lmb_retry_req,
+                             u_core.u_lsu.lmb_p1_alloc_avail,
+                             u_core.u_lsu.p1_miss_detect &&
+                                 u_core.u_lsu.lmb_p1_alloc_avail,
+                             u_core.u_lsu.p1_miss_fill_hit,
+                             u_core.u_lsu.load_pipe_flush_keep[1],
+                             u_core.flush_out.valid,
+                             u_core.flush_out.full_flush,
+                             u_core.flush_out.rob_idx);
+                end
+                if (u_core.u_lsu.lmb_any_match &&
+                    linux_trace_line_match(u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].line_addr)) begin
+                    $display("[LINUX_LMB_FILL_MATCH] cyc=%0d idx=%0d pc=%016h rob=%0d lq=%0d line=%016h wb_free=%0b ready_any=%0b",
+                             sim_cycle,
+                             u_core.u_lsu.lmb_match_idx,
+                             u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].pc,
+                             u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].rob_idx,
+                             u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].lq_idx,
+                             u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].line_addr,
+                             u_core.u_lsu.lmb_wb_port_free,
+                             u_core.u_lsu.lmb_ready_any);
+                end
+                if (u_core.u_lsu.lmb_ready_any &&
+                    linux_trace_line_match(u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].line_addr)) begin
+                    $display("[LINUX_LMB_READY] cyc=%0d idx=%0d pc=%016h rob=%0d lq=%0d line=%016h wb_free=%0b any_match=%0b",
+                             sim_cycle,
+                             u_core.u_lsu.lmb_ready_idx,
+                             u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].pc,
+                             u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].rob_idx,
+                             u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].lq_idx,
+                             u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].line_addr,
+                             u_core.u_lsu.lmb_wb_port_free,
+                             u_core.u_lsu.lmb_any_match);
                 end
                 if (u_core.dc_l2_req_valid &&
                     linux_trace_line_match(u_core.dc_l2_req_addr)) begin

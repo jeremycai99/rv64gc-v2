@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build the Stage 3 Linux platform simulation binary with Verilator.
+# Build the benchmark simulation binary with Verilator.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 VERILATOR_BIN="${VERILATOR:-verilator}"
-WORK_DIR="${VERILATOR_LINUX_WORK_DIR:-verilator_linux_work}"
+WORK_DIR="${VERILATOR_BENCH_WORK_DIR:-verilator_work}"
 JOBS="${VERILATOR_JOBS:-0}"
 CONVERGE_LIMIT="${VERILATOR_CONVERGE_LIMIT:-100}"
 FLATTEN="${VERILATOR_FLATTEN:-1}"
@@ -28,11 +28,11 @@ mapfile -t SV_FILES < <(
                 }
             }
         }
-    ' build_dsim_linux.sh
+    ' build_dsim.sh
 )
 
 if [[ ${#SV_FILES[@]} -eq 0 ]]; then
-    echo "ERROR: no SystemVerilog files found in build_dsim_linux.sh"
+    echo "ERROR: no SystemVerilog files found in build_dsim.sh"
     exit 1
 fi
 
@@ -77,12 +77,12 @@ fi
     -Wno-TIMESCALEMOD \
     -Wno-ASCRANGE \
     --Mdir "$WORK_DIR" \
-    --top-module tb_linux \
+    --top-module tb_xsim \
     "${SV_FILES[@]}"
 
 echo
-echo "Verilator Linux platform build OK. Binary at $WORK_DIR/Vtb_linux"
-echo "Run with: ./run_verilator_linux.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]"
+echo "Verilator benchmark build OK. Binary at $WORK_DIR/Vtb_xsim"
+echo "Run with: ./run_verilator.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]"
 if [[ "$TRACE" == "0" ]]; then
     echo "Waveform tracing disabled. Rebuild with VERILATOR_TRACE=1 when waveforms are required."
 fi

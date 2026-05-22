@@ -153,18 +153,25 @@ module lsu
     iq_entry_t       p0_retry_data_r;
     logic [63:0]     p0_retry_addr_r;
     logic            p0_fwd_hit;
+    logic            p0_fwd_hit_candidate;
     logic            fwd_hold_valid_r;
     logic            p1_fwd_hold_valid_r;
     logic            p0_dcache_hit_valid;
+    logic            p0_dcache_hold_valid_r;
+    logic            p0_dcache_hold_flush_keep;
+    logic            p0_dcache_hit_blocked;
+    logic            p0_load_wb_port_busy;
     logic            p1_normal_wb_valid;
     logic            p0_fwd_spill_to_p1;
     logic            fwd_hold_blocked;
+    logic            fwd_hold_flush_keep;
     logic            p1_misalign_hold_valid_r;
     logic            lmb_wb_port_free;
     logic            mmio_resp_hold_valid_r;
     logic            mmio_load0_block;
     logic            mmio_load1_block;
     logic            mmio_store_launch;
+    logic            mmio_load0_candidate_launch;
     logic            mmio_load0_launch;
     logic            mmio_load1_launch;
     logic            mmio_load_wb_fire;
@@ -181,6 +188,7 @@ module lsu
     logic            amo_serial_block;
     logic            amo_forward_block;
     logic            amo_flush_kill;
+    logic            amo_wb_drain_fire;
     logic            amo_wait_load_r;
     logic            amo_store_valid_r;
     logic            amo_store_committed_r;
@@ -551,7 +559,9 @@ module lsu
     // SQ CAM won't see it.  This path has HIGHER priority than the SQ CAM
     // (younger store wins over older SQ entries).
     logic        same_cycle_fwd_hit;
+    logic        same_cycle_fwd_hit_candidate;
     logic        same_cycle_fwd_partial;
+    logic        same_cycle_fwd_partial_candidate;
     logic [63:0] same_cycle_fwd_data;
     logic        same_cycle_sta_wait0;
     logic        same_cycle_sta_wait1;
@@ -706,24 +716,29 @@ module lsu
     assign same_cycle_overlap1 = (sta_older_than_load1 && same_cycle_addr_match1)
                                ? (sta_byte_mask_dyn & load1_byte_mask_dyn)
                                : 8'h00;
-    assign same_cycle_fwd_hit = load_issue_valid[0] & ~load_addr_misaligned[0] &
-                                ~flush_in.valid &
-                                sta_older_than_load0 &
-                                sta_std_same_store &
-                                same_cycle_addr_match0 &
-                                !(sta_cross_dword || load0_cross_dword) &
-                                ((sta_byte_mask_dyn & load0_byte_mask_dyn)
-                                 == load0_byte_mask_dyn);
-    assign same_cycle_fwd_partial =
-        load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid &
+    assign same_cycle_fwd_hit_candidate =
+        load_issue_candidate_valid[0] & ~load_addr_misaligned[0] &
+        ~flush_in.valid &
+        sta_older_than_load0 &
+        sta_std_same_store &
+        same_cycle_addr_match0 &
+        !(sta_cross_dword || load0_cross_dword) &
+        ((sta_byte_mask_dyn & load0_byte_mask_dyn) == load0_byte_mask_dyn);
+    assign same_cycle_fwd_hit =
+        load_issue_valid[0] & same_cycle_fwd_hit_candidate;
+    assign same_cycle_fwd_partial_candidate =
+        load_issue_candidate_valid[0] & ~load_addr_misaligned[0] &
+        ~flush_in.valid &
         sta_older_than_load0 &
         same_cycle_range_overlap0 &
-        ~same_cycle_fwd_hit;
+        ~same_cycle_fwd_hit_candidate;
+    assign same_cycle_fwd_partial =
+        load_issue_valid[0] & same_cycle_fwd_partial_candidate;
     assign same_cycle_sta_wait0 =
         load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid &
         sta_older_than_load0 &
         same_cycle_range_overlap0 &
-        ~same_cycle_fwd_hit;
+        ~same_cycle_fwd_hit_candidate;
     assign same_cycle_sta_wait1 =
         load_issue_candidate_valid[1] & ~load_addr_misaligned[1] & ~flush_in.valid &
         sta_older_than_load1 &
@@ -965,19 +980,29 @@ module lsu
                 load_eff_addr_rr[i]   <= '0;
             end
         end else if (flush_in.valid) begin
-            // Kill all in-flight load metadata on a redirect. Keeping the
-            // one-cycle stage live lets a wrong-path miss allocate an LMB
-            // entry after the flush, then write stale data into a recycled
-            // ROB/pdst when the fill returns.
-            load_issue_valid_r  <= '0;
-            load_issue_valid_rr <= '0;
-            load_nocache_r      <= '0;
-            load_nocache_rr     <= '0;
+            // Match the LQ partial-flush owner rule.  A partial flush discards
+            // wrong-path younger loads, but older issued loads still need their
+            // one-cycle metadata so a cache response can complete the live LQ
+            // entry.  Full flushes still kill every in-flight endpoint.
             for (int i = 0; i < 2; i++) begin
-                load_issue_data_r[i]  <= '0;
-                load_issue_data_rr[i] <= '0;
-                load_eff_addr_r[i]    <= '0;
-                load_eff_addr_rr[i]   <= '0;
+                if (flush_in.full_flush ||
+                    (load_issue_valid_r[i] &&
+                     (lsu_rob_age_from_head(load_issue_data_r[i].rob_idx) >=
+                      lsu_rob_age_from_head(flush_in.rob_idx)))) begin
+                    load_issue_valid_r[i] <= 1'b0;
+                    load_nocache_r[i]     <= 1'b0;
+                    load_issue_data_r[i]  <= '0;
+                    load_eff_addr_r[i]    <= '0;
+                end
+                if (flush_in.full_flush ||
+                    (load_issue_valid_rr[i] &&
+                     (lsu_rob_age_from_head(load_issue_data_rr[i].rob_idx) >=
+                      lsu_rob_age_from_head(flush_in.rob_idx)))) begin
+                    load_issue_valid_rr[i] <= 1'b0;
+                    load_nocache_rr[i]     <= 1'b0;
+                    load_issue_data_rr[i]  <= '0;
+                    load_eff_addr_rr[i]    <= '0;
+                end
             end
         end else begin
             // Port 0 and port 1 propagate their effective issue.  This includes
@@ -1010,37 +1035,44 @@ module lsu
         end
     end
 
-    // =========================================================================
-    // LQ result fill: whichever path drove load_wb[0] this cycle also
-    // records the result into the load queue.  Because the LMB needs to be
-    // declared below before we can reference its fields here, we forward-
-    // declare the lq_result source selector and bind it in the same
-    // writeback always_comb block below.
-    // =========================================================================
-    logic                   lq_result_valid;
-    logic [LQ_IDX_BITS-1:0] lq_result_idx;
-    logic [63:0]            lq_result_data;
+    // Partial flushes discard ROB entries in [flush tail, current tail), while
+    // older entries remain architecturally live.  LSU endpoint state must use
+    // the same owner rule: keep completions for older loads and kill only
+    // wrong-path younger loads.
+    logic [ROB_IDX_BITS:0] flush_tail_age;
+    logic [1:0]            load_pipe_flush_keep;
 
-    logic                   lq_result_valid_r;
-    logic [LQ_IDX_BITS-1:0] lq_result_idx_r;
-    logic [63:0]            lq_result_data_r;
-    logic [LQ_IDX_BITS-1:0] lq_result_idx_sel;  // combinational selector
+    assign flush_tail_age = lsu_rob_age_from_head(flush_in.rob_idx);
 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            lq_result_valid_r <= 1'b0;
-        end else if (flush_in.valid) begin
-            lq_result_valid_r <= 1'b0;
-        end else begin
-            lq_result_valid_r <= load_wb_valid[0];
-            lq_result_idx_r   <= lq_result_idx_sel;
-            lq_result_data_r  <= load_wb_data[0];
+    always_comb begin
+        for (int i = 0; i < 2; i++) begin
+            load_pipe_flush_keep[i] =
+                !flush_in.valid ||
+                (!flush_in.full_flush &&
+                 (lsu_rob_age_from_head(load_issue_data_r[i].rob_idx) < flush_tail_age));
         end
     end
 
-    assign lq_result_valid = lq_result_valid_r;
-    assign lq_result_idx   = lq_result_idx_r;
-    assign lq_result_data  = lq_result_data_r;
+    // =========================================================================
+    // LQ result fill: whichever paths drive load_wb this cycle also record
+    // results into the load queue.  Because the LMB needs to be declared
+    // below before we can reference its fields here, the result source
+    // selectors are bound in the writeback always_comb block below.
+    // =========================================================================
+    logic [1:0]             lq_result_valid;
+    logic [LQ_IDX_BITS-1:0] lq_result_idx [0:1];
+    logic [63:0]            lq_result_data [0:1];
+
+    logic [1:0]             lq_result_valid_sel;
+    logic [LQ_IDX_BITS-1:0] lq_result_idx_sel [0:1];
+
+    always_comb begin
+        for (int i = 0; i < 2; i++) begin
+            lq_result_valid[i] = load_wb_valid[i] && lq_result_valid_sel[i];
+            lq_result_idx[i]   = lq_result_idx_sel[i];
+            lq_result_data[i]  = load_wb_data[i];
+        end
+    end
 
     load_queue u_load_queue (
         .clk               (clk),
@@ -1065,9 +1097,12 @@ module lsu
         .exec1_size        (lq_exec1_size),
         .exec1_is_unsigned (lq_exec1_is_unsigned),
         // Load result
-        .result_valid      (lq_result_valid),
-        .result_idx        (lq_result_idx),
-        .result_data       (lq_result_data),
+        .result0_valid     (lq_result_valid[0]),
+        .result0_idx       (lq_result_idx[0]),
+        .result0_data      (lq_result_data[0]),
+        .result1_valid     (lq_result_valid[1]),
+        .result1_idx       (lq_result_idx[1]),
+        .result1_data      (lq_result_data[1]),
         // Store-to-load ordering violation check (from STA).
         // Use the same unguarded STA valid as above; a flush-cycle STA that
         // is older than the flush point still needs its ordering check.
@@ -1415,6 +1450,11 @@ module lsu
         sq_fwd_hit |
         csb_enq_fwd_hit |
         csb_fwd_hit;
+    assign p0_fwd_hit_candidate =
+        same_cycle_fwd_hit_candidate |
+        sq_fwd_hit |
+        csb_enq_fwd_hit |
+        csb_fwd_hit;
     assign p1_any_fwd_hit =
         sq_fwd_hit_p1 |
         csb_enq_fwd_hit_p1 |
@@ -1460,31 +1500,42 @@ module lsu
     logic            p1_retry_addr_mmio;
     logic            p0_miss_retry_req;
     logic            p1_miss_retry_req;
+    logic            p0_lmb_retry_req;
+    logic            p1_lmb_retry_req;
     logic            p1_fwd_blocked;
     logic            split_load_busy;
     logic            split_load_start;
     logic            split_load_wb_fire;
 
-    assign p0_dcache_hit_valid = !flush_in.valid
+    assign p0_dcache_hit_valid = load_pipe_flush_keep[0]
                                && dcache_load_resp_valid[0]
                                && load_issue_valid_r[0]
                                && !load_nocache_r[0]
                                && !load_issue_data_r[0].is_amo;
     assign p1_normal_wb_valid  = p1_misalign_hold_valid_r
-                               || (!flush_in.valid
+                               || (load_pipe_flush_keep[1]
                                    && dcache_load_resp_valid[1]
                                    && load_issue_valid_r[1]
                                    && !load_nocache_r[1]);
-    assign p0_fwd_spill_to_p1  = fwd_hold_valid_r && p0_dcache_hit_valid && !p1_normal_wb_valid;
-    assign fwd_hold_blocked    = fwd_hold_valid_r && p0_dcache_hit_valid && p1_normal_wb_valid;
-    assign lmb_wb_port_free    = !p0_dcache_hit_valid &&
-                                  !fwd_hold_valid_r &&
-                                  !amo_wb_valid_r;
+    assign p0_load_wb_port_busy =
+        (amo_wb_valid_r && amo_wb_flush_keep) |
+        p0_dcache_hit_valid |
+        (p0_dcache_hold_valid_r && p0_dcache_hold_flush_keep);
+    assign p0_fwd_spill_to_p1  =
+        fwd_hold_valid_r && fwd_hold_flush_keep &&
+        p0_load_wb_port_busy && !p1_normal_wb_valid;
+    assign fwd_hold_blocked    =
+        fwd_hold_valid_r && fwd_hold_flush_keep &&
+        p0_load_wb_port_busy && p1_normal_wb_valid;
+    assign lmb_wb_port_free    = !p0_load_wb_port_busy &&
+                                  !(fwd_hold_valid_r && fwd_hold_flush_keep) &&
+                                  !(amo_wb_valid_r && amo_wb_flush_keep);
     assign amo_busy = amo_wait_load_r | amo_store_valid_r | amo_wb_valid_r;
     assign amo_serial_block =
         amo_busy |
         csb_deq_valid |
         lmb_any_valid |
+        p0_dcache_hold_valid_r |
         (load_issue_valid_r != 2'b00) |
         (load_issue_valid_rr != 2'b00) |
         p0_retry_valid_r |
@@ -1509,7 +1560,8 @@ module lsu
         sta_older_than_load0 |
         sq_fwd_wait |
         sq_fwd_hit |
-        p0_partial_fwd_wait |
+        (sq_fwd_partial | same_cycle_fwd_partial_candidate |
+         csb_enq_fwd_partial | csb_fwd_partial) |
         csb_enq_fwd_hit |
         csb_fwd_hit;
     assign amo_flush_kill = flush_in.valid && flush_in.full_flush;
@@ -1519,6 +1571,7 @@ module lsu
         (flush_in.valid ||
          split_load_busy ||
          p0_retry_valid_r ||
+         p0_dcache_hold_valid_r ||
          p0_miss_retry_req ||
          load0_tlb_miss ||
          load0_tlb_port_wait ||
@@ -1770,13 +1823,16 @@ module lsu
             p0_retry_valid_r <= 1'b0;
             p0_retry_data_r  <= '0;
             p0_retry_addr_r  <= 64'd0;
-        end else if (flush_in.valid) begin
+        end else if (flush_in.valid &&
+                     (flush_in.full_flush ||
+                      (p0_retry_valid_r &&
+                       (lsu_rob_age_from_head(p0_retry_data_r.rob_idx) >= flush_tail_age)))) begin
             p0_retry_valid_r <= 1'b0;
         end else begin
             if (p0_retry_fire) begin
                 p0_retry_valid_r <= 1'b0;
             end
-            if (p0_miss_retry_req) begin
+            if (p0_miss_retry_req || p0_lmb_retry_req) begin
                 p0_retry_valid_r <= 1'b1;
                 p0_retry_data_r  <= load_issue_data_r[0];
                 p0_retry_addr_r  <= load_eff_addr_r[0];
@@ -1836,7 +1892,10 @@ module lsu
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             p1_retry_valid_r <= 1'b0;
-        end else if (flush_in.valid) begin
+        end else if (flush_in.valid &&
+                     (flush_in.full_flush ||
+                      (p1_retry_valid_r &&
+                       (lsu_rob_age_from_head(p1_retry_data_r.rob_idx) >= flush_tail_age)))) begin
             p1_retry_valid_r <= 1'b0;
         end else begin
             if (p1_retry_valid_r) begin
@@ -1857,7 +1916,7 @@ module lsu
                 p1_retry_misalign_r     <= load_addr_misaligned[1];
                 p1_retry_load_nocache_r <= load_addr_misaligned[1] | flush_in.valid;
             end
-            if (p1_miss_retry_req) begin
+            if (p1_miss_retry_req || p1_lmb_retry_req) begin
                 p1_retry_valid_r        <= 1'b1;
                 p1_retry_data_r         <= load_issue_data_r[1];
                 p1_retry_addr_r         <= load_eff_addr_r[1];
@@ -1903,6 +1962,15 @@ module lsu
         !p0_fwd_hit &&
         !p0_partial_fwd_wait &&
         !flush_in.valid;
+    assign mmio_load0_candidate_launch =
+        mmio_available && !mmio_store_launch &&
+        load_issue_candidate_valid[0] &&
+        !load_addr_misaligned[0] &&
+        load_addr_mmio[0] &&
+        !p0_fwd_hit_candidate &&
+        !(sq_fwd_partial | same_cycle_fwd_partial_candidate |
+          csb_enq_fwd_partial | csb_fwd_partial) &&
+        !flush_in.valid;
 
     assign mmio_load1_launch =
         mmio_available && !mmio_store_launch && !mmio_load0_launch &&
@@ -1923,7 +1991,7 @@ module lsu
         load_issue_candidate_valid[1] &&
         !load_addr_misaligned[1] &&
         load_addr_mmio[1] &&
-        (!mmio_available || mmio_store_launch || mmio_load0_launch);
+        (!mmio_available || mmio_store_launch || mmio_load0_candidate_launch);
 
     assign data_mmio_req_valid = mmio_req_valid_r;
     assign data_mmio_req_we    = mmio_req_we_r;
@@ -2068,6 +2136,12 @@ module lsu
     logic [63:0]       split_load_merged_raw;
     logic [63:0]       split_load_result;
     logic [3:0]        split_load_first_bytes;
+    logic              split_load_flush_keep;
+
+    assign split_load_flush_keep =
+        !flush_in.valid ||
+        (!flush_in.full_flush &&
+         (lsu_rob_age_from_head(split_load_data_r.rob_idx) < flush_tail_age));
 
     assign split_load_busy = (split_load_state_r != SPLIT_LD_IDLE);
     assign split_load_start =
@@ -2139,7 +2213,9 @@ module lsu
             split_load_wait_addr_r    <= 64'd0;
             split_load_first_dword_r  <= 64'd0;
             split_load_second_dword_r <= 64'd0;
-        end else if (flush_in.valid) begin
+        end else if (flush_in.valid &&
+                     (flush_in.full_flush ||
+                      ((split_load_state_r != SPLIT_LD_IDLE) && !split_load_flush_keep))) begin
             split_load_state_r <= SPLIT_LD_IDLE;
         end else begin
             case (split_load_state_r)
@@ -2484,7 +2560,8 @@ module lsu
             end
             lr_valid_r <= 1'b0;
         end else begin
-            if (amo_wb_valid_r)
+            if (amo_wb_drain_fire ||
+                (flush_in.valid && amo_wb_valid_r && !amo_wb_flush_keep))
                 amo_wb_valid_r <= 1'b0;
 
             if (lr_store_clear)
@@ -2587,6 +2664,16 @@ module lsu
     } lmb_entry_t;
 
     lmb_entry_t lmb [0:LMB_DEPTH-1];
+    logic [LMB_DEPTH-1:0] lmb_flush_keep;
+
+    always_comb begin
+        for (int i = 0; i < LMB_DEPTH; i++) begin
+            lmb_flush_keep[i] =
+                !flush_in.valid ||
+                (!flush_in.full_flush &&
+                 (lsu_rob_age_from_head(lmb[i].rob_idx) < flush_tail_age));
+        end
+    end
 
     function automatic logic [63:0] lmb_extract_from_fill(
         input logic [LINE_SIZE*8-1:0] fill_data,
@@ -2623,23 +2710,23 @@ module lsu
     logic p1_miss_fill_hit;
     logic [LINE_SIZE*8-1:0] p0_miss_fill_data;
     logic [LINE_SIZE*8-1:0] p1_miss_fill_data;
-    assign p1_miss_retry_req = !flush_in.valid
+    assign p1_miss_retry_req = load_pipe_flush_keep[1]
                              & load_issue_valid_r[1]
                              & ~load_nocache_r[1]
                              & ~load_issue_data_r[1].is_amo
                              & dcache_load_miss_retry[1];
-    assign p0_miss_retry_req = !flush_in.valid
+    assign p0_miss_retry_req = load_pipe_flush_keep[0]
                              & load_issue_valid_r[0]
                              & ~load_nocache_r[0]
                              & ~load_issue_data_r[0].is_amo
                              & dcache_load_miss_retry[0];
-    assign p0_miss_detect = !flush_in.valid
+    assign p0_miss_detect = load_pipe_flush_keep[0]
                           & load_issue_valid_r[0]
                           & ~load_nocache_r[0]
                           & ~load_issue_data_r[0].is_amo
                           & ~dcache_load_resp_valid[0]
                           & ~dcache_load_miss_retry[0];
-    assign p1_miss_detect = !flush_in.valid
+    assign p1_miss_detect = load_pipe_flush_keep[1]
                           & load_issue_valid_r[1]
                           & ~load_nocache_r[1]
                           & ~load_issue_data_r[1].is_amo
@@ -2716,10 +2803,10 @@ module lsu
         lmb_free2_avail = 1'b0;
         lmb_free2_idx   = '0;
         for (int i = 0; i < LMB_DEPTH; i++) begin
-            if (!lmb[i].valid && !lmb_free_avail) begin
+            if (!(lmb[i].valid && lmb_flush_keep[i]) && !lmb_free_avail) begin
                 lmb_free_avail = 1'b1;
                 lmb_free_idx   = LMB_IDX_BITS'(i);
-            end else if (!lmb[i].valid && !lmb_free2_avail) begin
+            end else if (!(lmb[i].valid && lmb_flush_keep[i]) && !lmb_free2_avail) begin
                 lmb_free2_avail = 1'b1;
                 lmb_free2_idx   = LMB_IDX_BITS'(i);
             end
@@ -2727,6 +2814,12 @@ module lsu
         lmb_p1_alloc_avail = p0_miss_detect ? lmb_free2_avail : lmb_free_avail;
         lmb_p1_alloc_idx   = p0_miss_detect ? lmb_free2_idx   : lmb_free_idx;
     end
+
+    // Keep a missed load live when no LMB completion owner can be reserved.
+    // The data cache may already be tracking the line miss, so the retry will
+    // later merge with that MSHR or hit after the line installs.
+    assign p0_lmb_retry_req = p0_miss_detect && !lmb_free_avail;
+    assign p1_lmb_retry_req = p1_miss_detect && !lmb_p1_alloc_avail;
 
     // Match an incoming fill to an LMB entry (line-aligned compare).
     logic [LMB_DEPTH-1:0] lmb_fill_match;
@@ -2742,9 +2835,10 @@ module lsu
         lmb_ready_idx = '0;
         lmb_any_valid = 1'b0;
         for (int i = 0; i < LMB_DEPTH; i++) begin
-            if (lmb[i].valid)
+            if (lmb[i].valid && lmb_flush_keep[i])
                 lmb_any_valid = 1'b1;
             lmb_fill_match[i] = lmb[i].valid
+                              & lmb_flush_keep[i]
                               & !lmb[i].ready
                               & dcache_fill_valid
                               & (lmb[i].line_addr[63:LINE_BITS]
@@ -2753,7 +2847,7 @@ module lsu
                 lmb_any_match = 1'b1;
                 lmb_match_idx = LMB_IDX_BITS'(i);
             end
-            if (lmb[i].valid && lmb[i].ready && !lmb_ready_any) begin
+            if (lmb[i].valid && lmb_flush_keep[i] && lmb[i].ready && !lmb_ready_any) begin
                 lmb_ready_any = 1'b1;
                 lmb_ready_idx = LMB_IDX_BITS'(i);
             end
@@ -2948,6 +3042,15 @@ module lsu
                 lmb[i].ready <= 1'b0;
             end
         end else begin
+            if (flush_in.valid) begin
+                for (int i = 0; i < LMB_DEPTH; i++) begin
+                    if (lmb[i].valid && !lmb_flush_keep[i]) begin
+                        lmb[i].valid <= 1'b0;
+                        lmb[i].ready <= 1'b0;
+                    end
+                end
+            end
+
             // Allocate on miss detection.  Both load ports can allocate in
             // the same cycle when two LMB slots are free; otherwise port 0
             // has priority.
@@ -3036,12 +3139,18 @@ module lsu
     logic [63:0] fwd_hold_data_r;
     mem_size_e fwd_hold_mem_size_r;
     logic [LQ_IDX_BITS-1:0] fwd_hold_lq_idx_r;
+    logic [ROB_IDX_BITS-1:0] p0_dcache_hold_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] p0_dcache_hold_pdst_r;
+    logic [63:0] p0_dcache_hold_data_r;
+    mem_size_e p0_dcache_hold_mem_size_r;
+    logic [LQ_IDX_BITS-1:0] p0_dcache_hold_lq_idx_r;
 
     logic fwd_hold_is_exc_r;
     logic [ROB_IDX_BITS-1:0] p1_fwd_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] p1_fwd_hold_pdst_r;
     logic [63:0] p1_fwd_hold_data_r;
     mem_size_e p1_fwd_hold_mem_size_r;
+    logic [LQ_IDX_BITS-1:0] p1_fwd_hold_lq_idx_r;
 
     // Port-1 misalign-exception hold register (mirrors the port-0 fwd_hold
     // pattern). Original same-cycle path at the writeback mux was a
@@ -3054,9 +3163,72 @@ module lsu
     // (rare) misalign exception path.
     logic [ROB_IDX_BITS-1:0]  p1_misalign_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] p1_misalign_hold_pdst_r;
+    logic [LQ_IDX_BITS-1:0]   p1_misalign_hold_lq_idx_r;
+    logic                     p1_fwd_hold_flush_keep;
+    logic                     p1_misalign_hold_flush_keep;
+    logic                     amo_wb_flush_keep;
+    logic                     mmio_resp_flush_keep;
+
+    assign fwd_hold_flush_keep =
+        !flush_in.valid ||
+        (!flush_in.full_flush &&
+         (lsu_rob_age_from_head(fwd_hold_rob_idx_r) < flush_tail_age));
+    assign p1_fwd_hold_flush_keep =
+        !flush_in.valid ||
+        (!flush_in.full_flush &&
+         (lsu_rob_age_from_head(p1_fwd_hold_rob_idx_r) < flush_tail_age));
+    assign p1_misalign_hold_flush_keep =
+        !flush_in.valid ||
+        (!flush_in.full_flush &&
+         (lsu_rob_age_from_head(p1_misalign_hold_rob_idx_r) < flush_tail_age));
+    assign p0_dcache_hold_flush_keep =
+        !flush_in.valid ||
+        (!flush_in.full_flush &&
+         (lsu_rob_age_from_head(p0_dcache_hold_rob_idx_r) < flush_tail_age));
+    assign amo_wb_flush_keep =
+        !flush_in.valid ||
+        (!flush_in.full_flush &&
+         (lsu_rob_age_from_head(amo_wb_rob_idx_r) < flush_tail_age));
+    assign mmio_resp_flush_keep =
+        !flush_in.valid ||
+        (!flush_in.full_flush &&
+         (lsu_rob_age_from_head(mmio_resp_load_data_r.rob_idx) < flush_tail_age));
+    assign amo_wb_drain_fire =
+        amo_wb_valid_r &&
+        amo_wb_flush_keep &&
+        !(p0_dcache_hold_valid_r && p0_dcache_hold_flush_keep);
+
+    assign p0_dcache_hit_blocked =
+        p0_dcache_hit_valid &&
+        ((amo_wb_valid_r && amo_wb_flush_keep) ||
+         (p0_dcache_hold_valid_r && p0_dcache_hold_flush_keep));
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || flush_in.valid) begin
+        if (!rst_n ||
+            (flush_in.valid &&
+             (flush_in.full_flush ||
+              (p0_dcache_hold_valid_r && !p0_dcache_hold_flush_keep)))) begin
+            p0_dcache_hold_valid_r <= 1'b0;
+            p0_dcache_hold_mem_size_r <= MEM_DWORD;
+        end else begin
+            if (p0_dcache_hold_valid_r) begin
+                p0_dcache_hold_valid_r <= 1'b0;
+            end
+            if (p0_dcache_hit_blocked) begin
+                p0_dcache_hold_valid_r <= 1'b1;
+                p0_dcache_hold_rob_idx_r <= load_issue_data_r[0].rob_idx;
+                p0_dcache_hold_pdst_r <= load_issue_data_r[0].pdst;
+                p0_dcache_hold_data_r <= load_extracted_dc[0];
+                p0_dcache_hold_mem_size_r <= load_issue_data_r[0].mem_size;
+                p0_dcache_hold_lq_idx_r <= load_issue_data_r[0].lq_idx;
+            end
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n ||
+            (flush_in.valid &&
+             (flush_in.full_flush || (fwd_hold_valid_r && !fwd_hold_flush_keep)))) begin
             fwd_hold_valid_r  <= 1'b0;
             fwd_hold_is_exc_r <= 1'b0;
             fwd_hold_mem_size_r <= MEM_DWORD;
@@ -3083,7 +3255,10 @@ module lsu
 
     // Port-1 misalign hold capture/drain.
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || flush_in.valid) begin
+        if (!rst_n ||
+            (flush_in.valid &&
+             (flush_in.full_flush ||
+              (p1_misalign_hold_valid_r && !p1_misalign_hold_flush_keep)))) begin
             p1_misalign_hold_valid_r <= 1'b0;
         end else begin
             if (p1_misalign_hold_valid_r) begin
@@ -3096,12 +3271,16 @@ module lsu
                 p1_misalign_hold_valid_r   <= 1'b1;
                 p1_misalign_hold_rob_idx_r <= load_issue_data[1].rob_idx;
                 p1_misalign_hold_pdst_r    <= load_issue_data[1].pdst;
+                p1_misalign_hold_lq_idx_r  <= load_issue_data[1].lq_idx;
             end
         end
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || flush_in.valid) begin
+        if (!rst_n ||
+            (flush_in.valid &&
+             (flush_in.full_flush ||
+              (p1_fwd_hold_valid_r && !p1_fwd_hold_flush_keep)))) begin
             p1_fwd_hold_valid_r <= 1'b0;
             p1_fwd_hold_mem_size_r <= MEM_DWORD;
         end else begin
@@ -3125,6 +3304,7 @@ module lsu
                 p1_fwd_hold_pdst_r    <= p1_eff_data.pdst;
                 p1_fwd_hold_data_r    <= p1_extracted_fwd;
                 p1_fwd_hold_mem_size_r <= p1_eff_data.mem_size;
+                p1_fwd_hold_lq_idx_r  <= p1_eff_data.lq_idx;
             end
         end
     end
@@ -3133,10 +3313,11 @@ module lsu
     // Load writeback to CDB
     // =========================================================================
     // Priority (Port 0):
-    //   1. Misalign exception (same-cycle, rare — doesn't oscillate)
-    //   2. Forwarding hold (1-cycle delayed SQ/CSB fwd)
-        //   3. D-cache hit response (1-cycle delayed metadata)
-    //   4. LMB fill match (late miss response)
+    //   1. Held D-cache hit from a previous arbitration conflict
+    //   2. AMO/LR/SC writeback
+    //   3. D-cache hit response with 1-cycle-delayed metadata
+    //   4. Forwarding hold or split load result
+    //   5. LMB fill match, ready LMB drain, or MMIO response
     // Priority (Port 1):
     //   1. Misalign exception (1-cycle-delayed registered hold — was a
     //      same-cycle CDB-loop leak; see p1_misalign_hold_valid_r above)
@@ -3148,35 +3329,50 @@ module lsu
     // =========================================================================
     assign split_load_wb_fire =
         (split_load_state_r == SPLIT_LD_WB) &&
-        !flush_in.valid &&
-        !amo_wb_valid_r &&
+        split_load_flush_keep &&
+        !(amo_wb_valid_r && amo_wb_flush_keep) &&
+        !(p0_dcache_hold_valid_r && p0_dcache_hold_flush_keep) &&
         !p0_dcache_hit_valid &&
-        !fwd_hold_valid_r;
+        !(fwd_hold_valid_r && fwd_hold_flush_keep);
 
     always_comb begin
-        // Default LQ index selector (drives lq_result_idx_sel)
-        lq_result_idx_sel = '0;
+        // Default LQ result selectors.
+        lq_result_valid_sel = 2'b00;
+        for (int i = 0; i < 2; i++) begin
+            lq_result_idx_sel[i] = '0;
+        end
         mmio_load_wb_fire = 1'b0;
         load_wb_mem_size[0] = MEM_DWORD;
         load_wb_mem_size[1] = MEM_DWORD;
 
         // Port 0 — no same-cycle paths.  Misalign + fwd both go through
         // the hold register (1-cycle delayed) to eliminate CDB loops.
-        if (flush_in.valid) begin
+        if (flush_in.valid && flush_in.full_flush) begin
             load_wb_valid[0]         = 1'b0;
             load_wb_rob_idx[0]       = '0;
             load_wb_pdst[0]          = '0;
             load_wb_data[0]          = '0;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-        end else if (amo_wb_valid_r) begin
+        end else if (p0_dcache_hold_valid_r && p0_dcache_hold_flush_keep) begin
+            load_wb_valid[0]         = 1'b1;
+            load_wb_rob_idx[0]       = p0_dcache_hold_rob_idx_r;
+            load_wb_pdst[0]          = p0_dcache_hold_pdst_r;
+            load_wb_data[0]          = p0_dcache_hold_data_r;
+            load_wb_mem_size[0]      = p0_dcache_hold_mem_size_r;
+            load_wb_has_exception[0] = 1'b0;
+            load_wb_exc_code[0]      = '0;
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = p0_dcache_hold_lq_idx_r;
+        end else if (amo_wb_valid_r && amo_wb_flush_keep) begin
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = amo_wb_rob_idx_r;
             load_wb_pdst[0]          = amo_wb_pdst_r;
             load_wb_data[0]          = amo_wb_data_r;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-            lq_result_idx_sel        = amo_wb_lq_idx_r;
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = amo_wb_lq_idx_r;
         end else if (p0_dcache_hit_valid) begin
             // D-cache hit response — 1 cycle after issue.
             load_wb_valid[0]         = 1'b1;
@@ -3186,8 +3382,9 @@ module lsu
             load_wb_mem_size[0]      = load_issue_data_r[0].mem_size;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-            lq_result_idx_sel        = load_issue_data_r[0].lq_idx;
-        end else if (fwd_hold_valid_r) begin
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = load_issue_data_r[0].lq_idx;
+        end else if (fwd_hold_valid_r && fwd_hold_flush_keep) begin
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = fwd_hold_rob_idx_r;
             load_wb_pdst[0]          = fwd_hold_pdst_r;
@@ -3195,7 +3392,8 @@ module lsu
             load_wb_mem_size[0]      = fwd_hold_mem_size_r;
             load_wb_has_exception[0] = fwd_hold_is_exc_r;
             load_wb_exc_code[0]      = fwd_hold_is_exc_r ? 4'd4 : 4'd0;
-            lq_result_idx_sel        = fwd_hold_lq_idx_r;
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = fwd_hold_lq_idx_r;
         end else if (split_load_wb_fire) begin
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = split_load_data_r.rob_idx;
@@ -3204,7 +3402,8 @@ module lsu
             load_wb_mem_size[0]      = split_load_data_r.mem_size;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-            lq_result_idx_sel        = split_load_data_r.lq_idx;
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = split_load_data_r.lq_idx;
         end else if (lmb_wb_port_free && lmb_any_match) begin
             // Late miss response from LMB (fill arrived).
             load_wb_valid[0]         = 1'b1;
@@ -3214,7 +3413,8 @@ module lsu
             load_wb_mem_size[0]      = mem_size_e'(lmb[lmb_match_idx].size);
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-            lq_result_idx_sel        = lmb[lmb_match_idx].lq_idx;
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = lmb[lmb_match_idx].lq_idx;
         end else if (lmb_wb_port_free && lmb_ready_any) begin
             // A previous fill satisfied this miss, but the single LMB WB
             // port was busy with an older same-line match in that cycle.
@@ -3225,8 +3425,9 @@ module lsu
             load_wb_mem_size[0]      = mem_size_e'(lmb[lmb_ready_idx].size);
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-            lq_result_idx_sel        = lmb[lmb_ready_idx].lq_idx;
-        end else if (mmio_resp_hold_valid_r) begin
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = lmb[lmb_ready_idx].lq_idx;
+        end else if (mmio_resp_hold_valid_r && mmio_resp_flush_keep) begin
             load_wb_valid[0]         = 1'b1;
             load_wb_rob_idx[0]       = mmio_resp_load_data_r.rob_idx;
             load_wb_pdst[0]          = mmio_resp_load_data_r.pdst;
@@ -3234,7 +3435,8 @@ module lsu
             load_wb_mem_size[0]      = mmio_resp_load_data_r.mem_size;
             load_wb_has_exception[0] = 1'b0;
             load_wb_exc_code[0]      = '0;
-            lq_result_idx_sel        = mmio_resp_load_data_r.lq_idx;
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = mmio_resp_load_data_r.lq_idx;
             mmio_load_wb_fire        = 1'b1;
         end else begin
             load_wb_valid[0]         = 1'b0;
@@ -3246,22 +3448,24 @@ module lsu
         end
 
         // Port 1
-        if (flush_in.valid) begin
+        if (flush_in.valid && flush_in.full_flush) begin
             load_wb_valid[1]         = 1'b0;
             load_wb_rob_idx[1]       = '0;
             load_wb_pdst[1]          = '0;
             load_wb_data[1]          = '0;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
-        end else if (p1_misalign_hold_valid_r) begin
+        end else if (p1_misalign_hold_valid_r && p1_misalign_hold_flush_keep) begin
             load_wb_valid[1]         = 1'b1;
             load_wb_rob_idx[1]       = p1_misalign_hold_rob_idx_r;
             load_wb_pdst[1]          = p1_misalign_hold_pdst_r;
             load_wb_data[1]          = '0;
             load_wb_has_exception[1] = 1'b1;
             load_wb_exc_code[1]      = 4'd4;
+            lq_result_valid_sel[1]   = 1'b1;
+            lq_result_idx_sel[1]     = p1_misalign_hold_lq_idx_r;
         end else if (dcache_load_resp_valid[1] && load_issue_valid_r[1]
-                     && !load_nocache_r[1]) begin
+                     && !load_nocache_r[1] && load_pipe_flush_keep[1]) begin
             load_wb_valid[1]         = 1'b1;
             load_wb_rob_idx[1]       = load_issue_data_r[1].rob_idx;
             load_wb_pdst[1]          = load_issue_data_r[1].pdst;
@@ -3269,6 +3473,8 @@ module lsu
             load_wb_mem_size[1]      = load_issue_data_r[1].mem_size;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
+            lq_result_valid_sel[1]   = 1'b1;
+            lq_result_idx_sel[1]     = load_issue_data_r[1].lq_idx;
         end else if (p0_fwd_spill_to_p1) begin
             load_wb_valid[1]         = 1'b1;
             load_wb_rob_idx[1]       = fwd_hold_rob_idx_r;
@@ -3277,7 +3483,9 @@ module lsu
             load_wb_mem_size[1]      = fwd_hold_mem_size_r;
             load_wb_has_exception[1] = fwd_hold_is_exc_r;
             load_wb_exc_code[1]      = fwd_hold_is_exc_r ? 4'd4 : 4'd0;
-        end else if (p1_fwd_hold_valid_r) begin
+            lq_result_valid_sel[1]   = 1'b1;
+            lq_result_idx_sel[1]     = fwd_hold_lq_idx_r;
+        end else if (p1_fwd_hold_valid_r && p1_fwd_hold_flush_keep) begin
             load_wb_valid[1]         = 1'b1;
             load_wb_rob_idx[1]       = p1_fwd_hold_rob_idx_r;
             load_wb_pdst[1]          = p1_fwd_hold_pdst_r;
@@ -3285,6 +3493,8 @@ module lsu
             load_wb_mem_size[1]      = p1_fwd_hold_mem_size_r;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
+            lq_result_valid_sel[1]   = 1'b1;
+            lq_result_idx_sel[1]     = p1_fwd_hold_lq_idx_r;
         end else begin
             load_wb_valid[1]         = 1'b0;
             load_wb_rob_idx[1]       = '0;
@@ -3306,7 +3516,9 @@ module lsu
                 spec_cancel_valid[li] = 1'b0;
                 spec_cancel_tag[li]   = '0;
                 if (load_issue_valid_r[li] && !load_nocache_r[li] &&
-                    !dcache_load_resp_valid[li] && !flush_in.valid) begin
+                    (!dcache_load_resp_valid[li] ||
+                     ((li == 0) && p0_dcache_hit_blocked)) &&
+                    !flush_in.valid) begin
                     spec_cancel_valid[li] = 1'b1;
                     spec_cancel_tag[li]   = load_issue_data_r[li].pdst;
                 end

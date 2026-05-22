@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -22,18 +23,24 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAIL_PATTERNS = [
     "ERROR:",
+    "%Error:",
     "Kernel panic",
     "Oops",
     "BUG:",
     "Illegal instruction",
     "trap loop",
     "fatal",
+    "[LINUX_STOP_LOST_LOAD_OWNER]",
 ]
 DSIM_LICENSE_BLOCK_PATTERNS = [
     "License not obtained",
     "Already at maxLeases",
     "No DSim license configured",
 ]
+DEFAULT_STALE_COMMIT_LIMIT = 50_000
+LAST_COMMIT_RE = re.compile(
+    r"\[LINUX_DEBUG\] last_commit_pc=[0-9a-fA-F]+ last_commit_cycle=(\d+)"
+)
 MILESTONES = [
     {
         "id": "m_mode_uart_smoke",
@@ -164,11 +171,20 @@ def classify_milestones(uart_text: str, sim_text: str) -> list[dict[str, str]]:
     return reached
 
 
+def last_timeout_commit_cycle(combined: str) -> int | None:
+    matches = LAST_COMMIT_RE.findall(combined)
+    if not matches:
+        return None
+    return int(matches[-1])
+
+
 def classify_log(
     uart_text: str,
     sim_text: str,
     pass_pattern: str | None,
     target_milestone: str,
+    max_cycles: int,
+    stale_commit_limit: int,
 ) -> dict[str, Any]:
     combined = uart_text + "\n" + sim_text
     reached = classify_milestones(uart_text, sim_text)
@@ -180,6 +196,33 @@ def classify_log(
             return {
                 "status": "FAIL",
                 "reason": f"matched failure pattern: {pattern}",
+                "milestones_reached": reached,
+                "last_milestone": last_milestone,
+            }
+    if "[LINUX_STOP_NO_COMMIT]" in combined:
+        return {
+            "status": "FAIL",
+            "reason": "matched no-commit stop marker",
+            "milestones_reached": reached,
+            "last_milestone": last_milestone,
+        }
+    timeout_commit_cycle = last_timeout_commit_cycle(combined)
+    if (
+        stale_commit_limit > 0 and
+        timeout_commit_cycle is not None and
+        max_cycles > timeout_commit_cycle
+    ):
+        stale_commit_cycles = max_cycles - timeout_commit_cycle
+        if stale_commit_cycles > stale_commit_limit:
+            return {
+                "status": "FAIL",
+                "reason": (
+                    "stale commit at timeout: "
+                    f"last_commit_cycle={timeout_commit_cycle} "
+                    f"max_cycles={max_cycles} "
+                    f"stale_cycles={stale_commit_cycles} "
+                    f"limit={stale_commit_limit}"
+                ),
                 "milestones_reached": reached,
                 "last_milestone": last_milestone,
             }
@@ -322,6 +365,15 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         help="Additional simulator plusarg. Accepts either NAME or +NAME.",
+    )
+    parser.add_argument(
+        "--timeout-stale-commit-limit",
+        type=int,
+        default=DEFAULT_STALE_COMMIT_LIMIT,
+        help=(
+            "Fail a timeout run when the last committed instruction is older "
+            "than this many cycles. Set to 0 to disable the post-run check."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -622,12 +674,15 @@ def main(argv: list[str] | None = None) -> int:
         sim_text,
         args.pass_pattern,
         args.target_milestone,
+        args.max_cycles,
+        args.timeout_stale_commit_limit,
     )
     status = str(classification["status"])
     reason = str(classification["reason"])
-    if rc != 0 and status == "INCOMPLETE":
+    if rc != 0 and status not in ("FAIL", "BLOCKED"):
+        prior_status = status
         status = "FAIL"
-        reason = f"simulator exit code {rc}"
+        reason = f"simulator exit code {rc}; prior classification was {prior_status}"
 
     summarize(
         run_dir,

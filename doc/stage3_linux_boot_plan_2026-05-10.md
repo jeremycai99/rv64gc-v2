@@ -3605,6 +3605,71 @@ Remaining promotion gate:
   `last_commit_cyc=62,720,377` freeze without a fresh UART `Oops`, `BUG`, or
   kernel panic.
 
+### 2026-05-22 Load Completion Arbiter Repair
+
+The latest current-tree long Linux evidence is still not a boot pass, but it
+narrows the active blocker:
+
+- After the issue-queue load-wakeup repair, a 3M DSim smoke passed and entered
+  Linux S-mode, and the required Stage 3 DS/CM guard passed.
+- The current-tree 100M and 65M DSim runs then both stopped at the same late
+  owner-loss point: `LINUX_STOP_LOST_LOAD_OWNER` at cycle `62,720,645`, LQ
+  head `idx=14`, ROB `4`, address `0x8004e3f8`, ROB head PC `0x8000c840` in
+  OpenSBI `mtimer_event_start`.
+- The same-cycle LQ result-fill cleanup passed the directed LSU probes and the
+  DS/CM guard, but it reproduced the same `62,720,645` owner-loss signature.
+  That proves the failure is not just a stale LQ-result timing window.
+- A targeted DSim trace run was stopped at the early Linux window because it
+  was too slow to reach the 62.72M-cycle reproduction point in this turn.
+
+Static root cause:
+
+- Port 0 records LQ execution at issue time. One cycle later, a D-cache hit
+  must write the result to CDB/ROB and mark the LQ entry complete.
+- Before this repair, the port-0 load writeback mux could prefer a pending AMO,
+  LR, or SC writeback over a simultaneous port-0 D-cache hit without preserving
+  that hit response. The LQ entry then remained `executed=1`, `has_result=0`,
+  with no LMB, retry, or D-cache owner left. This matches the final Linux dump.
+- The repair adds a real port-0 D-cache-hit skid in `lsu.sv`. If a hit response
+  loses writeback arbitration, the LSU captures ROB, physical destination, LQ
+  index, result data, and size, cancels the speculative wakeup for that load,
+  and drains the held hit through the normal definitive load writeback path.
+- AMO writeback is held until the older skid can drain, so the arbiter is
+  lossless rather than priority-dropping one completion.
+
+Validation completed for this slice:
+
+- `git diff --check` and Python tool compile are clean.
+- Verilator benchmark build passes with the backup-simulator policy: default
+  convergence limit is `100`, and UNOPTFLAT is reported as a nonfatal warning
+  so the backup simulator remains usable without hiding RTL convergence debt.
+- DSim was attempted first for the focused probes, but the shared license was
+  blocked with `Already at maxLeases (1)`.
+- Verilator directed probes passed:
+  `benchmark_results/stage3_p0_dcache_hit_skid_probe_verilator_20260522a`.
+  `probe_lq_full_load_completion`, `probe_mtimer_head_load_pressure`, and
+  `probe_mtimer_head_load_lq_full` all pass.
+- Stage 3 DS/CM performance guard passed under the Verilator backup:
+  `benchmark_results/stage3_rtl_guard_20260522_p0_dcache_hit_skid`.
+  The hard metrics are DS100 `3.139802 DMIPS/MHz`, DS300
+  `3.276072 DMIPS/MHz`, CM1 `6.605412 CoreMark/MHz`, and CM10
+  `6.793229 CoreMark/MHz`, all above the 0.01% no-regression minima.
+- Verilator Linux 3M smoke passed by timeout:
+  `linux_boot_results/stage3_p0_dcache_hit_skid_verilator_3m_20260522a`.
+  It reaches Linux S-mode with Sv48 enabled (`satp=9000000000080a05`) and no
+  no-commit or lost-owner stop. This is a backup-simulator smoke only, not the
+  62.72M-cycle DSim crossing proof.
+
+Remaining proof:
+
+- Rebuild and run DSim when the lease is available. DSim remains the primary
+  Stage 3 simulator.
+- The next DSim Linux run should target crossing the old `62,720,645` cycle
+  lost-owner point with `+LINUX_STOP_ON_LOST_LOAD_OWNER`,
+  `+LINUX_STOP_ON_NO_COMMIT`, and panic/Oops/BUG UART stops enabled.
+- Only after that crossing is clean should the session resume the longer 100M
+  Linux run.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.

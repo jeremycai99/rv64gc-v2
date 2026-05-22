@@ -9,6 +9,15 @@ module rv64gc_core_top
     import isa_pkg::*;
     import uarch_pkg::*;
     import fpu_pkg::*;
+#(
+    parameter logic BPU_EXEC_MISP_UPDATE_ENABLE      = 1'b0,
+    parameter logic EXEC_PARTIAL_BRANCH_RECOVERY     = 1'b0,
+    parameter logic SELECTIVE_BRANCH_RECOVERY        = 1'b0,
+    parameter logic TAGE_TRAIN_MISP_COND_FIRST       = 1'b0,
+    parameter logic BRU0_EARLY_REDIRECT_ENABLE       = 1'b0,
+    parameter logic BRU1_EARLY_REDIRECT_ENABLE       = 1'b0,
+    parameter logic UOP_CACHE_ENABLE                 = 1'b0
+)
 (
     input  logic        clk,
     input  logic        rst_n,
@@ -209,6 +218,7 @@ module rv64gc_core_top
     logic          uoc_ev_emit_cond, uoc_ev_emit_jal, uoc_ev_emit_jalr;
     logic          uoc_ev_emit_pred_taken;
     logic          uoc_ev_invalidate;
+    logic [1:0]    uoc_state_dbg;
     logic [GHR_BITS-1:0] ghr_out;
     logic                ghr_restore_valid_fe;
     logic [GHR_BITS-1:0] ghr_restore_val_fe;
@@ -289,46 +299,18 @@ module rv64gc_core_top
     logic [2:0]  exec_bpu_update_type;
     logic [GHR_BITS-1:0] exec_bpu_update_ghr;
 
-`ifndef SYNTHESIS
-    bit sim_bpu_exec_misp_update;
-    bit sim_exec_partial_branch_recovery;
-    bit sim_selective_branch_recovery;
-    bit sim_tage_train_misp_cond_first;
-    bit sim_bru0_early_redirect_en;
-    bit sim_bru1_early_redirect_en;
-    bit sim_uoc_enable;
-    initial sim_bpu_exec_misp_update =
-        $test$plusargs("BPU_EXEC_MISP_UPDATE");
-    initial sim_exec_partial_branch_recovery =
-        $test$plusargs("EXEC_PARTIAL_BRANCH_RECOVERY");
-    initial sim_selective_branch_recovery =
-        $test$plusargs("SELECTIVE_BRANCH_RECOVERY");
-    initial sim_tage_train_misp_cond_first =
-        $test$plusargs("TAGE_TRAIN_MISP_COND_FIRST");
-    initial sim_bru0_early_redirect_en =
-        $test$plusargs("ENABLE_BRU_EARLY_REDIRECT") &&
-        !$test$plusargs("DISABLE_BRU_EARLY_REDIRECT") &&
-        !$test$plusargs("DISABLE_BRU0_EARLY_REDIRECT");
-    initial sim_bru1_early_redirect_en =
-        $test$plusargs("ENABLE_BRU_EARLY_REDIRECT") &&
-        !$test$plusargs("DISABLE_BRU_EARLY_REDIRECT") &&
-        !$test$plusargs("DISABLE_BRU1_EARLY_REDIRECT");
-    // Stage 1 signs off the FTQ/IFU/fetch-packet frontend path. The UOP cache
-    // remains an explicit unsafe research path until replay is tied to live
-    // BPU/FTQ validation.
-    initial sim_uoc_enable =
-        $test$plusargs("ENABLE_UOC") &&
-        $test$plusargs("UOC_UNSAFE_STREAM") &&
-        !$test$plusargs("DISABLE_UOC");
-`else
-    localparam logic sim_bpu_exec_misp_update = 1'b0;
-    localparam logic sim_exec_partial_branch_recovery = 1'b0;
-    localparam logic sim_selective_branch_recovery = 1'b0;
-    localparam logic sim_tage_train_misp_cond_first = 1'b0;
-    localparam logic sim_bru0_early_redirect_en = 1'b0;
-    localparam logic sim_bru1_early_redirect_en = 1'b0;
-    localparam logic sim_uoc_enable = 1'b0;
-`endif
+    localparam logic sim_bpu_exec_misp_update =
+        BPU_EXEC_MISP_UPDATE_ENABLE;
+    localparam logic sim_exec_partial_branch_recovery =
+        EXEC_PARTIAL_BRANCH_RECOVERY;
+    localparam logic sim_selective_branch_recovery =
+        SELECTIVE_BRANCH_RECOVERY;
+    localparam logic sim_tage_train_misp_cond_first =
+        TAGE_TRAIN_MISP_COND_FIRST;
+    localparam logic sim_bru0_early_redirect_en =
+        BRU0_EARLY_REDIRECT_ENABLE;
+    localparam logic sim_bru1_early_redirect_en =
+        BRU1_EARLY_REDIRECT_ENABLE;
 
     // Stall from decode/rename
     logic        backend_stall;
@@ -470,38 +452,71 @@ module rv64gc_core_top
     // =========================================================================
     // 4. UOP CACHE / DECODED-OP CACHE
     // =========================================================================
-    uop_cache u_uop_cache (
-        .clk                    (clk),
-        .rst_n                  (rst_n),
-        .en                     (sim_uoc_enable),
-        .fused_insn             (fused_insn),
-        .fused_count            (fused_count),
-        .uoc_insn               (uoc_insn),
-        .uoc_count              (uoc_count),
-        .active                 (uoc_active),
-        .handoff_valid          (uoc_handoff_valid),
-        .handoff_pc             (uoc_handoff_pc),
-        .redirect_valid         (frontend_flush_valid),
-        .redirect_pc            (frontend_flush_pc),
-        .invalidate             (fence_i_signal),
-        .stall                  (rename_stall),
-        .ev_lookup              (uoc_ev_lookup),
-        .ev_hit                 (uoc_ev_hit),
-        .ev_miss                (uoc_ev_miss),
-        .ev_fill                (uoc_ev_fill),
-        .ev_fill_evict_valid    (uoc_ev_fill_evict_valid),
-        .ev_enter_playing       (uoc_ev_enter_playing),
-        .ev_exit_playing_miss   (uoc_ev_exit_playing_miss),
-        .ev_exit_playing_nohit  (uoc_ev_exit_playing_nohit),
-        .ev_exit_playing_unsafe (uoc_ev_exit_playing_unsafe),
-        .ev_emit                (uoc_ev_emit),
-        .ev_emit_control        (uoc_ev_emit_control),
-        .ev_emit_cond           (uoc_ev_emit_cond),
-        .ev_emit_jal            (uoc_ev_emit_jal),
-        .ev_emit_jalr           (uoc_ev_emit_jalr),
-        .ev_emit_pred_taken     (uoc_ev_emit_pred_taken),
-        .ev_invalidate          (uoc_ev_invalidate)
-    );
+    // Default Linux and performance signoff use the FTQ/IFU/fetch-packet path.
+    // The decoded-op cache remains compile-time optional until replay is tied
+    // to live BPU/FTQ validation.
+    generate
+        if (UOP_CACHE_ENABLE) begin : gen_uop_cache
+            uop_cache u_uop_cache (
+                .clk                    (clk),
+                .rst_n                  (rst_n),
+                .en                     (1'b1),
+                .fused_insn             (fused_insn),
+                .fused_count            (fused_count),
+                .uoc_insn               (uoc_insn),
+                .uoc_count              (uoc_count),
+                .active                 (uoc_active),
+                .handoff_valid          (uoc_handoff_valid),
+                .handoff_pc             (uoc_handoff_pc),
+                .redirect_valid         (frontend_flush_valid),
+                .redirect_pc            (frontend_flush_pc),
+                .invalidate             (fence_i_signal),
+                .stall                  (rename_stall),
+                .ev_lookup              (uoc_ev_lookup),
+                .ev_hit                 (uoc_ev_hit),
+                .ev_miss                (uoc_ev_miss),
+                .ev_fill                (uoc_ev_fill),
+                .ev_fill_evict_valid    (uoc_ev_fill_evict_valid),
+                .ev_enter_playing       (uoc_ev_enter_playing),
+                .ev_exit_playing_miss   (uoc_ev_exit_playing_miss),
+                .ev_exit_playing_nohit  (uoc_ev_exit_playing_nohit),
+                .ev_exit_playing_unsafe (uoc_ev_exit_playing_unsafe),
+                .ev_emit                (uoc_ev_emit),
+                .ev_emit_control        (uoc_ev_emit_control),
+                .ev_emit_cond           (uoc_ev_emit_cond),
+                .ev_emit_jal            (uoc_ev_emit_jal),
+                .ev_emit_jalr           (uoc_ev_emit_jalr),
+                .ev_emit_pred_taken     (uoc_ev_emit_pred_taken),
+                .ev_invalidate          (uoc_ev_invalidate)
+            );
+            assign uoc_state_dbg = {1'b0, u_uop_cache.state_r};
+        end else begin : gen_no_uop_cache
+            for (genvar i = 0; i < PIPE_WIDTH; i++) begin : gen_uoc_tieoff
+                assign uoc_insn[i] = '0;
+            end
+            assign uoc_count              = '0;
+            assign uoc_active             = 1'b0;
+            assign uoc_handoff_valid      = 1'b0;
+            assign uoc_handoff_pc         = '0;
+            assign uoc_ev_lookup          = 1'b0;
+            assign uoc_ev_hit             = 1'b0;
+            assign uoc_ev_miss            = 1'b0;
+            assign uoc_ev_fill            = 1'b0;
+            assign uoc_ev_fill_evict_valid = 1'b0;
+            assign uoc_ev_enter_playing   = 1'b0;
+            assign uoc_ev_exit_playing_miss = 1'b0;
+            assign uoc_ev_exit_playing_nohit = 1'b0;
+            assign uoc_ev_exit_playing_unsafe = 1'b0;
+            assign uoc_ev_emit            = 1'b0;
+            assign uoc_ev_emit_control    = 1'b0;
+            assign uoc_ev_emit_cond       = 1'b0;
+            assign uoc_ev_emit_jal        = 1'b0;
+            assign uoc_ev_emit_jalr       = 1'b0;
+            assign uoc_ev_emit_pred_taken = 1'b0;
+            assign uoc_ev_invalidate      = 1'b0;
+            assign uoc_state_dbg          = 2'b00;
+        end
+    endgenerate
 
     // Mux: bru-quarantine > fetch exception > UOP-cache > fused.
     decoded_insn_t rename_dec_in [0:PIPE_WIDTH-1];
@@ -1523,7 +1538,9 @@ module rv64gc_core_top
     // ROB port connections at lines ~563-566 have an explicit declaration
     // in scope — IEEE 1800 strict (DSim) rejects implicit-net declarations;
     // xsim was lenient.
+    logic                     lsu_ordering_violation_raw;
     logic                     lsu_ordering_violation;
+    logic [ROB_IDX_BITS-1:0]  lsu_violation_rob_idx_raw;
     logic [ROB_IDX_BITS-1:0]  lsu_violation_rob_idx;
     logic                     replay_valid;
     logic [ROB_IDX_BITS-1:0]  replay_rob_idx_from;
@@ -1825,9 +1842,13 @@ module rv64gc_core_top
     assign iq_full_vec = {iq2_full, iq1_full, iq0_full};
 
     // Speculative wakeup / cancel signals (from LSU)
+    logic [1:0]               lsu_spec_wakeup_valid_raw;
     logic [1:0]               lsu_spec_wakeup_valid;
+    logic [PHYS_REG_BITS-1:0] lsu_spec_wakeup_tag_raw [0:1];
     logic [PHYS_REG_BITS-1:0] lsu_spec_wakeup_tag [0:1];
+    logic [1:0]               lsu_spec_cancel_valid_raw;
     logic [1:0]               lsu_spec_cancel_valid;
+    logic [PHYS_REG_BITS-1:0] lsu_spec_cancel_tag_raw [0:1];
     logic [PHYS_REG_BITS-1:0] lsu_spec_cancel_tag [0:1];
 
     assign issueq_probe_none_valid = 2'b00;
@@ -1845,6 +1866,28 @@ module rv64gc_core_top
         lsu_sta_issue_suppress_raw |
         vm_serial_sta_issue_suppress |
         mem_fence_sta_issue_suppress;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n || (flush_out.valid && flush_out.full_flush)) begin
+            lsu_ordering_violation <= 1'b0;
+            lsu_violation_rob_idx  <= '0;
+            lsu_spec_wakeup_valid  <= '0;
+            lsu_spec_cancel_valid  <= '0;
+            for (int p = 0; p < 2; p++) begin
+                lsu_spec_wakeup_tag[p] <= '0;
+                lsu_spec_cancel_tag[p] <= '0;
+            end
+        end else begin
+            lsu_ordering_violation <= lsu_ordering_violation_raw;
+            lsu_violation_rob_idx  <= lsu_violation_rob_idx_raw;
+            lsu_spec_wakeup_valid  <= lsu_spec_wakeup_valid_raw;
+            lsu_spec_cancel_valid  <= lsu_spec_cancel_valid_raw;
+            for (int p = 0; p < 2; p++) begin
+                lsu_spec_wakeup_tag[p] <= lsu_spec_wakeup_tag_raw[p];
+                lsu_spec_cancel_tag[p] <= lsu_spec_cancel_tag_raw[p];
+            end
+        end
+    end
 
     always_comb begin
         vm_serial_alloc_c = 1'b0;
@@ -4284,9 +4327,9 @@ module rv64gc_core_top
         end
     end
 
-    // Combinational ready table: includes THIS cycle's rename clears.
-    // Same move/zero-elim exclusion as the registered update below — a
-    // move-eliminated pdst aliases the source, whose data is already valid.
+    // Combinational ready table: includes this cycle's rename clears so
+    // dispatch cannot enqueue a consumer as ready while its producer is being
+    // allocated in the same rename group.
     always_comb begin
         preg_ready_table_comb = preg_ready_table;
         for (int i = 0; i < PIPE_WIDTH; i++) begin
@@ -4761,10 +4804,10 @@ module rv64gc_core_top
         .store_commit_count     (store_commit_count),
         .load_commit_count      (load_commit_count),
         // Speculative wakeup
-        .spec_wakeup_valid      (lsu_spec_wakeup_valid),
-        .spec_wakeup_tag        (lsu_spec_wakeup_tag),
-        .spec_cancel_valid      (lsu_spec_cancel_valid),
-        .spec_cancel_tag        (lsu_spec_cancel_tag),
+        .spec_wakeup_valid      (lsu_spec_wakeup_valid_raw),
+        .spec_wakeup_tag        (lsu_spec_wakeup_tag_raw),
+        .spec_cancel_valid      (lsu_spec_cancel_valid_raw),
+        .spec_cancel_tag        (lsu_spec_cancel_tag_raw),
         // LQ/SQ allocation
         .lq_alloc_count         (lq_alloc_count),
         .sq_alloc_count         (sq_alloc_count),
@@ -4776,10 +4819,10 @@ module rv64gc_core_top
         .sq_full                (sq_full),
         .rob_head               (rob_head_idx),
         // Ordering violation
-        .ordering_violation     (lsu_ordering_violation),
+        .ordering_violation     (lsu_ordering_violation_raw),
         .load_issue_suppress    (lsu_load_issue_suppress_raw),
         .sta_issue_suppress     (lsu_sta_issue_suppress_raw[0]),
-        .violation_rob_idx      (lsu_violation_rob_idx),
+        .violation_rob_idx      (lsu_violation_rob_idx_raw),
         // DTLB sideband
         .data_vm_active_i       (data_vm_active),
         .dtlb_hit_i             (dtlb_hit),

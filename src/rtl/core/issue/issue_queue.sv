@@ -179,6 +179,9 @@ module issue_queue
     logic [DEPTH-1:0] rs1_cdb_hit;
     logic [DEPTH-1:0] rs2_cdb_hit;
     logic [DEPTH-1:0] rs3_cdb_hit;
+    logic [DEPTH-1:0] rs1_load_wb_hit;
+    logic [DEPTH-1:0] rs2_load_wb_hit;
+    logic [DEPTH-1:0] rs3_load_wb_hit;
 
     // Per-entry spec-cancel match (combinational, used by both paths)
     logic [DEPTH-1:0] spec_cancel_rs1;
@@ -215,6 +218,9 @@ module issue_queue
             rs1_cdb_hit[e]     = 1'b0;
             rs2_cdb_hit[e]     = 1'b0;
             rs3_cdb_hit[e]     = 1'b0;
+            rs1_load_wb_hit[e] = 1'b0;
+            rs2_load_wb_hit[e] = 1'b0;
+            rs3_load_wb_hit[e] = 1'b0;
             spec_set_src1[e]   = 1'b0;
             spec_set_src2[e]   = 1'b0;
             spec_set_src3[e]   = 1'b0;
@@ -256,21 +262,25 @@ module issue_queue
                 // spec bit, no cancel path needed.  Allows instructions that
                 // depend on load results to see the definitive wake even when
                 // a cache miss cancelled the earlier speculative wakeup.
-                if (!src1_ready[e] && !rs1_cdb_hit[e] &&
-                    ((load_wb_wk_valid0 && (load_wb_wk_tag0 == rs1_phys_r[e])) ||
-                     (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs1_phys_r[e])))) begin
+                rs1_load_wb_hit[e] =
+                    (load_wb_wk_valid0 && (load_wb_wk_tag0 == rs1_phys_r[e])) ||
+                    (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs1_phys_r[e]));
+                rs2_load_wb_hit[e] =
+                    (load_wb_wk_valid0 && (load_wb_wk_tag0 == rs2_phys_r[e])) ||
+                    (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs2_phys_r[e]));
+                rs3_load_wb_hit[e] =
+                    (load_wb_wk_valid0 && (load_wb_wk_tag0 == rs3_phys_r[e])) ||
+                    (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs3_phys_r[e]));
+
+                if (rs1_load_wb_hit[e]) begin
                     next_src1_ready[e] = 1'b1;
                     next_src1_spec[e]  = 1'b0;
                 end
-                if (!src2_ready[e] && !rs2_cdb_hit[e] &&
-                    ((load_wb_wk_valid0 && (load_wb_wk_tag0 == rs2_phys_r[e])) ||
-                     (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs2_phys_r[e])))) begin
+                if (rs2_load_wb_hit[e]) begin
                     next_src2_ready[e] = 1'b1;
                     next_src2_spec[e]  = 1'b0;
                 end
-                if (!src3_ready[e] && !rs3_cdb_hit[e] &&
-                    ((load_wb_wk_valid0 && (load_wb_wk_tag0 == rs3_phys_r[e])) ||
-                     (load_wb_wk_valid1 && (load_wb_wk_tag1 == rs3_phys_r[e])))) begin
+                if (rs3_load_wb_hit[e]) begin
                     next_src3_ready[e] = 1'b1;
                     next_src3_spec[e]  = 1'b0;
                 end
@@ -303,21 +313,21 @@ module issue_queue
                 // authoritative result and overrides cancel).
                 if (((spec_cancel_valid && (spec_cancel_tag == rs1_phys_r[e])) ||
                      (spec_cancel_valid1 && (spec_cancel_tag1 == rs1_phys_r[e]))) &&
-                    src1_spec[e] && !rs1_cdb_hit[e]) begin
+                    src1_spec[e] && !rs1_cdb_hit[e] && !rs1_load_wb_hit[e]) begin
                     next_src1_ready[e] = 1'b0;
                     next_src1_spec[e]  = 1'b0;
                     spec_cancel_rs1[e] = 1'b1;
                 end
                 if (((spec_cancel_valid && (spec_cancel_tag == rs2_phys_r[e])) ||
                      (spec_cancel_valid1 && (spec_cancel_tag1 == rs2_phys_r[e]))) &&
-                    src2_spec[e] && !rs2_cdb_hit[e]) begin
+                    src2_spec[e] && !rs2_cdb_hit[e] && !rs2_load_wb_hit[e]) begin
                     next_src2_ready[e] = 1'b0;
                     next_src2_spec[e]  = 1'b0;
                     spec_cancel_rs2[e] = 1'b1;
                 end
                 if (((spec_cancel_valid && (spec_cancel_tag == rs3_phys_r[e])) ||
                      (spec_cancel_valid1 && (spec_cancel_tag1 == rs3_phys_r[e]))) &&
-                    src3_spec[e] && !rs3_cdb_hit[e]) begin
+                    src3_spec[e] && !rs3_cdb_hit[e] && !rs3_load_wb_hit[e]) begin
                     next_src3_ready[e] = 1'b0;
                     next_src3_spec[e]  = 1'b0;
                     spec_cancel_rs3[e] = 1'b1;
@@ -473,13 +483,15 @@ module issue_queue
                 issue_data[p].rs1_ready = enq_s1_rdy[issue_enq_lane[p]];
                 issue_data[p].rs2_ready = enq_s2_rdy[issue_enq_lane[p]];
                 issue_data[p].rs3_ready = enq_s3_rdy[issue_enq_lane[p]];
-            end else begin
+            end else if (sel_found[p]) begin
                 issue_data[p]  = iq_entry_t'(payload_r[sel_idx[p]]);
                 // Override ready flags with wakeup results so downstream sees
                 // correct readiness even on the issue cycle.
                 issue_data[p].rs1_ready = next_src1_ready[sel_idx[p]];
                 issue_data[p].rs2_ready = next_src2_ready[sel_idx[p]];
                 issue_data[p].rs3_ready = next_src3_ready[sel_idx[p]];
+            end else begin
+                issue_data[p] = '0;
             end
         end
     end

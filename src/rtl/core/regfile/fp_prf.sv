@@ -56,15 +56,12 @@ module fp_prf
     assign base_rdata[6] = regfile_copy3[rd_addr[6]];
     assign base_rdata[7] = regfile_copy3[rd_addr[7]];
 
+    // Match integer PRF timing: no write first read path. Same cycle producer
+    // forwarding must be handled by an explicit bypass path, not by feeding
+    // writeback data through the register file read ports.
     always_comb begin
         for (int rp = 0; rp < 8; rp++) begin
             rd_data[rp] = base_rdata[rp];
-            for (int wp = 0; wp < 4; wp++) begin
-                if (wr_en[wp] && (wr_addr[wp] < FP_PRF_DEPTH[6:0]) &&
-                    (rd_addr[rp] == wr_addr[wp])) begin
-                    rd_data[rp] = wr_data[wp];
-                end
-            end
         end
     end
 

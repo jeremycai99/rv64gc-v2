@@ -889,6 +889,7 @@ module tb_top
     logic   load_lat_track_valid [0:ROB_DEPTH-1];
     integer load_lat_issue_cycle [0:ROB_DEPTH-1];
     logic [63:0] load_lat_issue_pc [0:ROB_DEPTH-1];
+    logic [63:0] load_lat_issue_addr [0:ROB_DEPTH-1];
     logic        load_lat_issue_port [0:ROB_DEPTH-1];
     integer load_lat_issue_total, load_lat_reissue_total;
     integer load_lat_wb_total, load_lat_wb_untracked_total;
@@ -1185,6 +1186,7 @@ module tb_top
                 load_lat_track_valid[i] <= 1'b0;
                 load_lat_issue_cycle[i] <= 0;
                 load_lat_issue_pc[i]    <= 64'd0;
+                load_lat_issue_addr[i]  <= 64'd0;
                 load_lat_issue_port[i]  <= 1'b0;
             end
             for (int i = 0; i < LOAD_LAT_BUCKETS; i++) begin
@@ -5001,6 +5003,9 @@ module tb_top
                             load_lat_track_valid[issue_idx] <= 1'b1;
                             load_lat_issue_cycle[issue_idx] <= perf_total_cyc;
                             load_lat_issue_pc[issue_idx]    <= u_core.iq_load_issue_data[p].pc;
+                            load_lat_issue_addr[issue_idx]  <= (p == 0)
+                                ? u_core.u_lsu.load_eff_addr[0]
+                                : u_core.u_lsu.load_eff_addr[1];
                             load_lat_issue_port[issue_idx]  <= (p != 0);
                             cyc_issue_count++;
                         end
@@ -5538,6 +5543,75 @@ module tb_top
                         load_lat_pc_hist_fwd[i],
                         load_lat_pc_hist_lmb[i],
                         load_lat_pc_hist_other[i]);
+                end
+            end
+            $display("  pending load tracks: rob pc addr issue_cyc age port lq_result");
+            for (int r = 0; r < ROB_DEPTH; r++) begin
+                if (load_lat_track_valid[r]) begin
+                    logic pending_lq_result;
+                    pending_lq_result = 1'b0;
+                    for (int lqi = 0; lqi < LQ_DEPTH; lqi++) begin
+                        if (u_core.u_lsu.u_load_queue.queue[lqi].valid &&
+                            (u_core.u_lsu.u_load_queue.queue[lqi].rob_idx ==
+                             ROB_IDX_BITS'(r)) &&
+                            u_core.u_lsu.u_load_queue.queue[lqi].has_result) begin
+                            pending_lq_result = 1'b1;
+                        end
+                    end
+                    $display("    %0d %016h %016h %0d %0d %0d %0b",
+                             r,
+                             load_lat_issue_pc[r],
+                             load_lat_issue_addr[r],
+                             load_lat_issue_cycle[r],
+                             perf_total_cyc - load_lat_issue_cycle[r],
+                             load_lat_issue_port[r],
+                             pending_lq_result);
+                end
+            end
+            $display("  live LQ entries: idx head rob addr_v exec result addr size data");
+            for (int lqi = 0; lqi < LQ_DEPTH; lqi++) begin
+                if (u_core.u_lsu.u_load_queue.queue[lqi].valid) begin
+                    $display("    %0d %0b %0d %0b %0b %0b %016h %0d %016h",
+                             lqi,
+                             (lqi == u_core.u_lsu.u_load_queue.head_r),
+                             u_core.u_lsu.u_load_queue.queue[lqi].rob_idx,
+                             u_core.u_lsu.u_load_queue.queue[lqi].addr_valid,
+                             u_core.u_lsu.u_load_queue.queue[lqi].executed,
+                             u_core.u_lsu.u_load_queue.queue[lqi].has_result,
+                             u_core.u_lsu.u_load_queue.queue[lqi].addr,
+                             u_core.u_lsu.u_load_queue.queue[lqi].size,
+                             u_core.u_lsu.u_load_queue.queue[lqi].data);
+                end
+            end
+            $display("  live LMB entries: idx ready pc rob pdst lq line off size data");
+            for (int lmbi = 0; lmbi < 32; lmbi++) begin
+                if (u_core.u_lsu.lmb[lmbi].valid) begin
+                    $display("    %0d %0b %016h %0d %0d %0d %016h %0d %0d %016h",
+                             lmbi,
+                             u_core.u_lsu.lmb[lmbi].ready,
+                             u_core.u_lsu.lmb[lmbi].pc,
+                             u_core.u_lsu.lmb[lmbi].rob_idx,
+                             u_core.u_lsu.lmb[lmbi].pdst,
+                             u_core.u_lsu.lmb[lmbi].lq_idx,
+                             u_core.u_lsu.lmb[lmbi].line_addr,
+                             u_core.u_lsu.lmb[lmbi].byte_offset,
+                             u_core.u_lsu.lmb[lmbi].size,
+                             u_core.u_lsu.lmb[lmbi].data);
+                end
+            end
+            $display("  live D-cache MSHRs: idx addr wb fill_pend fill_done store victim dirty evict");
+            for (int mi = 0; mi < 16; mi++) begin
+                if (u_core.u_dcache.mshr[mi].valid) begin
+                    $display("    %0d %016h %0b %0b %0b %0b %0d %0b %016h",
+                             mi,
+                             u_core.u_dcache.mshr[mi].addr,
+                             u_core.u_dcache.mshr[mi].writeback_pend,
+                             u_core.u_dcache.mshr[mi].fill_pend,
+                             u_core.u_dcache.mshr[mi].fill_done,
+                             u_core.u_dcache.mshr[mi].store_pending,
+                             u_core.u_dcache.mshr[mi].victim,
+                             u_core.u_dcache.mshr[mi].dirty_evict,
+                             u_core.u_dcache.mshr[mi].evict_addr);
                 end
             end
             $display("  spec wake p0/p1             : %0d / %0d",
@@ -6277,12 +6351,12 @@ module tb_top
 `endif
                     1'b0 ||
                     (u_core.uoc_active != trace_prev_uoc_active) ||
-                    (u_core.u_uop_cache.state_r != trace_prev_uoc_state) ||
+                    (u_core.uoc_state_dbg != trace_prev_uoc_state) ||
                     u_core.bru_early_redirect ||
                     u_core.flush_out.valid) begin
                     $display("[UOCDBG] cyc=%0d state=%0d active=%b fused_count=%0d uoc_count=%0d bru_redir=%b bru_pc=%016h flush=%b fl_pc=%016h",
                         trace_cycle,
-                        u_core.u_uop_cache.state_r,
+                        u_core.uoc_state_dbg,
                         u_core.uoc_active,
                         u_core.fused_count,
                         u_core.uoc_count,
@@ -6316,7 +6390,7 @@ module tb_top
                         end
                     end
                 end
-                trace_prev_uoc_state  <= u_core.u_uop_cache.state_r;
+                trace_prev_uoc_state  <= u_core.uoc_state_dbg;
                 trace_prev_uoc_active <= u_core.uoc_active;
             end
             if (trace_a0map_en) begin
@@ -7088,7 +7162,7 @@ module tb_top
                         lowpc_next_count,
                         u_core.bru_early_target,
                         u_core.uoc_active,
-                        u_core.u_uop_cache.state_r,
+                        u_core.uoc_state_dbg,
                         u_core.flush_out.valid,
                         u_core.flush_out.redirect_pc,
                         u_core.bru0_early_redirect,
@@ -7103,7 +7177,7 @@ module tb_top
                         lowpc_next_count,
                         u_core.flush_out.redirect_pc,
                         u_core.uoc_active,
-                        u_core.u_uop_cache.state_r,
+                        u_core.uoc_state_dbg,
                         u_core.flush_out.full_flush,
                         u_core.bru_early_redirect,
                         u_core.bru_early_target);
@@ -7119,7 +7193,7 @@ module tb_top
                             i,
                             u_core.u_fetch_top.fetch_pc[i],
                             u_core.uoc_active,
-                            u_core.u_uop_cache.state_r,
+                            u_core.uoc_state_dbg,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.bru_early_redirect,
@@ -7137,7 +7211,7 @@ module tb_top
                             i,
                             u_core.dec_insn_out[i].pc,
                             u_core.uoc_active,
-                            u_core.u_uop_cache.state_r,
+                            u_core.uoc_state_dbg,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.dec_count_out);
@@ -7153,7 +7227,7 @@ module tb_top
                             i,
                             u_core.fused_insn[i].pc,
                             u_core.uoc_active,
-                            u_core.u_uop_cache.state_r,
+                            u_core.uoc_state_dbg,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.fused_count,
@@ -7174,7 +7248,7 @@ module tb_top
                             lowpc_next_count,
                             i,
                             u_core.uoc_insn[i].pc,
-                            u_core.u_uop_cache.state_r,
+                            u_core.uoc_state_dbg,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.uoc_count,
@@ -7193,7 +7267,7 @@ module tb_top
                             i,
                             u_core.rename_dec_in[i].pc,
                             u_core.uoc_active,
-                            u_core.u_uop_cache.state_r,
+                            u_core.uoc_state_dbg,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.rename_dec_count,
@@ -7213,7 +7287,7 @@ module tb_top
                             u_core.ren_insn[i].base.pc,
                             u_core.ren_insn[i].rob_idx,
                             u_core.uoc_active,
-                            u_core.u_uop_cache.state_r,
+                            u_core.uoc_state_dbg,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.ren_count_w,
@@ -7234,7 +7308,7 @@ module tb_top
                             u_core.dq_deq_data[i].rob_idx,
                             u_core.dq_deq_iq_target[i],
                             u_core.uoc_active,
-                            u_core.u_uop_cache.state_r,
+                            u_core.uoc_state_dbg,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.dq_deq_count,
@@ -7253,7 +7327,7 @@ module tb_top
                             u_core.rob_head_pc[i],
                             u_core.commit_count,
                             u_core.uoc_active,
-                            u_core.u_uop_cache.state_r,
+                            u_core.uoc_state_dbg,
                             u_core.flush_out.valid,
                             u_core.flush_out.redirect_pc,
                             u_core.rob_head_is_branch[i],

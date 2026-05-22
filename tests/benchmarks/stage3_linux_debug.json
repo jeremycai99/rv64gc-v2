@@ -30,6 +30,36 @@
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "notes": "Directed LSU/D-cache probe for the Linux mtimer deadlock class: independent cold loads pressure D-cache MSHR allocation and require load port 0 retry to preserve endpoint identity."
+    },
+    {
+      "name": "probe_lq_full_load_completion",
+      "kind": "generic",
+      "hex": "tests/hex/probe_lq_full_load_completion.hex",
+      "max_cycles": 500000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Directed LQ/ROB pressure probe for the current Linux mtimer freeze class: many cold loads target x0 so every ROB load must complete without consuming physical integer registers."
+    },
+    {
+      "name": "probe_mtimer_head_load_pressure",
+      "kind": "generic",
+      "hex": "tests/hex/probe_mtimer_head_load_pressure.hex",
+      "max_cycles": 500000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Directed M-mode timer-handler-body probe for the Linux mtimer_event_start freeze: a cold handler head load must complete while younger independent cacheable loads create ROB/LQ pressure. It runs the body directly because tb_top does not model CLINT timer interrupts."
+    },
+    {
+      "name": "probe_mtimer_head_load_lq_full",
+      "kind": "generic",
+      "hex": "tests/hex/probe_mtimer_head_load_lq_full.hex",
+      "max_cycles": 800000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Stronger mtimer_event_start probe for the current Linux no-retire class: the handler head load must complete while younger cold loads fill and drain the LQ/LMB path."
     }
   ]
 }

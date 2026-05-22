@@ -40,9 +40,12 @@ module load_queue
     input logic exec1_is_unsigned,
 
     // Load result (from D-cache or store forwarding)
-    input logic result_valid,
-    input logic [LQ_IDX_BITS-1:0] result_idx,
-    input logic [63:0] result_data,
+    input logic result0_valid,
+    input logic [LQ_IDX_BITS-1:0] result0_idx,
+    input logic [63:0] result0_data,
+    input logic result1_valid,
+    input logic [LQ_IDX_BITS-1:0] result1_idx,
+    input logic [63:0] result1_data,
 
     // Store-to-load ordering violation check
     input logic st_addr_valid,
@@ -316,9 +319,13 @@ module load_queue
                 queue[exec1_idx].addr_valid  <= 1'b1;
                 queue[exec1_idx].executed    <= 1'b1;
             end
-            if (result_valid && partial_flush_keep[result_idx]) begin
-                queue[result_idx].data       <= result_data;
-                queue[result_idx].has_result <= 1'b1;
+            if (result0_valid && partial_flush_keep[result0_idx]) begin
+                queue[result0_idx].data       <= result0_data;
+                queue[result0_idx].has_result <= 1'b1;
+            end
+            if (result1_valid && partial_flush_keep[result1_idx]) begin
+                queue[result1_idx].data       <= result1_data;
+                queue[result1_idx].has_result <= 1'b1;
             end
         end else begin
             // --- Commit: advance head ---
@@ -353,9 +360,13 @@ module load_queue
             end
 
             // --- Result fill: record loaded data ---
-            if (result_valid) begin
-                queue[result_idx].data       <= result_data;
-                queue[result_idx].has_result <= 1'b1;
+            if (result0_valid) begin
+                queue[result0_idx].data       <= result0_data;
+                queue[result0_idx].has_result <= 1'b1;
+            end
+            if (result1_valid) begin
+                queue[result1_idx].data       <= result1_data;
+                queue[result1_idx].has_result <= 1'b1;
             end
 
             // --- Allocate new entries ---

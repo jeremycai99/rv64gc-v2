@@ -1047,6 +1047,8 @@ def local_runner_command(bench: dict[str, Any], args: argparse.Namespace) -> lis
         cmd = [str(REPO_ROOT / "run_xsim.sh"), memfile.as_posix(), str(max_cycles)]
     elif args.runner == "dsim":
         cmd = [str(REPO_ROOT / "run_dsim.sh"), memfile.as_posix(), str(max_cycles)]
+    elif args.runner == "verilator":
+        cmd = [str(REPO_ROOT / "run_verilator.sh"), memfile.as_posix(), str(max_cycles)]
     else:
         raise ValueError(f"unsupported local runner: {args.runner}")
     cmd.extend(effective_plusargs(args, bench))
@@ -1767,7 +1769,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true")
     parser.add_argument(
         "--runner",
-        choices=("xsim-bat", "xsim-sh", "dsim"),
+        choices=("xsim-bat", "xsim-sh", "dsim", "verilator"),
         default="xsim-bat",
         help="Simulation launcher to use.",
     )
