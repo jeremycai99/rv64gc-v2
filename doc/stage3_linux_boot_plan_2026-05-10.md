@@ -4,11 +4,11 @@ Date: May 10, 2026
 
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
 phase. The RV64GC instruction compliance prerequisite is closed on the current
-RTL candidate, the DS/CM hard performance gate is clean, and the trimmed
-OpenSBI plus Linux image now reaches the RISC-V clocksource milestone through
-the ASIC-style core boundary. The next Linux target is continuing beyond
-`sched_clock` and delay-loop setup toward UART-driver, kernel-init, and
-userspace milestones.
+RTL candidate and the DS/CM hard performance gate remains mandatory. Linux
+panic/no-retire chasing is paused while the Verilator `Active region did not
+converge` failure is treated as an RTL convergence and ASIC-quality blocker.
+Do not resume Linux long-run debug until in-core combinational feedback is
+removed without breaking strict owner checks or the DS/CM performance guard.
 
 ## Goal
 
@@ -171,6 +171,234 @@ commit point:
 - status stayed unchanged from 65M through 100M cycles while `mtime` kept
   advancing past `mtimecmp`.
 
+Latest May 21 triage update:
+
+- A newer rebuilt DSim run,
+  `linux_boot_results/stage3_lsu_lmb_owner_retry_100m_unblock_dsim_retry_20260521a`,
+  was stopped deliberately at cycle `60,681,812` after the debug pivot.  It is
+  not a 100M signoff artifact.
+- That stopped run has no current `Unable to handle`, `Oops`, `BUG:`,
+  `Kernel panic`, or `LINUX_STOP` marker.  UART reaches
+  `clocksource: Switched to clocksource riscv_clocksource`.
+- The historical `ffffffff805c5dec` Oops symbolizes to kernel `strcmp`, called
+  by `try_enable_preferred_console` with return address
+  `ffffffff80059a4a`.  The reported cause was `0xC`, an instruction page fault
+  on a mapped kernel text PC.  Current rebuilt Linux runs pass that early
+  window, so this is not the live May 21 blocker unless reproduced by a fresh
+  current-RTL run.
+- The `stage3_100m_first_failure_dsim_20260521a_retryloop` timeout is now
+  classified as false PASS evidence: it matched the timeout pass pattern, but
+  `last_commit_cycle=62,720,377` while `max_cycles=100,000,000`, leaving
+  `37,279,623` stale cycles.
+- `tools/run_linux_boot.py` now fails timeout runs when the final
+  `[LINUX_DEBUG] last_commit_cycle` is older than the cycle cap by more than
+  the default `50,000` cycles, and it treats `[LINUX_STOP_NO_COMMIT]` as a
+  failure marker.  This prevents a dead core from being hidden behind a timeout
+  pass pattern.
+- Current live debug target is therefore no-retire at the OpenSBI timer path,
+  not kernel panic.  The next proof run must keep
+  `+LINUX_STOP_ON_NO_COMMIT +LINUX_NO_COMMIT_LIMIT=50000` enabled and must
+  cross the old `62,720,377`-cycle freeze point with retirement still moving.
+
+May 21 latest debug update:
+
+- A fresh scan of May 21 Linux logs found no current `Kernel panic`,
+  `Unable to handle`, `Oops`, or `BUG:` marker.  The historical
+  `ffffffff805c5dec` and low-physical-fetch panic artifacts remain stale
+  unless reproduced by a rebuilt current-RTL run.
+- Verilator was rebuilt from the current tree and reached the OpenSBI platform
+  probe in
+  `linux_boot_results/stage3_verilator_current_smoke_2m_20260521b`, but then
+  aborted with `Active region did not converge`.  This is not Linux progress
+  evidence beyond the early OpenSBI milestone.
+- `tools/run_linux_boot.py` now treats `%Error:` as a failure marker and makes
+  any nonzero simulator exit override an early milestone PASS.  This prevents
+  the Verilator OpenSBI probe from being misreported as a successful Linux run
+  after the simulator aborts.
+- A focused 63M DSim first-failure capture,
+  `linux_boot_results/stage3_lmb_owner_retry_firstfail_63m_dsim_20260521c`,
+  acquired the DSim lease and reached the OpenSBI domain handoff text, but was
+  stopped because it produced no dense progress status before the first 5M
+  checkpoint.  Treat it as aborted non-evidence.
+- A follow-up 2M DSim progress probe,
+  `linux_boot_results/stage3_lmb_owner_retry_progress_2m_dsim_20260521d`,
+  was blocked by the DSim lease (`Already at maxLeases`).  The next DSim retry
+  should be a short dense-status progress probe before another 63M capture.
+
+## May 21 RTL Convergence Blocker
+
+Linux long-run and panic chasing are paused while the Verilator
+`Active region did not converge` failure is treated as an ASIC-quality RTL
+blocker.  This is not accepted as a Verilator script issue or Linux/OpenSBI
+software issue: the full-image Verilator build succeeds and then exposes
+same-cycle combinational feedback in the core during the OpenSBI platform
+probe window.
+
+Ground rules for this blocker:
+
+- Do not raise convergence limits as a fix.
+- Do not add `UNOPTFLAT` suppressions, `lint_off` pragmas, or simulator-only
+  workarounds in synthesizable RTL.
+- Do not claim the current kernel panic/no-retire path is root-caused by this
+  convergence issue unless the panic reproduces after the RTL feedback loops
+  are removed.
+- Do not promote or commit a structural slice until rebuilt simulation is
+  acyclic for in-core RTL and the Stage 3 DS/CM 0.01% performance guard is
+  clean.
+
+Current root-cause audit:
+
+| Area | Evidence | Current verdict | Required structural direction |
+| --- | --- | --- | --- |
+| Frontend packet-buffer ready/owner feedback | The latest audit experiments show in-core UNOPTFLAT around `ifu.runahead_candidate_c`, `fetch_top.ic_resp_valid`, FTQ same-cycle pop-to-head visibility, and successor/runahead owner selection. The path runs from F2 data/predecode/pred-check to successor allocation, FTQ enqueue/cancel, FTQ head/next-owner visibility, and back into IFU request selection. | Active blocker. The owner-register experiments `cut16/cut19`, `ftqheadreg`, `minimal5`, and `reghead_liveic` are quarantined because they either broke owner/stale counters, regressed DS materially, or stalled the OpenSBI payload before UART output. | Split same-cycle F2 successor production from IFU/FTQ allocation with a real registered owner/request queue, or make the FTQ-to-line-fetch boundary a proper elastic stage. Readiness and cancel side effects must come from registered state, not live packet data. |
+| Rename/free-list/checkpoint readiness feedback | No current in-core UNOPTFLAT path is reported through rename, free-list, or checkpoint readiness after the ready-table cuts already in the tree. | Monitor only. | Keep rename backpressure driven from registered state. Recheck after every frontend or backend structural slice. |
+| Issue queue ready-at-enqueue/select/wakeup feedback | Earlier LSU/load-wakeup feedback was reduced by registering load writeback and LSU sideband signals before they re-enter issue readiness. No current in-core UNOPTFLAT path is reported through IQ select/wakeup in the latest log. | Not the active convergence blocker. | Do not revive same-cycle issue/select/CDB/wakeup loops while debugging Linux. |
+| CDB/PRF/LSU/store-forward feedback | The current latest UNOPTFLAT log no longer points at LSU, PRF, CDB, or store-forward paths. Port-0 retry and LMB-owner retry remain separate Linux no-retire candidates that already passed DS/CM guard before this convergence pivot. | Not the active convergence blocker, but still must be guarded. | Keep LSU request accept, retry, and wakeup side effects registered at module boundaries where needed. |
+| Branch recovery/BPU update/frontend feedback | A registered BPU speculative-update sideband removed one candidate feedback path during experiments, but the branch/successor path still participates in the frontend loop through `successor_req_valid`, redirect target matching, and FTQ next-owner matching. | Still open through IFU ownership. The registered sideband is not promoted because the surrounding frontend slice failed validation. | Separate prediction/training side effects from current-cycle owner allocation and line delivery. |
+| External cvfpu IP | Verilator also reports UNOPTFLAT warnings under `external/cvfpu-src`, for example `fpnew_opgroup_block`, `fpnew_fma`, `lzc`, and div/sqrt control. | Third-party IP debt, not the current core RTL blocker. | Track separately. Do not hide in-core feedback by globally suppressing warnings. |
+
+Latest convergence evidence and quarantine status:
+
+- `linux_boot_results/convergence_audit_20260521a_ftqheadreg/build_verilator_unoptflat.log`
+  removes the earlier FTQ cancel-next and LSU/top-level feedback paths, but
+  still leaves the IFU successor/runahead ownership loop active.
+- `linux_boot_results/convergence_audit_20260521a_ftqnextreg/build_verilator_unoptflat.log`
+  removes in-core UNOPTFLAT warnings, but the combined candidate is rejected:
+  DS100 later shows a large cycle regression and `xs_f2_owner_no_head=203`.
+- `linux_boot_results/convergence_audit_20260521a_minimal5/build_verilator_unoptflat.log`
+  also removes in-core UNOPTFLAT warnings, but the narrowed candidate is
+  rejected: DS100 reports nonzero `xs_f2_owner_idx_mismatch` and
+  `xs_packet_stale_idx_mismatch`.
+- `linux_boot_results/convergence_audit_20260521a_reghead_liveic/build_verilator_unoptflat.log`
+  removes in-core UNOPTFLAT warnings while preserving IC response bypass, but
+  the OpenSBI payload Verilator smoke
+  `linux_boot_results/stage3_verilator_convergence_opensbi_2m_20260521a`
+  stalls before UART output with an ownerless ICQ line.  This candidate is
+  rejected.
+- The failed frontend convergence RTL has been reverted/quarantined.  The
+  current dirty working tree keeps the pre-existing Stage 3 LSU/debug changes
+  and this documentation update, but no accepted frontend convergence slice is
+  present.
+- The active loop is:
+  F2 line/data availability, instruction boundary, RVC expansion, predecode,
+  predicted-control check, successor request, IFU request selection, FTQ
+  enqueue/cancel, FTQ next-owner visibility, and IFU successor/runahead
+  matching.
+- Linux boot debug must resume only after this in-core feedback loop is
+  removed and DS/CM performance guard remains within tolerance.
+
+May 22 convergence audit update:
+
+- Current-tree `VERILATOR_REPORT_UNOPTFLAT=1 ./build_verilator_linux.sh`
+  reported in-core frontend feedback paths in
+  `linux_boot_results/convergence_audit_20260522a_current/build_verilator_unoptflat.log`.
+  The active paths crossed FTQ cancel/next-owner visibility, IFU runahead and
+  successor matching, line-fetch owner association, and predicted-control
+  redirect generation.
+- Local cuts that registered or narrowed FTQ/IFU owner visibility can remove
+  the in-core `UNOPTFLAT` warnings, but they are rejected because they change
+  delivery behavior:
+  `convergence_audit_20260522a_ftq_registered_owner_outputs` regressed DS100
+  heavily and timed out CoreMark 1 and CoreMark 10, while
+  `convergence_audit_20260522a_linefetch_work_owner` timed out DS300 during
+  the DS/CM guard.
+- The later active-only/registered-match attempt also removed in-core
+  `UNOPTFLAT`, but strict Verilator OpenSBI smoke failed before UART output
+  with `[FETCH_OWNER_CHECK] skipped PC owner idx=10 tag=2907`. This proves the
+  patch lost owner delivery identity, so it is rejected without promotion.
+- DSim was lease-blocked during the final rejected candidate, but the strict
+  owner failure is already sufficient to reject it. No validated May 22 RTL
+  convergence slice is available to commit.
+- A follow-up May 22 audit rebuilt the flow with DSim available and tested
+  narrower structural cuts:
+  - `convergence_audit_20260522c_qualified_ftq_head` removed all in-core
+    `UNOPTFLAT` paths by registering FTQ head visibility. It is rejected:
+    `stage3_rtl_guard_convergence_qualified_ftq_20260522c` regressed
+    `dhrystone_100_checkedin` from 3.133924 DMIPS/MHz to 2.683540 DMIPS/MHz
+    and timed out both CoreMark rows.
+  - `convergence_audit_20260522c_linefetch_owner_snapshot` kept FTQ same-cycle
+    owner bypass internal to IFU and registered only the FTQ owner snapshot
+    used by `ifu_line_fetch`. It also removed all in-core `UNOPTFLAT` paths,
+    but `stage3_rtl_guard_convergence_linefetch_snapshot_20260522c` timed out
+    DS100, DS300, CM1, and CM10, with `xs_f2_owner_idx_mismatch=1` on DS300.
+  - These failures show the frontend convergence loop is not a cosmetic
+    Verilator artifact. The current frontend depends on same-cycle FTQ owner
+    visibility for correct packet delivery. Local register cuts can make the
+    graph acyclic but break the owner contract or performance gate.
+- The frontend convergence-trial RTL was reverted to avoid carrying a broken
+  pipeline. The remaining dirty tree reflects pre-existing Stage 3 Linux,
+  LSU/debug, and documentation work, not an accepted frontend convergence fix.
+- The next acceptable fix is not another local owner-output patch. It must
+  redesign the boundary as a real elastic owned-request protocol between
+  predicted-control production, IFU request selection, FTQ allocation, and
+  line-fetch association. The proof order is strict owner/delivery smoke,
+  DS/CM 0.01% performance guard, Verilator OpenSBI smoke, then Linux panic
+  debug. Do not resume Linux panic chasing before this convergence blocker is
+  fixed.
+
+May 22 fresh convergence blocker audit:
+
+- Artifact:
+  `linux_boot_results/convergence_audit_20260522d_current/build_verilator_unoptflat.log`.
+- Current rebuilt Verilator report contains four in-core `UNOPTFLAT` warnings:
+  `ftq.ifu_cancel_next_possible_c`, `fetch_top.f2_has_emit_payload_c`,
+  `ifu.required_ftq_need_alloc_c`, and `ifu.runahead_candidate_c`.
+- These four warnings are different entry points into one frontend feedback
+  graph:
+  FTQ cancel or next-owner visibility, ICQ owner match/stale decision, F2 data
+  validity, RVC/predecode/pred-check, successor request, IFU request selection,
+  FTQ allocation/cancel, and the BPU loop speculative-count lookup/update.
+- The same fresh report has no in-core `UNOPTFLAT` warnings in rename,
+  free-list, checkpoint, issue queue, CDB, PRF, LSU, store-forward, or dcache.
+  Older root logs that mention those areas predate the current cuts and should
+  not drive the May 22 fix list.
+
+| Area | Fresh current evidence | Verdict | Structural fix direction |
+| --- | --- | --- | --- |
+| Frontend packet-buffer ready/owner feedback | The current loop crosses `ftq.sv`, `ifu_line_fetch.sv`, `instr_boundary.sv`, `predecode.sv`, `pred_checker.sv`, `ifu.sv`, and `tage_sc_l.sv`. The packet buffer itself now drives `enq_ready` from registered occupancy, but its owner-visible output participates in the broader same-cycle owner graph. | Active blocker. | First cut the BPU speculative-count lookup feedback, then replace the remaining FTQ/IFU owner same-cycle graph with an elastic owned request/response boundary. |
+| Rename/free-list/checkpoint readiness feedback | No current in-core `UNOPTFLAT` warning in rename, free-list, RAT, or checkpoint readiness. | Monitor only. | Keep rename readiness driven from registered free-list/checkpoint state. |
+| Issue queue ready-at-enqueue/select/wakeup feedback | No current in-core `UNOPTFLAT` warning in issue queue select/wakeup. | Monitor only. | Do not reintroduce same-cycle issue/select/CDB/wakeup loops while fixing Linux. |
+| CDB/PRF/LSU/store-forward feedback | No current in-core `UNOPTFLAT` warning in LSU, CDB, PRF, store-forward, or dcache. | Monitor only. | Keep LSU retry, store-forward, and load-writeback side effects registered at module boundaries. |
+| Branch recovery/BPU update/frontend feedback | `f2_has_emit_payload_c` feeds `pred_checker` speculative update, which feeds the BPU loop speculative-count lookup and returns as `owner_tage_pred_taken` into the same F2 predecode/pred-check chain. | Active blocker. | Remove same-cycle speculative-count update-to-lookup feedback. Speculative count updates must be registered before influencing future lookups. |
+| External CVFPU IP | The same report still shows third-party `external/cvfpu-src` `UNOPTFLAT` warnings. | Separate debt. | Track separately after in-core convergence is fixed. Do not hide in-core loops with global warning suppression. |
+
+May 22 follow-up convergence DSE:
+
+- `convergence_loop_spec_registered` and `convergence_loop_bypass_split`
+  removed all in-core Verilator `UNOPTFLAT` warnings, but both are rejected
+  as promotion candidates because the Stage 3 DS/CM hard gate regressed
+  materially.  The split-bypass result matched the aux-disabled performance
+  signature exactly: DS300 `3.190910 DMIPS/MHz`, CM1 `6.002797 CM/MHz`, and
+  CM10 `6.116081 CM/MHz`.
+- Restoring raw owner completion remains acyclic in Verilator, but is rejected:
+  strict owner checks report nonzero `xs_f2_owner_idx_mismatch` on all four
+  DS/CM rows and CoreMark still regresses.
+- Restoring live FTQ owner visibility for IFU runahead recovers the old fast
+  dependency direction, but reintroduces the FTQ same-cycle pop/head loop:
+  `ftq.ifu_req_pop_existing_c`, `ftq.ifu_req_pop_from_enq_c`, and
+  `fetch_top.ftq_head_idx`.
+- The `convergence_owner_token` trial replaced live FTQ owner visibility with
+  a local `work_r.owner_delivered` runahead token.  Verilator reported no
+  in-core `UNOPTFLAT` paths and strict owner checks stayed clean, but the
+  Stage 3 guard still matched the aux-disabled performance signature:
+  DS300 `3.190910 DMIPS/MHz`, CM1 `6.002797 CM/MHz`, and CM10
+  `6.116081 CM/MHz`.  It is rejected because it does not preserve the
+  performance-critical owner-timing contract.
+- The `convergence_redirect_gated` trial additionally gated BPU redirects
+  through the frontend stall signal.  Artifact
+  `benchmark_results/stage3_rtl_guard_convergence_redirect_gated_dsim_20260522d`
+  is endpoint-clean, but it fails the hard performance gate:
+  DS300 regresses `0.07663%`, CM1 regresses `7.41706%`, and CM10 regresses
+  `8.78881%` versus the locked Stage 3 baseline.  It is rejected and must not
+  be promoted.
+- Verdict: do not promote local scalar patches on loop-spec timing or live FTQ
+  owner visibility.  The next structural fix should add a registered
+  runahead/owner-eligibility token or elastic owned-request stage that is
+  captured from live owner state after delivery, then consumed by IFU request
+  selection without feeding the current-cycle FTQ pop/allocation network.
+  This preserves the fast architectural intent while keeping readiness and
+  owner visibility acyclic.
+
 Root cause found:
 
 - D-cache can assert `load_miss_retry[0]` when a port 0 load miss cannot attach
@@ -190,6 +418,20 @@ Implemented RTL repair:
 - Port 0 miss detection now excludes `dcache_load_miss_retry[0]`, so the LSU
   does not allocate an LMB entry for a request the D-cache explicitly rejected.
 
+Additional current repair candidate:
+
+- The newer `src/rtl/core/lsu/lsu.sv` candidate also keeps a missed load live
+  when an LMB completion owner cannot be reserved.  Both load ports capture a
+  retry request when a miss is detected but the LMB allocation side is full.
+- This addresses the deeper lost-load class where the data cache may already
+  be tracking the line miss, but LSU has no completion owner to attach the ROB
+  and LQ entry to the eventual fill.  Retrying lets the request merge with the
+  existing MSHR or hit after the line installs, instead of leaving a ROB-head
+  load permanently not ready.
+- This is still a current-RTL candidate until a rebuilt DSim Linux run crosses
+  the old `62,720,377`-cycle freeze point with no no-commit stop and no fresh
+  UART failure marker.
+
 Validation completed before promotion:
 
 - Linux DSim image rebuild from current RTL: pass.
@@ -201,6 +443,19 @@ Validation completed before promotion:
   29 / 23 / 0` and `new load miss no free MSHR = 7`.
 - Stage 3 DS/CM hard regression gate:
   `benchmark_results/stage3_rtl_guard_lsu_p0_retry_20260521a`.
+  Result: pass within the 0.01% regression tolerance.  Guard metrics were
+  DS100 `3.150055 DMIPS/MHz`, DS300 `3.218821 DMIPS/MHz`, CM1
+  `6.649025 CoreMark/MHz`, and CM10 `6.851474 CoreMark/MHz`.
+- Current LMB-owner retry directed probes:
+  `benchmark_results/stage3_probe_mtimer_head_load_pressure_dsim_fix_20260521a`
+  and
+  `benchmark_results/stage3_probe_lq_full_load_completion_dsim_fix_20260521a`
+  both pass.  The mtimer-head probe retires `67` loads with `66` LMB fill
+  matches while creating `25` no-free-MSHR load-miss events.  The LQ-pressure
+  probe retires `193` loads with `192` LMB fill matches while creating `104`
+  no-free-MSHR load-miss events.  Both have `LMB WB blocked cycles = 0`.
+- Current LMB-owner retry DS/CM hard gate:
+  `benchmark_results/stage3_rtl_guard_lsu_lmb_owner_retry_20260521a`.
   Result: pass within the 0.01% regression tolerance.  Guard metrics were
   DS100 `3.150055 DMIPS/MHz`, DS300 `3.218821 DMIPS/MHz`, CM1
   `6.649025 CoreMark/MHz`, and CM10 `6.851474 CoreMark/MHz`.
@@ -238,7 +493,7 @@ Remaining proof before claiming the Linux milestone:
 - Verilator is useful for compile and selected directed turnaround, but the
   current full Linux Verilator image aborts near the OpenSBI platform probe with
   `Active region did not converge`.  Do not use that full-image Verilator path
-  as Linux milestone evidence until the testbench convergence issue is fixed.
+  as Linux milestone evidence until the in-core RTL convergence issue is fixed.
 
 Debug policy from this point:
 
@@ -462,7 +717,7 @@ May 14 trap-frame overwrite root cause update:
 - Verilator is useful as a build sanity check for these hooks, but it still
   aborts on longer Linux runs with `Active region did not converge`. Do not use
   Verilator Linux execution as promotion evidence until that remaining
-  convergence issue is fixed. The current DSim lease may remain blocked
+  in-core RTL convergence issue is fixed. The current DSim lease may remain blocked
   briefly after a killed run; retry only one focused DSim run at a time.
 - Two directed Sv48 smokes are useful regression probes:
   - `tests/asm/vm_strap_frame_sv48_smoke.S` passes the simple S-mode interrupt
@@ -751,8 +1006,8 @@ Simulator backend policy:
 - Current caveat: Verilator builds the Linux platform, but Linux execution still
   aborts around 50K cycles with `Active region did not converge`
   (`linux_boot_results/stage3_linux_trappc_verilator_conv50k_100k_20260517a`).
-  Treat Verilator as compile-only for this slice until that convergence issue is
-  fixed.
+  Treat Verilator as compile-only for this slice until that in-core RTL
+  convergence issue is fixed.
 - XSim is demoted to a last-resort cross-check because it is too slow for this
   workload.
 - The Linux boot runner default is now `--simulator auto`, which tries DSim
@@ -3260,6 +3515,95 @@ Current debug verdict:
   then run a bounded 63M DSim slice with
   `+LINUX_STOP_ON_NO_COMMIT +LINUX_NO_COMMIT_LIMIT=50000`. Do not run another
   blind 100M wait before collecting that LQ/LMB dump.
+
+### 2026-05-21 LSU Owner-Retry Repair, Directed Validation
+
+Static root-cause inspection found a credible lost-load path that matches the
+`mtimer_event_start` freeze:
+
+- D-cache can accept or merge a load miss into its MSHR machinery.
+- One cycle later, the LSU miss detector must allocate an LMB entry so that the
+  original load still has a completion owner.
+- If the LMB has no free entry at that point, the previous RTL counted the miss
+  but did not keep the load live. The D-cache line can later fill, but the ROB
+  entry for the original load has no LMB owner to wake it up.
+- That failure mode explains the observed combination of `lq_full=1`,
+  ROB head stuck on a load, and no fresh UART panic in the latest 100M run.
+
+Directed-validated RTL change, still pending full Linux confirmation:
+
+- `src/rtl/core/lsu/lsu.sv` now captures `p*_lmb_retry_req` into the existing
+  port retry registers when a miss is detected and no LMB completion owner can
+  be reserved.
+- The repair intentionally does not feed the late LMB retry signal back into
+  same-cycle load issue suppression, because that creates a D-cache response to
+  issue-valid combinational dependency. Retry ownership is taken by the
+  registered retry path on the following cycle.
+- A stale XSim snapshot before rebuild reproduced the directed failure in
+  `benchmark_results/stage3_probe_mtimer_head_load_pressure_xsim_50k_dump_20260521a`:
+  the run timed out at 50K cycles with `lq_full=49934`, `52` load issues, only
+  `43` load writebacks, and nine live load owners that could no longer retire.
+  That is debug evidence for the lost-owner class, but not a current RTL result
+  because the XSim image was stale.
+- After rebuilding the current RTL, the same directed timer-body pressure probe
+  passes on both XSim and DSim. The DSim proof point is
+  `benchmark_results/stage3_probe_mtimer_head_load_pressure_dsim_fix_20260521a`:
+  `PASS`, `mcycle=283`, `minstret=107`, `67` load issues, `67` load writebacks,
+  `Fill matches=66`, no live LQ/LMB/MSHR leftovers at finish.
+- The broader LQ pressure probe
+  `benchmark_results/stage3_probe_lq_full_load_completion_dsim_fix_20260521a`
+  also passes: `mcycle=787`, `minstret=222`, `LMB max occupied=16`, and no
+  LMB full cycles.
+- The required Stage 3 DS/CM hard regression gate passes after rebuilding DSim
+  from the same worktree:
+  `benchmark_results/stage3_rtl_guard_lsu_lmb_owner_retry_20260521a`.
+  Metrics are DS100 `3.150055 DMIPS/MHz`, DS300 `3.218821 DMIPS/MHz`,
+  CM1 `6.649025 CoreMark/MHz`, and CM10 `6.851474 CoreMark/MHz`, all within
+  the `0.01%` no-regression rule.
+
+Current Linux status:
+
+- There is no fresh UART-visible kernel panic in the latest complete Linux
+  first-failure run. The May 14 `Unable to handle kernel paging request` and
+  May 19 `BUG: scheduling while atomic` signatures are stale failure classes.
+- The latest complete blocker remains the no-retire freeze at
+  `last_commit_cyc=62,720,377` with ROB head loads at `0x8000c840/0x8000c842`
+  in OpenSBI `mtimer_event_start`.
+- The first fresh root-cause candidate is LSU partial-flush owner mismatch.
+  The LQ already keeps older entries across a partial flush, but the one-cycle
+  LSU load metadata pipe still killed every in-flight load on any flush.  That
+  can leave an older LQ entry marked `executed=1` with `has_result=0` and no
+  live LMB/retry owner after timer interrupt or branch recovery traffic.  This
+  exactly matches the latest no-retire dump: `lq_full=1`, LQ head `idx=14`,
+  `rob=4`, `addr=0x8004e3f8`, `result=0`, while `lmb_any=0` and retry state
+  is empty.
+- A narrow RTL candidate now aligns the LSU load-pipe metadata with the LQ
+  owner rule: full flush kills all in-flight endpoint state, while partial
+  flush keeps older load-pipe metadata and kills only wrong-path younger
+  owners.  This is a correctness fix, not a Linux benchmark tuning change.
+- Validation status for this candidate is not yet signoff complete.  Verilator
+  Linux elaboration passes after the patch, and a short interrupted smoke
+  reaches the OpenSBI banner without the previous immediate active-region
+  convergence abort.  DSim Linux rebuild is currently license-blocked
+  (`maxLeases`), so the required DSim proof across the old 62.72M freeze and
+  the DS/CM performance gate still must run before promotion.
+- A 70M DSim confirmation attempt,
+  `linux_boot_results/stage3_lsu_lmb_owner_retry_uart_probe_dsim_70m_20260521a`,
+  was intentionally stopped during early OpenSBI because it was too slow to be
+  useful for this debug turn. Do not use it as pass or fail evidence.
+
+Remaining promotion gate:
+
+- Rebuild with DSim when the lease is available.  The exact first proof should
+  be a bounded Linux run with `+LINUX_STOP_ON_LOST_LOAD_OWNER`,
+  `+LINUX_STOP_ON_NO_COMMIT`, and the old 62.72M freeze point as the minimum
+  crossing target.
+- Run a focused DSim Linux first-failure confirmation when runtime budget is
+  acceptable, preferably with a shorter checkpoint or snapshot strategy instead
+  of another blind 70M to 100M wait.
+- The Linux debug gate passes only if retirement continues past the old
+  `last_commit_cyc=62,720,377` freeze without a fresh UART `Oops`, `BUG`, or
+  kernel panic.
 
 ## Near-Term Non-Goals
 
