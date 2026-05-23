@@ -189,6 +189,7 @@ module lsu
     logic            amo_forward_block;
     logic            amo_flush_kill;
     logic            amo_wb_drain_fire;
+    logic            amo_wb_flush_keep;
     logic            amo_wait_load_r;
     logic            amo_store_valid_r;
     logic            amo_store_committed_r;
@@ -1578,7 +1579,7 @@ module lsu
          load0_tlb_fault ||
          (!load_addr_misaligned[0] &&
           (p0_sq_order_wait_block || sq_fwd_partial ||
-           csb_fwd_partial || same_cycle_sta_wait0 ||
+           csb_enq_fwd_partial || csb_fwd_partial || same_cycle_sta_wait0 ||
            fwd_hold_blocked || mmio_load0_block ||
            amo_busy ||
            (load_issue_data[0].is_amo &&
@@ -3166,7 +3167,6 @@ module lsu
     logic [LQ_IDX_BITS-1:0]   p1_misalign_hold_lq_idx_r;
     logic                     p1_fwd_hold_flush_keep;
     logic                     p1_misalign_hold_flush_keep;
-    logic                     amo_wb_flush_keep;
     logic                     mmio_resp_flush_keep;
 
     assign fwd_hold_flush_keep =
