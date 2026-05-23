@@ -238,7 +238,7 @@ module tb_linux;
     string uart_fail_bug_pattern;
 
     localparam int TRACE_LOAD_TRACK = 8;
-    localparam int LOAD_OWNER_HIST_DEPTH = 256;
+    localparam int LOAD_OWNER_HIST_DEPTH = 2048;
     localparam logic [63:0] OPENSBI_TEXT_LO = 64'h0000_0000_8000_0000;
     localparam logic [63:0] OPENSBI_TEXT_HI = 64'h0000_0000_8006_0000;
     logic                    trace_load_valid [0:TRACE_LOAD_TRACK-1];
@@ -897,24 +897,114 @@ module tb_linux;
 
                 if (u_core.dc_load_req_valid[li] &&
                     linux_owner_hist_addr_match(u_core.dc_load_req_addr[li])) begin
-                    linux_owner_hist_record(
-                        8'd3,
-                        2'(li),
-                        ((li == 0) ? u_core.u_lsu.load_issue_data_r[0].pc
-                                   : u_core.u_lsu.load_issue_data_r[1].pc),
-                        ((li == 0) ? u_core.u_lsu.load_issue_data_r[0].rob_idx
-                                   : u_core.u_lsu.load_issue_data_r[1].rob_idx),
-                        ((li == 0) ? u_core.u_lsu.load_issue_data_r[0].lq_idx
-                                   : u_core.u_lsu.load_issue_data_r[1].lq_idx),
-                        u_core.dc_load_req_addr[li],
-                        {
-                            60'd0,
-                            u_core.flush_out.valid,
-                            u_core.dc_load_miss_retry[li],
-                            u_core.dc_load_resp_hit[li],
-                            u_core.dc_load_resp_valid[li]
-                        });
+                    if ((li == 0) && u_core.u_lsu.split_load_req_valid) begin
+                        linux_owner_hist_record(
+                            8'd3,
+                            2'(li),
+                            u_core.u_lsu.split_load_data_r.pc,
+                            u_core.u_lsu.split_load_data_r.rob_idx,
+                            u_core.u_lsu.split_load_data_r.lq_idx,
+                            u_core.dc_load_req_addr[li],
+                            {
+                                56'd0,
+                                u_core.flush_out.valid,
+                                u_core.u_lsu.split_load_req_valid,
+                                u_core.u_lsu.p0_retry_fire,
+                                u_core.dc_load_miss_retry[li],
+                                u_core.dc_load_resp_hit[li],
+                                u_core.dc_load_resp_valid[li],
+                                u_core.dc_load_req_valid[li]
+                            });
+                    end else if ((li == 0) && u_core.u_lsu.p0_retry_fire) begin
+                        linux_owner_hist_record(
+                            8'd3,
+                            2'(li),
+                            u_core.u_lsu.p0_retry_data_r.pc,
+                            u_core.u_lsu.p0_retry_data_r.rob_idx,
+                            u_core.u_lsu.p0_retry_data_r.lq_idx,
+                            u_core.dc_load_req_addr[li],
+                            {
+                                56'd0,
+                                u_core.flush_out.valid,
+                                u_core.u_lsu.split_load_req_valid,
+                                u_core.u_lsu.p0_retry_fire,
+                                u_core.dc_load_miss_retry[li],
+                                u_core.dc_load_resp_hit[li],
+                                u_core.dc_load_resp_valid[li],
+                                u_core.dc_load_req_valid[li]
+                            });
+                    end else if (li == 0) begin
+                        linux_owner_hist_record(
+                            8'd3,
+                            2'(li),
+                            u_core.u_lsu.load_issue_data[0].pc,
+                            u_core.u_lsu.load_issue_data[0].rob_idx,
+                            u_core.u_lsu.load_issue_data[0].lq_idx,
+                            u_core.dc_load_req_addr[li],
+                            {
+                                56'd0,
+                                u_core.flush_out.valid,
+                                u_core.u_lsu.split_load_req_valid,
+                                u_core.u_lsu.p0_retry_fire,
+                                u_core.dc_load_miss_retry[li],
+                                u_core.dc_load_resp_hit[li],
+                                u_core.dc_load_resp_valid[li],
+                                u_core.dc_load_req_valid[li]
+                            });
+                    end else begin
+                        linux_owner_hist_record(
+                            8'd3,
+                            2'(li),
+                            u_core.u_lsu.p1_eff_data.pc,
+                            u_core.u_lsu.p1_eff_data.rob_idx,
+                            u_core.u_lsu.p1_eff_data.lq_idx,
+                            u_core.dc_load_req_addr[li],
+                            {
+                                56'd0,
+                                u_core.flush_out.valid,
+                                u_core.u_lsu.p1_retry_valid_r,
+                                u_core.u_lsu.dcache_conflict,
+                                u_core.dc_load_miss_retry[li],
+                                u_core.dc_load_resp_hit[li],
+                                u_core.dc_load_resp_valid[li],
+                                u_core.dc_load_req_valid[li]
+                            });
+                    end
                 end
+            end
+
+            if (u_core.u_lsu.lq_exec_valid &&
+                (linux_owner_hist_pc_match(u_core.u_lsu.load_issue_data[0].pc) ||
+                 linux_owner_hist_addr_match(u_core.u_lsu.lq_exec_addr))) begin
+                linux_owner_hist_record(
+                    8'd18,
+                    2'd0,
+                    u_core.u_lsu.load_issue_data[0].pc,
+                    u_core.u_lsu.lq_exec_rob_idx,
+                    u_core.u_lsu.lq_exec_idx,
+                    u_core.u_lsu.lq_exec_addr,
+                    {60'd0,
+                     u_core.flush_out.valid,
+                     u_core.u_lsu.p0_partial_fwd_wait,
+                     u_core.u_lsu.p0_fwd_hit,
+                     u_core.u_lsu.dcache_load_req_valid[0]});
+            end
+
+            if (u_core.u_lsu.lq_exec1_valid &&
+                (linux_owner_hist_pc_match(u_core.u_lsu.p1_eff_data.pc) ||
+                 linux_owner_hist_addr_match(u_core.u_lsu.lq_exec1_addr))) begin
+                linux_owner_hist_record(
+                    8'd18,
+                    2'd1,
+                    u_core.u_lsu.p1_eff_data.pc,
+                    u_core.u_lsu.lq_exec1_rob_idx,
+                    u_core.u_lsu.lq_exec1_idx,
+                    u_core.u_lsu.lq_exec1_addr,
+                    {60'd0,
+                     u_core.flush_out.valid,
+                     u_core.u_lsu.p1_partial_fwd_wait,
+                     u_core.u_lsu.p1_any_fwd_hit,
+                     u_core.u_lsu.dcache_load_req_valid[1]});
             end
 
             if (u_core.u_lsu.p0_miss_detect &&
@@ -954,6 +1044,36 @@ module tb_linux;
                         u_core.u_lsu.lmb_p1_alloc_avail,
                         u_core.dc_load_miss_retry[1]
                     });
+            end
+            if (u_core.u_lsu.p0_miss_retry_req &&
+                linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr_r[0])) begin
+                linux_owner_hist_record(
+                    8'd16,
+                    2'd0,
+                    u_core.u_lsu.load_issue_data_r[0].pc,
+                    u_core.u_lsu.load_issue_data_r[0].rob_idx,
+                    u_core.u_lsu.load_issue_data_r[0].lq_idx,
+                    u_core.u_lsu.load_eff_addr_r[0],
+                    {60'd0,
+                     u_core.flush_out.valid,
+                     u_core.dc_load_miss_retry[0],
+                     u_core.u_lsu.p0_lmb_retry_req,
+                     u_core.u_lsu.lmb_free_avail});
+            end
+            if (u_core.u_lsu.p1_miss_retry_req &&
+                linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr_r[1])) begin
+                linux_owner_hist_record(
+                    8'd17,
+                    2'd1,
+                    u_core.u_lsu.load_issue_data_r[1].pc,
+                    u_core.u_lsu.load_issue_data_r[1].rob_idx,
+                    u_core.u_lsu.load_issue_data_r[1].lq_idx,
+                    u_core.u_lsu.load_eff_addr_r[1],
+                    {60'd0,
+                     u_core.flush_out.valid,
+                     u_core.dc_load_miss_retry[1],
+                     u_core.u_lsu.p1_lmb_retry_req,
+                     u_core.u_lsu.lmb_p1_alloc_avail});
             end
             if (u_core.u_lsu.lmb_any_match &&
                 linux_owner_hist_addr_match(
@@ -1015,6 +1135,89 @@ module tb_linux;
                     '0,
                     '0,
                     u_core.dc_fill_snoop_addr,
+                    64'd0);
+            end
+            if (u_core.u_lsu.p0_dcache_hit_valid &&
+                linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr_r[0])) begin
+                linux_owner_hist_record(
+                    8'd10,
+                    2'd0,
+                    u_core.u_lsu.load_issue_data_r[0].pc,
+                    u_core.u_lsu.load_issue_data_r[0].rob_idx,
+                    u_core.u_lsu.load_issue_data_r[0].lq_idx,
+                    u_core.u_lsu.load_eff_addr_r[0],
+                    {60'd0,
+                     u_core.flush_out.valid,
+                     u_core.u_lsu.p0_dcache_hit_blocked,
+                     u_core.u_lsu.p0_dcache_hold_valid_r,
+                     u_core.u_lsu.amo_wb_valid_r});
+            end
+            if (u_core.u_lsu.p1_dcache_hit_valid &&
+                linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr_r[1])) begin
+                linux_owner_hist_record(
+                    8'd11,
+                    2'd1,
+                    u_core.u_lsu.load_issue_data_r[1].pc,
+                    u_core.u_lsu.load_issue_data_r[1].rob_idx,
+                    u_core.u_lsu.load_issue_data_r[1].lq_idx,
+                    u_core.u_lsu.load_eff_addr_r[1],
+                    {60'd0,
+                     u_core.flush_out.valid,
+                     u_core.u_lsu.p1_dcache_hit_blocked,
+                     u_core.u_lsu.p1_dcache_hold_valid_r,
+                     u_core.u_lsu.p1_misalign_hold_valid_r});
+            end
+            if (u_core.u_lsu.p0_dcache_hit_blocked &&
+                linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr_r[0])) begin
+                linux_owner_hist_record(
+                    8'd12,
+                    2'd0,
+                    u_core.u_lsu.load_issue_data_r[0].pc,
+                    u_core.u_lsu.load_issue_data_r[0].rob_idx,
+                    u_core.u_lsu.load_issue_data_r[0].lq_idx,
+                    u_core.u_lsu.load_eff_addr_r[0],
+                    {62'd0,
+                     u_core.u_lsu.amo_wb_valid_r,
+                     u_core.u_lsu.p0_dcache_hold_valid_r});
+            end
+            if (u_core.u_lsu.p1_dcache_hit_blocked &&
+                linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr_r[1])) begin
+                linux_owner_hist_record(
+                    8'd13,
+                    2'd1,
+                    u_core.u_lsu.load_issue_data_r[1].pc,
+                    u_core.u_lsu.load_issue_data_r[1].rob_idx,
+                    u_core.u_lsu.load_issue_data_r[1].lq_idx,
+                    u_core.u_lsu.load_eff_addr_r[1],
+                    {62'd0,
+                     u_core.u_lsu.p1_dcache_hold_valid_r,
+                     u_core.u_lsu.p1_misalign_hold_valid_r});
+            end
+            if (u_core.u_lsu.fwd_hold_valid_r &&
+                linux_owner_hist_addr_match(u_core.u_lsu.u_load_queue.queue[
+                    u_core.u_lsu.fwd_hold_lq_idx_r].addr)) begin
+                linux_owner_hist_record(
+                    8'd14,
+                    2'd0,
+                    64'd0,
+                    u_core.u_lsu.fwd_hold_rob_idx_r,
+                    u_core.u_lsu.fwd_hold_lq_idx_r,
+                    u_core.u_lsu.u_load_queue.queue[
+                        u_core.u_lsu.fwd_hold_lq_idx_r].addr,
+                    {63'd0,
+                     u_core.u_lsu.fwd_hold_is_exc_r});
+            end
+            if (u_core.u_lsu.p1_fwd_hold_valid_r &&
+                linux_owner_hist_addr_match(u_core.u_lsu.u_load_queue.queue[
+                    u_core.u_lsu.p1_fwd_hold_lq_idx_r].addr)) begin
+                linux_owner_hist_record(
+                    8'd15,
+                    2'd1,
+                    64'd0,
+                    u_core.u_lsu.p1_fwd_hold_rob_idx_r,
+                    u_core.u_lsu.p1_fwd_hold_lq_idx_r,
+                    u_core.u_lsu.u_load_queue.queue[
+                        u_core.u_lsu.p1_fwd_hold_lq_idx_r].addr,
                     64'd0);
             end
         end

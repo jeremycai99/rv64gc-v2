@@ -4,11 +4,14 @@ Date: May 10, 2026
 
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
 phase. The RV64GC instruction compliance prerequisite is closed on the current
-RTL candidate and the DS/CM hard performance gate remains mandatory. Linux
-panic/no-retire chasing is paused while the Verilator `Active region did not
-converge` failure is treated as an RTL convergence and ASIC-quality blocker.
-Do not resume Linux long-run debug until in-core combinational feedback is
-removed without breaking strict owner checks or the DS/CM performance guard.
+RTL candidate and the DS/CM hard performance gate remains mandatory. The active
+DSim Linux blocker is the deterministic lost-load-owner/no-retire path in
+OpenSBI `mtimer_event_start`. The latest root cause is the LSU LMB fill
+writeback arbitration against split-load writeback. A focused 65M DSim smoke
+and the DS/CM hard guard pass after the repair candidate, but the 100M Linux
+proof is still pending. Verilator `Active region did not converge` remains an
+ASIC-quality backup-simulator blocker and must not be hidden with warning
+suppression or convergence-limit workarounds.
 
 ## Goal
 
@@ -245,6 +248,98 @@ Current verdict:
   no-commit and lost-owner stops still enabled.
 - Use owner-history filters only when chasing a specific line or PC; keep the
   default long proof log clean.
+
+## May 23 LMB Split-Load Writeback Arbitration Repair
+
+The next deterministic lost-load-owner failure after the LQ result-owner guard
+was root-caused to LSU load writeback arbitration, not to OpenSBI timer
+software.
+
+Fresh failing artifacts:
+
+- `linux_boot_results/stage3_lq_guard_100m_dsim_20260523a`.
+- `linux_boot_results/stage3_lost_owner_precise_history_dsim_20260523a`.
+
+Failure signature:
+
+- DSim stopped around cycle `62,720,645` with
+  `+LINUX_STOP_ON_LOST_LOAD_OWNER`.
+- The architectural window is OpenSBI `mtimer_event_start`:
+  - `0x8000c840: lw a3,40(a5)`, `mt->first_hartid`;
+  - `0x8000c844: ld a4,24(a5)`, `mt->mtimecmp_addr`.
+- v1 has the same code shape at `0x8000c9b8` and `0x8000c9bc` and boots past
+  clocksource, serial init, and `/init`; therefore this is a v2 LSU ownership
+  issue, not a software image issue.
+
+Precise owner-history evidence:
+
+- `cyc=62720399`: older `lw` at `0x8000c840`, ROB `4`, LQ `1`,
+  address `0x8004e3f8`, creates the load execution/request owner.
+- `cyc=62720400`: the older `lw` is recorded as a miss/LMB-owned request.
+- `cyc=62720412`: the LMB sees a fill match for line `0x8004e3c0`.
+- There is no result event for ROB `4`, LQ `1`.
+- `cyc=62720413`: the younger same-line `ld` at `0x8000c844`, ROB `6`,
+  LQ `2`, drains and records its result.
+- Final LQ dump shows LQ `1` executed with no result while LQ `2` has a
+  result, matching an older-owner drop during same-line dual-load completion.
+
+Root cause:
+
+- The LMB sequential block clears a matched fill entry immediately when
+  `lmb_wb_port_free && lmb_any_match`.
+- The actual port-0 load writeback mux gives `split_load_wb_fire` priority
+  before the LMB fill branch.
+- Before the repair, `lmb_wb_port_free` did not exclude `split_load_wb_fire`.
+  In a collision cycle the LMB could clear the older fill entry as if it wrote
+  back, while the writeback mux actually emitted the split-load result.
+
+Implemented RTL repair:
+
+- `src/rtl/core/lsu/lsu.sv` now includes `!split_load_wb_fire` in
+  `lmb_wb_port_free`.
+- This makes the LMB clear a fill entry only when the real port-0 mux slot is
+  available for the LMB owner. If split-load owns the slot, the LMB keeps the
+  filled data and drains later.
+- This is an ASIC-style valid/owner arbitration repair. It does not change the
+  benchmark image, add PC-specific logic, loosen owner checks, or add
+  simulation-only behavior to synthesizable RTL.
+
+Debug infrastructure:
+
+- `src/tb/tb_linux.sv` owner-history tracing was extended to preserve enough
+  request, fill, hit, hold, and result events to classify this exact failure.
+- The extra tracing is TB-only and should remain off unless a Linux owner
+  debug plusarg enables it.
+
+Validation:
+
+- Rebuilt DSim Linux simulator from the repaired tree:
+  `linux_boot_results/stage3_lmb_split_port_simbuild_20260523a`.
+- Focused DSim Linux smoke:
+  `linux_boot_results/stage3_lmb_split_port_65m_dsim_20260523a`.
+- Result: `PASS` by `TIMEOUT` at `65,000,000` cycles with no lost-owner,
+  no-commit, panic, Oops, or BUG stop. This crosses the old deterministic
+  `62.72M` failure point.
+- DS/CM hard performance guard:
+  `benchmark_results/stage3_rtl_guard_lmb_split_port_20260523a`.
+- Guard result: `PASS` with the Stage 3 `0.01%` regression tolerance.
+
+Guard metrics:
+
+| Row | Timed cycles | Metric |
+|---|---:|---:|
+| Dhrystone 100 | `18,068` | `3.150055 DMIPS/MHz` |
+| Dhrystone 300 | `53,046` | `3.218821 DMIPS/MHz` |
+| CoreMark 1 | `150,398` | `6.649025 CM/MHz` |
+| CoreMark 10 | `1,459,540` | `6.851474 CM/MHz` |
+
+Current verdict:
+
+- The LMB split-load arbitration repair is the current Stage 3 Linux RTL
+  candidate.
+- It is not final 100M Linux proof. The next required run is a clean 100M DSim
+  proof with no-commit and lost-owner stops enabled and owner-history filters
+  disabled unless the run fails again.
 
 ## May 20 Panic Debug Pivot
 

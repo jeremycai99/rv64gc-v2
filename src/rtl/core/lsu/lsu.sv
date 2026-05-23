@@ -1544,7 +1544,8 @@ module lsu
         p0_load_wb_port_busy && p1_normal_wb_valid;
     assign lmb_wb_port_free    = !p0_load_wb_port_busy &&
                                   !(fwd_hold_valid_r && fwd_hold_flush_keep) &&
-                                  !(amo_wb_valid_r && amo_wb_flush_keep);
+                                  !(amo_wb_valid_r && amo_wb_flush_keep) &&
+                                  !split_load_wb_fire;
     assign amo_busy = amo_wait_load_r | amo_store_valid_r | amo_wb_valid_r;
     assign amo_serial_block =
         amo_busy |
