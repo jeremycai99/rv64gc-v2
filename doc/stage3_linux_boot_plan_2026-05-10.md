@@ -111,6 +111,58 @@ Current compliance status:
 - Linux kernel debug may proceed only while this compliance gate and the DS/CM
   hard performance gate stay clean after each RTL change.
 
+## May 23 AMO Wait Owner Checker Update
+
+The May 23 Verilator lost-load-owner stop was root-caused as a Stage 3
+testbench checker contract bug, not as an RTL LSU owner loss.
+
+Evidence:
+
+- Failing artifact:
+  `linux_boot_results/stage3_lost_owner_terms_verilator_20260523a`.
+- The run stopped at cycle `20,700,837` with LQ entry `2`, ROB `41`,
+  physical address `0x8108b940`, and D-cache MSHR `0` tracking the same line
+  behind a dirty eviction.
+- Focused trace showed the load was an AMO/LR-class load:
+  `is_amo=1`, `load_nocache_r=1`, `amo_wait_load_r=1`.
+- The data path was legal: AMO load waits for either the D-cache hit response
+  or `amo_load_fill_fire` from the matching D-cache fill. The generic LMB path
+  intentionally excludes AMO loads.
+- The lost-owner checker already counted load pipe stages, retries,
+  forwarding holds, D-cache holds, split load, MMIO response hold, AMO
+  writeback, and LMB entries, but it did not count `amo_wait_load_r`.
+
+Implemented testbench repair:
+
+- `src/tb/tb_linux.sv` now treats `amo_wait_load_r` with matching `lq_idx` as
+  a legal owner in `linux_lq_entry_has_owner`.
+- The failure dump now prints the AMO wait/writeback/store state to avoid
+  misclassifying AMO fill wait as an ownerless load again.
+- The p1 retry RTL experiment from the earlier hypothesis did not change this
+  failure and was reverted. No synthesizable RTL change is promoted by this
+  checker fix.
+
+Validation:
+
+- Verilator Linux platform rebuild: pass, with the existing frontend/CVFPU
+  `UNOPTFLAT` warnings still visible and unsuppressed.
+- Focused 25M-cycle backup run:
+  `linux_boot_results/stage3_amo_owner_25m_verilator_20260523a`.
+- Result: `PASS` by `TIMEOUT` at `25,000,000` cycles with
+  `+LINUX_STOP_ON_NO_COMMIT` and `+LINUX_STOP_ON_LOST_LOAD_OWNER` enabled.
+- The run crossed the previous `20,700,837`-cycle stop point and still had
+  active retirement at the `25,000,000`-cycle status checkpoint.
+
+Current verdict:
+
+- The old May 23 `LINUX_STOP_LOST_LOAD_OWNER` at `0x8108b940` is closed as a
+  false checker stop.
+- This is not 100M Linux milestone proof. The next proof run should use the
+  corrected checker and keep the no-commit and lost-owner stops enabled.
+- Because this slice changes only testbench/debug logic, the DS/CM 0.01%
+  performance gate is not required for this commit. The performance gate
+  remains mandatory before any Stage 3 RTL modification is promoted.
+
 ## May 20 Panic Debug Pivot
 
 The 100M-cycle Linux run is no longer the active action item while a panic is

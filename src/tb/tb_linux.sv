@@ -326,6 +326,15 @@ module tb_linux;
                      u_core.u_lsu.p1_fwd_hold_valid_r,
                      u_core.u_lsu.p1_fwd_hold_lq_idx_r,
                      u_core.u_lsu.p1_fwd_hold_rob_idx_r);
+            $display("[LINUX_DEBUG_AMO] wait=%0b wb=%0b store=%0b committed=%0b lq=%0d rob=%0d addr=%016h op=%0d",
+                     u_core.u_lsu.amo_wait_load_r,
+                     u_core.u_lsu.amo_wb_valid_r,
+                     u_core.u_lsu.amo_store_valid_r,
+                     u_core.u_lsu.amo_store_committed_r,
+                     u_core.u_lsu.amo_data_r.lq_idx,
+                     u_core.u_lsu.amo_data_r.rob_idx,
+                     u_core.u_lsu.amo_addr_r,
+                     u_core.u_lsu.amo_data_r.amo_op);
             $display("[LINUX_DEBUG_DCACHE] l2_state=%0d active=%0d req=%0b we=%0b req_addr=%016h ready=%0b resp=%0b resp_addr=%016h fill=%0b fill_addr=%016h free=%0b free_idx=%0d fill_avail=%0b fill_idx=%0d done_avail=%0b done_idx=%0d wb_avail=%0b wb_idx=%0d wt_count=%0d wt_deq=%0b",
                      u_core.u_dcache.l2_state_q,
                      u_core.u_dcache.l2_active_mshr_q,
@@ -443,6 +452,9 @@ module tb_linux;
             linux_lq_entry_has_owner = 1'b1;
         if (u_core.u_lsu.amo_wb_valid_r &&
             (u_core.u_lsu.amo_wb_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+        if (u_core.u_lsu.amo_wait_load_r &&
+            (u_core.u_lsu.amo_data_r.lq_idx == LQ_IDX_BITS'(lq_idx)))
             linux_lq_entry_has_owner = 1'b1;
 
         for (int li = 0; li < 32; li++) begin
@@ -2770,6 +2782,28 @@ module tb_linux;
                              u_core.u_dcache.fill_mshr_idx,
                              u_core.u_dcache.wb_mshr_avail,
                              u_core.u_dcache.wb_mshr_idx);
+                    $display("[LINUX_LSU_MISS0_TERM] cyc=%0d detect=%0b keep=%0b valid_r=%0b nocache=%0b amo=%0b resp=%0b retry=%0b lmb_free=%0b lmb_retry=%0b r_pc=%016h r_rob=%0d r_lq=%0d r_addr=%016h cur_valid=%0b cur_pc=%016h cur_rob=%0d cur_lq=%0d flush=%0b/%0b/%0d",
+                             sim_cycle,
+                             u_core.u_lsu.p0_miss_detect,
+                             u_core.u_lsu.load_pipe_flush_keep[0],
+                             u_core.u_lsu.load_issue_valid_r[0],
+                             u_core.u_lsu.load_nocache_r[0],
+                             u_core.u_lsu.load_issue_data_r[0].is_amo,
+                             u_core.dc_load_resp_valid[0],
+                             u_core.dc_load_miss_retry[0],
+                             u_core.u_lsu.lmb_free_avail,
+                             u_core.u_lsu.p0_lmb_retry_req,
+                             u_core.u_lsu.load_issue_data_r[0].pc,
+                             u_core.u_lsu.load_issue_data_r[0].rob_idx,
+                             u_core.u_lsu.load_issue_data_r[0].lq_idx,
+                             u_core.u_lsu.load_eff_addr_r[0],
+                             u_core.u_lsu.load_issue_valid[0],
+                             u_core.u_lsu.load_issue_data[0].pc,
+                             u_core.u_lsu.load_issue_data[0].rob_idx,
+                             u_core.u_lsu.load_issue_data[0].lq_idx,
+                             u_core.flush_out.valid,
+                             u_core.flush_out.full_flush,
+                             u_core.flush_out.rob_idx);
                 end
                 if (u_core.u_dcache.ld1_new_miss_req &&
                     linux_trace_line_match(u_core.u_dcache.ld1_line_addr)) begin
@@ -2788,6 +2822,28 @@ module tb_linux;
                              u_core.u_dcache.fill_mshr_idx,
                              u_core.u_dcache.wb_mshr_avail,
                              u_core.u_dcache.wb_mshr_idx);
+                    $display("[LINUX_LSU_MISS1_TERM] cyc=%0d detect=%0b keep=%0b valid_r=%0b nocache=%0b amo=%0b resp=%0b retry=%0b lmb_free=%0b lmb_retry=%0b r_pc=%016h r_rob=%0d r_lq=%0d r_addr=%016h cur_valid=%0b cur_pc=%016h cur_rob=%0d cur_lq=%0d flush=%0b/%0b/%0d",
+                             sim_cycle,
+                             u_core.u_lsu.p1_miss_detect,
+                             u_core.u_lsu.load_pipe_flush_keep[1],
+                             u_core.u_lsu.load_issue_valid_r[1],
+                             u_core.u_lsu.load_nocache_r[1],
+                             u_core.u_lsu.load_issue_data_r[1].is_amo,
+                             u_core.dc_load_resp_valid[1],
+                             u_core.dc_load_miss_retry[1],
+                             u_core.u_lsu.lmb_p1_alloc_avail,
+                             u_core.u_lsu.p1_lmb_retry_req,
+                             u_core.u_lsu.load_issue_data_r[1].pc,
+                             u_core.u_lsu.load_issue_data_r[1].rob_idx,
+                             u_core.u_lsu.load_issue_data_r[1].lq_idx,
+                             u_core.u_lsu.load_eff_addr_r[1],
+                             u_core.u_lsu.load_issue_valid[1],
+                             u_core.u_lsu.load_issue_data[1].pc,
+                             u_core.u_lsu.load_issue_data[1].rob_idx,
+                             u_core.u_lsu.load_issue_data[1].lq_idx,
+                             u_core.flush_out.valid,
+                             u_core.flush_out.full_flush,
+                             u_core.flush_out.rob_idx);
                 end
                 if (u_core.u_dcache.ld0_miss_merge_req &&
                     linux_trace_line_match(u_core.u_dcache.ld0_line_addr)) begin
