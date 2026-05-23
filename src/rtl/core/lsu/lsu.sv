@@ -157,15 +157,21 @@ module lsu
     logic            fwd_hold_valid_r;
     logic            p1_fwd_hold_valid_r;
     logic            p0_dcache_hit_valid;
+    logic            p1_dcache_hit_valid;
     logic            p0_dcache_hold_valid_r;
+    logic            p1_dcache_hold_valid_r;
     logic            p0_dcache_hold_flush_keep;
+    logic            p1_dcache_hold_flush_keep;
     logic            p0_dcache_hit_blocked;
+    logic            p1_dcache_hit_blocked;
     logic            p0_load_wb_port_busy;
     logic            p1_normal_wb_valid;
     logic            p0_fwd_spill_to_p1;
     logic            fwd_hold_blocked;
     logic            fwd_hold_flush_keep;
+    logic            p1_fwd_hold_flush_keep;
     logic            p1_misalign_hold_valid_r;
+    logic            p1_misalign_hold_flush_keep;
     logic            lmb_wb_port_free;
     logic            mmio_resp_hold_valid_r;
     logic            mmio_load0_block;
@@ -1517,11 +1523,15 @@ module lsu
                                && load_issue_valid_r[0]
                                && !load_nocache_r[0]
                                && !load_issue_data_r[0].is_amo;
-    assign p1_normal_wb_valid  = p1_misalign_hold_valid_r
-                               || (load_pipe_flush_keep[1]
-                                   && dcache_load_resp_valid[1]
-                                   && load_issue_valid_r[1]
-                                   && !load_nocache_r[1]);
+    assign p1_dcache_hit_valid = load_pipe_flush_keep[1]
+                               && dcache_load_resp_valid[1]
+                               && load_issue_valid_r[1]
+                               && !load_nocache_r[1]
+                               && !load_issue_data_r[1].is_amo;
+    assign p1_normal_wb_valid  = (p1_dcache_hold_valid_r && p1_dcache_hold_flush_keep)
+                               || (p1_misalign_hold_valid_r && p1_misalign_hold_flush_keep)
+                               || p1_dcache_hit_valid
+                               || (p1_fwd_hold_valid_r && p1_fwd_hold_flush_keep);
     assign p0_load_wb_port_busy =
         (amo_wb_valid_r && amo_wb_flush_keep) |
         p0_dcache_hit_valid |
@@ -1541,6 +1551,7 @@ module lsu
         csb_deq_valid |
         lmb_any_valid |
         p0_dcache_hold_valid_r |
+        p1_dcache_hold_valid_r |
         (load_issue_valid_r != 2'b00) |
         (load_issue_valid_rr != 2'b00) |
         p0_retry_valid_r |
@@ -3149,6 +3160,11 @@ module lsu
     logic [63:0] p0_dcache_hold_data_r;
     mem_size_e p0_dcache_hold_mem_size_r;
     logic [LQ_IDX_BITS-1:0] p0_dcache_hold_lq_idx_r;
+    logic [ROB_IDX_BITS-1:0] p1_dcache_hold_rob_idx_r;
+    logic [PHYS_REG_BITS-1:0] p1_dcache_hold_pdst_r;
+    logic [63:0] p1_dcache_hold_data_r;
+    mem_size_e p1_dcache_hold_mem_size_r;
+    logic [LQ_IDX_BITS-1:0] p1_dcache_hold_lq_idx_r;
 
     logic fwd_hold_is_exc_r;
     logic [ROB_IDX_BITS-1:0] p1_fwd_hold_rob_idx_r;
@@ -3169,8 +3185,6 @@ module lsu
     logic [ROB_IDX_BITS-1:0]  p1_misalign_hold_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] p1_misalign_hold_pdst_r;
     logic [LQ_IDX_BITS-1:0]   p1_misalign_hold_lq_idx_r;
-    logic                     p1_fwd_hold_flush_keep;
-    logic                     p1_misalign_hold_flush_keep;
     logic                     mmio_resp_flush_keep;
 
     assign fwd_hold_flush_keep =
@@ -3189,6 +3203,10 @@ module lsu
         !flush_in.valid ||
         (!flush_in.full_flush &&
          (lsu_rob_age_from_head(p0_dcache_hold_rob_idx_r) < flush_tail_age));
+    assign p1_dcache_hold_flush_keep =
+        !flush_in.valid ||
+        (!flush_in.full_flush &&
+         (lsu_rob_age_from_head(p1_dcache_hold_rob_idx_r) < flush_tail_age));
     assign amo_wb_flush_keep =
         !flush_in.valid ||
         (!flush_in.full_flush &&
@@ -3206,6 +3224,10 @@ module lsu
         p0_dcache_hit_valid &&
         ((amo_wb_valid_r && amo_wb_flush_keep) ||
          (p0_dcache_hold_valid_r && p0_dcache_hold_flush_keep));
+    assign p1_dcache_hit_blocked =
+        p1_dcache_hit_valid &&
+        ((p1_dcache_hold_valid_r && p1_dcache_hold_flush_keep) ||
+         (p1_misalign_hold_valid_r && p1_misalign_hold_flush_keep));
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n ||
@@ -3225,6 +3247,28 @@ module lsu
                 p0_dcache_hold_data_r <= load_extracted_dc[0];
                 p0_dcache_hold_mem_size_r <= load_issue_data_r[0].mem_size;
                 p0_dcache_hold_lq_idx_r <= load_issue_data_r[0].lq_idx;
+            end
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n ||
+            (flush_in.valid &&
+             (flush_in.full_flush ||
+              (p1_dcache_hold_valid_r && !p1_dcache_hold_flush_keep)))) begin
+            p1_dcache_hold_valid_r <= 1'b0;
+            p1_dcache_hold_mem_size_r <= MEM_DWORD;
+        end else begin
+            if (p1_dcache_hold_valid_r) begin
+                p1_dcache_hold_valid_r <= 1'b0;
+            end
+            if (p1_dcache_hit_blocked) begin
+                p1_dcache_hold_valid_r <= 1'b1;
+                p1_dcache_hold_rob_idx_r <= load_issue_data_r[1].rob_idx;
+                p1_dcache_hold_pdst_r <= load_issue_data_r[1].pdst;
+                p1_dcache_hold_data_r <= load_extracted_dc[1];
+                p1_dcache_hold_mem_size_r <= load_issue_data_r[1].mem_size;
+                p1_dcache_hold_lq_idx_r <= load_issue_data_r[1].lq_idx;
             end
         end
     end
@@ -3289,9 +3333,9 @@ module lsu
             p1_fwd_hold_mem_size_r <= MEM_DWORD;
         end else begin
             if (p1_fwd_hold_valid_r &&
-                !(p1_misalign_hold_valid_r ||
-                   (dcache_load_resp_valid[1] && load_issue_valid_r[1] &&
-                    !load_nocache_r[1]) ||
+                !((p1_dcache_hold_valid_r && p1_dcache_hold_flush_keep) ||
+                   (p1_misalign_hold_valid_r && p1_misalign_hold_flush_keep) ||
+                   p1_dcache_hit_valid ||
                    (fwd_hold_valid_r && dcache_load_resp_valid[0] &&
                     load_issue_valid_r[0] && !load_nocache_r[0]))) begin
                 p1_fwd_hold_valid_r <= 1'b0;
@@ -3323,11 +3367,12 @@ module lsu
     //   4. Forwarding hold or split load result
     //   5. LMB fill match, ready LMB drain, or MMIO response
     // Priority (Port 1):
-    //   1. Misalign exception (1-cycle-delayed registered hold — was a
+    //   1. Held D-cache hit from a previous arbitration conflict
+    //   2. Misalign exception (1-cycle-delayed registered hold — was a
     //      same-cycle CDB-loop leak; see p1_misalign_hold_valid_r above)
-    //   2. D-cache hit response
-    //   3. Port-0 forwarded spill
-    //   4. SQ-forward hold
+    //   3. D-cache hit response
+    //   4. Port-0 forwarded spill
+    //   5. SQ-forward hold
     //
     // Note: only port 0 is wired to the LMB for now (single-port fill match).
     // =========================================================================
@@ -3459,6 +3504,16 @@ module lsu
             load_wb_data[1]          = '0;
             load_wb_has_exception[1] = 1'b0;
             load_wb_exc_code[1]      = '0;
+        end else if (p1_dcache_hold_valid_r && p1_dcache_hold_flush_keep) begin
+            load_wb_valid[1]         = 1'b1;
+            load_wb_rob_idx[1]       = p1_dcache_hold_rob_idx_r;
+            load_wb_pdst[1]          = p1_dcache_hold_pdst_r;
+            load_wb_data[1]          = p1_dcache_hold_data_r;
+            load_wb_mem_size[1]      = p1_dcache_hold_mem_size_r;
+            load_wb_has_exception[1] = 1'b0;
+            load_wb_exc_code[1]      = '0;
+            lq_result_valid_sel[1]   = 1'b1;
+            lq_result_idx_sel[1]     = p1_dcache_hold_lq_idx_r;
         end else if (p1_misalign_hold_valid_r && p1_misalign_hold_flush_keep) begin
             load_wb_valid[1]         = 1'b1;
             load_wb_rob_idx[1]       = p1_misalign_hold_rob_idx_r;
@@ -3468,8 +3523,7 @@ module lsu
             load_wb_exc_code[1]      = 4'd4;
             lq_result_valid_sel[1]   = 1'b1;
             lq_result_idx_sel[1]     = p1_misalign_hold_lq_idx_r;
-        end else if (dcache_load_resp_valid[1] && load_issue_valid_r[1]
-                     && !load_nocache_r[1] && load_pipe_flush_keep[1]) begin
+        end else if (p1_dcache_hit_valid) begin
             load_wb_valid[1]         = 1'b1;
             load_wb_rob_idx[1]       = load_issue_data_r[1].rob_idx;
             load_wb_pdst[1]          = load_issue_data_r[1].pdst;
@@ -3521,7 +3575,8 @@ module lsu
                 spec_cancel_tag[li]   = '0;
                 if (load_issue_valid_r[li] && !load_nocache_r[li] &&
                     (!dcache_load_resp_valid[li] ||
-                     ((li == 0) && p0_dcache_hit_blocked)) &&
+                     ((li == 0) && p0_dcache_hit_blocked) ||
+                     ((li == 1) && p1_dcache_hit_blocked)) &&
                     !flush_in.valid) begin
                     spec_cancel_valid[li] = 1'b1;
                     spec_cancel_tag[li]   = load_issue_data_r[li].pdst;

@@ -3670,6 +3670,88 @@ Remaining proof:
 - Only after that crossing is clean should the session resume the longer 100M
   Linux run.
 
+### 2026-05-23 Port-1 Load Completion Skid Repair
+
+The DSim primary simulator is available again, and the current Linux blocker
+has moved from the earlier p0-only analysis to a more general load-completion
+lossless-arbitration requirement.
+
+Fresh DSim evidence:
+
+- Commit baseline before this slice: `080d5d2`, `stage3: guard load queue
+  result ownership`.
+- Latest complete DSim Linux run:
+  `linux_boot_results/stage3_100m_unblocked_dsim_20260522e_lq_owner_guard`.
+- It stops on `LINUX_STOP_LOST_LOAD_OWNER` at cycle `62,720,645`, with LQ
+  `idx=14`, ROB `4`, address `0x8004e3f8`, ROB head PCs
+  `0x8000c840/0x8000c842`, `lq_count=32`, `lmb_any=0`, retry state empty,
+  and no UART `Oops`, `BUG`, or kernel panic.
+- The final LQ dump also shows a suspicious younger entry with
+  `valid=1`, `addr_v=0`, `exec=0`, `result=1`, which reinforces that load
+  completion ownership and result fill must be fully owner matched and
+  lossless under pressure.
+
+Static root cause:
+
+- Port 0 already had a D-cache hit skid after the previous repair, so a hit
+  response that loses writeback arbitration to AMO/LR/SC does not disappear.
+- Port 1 still had no equivalent D-cache hit skid. A port-1 D-cache hit could
+  be lower priority than an already registered port-1 misalign completion in
+  the writeback mux. The LQ entry had already been marked executed, but the
+  definitive result could be dropped without a retry, LMB, or hold owner.
+- This is an ASIC-style structural bug, not a Linux-specific workaround: every
+  executed load completion must either write back in that cycle or be owned by
+  a registered completion state until it writes back.
+
+RTL/TB change:
+
+- `src/rtl/core/lsu/lsu.sv` now has a port-1 D-cache hit hold register that
+  mirrors the port-0 skid behavior. It captures ROB index, destination physical
+  register, LQ index, result data, and memory size when a port-1 D-cache hit
+  loses writeback arbitration.
+- Port-1 speculative load wakeup is cancelled when the hit is postponed into
+  the skid, so dependent consumers do not observe a result before definitive
+  load writeback.
+- The port-1 SQ-forward hold drain check now treats port-1 D-cache hold,
+  misalign hold, and direct D-cache hit as port-1 writeback owners, preventing
+  local result drops between registered hold paths.
+- `src/tb/tb_linux.sv` now recognizes p0 and p1 D-cache hold entries in the
+  lost-load-owner checker and prints those hold states in the existing
+  `LINUX_DEBUG_LOAD_HOLD` failure dump. This is testbench-only visibility.
+
+Validation completed:
+
+- `./build_dsim.sh` passes for the normal benchmark image.
+- Directed DSim LSU probes pass in
+  `benchmark_results/stage3_lsu_p1_dcache_skid_probes_dsim_20260522a`:
+  `probe_lq_full_load_completion` `mcycle=787`,
+  `probe_mtimer_head_load_pressure` `mcycle=283`, and
+  `probe_mtimer_head_load_lq_full` `mcycle=798`.
+- The hard Stage 3 DS/CM performance guard passes under DSim in
+  `benchmark_results/stage3_rtl_guard_lsu_p1_dcache_skid_dsim_20260522a`.
+  Metrics remain at the accepted baseline: DS100 `3.150055 DMIPS/MHz`,
+  DS300 `3.218821 DMIPS/MHz`, CM1 `6.649025 CoreMark/MHz`, and CM10
+  `6.851474 CoreMark/MHz`, all above the `0.01%` no-regression gate.
+- `./build_dsim_linux.sh` passes for the Linux image after the TB checker
+  update.
+
+Pending Linux confirmation:
+
+- A bounded DSim Linux smoke was started in
+  `linux_boot_results/stage3_lsu_p1_dcache_skid_lost_owner_smoke_dsim_20260523a`
+  with `+LINUX_STOP_ON_LOST_LOAD_OWNER` and `+LINUX_STOP_ON_NO_COMMIT`, but it
+  was intentionally stopped during early OpenSBI because DSim had not reached
+  the first 5M-cycle status interval after several minutes. Do not count this
+  run as pass or fail evidence.
+- The next Linux proof should still be scoped to cross the old `62,720,645`
+  lost-owner point. It is not the full 50M or 100M clean-boot gate.
+- If it crosses the old point without lost-owner/no-commit/panic, promote the
+  Linux evidence for this slice and schedule the longer clean-log run
+  separately.
+- If it fails again at the same point, the new `LINUX_DEBUG_LOAD_HOLD` dump
+  should identify whether a registered LSU completion owner is still missing
+  or whether the remaining bug is inside LQ result lifetime/ROB owner matching.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.

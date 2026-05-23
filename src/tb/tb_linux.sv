@@ -310,6 +310,22 @@ module tb_linux;
                      u_core.lsu_load_wb_rob_idx[1],
                      u_core.lsu_load_wb_pdst[0],
                      u_core.lsu_load_wb_pdst[1]);
+            $display("[LINUX_DEBUG_LOAD_HOLD] p0_dcache=%0b lq=%0d rob=%0d p1_dcache=%0b lq=%0d rob=%0d p1_misalign=%0b lq=%0d rob=%0d p0_fwd=%0b lq=%0d rob=%0d p1_fwd=%0b lq=%0d rob=%0d",
+                     u_core.u_lsu.p0_dcache_hold_valid_r,
+                     u_core.u_lsu.p0_dcache_hold_lq_idx_r,
+                     u_core.u_lsu.p0_dcache_hold_rob_idx_r,
+                     u_core.u_lsu.p1_dcache_hold_valid_r,
+                     u_core.u_lsu.p1_dcache_hold_lq_idx_r,
+                     u_core.u_lsu.p1_dcache_hold_rob_idx_r,
+                     u_core.u_lsu.p1_misalign_hold_valid_r,
+                     u_core.u_lsu.p1_misalign_hold_lq_idx_r,
+                     u_core.u_lsu.p1_misalign_hold_rob_idx_r,
+                     u_core.u_lsu.fwd_hold_valid_r,
+                     u_core.u_lsu.fwd_hold_lq_idx_r,
+                     u_core.u_lsu.fwd_hold_rob_idx_r,
+                     u_core.u_lsu.p1_fwd_hold_valid_r,
+                     u_core.u_lsu.p1_fwd_hold_lq_idx_r,
+                     u_core.u_lsu.p1_fwd_hold_rob_idx_r);
             $display("[LINUX_DEBUG_DCACHE] l2_state=%0d active=%0d req=%0b we=%0b req_addr=%016h ready=%0b resp=%0b resp_addr=%016h fill=%0b fill_addr=%016h free=%0b free_idx=%0d fill_avail=%0b fill_idx=%0d done_avail=%0b done_idx=%0d wb_avail=%0b wb_idx=%0d wt_count=%0d wt_deq=%0b",
                      u_core.u_dcache.l2_state_q,
                      u_core.u_dcache.l2_active_mshr_q,
@@ -405,6 +421,12 @@ module tb_linux;
 
         if (u_core.u_lsu.fwd_hold_valid_r &&
             (u_core.u_lsu.fwd_hold_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+        if (u_core.u_lsu.p0_dcache_hold_valid_r &&
+            (u_core.u_lsu.p0_dcache_hold_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
+            linux_lq_entry_has_owner = 1'b1;
+        if (u_core.u_lsu.p1_dcache_hold_valid_r &&
+            (u_core.u_lsu.p1_dcache_hold_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
             linux_lq_entry_has_owner = 1'b1;
         if (u_core.u_lsu.p1_fwd_hold_valid_r &&
             (u_core.u_lsu.p1_fwd_hold_lq_idx_r == LQ_IDX_BITS'(lq_idx)))
