@@ -1060,18 +1060,20 @@ module lsu
     // below before we can reference its fields here, the result source
     // selectors are bound in the writeback always_comb block below.
     // =========================================================================
-    logic [1:0]             lq_result_valid;
-    logic [LQ_IDX_BITS-1:0] lq_result_idx [0:1];
-    logic [63:0]            lq_result_data [0:1];
+    logic [1:0]              lq_result_valid;
+    logic [LQ_IDX_BITS-1:0]  lq_result_idx [0:1];
+    logic [ROB_IDX_BITS-1:0] lq_result_rob_idx [0:1];
+    logic [63:0]             lq_result_data [0:1];
 
-    logic [1:0]             lq_result_valid_sel;
-    logic [LQ_IDX_BITS-1:0] lq_result_idx_sel [0:1];
+    logic [1:0]              lq_result_valid_sel;
+    logic [LQ_IDX_BITS-1:0]  lq_result_idx_sel [0:1];
 
     always_comb begin
         for (int i = 0; i < 2; i++) begin
-            lq_result_valid[i] = load_wb_valid[i] && lq_result_valid_sel[i];
-            lq_result_idx[i]   = lq_result_idx_sel[i];
-            lq_result_data[i]  = load_wb_data[i];
+            lq_result_valid[i]   = load_wb_valid[i] && lq_result_valid_sel[i];
+            lq_result_idx[i]     = lq_result_idx_sel[i];
+            lq_result_rob_idx[i] = load_wb_rob_idx[i];
+            lq_result_data[i]    = load_wb_data[i];
         end
     end
 
@@ -1100,9 +1102,11 @@ module lsu
         // Load result
         .result0_valid     (lq_result_valid[0]),
         .result0_idx       (lq_result_idx[0]),
+        .result0_rob_idx   (lq_result_rob_idx[0]),
         .result0_data      (lq_result_data[0]),
         .result1_valid     (lq_result_valid[1]),
         .result1_idx       (lq_result_idx[1]),
+        .result1_rob_idx   (lq_result_rob_idx[1]),
         .result1_data      (lq_result_data[1]),
         // Store-to-load ordering violation check (from STA).
         // Use the same unguarded STA valid as above; a flush-cycle STA that

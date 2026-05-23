@@ -42,9 +42,11 @@ module load_queue
     // Load result (from D-cache or store forwarding)
     input logic result0_valid,
     input logic [LQ_IDX_BITS-1:0] result0_idx,
+    input logic [ROB_IDX_BITS-1:0] result0_rob_idx,
     input logic [63:0] result0_data,
     input logic result1_valid,
     input logic [LQ_IDX_BITS-1:0] result1_idx,
+    input logic [ROB_IDX_BITS-1:0] result1_rob_idx,
     input logic [63:0] result1_data,
 
     // Store-to-load ordering violation check
@@ -186,6 +188,31 @@ module load_queue
     assign violation_rob_idx  = best_rob_idx;
 
     // =========================================================================
+    // LQ owner checks
+    // =========================================================================
+    logic exec_owner_match;
+    logic exec1_owner_match;
+    logic result0_owner_match;
+    logic result1_owner_match;
+
+    assign exec_owner_match =
+        exec_valid &&
+        queue[exec_idx].valid &&
+        (queue[exec_idx].rob_idx == exec_rob_idx);
+    assign exec1_owner_match =
+        exec1_valid &&
+        queue[exec1_idx].valid &&
+        (queue[exec1_idx].rob_idx == exec1_rob_idx);
+    assign result0_owner_match =
+        result0_valid &&
+        queue[result0_idx].valid &&
+        (queue[result0_idx].rob_idx == result0_rob_idx);
+    assign result1_owner_match =
+        result1_valid &&
+        queue[result1_idx].valid &&
+        (queue[result1_idx].rob_idx == result1_rob_idx);
+
+    // =========================================================================
     // Partial flush survivor map
     // =========================================================================
     logic [LQ_IDX_BITS-1:0] partial_flush_head;
@@ -303,27 +330,25 @@ module load_queue
                     queue[i] <= '0;
             end
 
-            if (exec_valid && partial_flush_keep[exec_idx]) begin
-                queue[exec_idx].rob_idx     <= exec_rob_idx;
+            if (exec_owner_match && partial_flush_keep[exec_idx]) begin
                 queue[exec_idx].addr        <= exec_addr;
                 queue[exec_idx].size        <= exec_size;
                 queue[exec_idx].is_unsigned <= exec_is_unsigned;
                 queue[exec_idx].addr_valid  <= 1'b1;
                 queue[exec_idx].executed    <= 1'b1;
             end
-            if (exec1_valid && partial_flush_keep[exec1_idx]) begin
-                queue[exec1_idx].rob_idx     <= exec1_rob_idx;
+            if (exec1_owner_match && partial_flush_keep[exec1_idx]) begin
                 queue[exec1_idx].addr        <= exec1_addr;
                 queue[exec1_idx].size        <= exec1_size;
                 queue[exec1_idx].is_unsigned <= exec1_is_unsigned;
                 queue[exec1_idx].addr_valid  <= 1'b1;
                 queue[exec1_idx].executed    <= 1'b1;
             end
-            if (result0_valid && partial_flush_keep[result0_idx]) begin
+            if (result0_owner_match && partial_flush_keep[result0_idx]) begin
                 queue[result0_idx].data       <= result0_data;
                 queue[result0_idx].has_result <= 1'b1;
             end
-            if (result1_valid && partial_flush_keep[result1_idx]) begin
+            if (result1_owner_match && partial_flush_keep[result1_idx]) begin
                 queue[result1_idx].data       <= result1_data;
                 queue[result1_idx].has_result <= 1'b1;
             end
@@ -342,16 +367,14 @@ module load_queue
             // --- Exec fill: record address, size, and ROB index ---
             // The ROB index is needed by the ordering-violation comparison
             // to determine which loads are younger than an incoming store.
-            if (exec_valid) begin
-                queue[exec_idx].rob_idx     <= exec_rob_idx;
+            if (exec_owner_match) begin
                 queue[exec_idx].addr        <= exec_addr;
                 queue[exec_idx].size        <= exec_size;
                 queue[exec_idx].is_unsigned <= exec_is_unsigned;
                 queue[exec_idx].addr_valid  <= 1'b1;
                 queue[exec_idx].executed    <= 1'b1;
             end
-            if (exec1_valid) begin
-                queue[exec1_idx].rob_idx     <= exec1_rob_idx;
+            if (exec1_owner_match) begin
                 queue[exec1_idx].addr        <= exec1_addr;
                 queue[exec1_idx].size        <= exec1_size;
                 queue[exec1_idx].is_unsigned <= exec1_is_unsigned;
@@ -360,11 +383,11 @@ module load_queue
             end
 
             // --- Result fill: record loaded data ---
-            if (result0_valid) begin
+            if (result0_owner_match) begin
                 queue[result0_idx].data       <= result0_data;
                 queue[result0_idx].has_result <= 1'b1;
             end
-            if (result1_valid) begin
+            if (result1_owner_match) begin
                 queue[result1_idx].data       <= result1_data;
                 queue[result1_idx].has_result <= 1'b1;
             end
