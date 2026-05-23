@@ -163,6 +163,89 @@ Current verdict:
   performance gate is not required for this commit. The performance gate
   remains mandatory before any Stage 3 RTL modification is promoted.
 
+## May 23 LSU LQ Result Owner Guard
+
+After the AMO checker repair, the first corrected DSim 100M proof still did
+not reach the 100M target.
+
+Fresh failing artifact:
+
+- `linux_boot_results/stage3_100m_amo_owner_auto_20260523a`.
+- DSim stopped at cycle `62,720,645` with
+  `+LINUX_STOP_ON_NO_COMMIT` and `+LINUX_STOP_ON_LOST_LOAD_OWNER`.
+- Stop reason:
+  `lq=14 rob=4 addr=0x000000008004e3f8 size=2`.
+- ROB head PC was `0x000000008000c840`, which resolves to the OpenSBI
+  `mtimer_event_start` load of the ACLINT timer data
+  (`lib/utils/timer/aclint_mtimer.c:110`).
+- UART had reached `clocksource: Switched to clocksource riscv_clocksource`,
+  `PCI: CLS 0 bytes, default 64`, and
+  `kvm [1]: hypervisor extension not available`.
+- There was no new kernel `Oops`, `BUG`, `Unable to handle`, or
+  `Kernel panic` marker at the stop.
+
+Root-cause direction:
+
+- The stop is a no-retire LSU endpoint ownership failure, not a Linux software
+  panic.
+- The dump showed LQ entry `14` valid and executed with no result and no
+  remaining owner.
+- The same final LQ snapshot also showed impossible LQ states, including
+  valid entries with `has_result=1` while `addr_valid=0` and `executed=0`.
+  That means the LQ could accept a completion solely by `lq_idx` and ROB match
+  even when the corresponding address/execute owner had not been established
+  for that allocation.
+
+Implemented RTL repair:
+
+- `src/rtl/core/lsu/load_queue.sv` now gates `result0_owner_match` and
+  `result1_owner_match` with an address-owner-ready condition.
+- A result can mark an LQ entry complete only when that entry is already
+  executed, or when the matching address execution owner is recorded in the
+  same cycle.
+- This is a structural LSU contract guard. It does not add Linux-specific,
+  benchmark-specific, PC-specific, or simulation-only behavior to core RTL.
+
+Debug infrastructure added:
+
+- `src/tb/tb_linux.sv` has a TB-only load-owner history ring enabled by
+  `+LINUX_TRACE_LOAD_OWNER_HISTORY`.
+- Optional match filters:
+  `+LINUX_OWNER_HIST_PA_LINE=<line>` and
+  `+LINUX_OWNER_HIST_LOAD_PC=<pc>`.
+- This replaces broad `+LINUX_TRACE_PA_LINE` use for long runs, because the
+  old trace plusarg prints every matching cache-line event and slows DSim
+  excessively.
+
+Validation:
+
+- Verilator Linux platform build passes after the TB and LQ changes.
+- Backup 10M Linux smoke:
+  `linux_boot_results/stage3_lq_result_guard_verilator_10m_20260523a`.
+  Result: `PASS` by `TIMEOUT` at `10,000,000` cycles with no no-commit,
+  lost-owner, panic, Oops, or BUG stop.
+- Required DSim DS/CM hard guard:
+  `benchmark_results/stage3_rtl_guard_20260523_lq_result_guard`.
+- Guard result: `PASS` with the Stage 3 `0.01%` regression tolerance.
+
+Guard metrics:
+
+| Row | Timed cycles | Metric |
+|---|---:|---:|
+| Dhrystone 100 | `18,068` | `3.150055 DMIPS/MHz` |
+| Dhrystone 300 | `53,046` | `3.218821 DMIPS/MHz` |
+| CoreMark 1 | `150,398` | `6.649025 CM/MHz` |
+| CoreMark 10 | `1,459,540` | `6.851474 CM/MHz` |
+
+Current verdict:
+
+- The LQ result-owner guard is promoted as a Stage 3 RTL correctness repair.
+- It is not 100M Linux milestone proof. The next required Linux proof is a
+  DSim run past the previous `62,720,645` stop, then the 100M target, with
+  no-commit and lost-owner stops still enabled.
+- Use owner-history filters only when chasing a specific line or PC; keep the
+  default long proof log clean.
+
 ## May 20 Panic Debug Pivot
 
 The 100M-cycle Linux run is no longer the active action item while a panic is

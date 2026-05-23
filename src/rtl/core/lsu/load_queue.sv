@@ -194,6 +194,8 @@ module load_queue
     logic exec1_owner_match;
     logic result0_owner_match;
     logic result1_owner_match;
+    logic result0_addr_owner_ready;
+    logic result1_addr_owner_ready;
 
     assign exec_owner_match =
         exec_valid &&
@@ -203,14 +205,24 @@ module load_queue
         exec1_valid &&
         queue[exec1_idx].valid &&
         (queue[exec1_idx].rob_idx == exec1_rob_idx);
+    assign result0_addr_owner_ready =
+        queue[result0_idx].executed ||
+        (exec_owner_match && (exec_idx == result0_idx)) ||
+        (exec1_owner_match && (exec1_idx == result0_idx));
+    assign result1_addr_owner_ready =
+        queue[result1_idx].executed ||
+        (exec_owner_match && (exec_idx == result1_idx)) ||
+        (exec1_owner_match && (exec1_idx == result1_idx));
     assign result0_owner_match =
         result0_valid &&
         queue[result0_idx].valid &&
-        (queue[result0_idx].rob_idx == result0_rob_idx);
+        (queue[result0_idx].rob_idx == result0_rob_idx) &&
+        result0_addr_owner_ready;
     assign result1_owner_match =
         result1_valid &&
         queue[result1_idx].valid &&
-        (queue[result1_idx].rob_idx == result1_rob_idx);
+        (queue[result1_idx].rob_idx == result1_rob_idx) &&
+        result1_addr_owner_ready;
 
     // =========================================================================
     // Partial flush survivor map

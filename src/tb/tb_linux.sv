@@ -238,6 +238,7 @@ module tb_linux;
     string uart_fail_bug_pattern;
 
     localparam int TRACE_LOAD_TRACK = 8;
+    localparam int LOAD_OWNER_HIST_DEPTH = 256;
     localparam logic [63:0] OPENSBI_TEXT_LO = 64'h0000_0000_8000_0000;
     localparam logic [63:0] OPENSBI_TEXT_HI = 64'h0000_0000_8006_0000;
     logic                    trace_load_valid [0:TRACE_LOAD_TRACK-1];
@@ -245,6 +246,21 @@ module tb_linux;
     logic [PHYS_REG_BITS-1:0] trace_load_pdst [0:TRACE_LOAD_TRACK-1];
     logic [63:0]             trace_load_pc [0:TRACE_LOAD_TRACK-1];
     logic [63:0]             trace_load_addr [0:TRACE_LOAD_TRACK-1];
+    integer                  linux_owner_hist_en;
+    integer                  linux_owner_hist_wr;
+    integer                  linux_owner_hist_count;
+    logic [7:0]              linux_owner_hist_event [0:LOAD_OWNER_HIST_DEPTH-1];
+    logic [1:0]              linux_owner_hist_port [0:LOAD_OWNER_HIST_DEPTH-1];
+    logic [63:0]             linux_owner_hist_cycle [0:LOAD_OWNER_HIST_DEPTH-1];
+    logic [63:0]             linux_owner_hist_pc [0:LOAD_OWNER_HIST_DEPTH-1];
+    logic [ROB_IDX_BITS-1:0] linux_owner_hist_rob [0:LOAD_OWNER_HIST_DEPTH-1];
+    logic [LQ_IDX_BITS-1:0]  linux_owner_hist_lq [0:LOAD_OWNER_HIST_DEPTH-1];
+    logic [63:0]             linux_owner_hist_addr [0:LOAD_OWNER_HIST_DEPTH-1];
+    logic [63:0]             linux_owner_hist_flags [0:LOAD_OWNER_HIST_DEPTH-1];
+    integer                  linux_owner_hist_load_pc_en;
+    logic [63:0]             linux_owner_hist_load_pc;
+    integer                  linux_owner_hist_pa_line_en;
+    logic [63:0]             linux_owner_hist_pa_line;
     wire                     linux_trace_cycle_on;
     wire                     linux_trace_any_line_en;
 
@@ -270,6 +286,85 @@ module tb_linux;
             ((linux_trace_preempt_va_en != 0) &&
              (addr == linux_trace_preempt_va));
     endfunction
+
+    function automatic logic linux_owner_hist_pc_match(input logic [63:0] pc);
+        linux_owner_hist_pc_match =
+            ((linux_trace_load_pc_en != 0) && (pc == linux_trace_load_pc)) ||
+            ((linux_owner_hist_load_pc_en != 0) &&
+             (pc == linux_owner_hist_load_pc));
+    endfunction
+
+    function automatic logic linux_owner_hist_addr_match(input logic [63:0] addr);
+        linux_owner_hist_addr_match =
+            ((linux_trace_any_line_en != 0) && linux_trace_line_match(addr)) ||
+            ((linux_owner_hist_pa_line_en != 0) &&
+             ({addr[63:6], 6'd0} == linux_owner_hist_pa_line));
+    endfunction
+
+    task automatic linux_owner_hist_record(
+        input logic [7:0]              event_i,
+        input logic [1:0]              port_i,
+        input logic [63:0]             pc_i,
+        input logic [ROB_IDX_BITS-1:0] rob_i,
+        input logic [LQ_IDX_BITS-1:0]  lq_i,
+        input logic [63:0]             addr_i,
+        input logic [63:0]             flags_i
+    );
+        begin
+            linux_owner_hist_event[linux_owner_hist_wr] = event_i;
+            linux_owner_hist_port[linux_owner_hist_wr]  = port_i;
+            linux_owner_hist_cycle[linux_owner_hist_wr] = 64'(sim_cycle);
+            linux_owner_hist_pc[linux_owner_hist_wr]    = pc_i;
+            linux_owner_hist_rob[linux_owner_hist_wr]   = rob_i;
+            linux_owner_hist_lq[linux_owner_hist_wr]    = lq_i;
+            linux_owner_hist_addr[linux_owner_hist_wr]  = addr_i;
+            linux_owner_hist_flags[linux_owner_hist_wr] = flags_i;
+            linux_owner_hist_wr = (linux_owner_hist_wr + 1) %
+                                  LOAD_OWNER_HIST_DEPTH;
+            if (linux_owner_hist_count < LOAD_OWNER_HIST_DEPTH)
+                linux_owner_hist_count = linux_owner_hist_count + 1;
+        end
+    endtask
+
+    task automatic linux_dump_load_owner_history(
+        input int                      target_lq,
+        input logic [ROB_IDX_BITS-1:0] target_rob,
+        input logic [63:0]             target_addr
+    );
+        integer hist_pos;
+        integer hist_idx;
+        logic   target_line_match;
+        begin
+            if (linux_owner_hist_en != 0) begin
+                $display("[LINUX_LOAD_OWNER_HISTORY] count=%0d wr=%0d target_lq=%0d target_rob=%0d target_addr=%016h",
+                         linux_owner_hist_count, linux_owner_hist_wr,
+                         target_lq, target_rob, target_addr);
+                for (hist_pos = 0; hist_pos < linux_owner_hist_count;
+                     hist_pos = hist_pos + 1) begin
+                    hist_idx = (linux_owner_hist_wr + LOAD_OWNER_HIST_DEPTH -
+                                linux_owner_hist_count + hist_pos) %
+                               LOAD_OWNER_HIST_DEPTH;
+                    target_line_match =
+                        ({linux_owner_hist_addr[hist_idx][63:6], 6'd0} ==
+                         {target_addr[63:6], 6'd0});
+                    if ((linux_owner_hist_lq[hist_idx] == LQ_IDX_BITS'(target_lq)) ||
+                        (linux_owner_hist_rob[hist_idx] == target_rob) ||
+                        target_line_match) begin
+                        $display("[LINUX_LOAD_OWNER_HIST] cyc=%0d ev=%0d p%0d pc=%016h rob=%0d lq=%0d addr=%016h flags=%016h line=%0b",
+                                 linux_owner_hist_cycle[hist_idx],
+                                 linux_owner_hist_event[hist_idx],
+                                 linux_owner_hist_port[hist_idx],
+                                 linux_owner_hist_pc[hist_idx],
+                                 linux_owner_hist_rob[hist_idx],
+                                 linux_owner_hist_lq[hist_idx],
+                                 linux_owner_hist_addr[hist_idx],
+                                 linux_owner_hist_flags[hist_idx],
+                                 target_line_match);
+                    end
+                end
+            end
+        end
+    endtask
 
     task linux_dump_stall_debug;
         begin
@@ -491,6 +586,10 @@ module tb_linux;
                                  u_core.u_lsu.u_load_queue.tail_r,
                                  u_core.u_lsu.u_load_queue.count_r);
                         linux_dump_stall_debug();
+                        linux_dump_load_owner_history(
+                            li,
+                            u_core.u_lsu.u_load_queue.queue[li].rob_idx,
+                            u_core.u_lsu.u_load_queue.queue[li].addr);
                         $finish;
                     end
                 end else begin
@@ -532,6 +631,11 @@ module tb_linux;
         linux_trace_fault_only_en = 0;
         linux_trace_fe_en = 0;
         linux_trace_amo_en = 0;
+        linux_owner_hist_en = 0;
+        linux_owner_hist_load_pc_en = 0;
+        linux_owner_hist_load_pc = 64'd0;
+        linux_owner_hist_pa_line_en = 0;
+        linux_owner_hist_pa_line = 64'd0;
         linux_stop_lost_load_owner_en = 0;
         linux_lost_load_owner_limit = 256;
         linux_trace_commit_range_en = 0;
@@ -630,6 +734,16 @@ module tb_linux;
             linux_trace_fe_en = 1;
         if ($test$plusargs("LINUX_TRACE_AMO"))
             linux_trace_amo_en = 1;
+        if ($test$plusargs("LINUX_TRACE_LOAD_OWNER_HISTORY"))
+            linux_owner_hist_en = 1;
+        if ($value$plusargs("LINUX_OWNER_HIST_LOAD_PC=%h",
+                            linux_owner_hist_load_pc))
+            linux_owner_hist_load_pc_en = 1;
+        if ($value$plusargs("LINUX_OWNER_HIST_PA_LINE=%h",
+                            linux_owner_hist_pa_line)) begin
+            linux_owner_hist_pa_line_en = 1;
+            linux_owner_hist_pa_line[5:0] = 6'd0;
+        end
         if ($test$plusargs("LINUX_STOP_ON_LOST_LOAD_OWNER"))
             linux_stop_lost_load_owner_en = 1;
         void'($value$plusargs("LINUX_LOST_LOAD_OWNER_LIMIT=%d",
@@ -705,6 +819,205 @@ module tb_linux;
     final begin
         if (uart_log_fd != 0)
             $fclose(uart_log_fd);
+    end
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            linux_owner_hist_wr = 0;
+            linux_owner_hist_count = 0;
+            for (int hi = 0; hi < LOAD_OWNER_HIST_DEPTH; hi++) begin
+                linux_owner_hist_event[hi] = 8'd0;
+                linux_owner_hist_port[hi]  = 2'd0;
+                linux_owner_hist_cycle[hi] = 64'd0;
+                linux_owner_hist_pc[hi]    = 64'd0;
+                linux_owner_hist_rob[hi]   = '0;
+                linux_owner_hist_lq[hi]    = '0;
+                linux_owner_hist_addr[hi]  = 64'd0;
+                linux_owner_hist_flags[hi] = 64'd0;
+            end
+        end else if (linux_owner_hist_en != 0) begin
+            for (int li = 0; li < 2; li++) begin
+                if (u_core.iq_load_issue_candidate_valid[li] &&
+                    u_core.lsu_load_issue_suppress_raw[li] &&
+                    (linux_owner_hist_pc_match(u_core.iq_load_issue_data[li].pc) ||
+                     linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr[li]))) begin
+                    linux_owner_hist_record(
+                        8'd1,
+                        2'(li),
+                        u_core.iq_load_issue_data[li].pc,
+                        u_core.iq_load_issue_data[li].rob_idx,
+                        u_core.iq_load_issue_data[li].lq_idx,
+                        u_core.u_lsu.load_eff_addr[li],
+                        {
+                            53'd0,
+                            u_core.flush_out.valid,
+                            u_core.u_lsu.amo_busy,
+                            ((li == 0) ? u_core.u_lsu.p0_partial_fwd_wait
+                                       : u_core.u_lsu.p1_partial_fwd_wait),
+                            ((li == 0) ? u_core.u_lsu.p0_sq_order_wait_block
+                                       : u_core.u_lsu.p1_sq_order_wait_block),
+                            u_core.u_lsu.load_addr_mmio[li],
+                            u_core.u_lsu.load_cross_line[li],
+                            u_core.u_lsu.load_addr_misaligned[li],
+                            u_core.mem_fence_load_issue_suppress[li],
+                            u_core.vm_serial_load_issue_suppress[li],
+                            u_core.lsu_load_issue_suppress_raw[li],
+                            u_core.iq_load_issue_candidate_valid[li]
+                        });
+                end
+
+                if (u_core.u_lsu.load_issue_valid[li] &&
+                    (linux_owner_hist_pc_match(u_core.u_lsu.load_issue_data[li].pc) ||
+                     linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr[li]))) begin
+                    linux_owner_hist_record(
+                        8'd2,
+                        2'(li),
+                        u_core.u_lsu.load_issue_data[li].pc,
+                        u_core.u_lsu.load_issue_data[li].rob_idx,
+                        u_core.u_lsu.load_issue_data[li].lq_idx,
+                        u_core.u_lsu.load_eff_addr[li],
+                        {
+                            53'd0,
+                            u_core.flush_out.valid,
+                            ((li == 0) ? u_core.u_lsu.p0_lmb_retry_req
+                                       : u_core.u_lsu.p1_lmb_retry_req),
+                            ((li == 0) ? u_core.u_lsu.lmb_free_avail
+                                       : u_core.u_lsu.lmb_p1_alloc_avail),
+                            u_core.dc_load_miss_retry[li],
+                            u_core.dc_load_resp_hit[li],
+                            u_core.dc_load_resp_valid[li],
+                            ((li == 0) ? u_core.u_lsu.p0_miss_detect
+                                       : u_core.u_lsu.p1_miss_detect),
+                            u_core.dc_load_req_valid[li],
+                            u_core.u_lsu.load_addr_mmio[li],
+                            u_core.u_lsu.load_cross_line[li],
+                            u_core.u_lsu.load_addr_misaligned[li]
+                        });
+                end
+
+                if (u_core.dc_load_req_valid[li] &&
+                    linux_owner_hist_addr_match(u_core.dc_load_req_addr[li])) begin
+                    linux_owner_hist_record(
+                        8'd3,
+                        2'(li),
+                        ((li == 0) ? u_core.u_lsu.load_issue_data_r[0].pc
+                                   : u_core.u_lsu.load_issue_data_r[1].pc),
+                        ((li == 0) ? u_core.u_lsu.load_issue_data_r[0].rob_idx
+                                   : u_core.u_lsu.load_issue_data_r[1].rob_idx),
+                        ((li == 0) ? u_core.u_lsu.load_issue_data_r[0].lq_idx
+                                   : u_core.u_lsu.load_issue_data_r[1].lq_idx),
+                        u_core.dc_load_req_addr[li],
+                        {
+                            60'd0,
+                            u_core.flush_out.valid,
+                            u_core.dc_load_miss_retry[li],
+                            u_core.dc_load_resp_hit[li],
+                            u_core.dc_load_resp_valid[li]
+                        });
+                end
+            end
+
+            if (u_core.u_lsu.p0_miss_detect &&
+                linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr_r[0])) begin
+                linux_owner_hist_record(
+                    8'd4,
+                    2'd0,
+                    u_core.u_lsu.load_issue_data_r[0].pc,
+                    u_core.u_lsu.load_issue_data_r[0].rob_idx,
+                    u_core.u_lsu.load_issue_data_r[0].lq_idx,
+                    u_core.u_lsu.load_eff_addr_r[0],
+                    {
+                        58'd0,
+                        u_core.flush_out.valid,
+                        u_core.u_lsu.load_pipe_flush_keep[0],
+                        u_core.u_lsu.p0_miss_fill_hit,
+                        u_core.u_lsu.p0_lmb_retry_req,
+                        u_core.u_lsu.lmb_free_avail,
+                        u_core.dc_load_miss_retry[0]
+                    });
+            end
+            if (u_core.u_lsu.p1_miss_detect &&
+                linux_owner_hist_addr_match(u_core.u_lsu.load_eff_addr_r[1])) begin
+                linux_owner_hist_record(
+                    8'd5,
+                    2'd1,
+                    u_core.u_lsu.load_issue_data_r[1].pc,
+                    u_core.u_lsu.load_issue_data_r[1].rob_idx,
+                    u_core.u_lsu.load_issue_data_r[1].lq_idx,
+                    u_core.u_lsu.load_eff_addr_r[1],
+                    {
+                        58'd0,
+                        u_core.flush_out.valid,
+                        u_core.u_lsu.load_pipe_flush_keep[1],
+                        u_core.u_lsu.p1_miss_fill_hit,
+                        u_core.u_lsu.p1_lmb_retry_req,
+                        u_core.u_lsu.lmb_p1_alloc_avail,
+                        u_core.dc_load_miss_retry[1]
+                    });
+            end
+            if (u_core.u_lsu.lmb_any_match &&
+                linux_owner_hist_addr_match(
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].line_addr)) begin
+                linux_owner_hist_record(
+                    8'd6,
+                    2'd0,
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].pc,
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].rob_idx,
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].lq_idx,
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_match_idx].line_addr,
+                    {61'd0,
+                     u_core.flush_out.valid,
+                     u_core.u_lsu.lmb_ready_any,
+                     u_core.u_lsu.lmb_wb_port_free});
+            end
+            if (u_core.u_lsu.lmb_ready_any &&
+                linux_owner_hist_addr_match(
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].line_addr)) begin
+                linux_owner_hist_record(
+                    8'd7,
+                    2'd0,
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].pc,
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].rob_idx,
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].lq_idx,
+                    u_core.u_lsu.lmb[u_core.u_lsu.lmb_ready_idx].line_addr,
+                    {61'd0,
+                     u_core.flush_out.valid,
+                     u_core.u_lsu.lmb_any_match,
+                     u_core.u_lsu.lmb_wb_port_free});
+            end
+            for (int wi = 0; wi < 2; wi++) begin
+                if (u_core.u_lsu.lq_result_valid[wi] &&
+                    linux_owner_hist_addr_match(
+                        u_core.u_lsu.u_load_queue.queue[
+                            u_core.u_lsu.lq_result_idx[wi]].addr)) begin
+                    linux_owner_hist_record(
+                        8'd8,
+                        2'(wi),
+                        64'd0,
+                        u_core.u_lsu.lq_result_rob_idx[wi],
+                        u_core.u_lsu.lq_result_idx[wi],
+                        u_core.u_lsu.u_load_queue.queue[
+                            u_core.u_lsu.lq_result_idx[wi]].addr,
+                        {62'd0,
+                         u_core.u_lsu.u_load_queue.queue[
+                            u_core.u_lsu.lq_result_idx[wi]].valid,
+                         (u_core.u_lsu.u_load_queue.queue[
+                            u_core.u_lsu.lq_result_idx[wi]].rob_idx ==
+                          u_core.u_lsu.lq_result_rob_idx[wi])});
+                end
+            end
+            if (u_core.dc_fill_snoop_valid &&
+                linux_owner_hist_addr_match(u_core.dc_fill_snoop_addr)) begin
+                linux_owner_hist_record(
+                    8'd9,
+                    2'd0,
+                    64'd0,
+                    '0,
+                    '0,
+                    u_core.dc_fill_snoop_addr,
+                    64'd0);
+            end
+        end
     end
 
     always_ff @(posedge clk) begin
