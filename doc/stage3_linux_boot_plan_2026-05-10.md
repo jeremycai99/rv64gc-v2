@@ -7,11 +7,12 @@ phase. The RV64GC instruction compliance prerequisite is closed on the current
 RTL candidate and the DS/CM hard performance gate remains mandatory. The active
 DSim Linux blocker is the deterministic lost-load-owner/no-retire path in
 OpenSBI `mtimer_event_start`. The latest root cause is the LSU LMB fill
-writeback arbitration against split-load writeback. A focused 65M DSim smoke
-and the DS/CM hard guard pass after the repair candidate, but the 100M Linux
-proof is still pending. Verilator `Active region did not converge` remains an
-ASIC-quality backup-simulator blocker and must not be hidden with warning
-suppression or convergence-limit workarounds.
+writeback arbitration against split-load writeback. The repaired RTL passes a
+focused 65M DSim smoke, the DS/CM hard guard, and the 100M DSim Linux proof
+with no lost-owner, no no-commit, and no panic-class marker. Verilator
+`Active region did not converge` remains an ASIC-quality backup-simulator
+blocker and must not be hidden with warning suppression or convergence-limit
+workarounds.
 
 ## Goal
 
@@ -323,6 +324,12 @@ Validation:
 - DS/CM hard performance guard:
   `benchmark_results/stage3_rtl_guard_lmb_split_port_20260523a`.
 - Guard result: `PASS` with the Stage 3 `0.01%` regression tolerance.
+- Full 100M DSim Linux proof:
+  `linux_boot_results/stage3_lmb_split_port_100m_dsim_20260523a`.
+- Result: `PASS` by `TIMEOUT` at `100,000,000` cycles with no lost-owner,
+  no no-commit, panic, Oops, or BUG stop. Final status had
+  `last_commit_cycle=99,999,999`, `last_pc=0xffffffff802f72e6`,
+  `mcycle=100,000,000`, and `minstret=102,675,417`.
 
 Guard metrics:
 
@@ -335,11 +342,13 @@ Guard metrics:
 
 Current verdict:
 
-- The LMB split-load arbitration repair is the current Stage 3 Linux RTL
-  candidate.
-- It is not final 100M Linux proof. The next required run is a clean 100M DSim
-  proof with no-commit and lost-owner stops enabled and owner-history filters
-  disabled unless the run fails again.
+- The LMB split-load arbitration repair is promoted as the current Stage 3
+  Linux RTL repair.
+- The deterministic OpenSBI `mtimer_event_start` lost-load-owner blocker is
+  closed through the 100M DSim proof.
+- The run still reaches only the `riscv_clocksource` milestone within 100M
+  cycles. The next Linux bring-up task is deeper boot-progress debugging or a
+  longer milestone run, not this fixed lost-owner path.
 
 ## May 20 Panic Debug Pivot
 
