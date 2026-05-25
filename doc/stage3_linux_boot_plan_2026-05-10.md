@@ -257,6 +257,11 @@ Fresh partial validation:
   `linux_boot_results/stage3_v1trim_nosec_boot_dsim_500m_bg_20260525b`,
   keeping `+LINUX_STOP_ON_PANIC`, `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and
   `+LINUX_STOP_ON_NO_COMMIT` enabled.
+- The same primary DSim proof reached S-mode Linux and
+  `clocksource: riscv_clocksource` cleanly. Through this checkpoint it has no
+  `Oops`, panic, lost-load-owner, no-commit, `LSM:`, `raid6`, `SCSI`, `PCI`,
+  or `kvm` line. The run remains active toward the later v1-reference
+  milestones and final `BOOT_OK` target.
 
 Current verdict:
 
