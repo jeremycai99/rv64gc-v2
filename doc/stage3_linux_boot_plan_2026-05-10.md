@@ -194,8 +194,10 @@ Fresh partial validation:
 - After the lease cleared, the Verilator backup was stopped and the primary
   DSim proof was relaunched as
   `linux_boot_results/stage3_v1trim_boot_dsim_500m_bg_20260525c` with the same
-  panic, lost-owner, and no-commit guards. The run has reached the Linux banner
-  and is still progressing through early Linux memory setup.
+  panic, lost-owner, and no-commit guards. The run reached the `25,000,000`
+  cycle status checkpoint with active retirement, `trap=0`, no panic/Oops
+  marker, no lost-load-owner stop, and
+  `clocksource: Switched to clocksource riscv_clocksource`.
 
 Current verdict:
 
