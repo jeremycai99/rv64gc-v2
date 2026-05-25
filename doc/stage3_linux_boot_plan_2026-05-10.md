@@ -156,6 +156,10 @@ Implemented software-image correction:
 
 - `sw/linux_boot/build_linux_boot.sh` now forces the v1-absent subsystems off
   for the Stage 3 Linux simulation image.
+- The same build script now also pins v1-present boot-surface settings that
+  should not depend on inherited `.config` state:
+  `CONFIG_BLK_DEV_LOOP=y`, `CONFIG_DEBUG_PLIST=y`,
+  `CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y`, and `CONFIG_CRYPTO_TEST=n`.
 - The kernel version string is normalized to
   `6.6.130-rv64gc-v2-sim (rv64gc-v2@linux-sim)` so the UART log does not carry
   a misleading SCM `dirty` marker from the reused Linux source tree.
