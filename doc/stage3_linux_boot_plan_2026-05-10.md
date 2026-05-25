@@ -198,6 +198,10 @@ Fresh partial validation:
   cycle status checkpoint with active retirement, `trap=0`, no panic/Oops
   marker, no lost-load-owner stop, and
   `clocksource: Switched to clocksource riscv_clocksource`.
+- The same DSim proof reached the `50,000,000` cycle status checkpoint with
+  active retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop,
+  and no no-commit stop. The run remains active toward the 500M proof and
+  `BOOT OK` target.
 
 Current verdict:
 
