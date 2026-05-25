@@ -244,6 +244,19 @@ Fresh partial validation:
   `jitter`, `jent`, `raid6`, or `xor_` symbols. Remaining `sha384` and
   block queue integrity symbol names are unrelated generic code, not the
   stale LSM/integrity/SHA3 execution path.
+- Early post-follow-up diagnostic artifact:
+  `linux_boot_results/stage3_v1trim_nosec_boot_verilator_status1m_20260525a`.
+  This backup-simulator smoke was used while the DSim lease was clearing, with
+  `+STATUS_INTERVAL=1000000`. It reached OpenSBI platform/domain printing,
+  S-mode Linux with active `satp`, and
+  `clocksource: riscv_clocksource` by the 20M-cycle window. It showed active
+  retirement, `trap=0`, and no `Oops`, panic, lost-load-owner, no-commit,
+  `LSM:`, `raid6`, `SCSI`, `PCI`, or `kvm` line before it was manually
+  stopped.
+- Primary DSim proof was relaunched with the rebuilt post-follow-up image as
+  `linux_boot_results/stage3_v1trim_nosec_boot_dsim_500m_bg_20260525b`,
+  keeping `+LINUX_STOP_ON_PANIC`, `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and
+  `+LINUX_STOP_ON_NO_COMMIT` enabled.
 
 Current verdict:
 
@@ -266,7 +279,7 @@ Current verdict:
   `+LINUX_STOP_ON_PANIC`, `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and
   `+LINUX_STOP_ON_NO_COMMIT` enabled.
 - The active long-run artifact is
-  `linux_boot_results/stage3_v1trim_boot_dsim_500m_bg_20260525c`.
+  `linux_boot_results/stage3_v1trim_nosec_boot_dsim_500m_bg_20260525b`.
 - If the trimmed image reproduces a fresh Oops, capture the complete trap frame
   and initcall context before making RTL changes.
 
