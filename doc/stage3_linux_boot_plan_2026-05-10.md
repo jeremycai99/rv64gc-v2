@@ -262,6 +262,11 @@ Fresh partial validation:
   `Oops`, panic, lost-load-owner, no-commit, `LSM:`, `raid6`, `SCSI`, `PCI`,
   or `kvm` line. The run remains active toward the later v1-reference
   milestones and final `BOOT_OK` target.
+- The same DSim proof reached the `25,000,000` cycle status checkpoint after
+  `clocksource: Switched to clocksource riscv_clocksource`. It still has
+  active retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop,
+  and no no-commit stop. This checkpoint is now stronger evidence than the
+  stale May 24 Oops path because it uses the post-follow-up v1-aligned image.
 
 Current verdict:
 
