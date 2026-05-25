@@ -3117,8 +3117,10 @@ module tb_linux;
                 if (u_core.dc_fill_snoop_valid &&
                     (linux_trace_any_line_en != 0) &&
                     linux_trace_line_match(u_core.dc_fill_snoop_addr)) begin
-                    $display("[LINUX_DC_FILL] cyc=%0d addr=%016h",
-                             sim_cycle, u_core.dc_fill_snoop_addr);
+                    $display("[LINUX_DC_FILL] cyc=%0d addr=%016h d08=%016h d30=%016h",
+                             sim_cycle, u_core.dc_fill_snoop_addr,
+                             u_core.dc_fill_snoop_data[8*8 +: 64],
+                             u_core.dc_fill_snoop_data[48*8 +: 64]);
                 end
             end
 
@@ -3471,14 +3473,25 @@ module tb_linux;
                 end
                 if (u_core.dc_l2_req_valid &&
                     linux_trace_line_match(u_core.dc_l2_req_addr)) begin
-                    $display("[LINUX_DC_L2_REQ] cyc=%0d we=%0b addr=%016h ready=%0b",
+                    $display("[LINUX_DC_L2_REQ] cyc=%0d we=%0b addr=%016h ready=%0b w08=%016h w30=%016h wt_count=%0d wt_head=%0d wt_tail=%0d l2_hit=%0b l2_match=%0b l2_free=%0b l2_inv_wb=%0b",
                              sim_cycle, u_core.dc_l2_req_we,
-                             u_core.dc_l2_req_addr, u_core.dc_l2_req_ready);
+                             u_core.dc_l2_req_addr, u_core.dc_l2_req_ready,
+                             u_core.dc_l2_req_wdata[8*8 +: 64],
+                             u_core.dc_l2_req_wdata[48*8 +: 64],
+                             u_core.u_dcache.wt_count_q,
+                             u_core.u_dcache.wt_head_q,
+                             u_core.u_dcache.wt_tail_q,
+                             u_core.u_l2_cache.hit_any,
+                             u_core.u_l2_cache.mshr_addr_match,
+                             u_core.u_l2_cache.mshr_has_free,
+                             u_core.u_l2_cache.inv_wb_pending);
                 end
                 if (u_core.dc_l2_resp_valid &&
                     linux_trace_line_match(u_core.dc_l2_resp_addr)) begin
-                    $display("[LINUX_DC_L2_RESP] cyc=%0d addr=%016h",
-                             sim_cycle, u_core.dc_l2_resp_addr);
+                    $display("[LINUX_DC_L2_RESP] cyc=%0d addr=%016h r08=%016h r30=%016h",
+                             sim_cycle, u_core.dc_l2_resp_addr,
+                             u_core.dc_l2_resp_data[8*8 +: 64],
+                             u_core.dc_l2_resp_data[48*8 +: 64]);
                 end
                 if (u_core.u_lsu.sq_drain_valid &&
                     linux_trace_line_match(u_core.u_lsu.sq_drain_entry.addr)) begin

@@ -4257,6 +4257,100 @@ Pending Linux confirmation:
   should identify whether a registered LSU completion owner is still missing
   or whether the remaining bug is inside LQ result lifetime/ROB owner matching.
 
+### 2026-05-25 Kernfs Oops L1D Write-Through Dirty-Evict Root Cause
+
+The current UART-visible Oops is not aligned with the earlier OpenSBI
+`mtimer_event_start` lost-load-owner failure.  The fresh failure is a Linux
+`kernfs_add_one` NULL parent-pointer dereference:
+
+- Faulting PC: `0xffffffff801b9e4a`, `ld a5,8(s2)`, trap value `0x8`.
+- The immediately previous instruction is `0xffffffff801b9e44`, `ld s2,8(a0)`.
+- The trace shows that `ld s2,8(a0)` loaded `0`, so the following
+  `ld a5,8(s2)` correctly faults at virtual address `0x8`.
+- `riscv64-linux-gnu-addr2line` against the v1 reference kernel maps this
+  region to `kernfs_add_one`; v1's disassembly has the same instruction shape
+  at this address.
+
+The v1 reference run is a useful control:
+
+- `rv64gc-v1/tmp/linux_boot/mainline_console_minimal.log` reaches
+  `clocksource: riscv_clocksource`, `Serial: 8250/16550`,
+  `Freeing unused kernel image`, and `Run /init as init process`.
+- Therefore the Linux/OpenSBI software path can execute through this region on
+  the prior core.  The v2 Oops should be treated as a v2 RTL memory-hierarchy
+  visibility bug unless a rebuilt current image proves otherwise.
+
+The old v2 PA-line trace identifies where the value is lost:
+
+- At cycle `26,203,205`, the SQ drains the parent pointer store:
+  PA `0x811afb48`, data `0xffffaf8001171ab0`.
+- At cycle `26,203,208`, the D-cache store acknowledges that value.
+- At cycle `26,203,209`, D-cache sends the correct write-through line to L2:
+  `w08=0xffffaf8001171ab0` for line `0x811afb40`.
+- At cycle `26,203,211`, D-cache sends a second same-line write request with
+  stale `w08=0`.  The write-through queue is empty in that trace, so this is
+  not the queued store update; it is the dirty-victim writeback path emitting an
+  older full-line image.
+- At cycles `26,203,269` to `26,203,278`, a later D-cache read miss refills the
+  same line from L2 with stale zero data at the `+8` lane.
+- At cycle `26,203,297`, the load at `0xffffffff801b9e44` writes back `0`.
+- At cycle `26,203,308`, Linux traps at `0xffffffff801b9e4a` with `tval=0x8`.
+
+Root-cause classification:
+
+- Not a kernel image issue: v1 boots past the same kernfs path, and the store
+  value being lost is visible in the v2 RTL trace.
+- Not an LSU store-drain loss: SQ and D-cache both show the correct store
+  value and D-cache produces the correct first write-through payload.
+- The first L2 MSHR/writeback contract repair was necessary but incomplete.
+  The precise PA-line trace proves L2 receives a correct update and then a
+  stale same-line update from D-cache overwrites it.
+- Failing contract: L1D was behaving as a hybrid write-through/write-back
+  cache.  Store hits and store-merged fills enqueue write-through updates to L2,
+  but the same lines were also marked dirty in L1D.  A later dirty-victim path
+  could therefore emit an older full-line image after the newer write-through
+  update and corrupt L2.
+- v1 is still a useful reference for methodology and for proving this software
+  path is valid, but the v2 fix should preserve the current ASIC-style
+  write-through contract rather than blindly copying v1's simulation-core cache.
+
+Directed RTL repair under test:
+
+- `src/rtl/core/cache/l2_cache.sv` has been refactored toward the v1-style
+  contract: writeback MSHR state, reserved fill ways, dirty-victim writeback
+  before install, pure writeback-miss install, same-line writeback merge, and
+  no read-ready response for same-line outstanding MSHRs without a new owner.
+- `src/rtl/core/cache/dcache.sv` now treats the L1D as clean under the
+  write-through policy: fill installs with merged store bytes are installed
+  clean, and store hits update the data RAM plus write-through queue without
+  setting the dirty bit.  This removes the stale second dirty-victim writeback
+  path while preserving the architectural store visibility path through the
+  write-through queue.
+- This is an ASIC-style cache-coherence/ownership repair, not a Linux-specific
+  software workaround.
+
+Validation status for this slice:
+
+- Verilator and DSim Linux builds complete from the current worktree.
+- Directed VM D-cache eviction smoke passes under Verilator.
+- Stage 3 Linux debug probes pass under Verilator.
+- Basic Sv48 VM smoke rows pass under Verilator.  The existing timer-vector
+  VM rows still time out, matching older xsim evidence, so they are not yet
+  attributed to this L2 change.
+- A DSim Linux proof was started but was too slow for interactive root-cause
+  confirmation and was intentionally stopped after entering early Linux.
+- `linux_boot_results/stage3_l1d_writethrough_clean_kernfs_trace_verilator_20260525b`
+  crossed the old `26,203,308` kernfs Oops point and timed out cleanly at
+  `26,350,000` cycles with no `LINUX_STOP_TRAP`, no UART Oops, and no kernel
+  panic.
+- `benchmark_results/stage3_l1d_writethrough_clean_guard_dsim_20260525a`
+  passed the Stage 3 DS/CM hard guard with the `0.01%` no-regression rule:
+  DS100 `3.150055` DMIPS/MHz, DS300 `3.218761` DMIPS/MHz, CM1 `6.649113`
+  CoreMark/MHz, CM10 `6.851483` CoreMark/MHz.
+- Next proof should be a longer DSim or Verilator Linux run past the current
+  focused window.  Do not claim full Linux boot completion from the focused
+  kernfs proof alone.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.

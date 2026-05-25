@@ -607,6 +607,15 @@ module dcache
     logic                     st_wt_merge_ready;
     logic                     st_wt_merge_fire;
     logic                     st_wt_push_fire;
+    logic                     st_wt_enq_full_line;
+    logic                     st_wt_deq_same_line;
+    logic [LINE_SIZE*8-1:0]   st_wt_push_data;
+    logic [LINE_SIZE-1:0]     st_full_mask;
+    logic [LINE_SIZE*8-1:0]   st_full_data;
+    logic [5:0]               st_line_off;
+    int                       st_line_byte [0:7];
+    logic [LINE_SIZE*8-1:0]   fill_done_line_data;
+    logic                     fill_done_store_merge;
 
     localparam int WT_DEPTH      = 4;
     localparam int WT_IDX_BITS   = $clog2(WT_DEPTH);
@@ -720,6 +729,11 @@ module dcache
                              st_wt_deq_fire;
     assign st_wt_merge_fire = st_wt_enq_valid && st_wt_merge_ready;
     assign st_wt_push_fire  = st_wt_enq_valid && !st_wt_merge_ready;
+    assign st_wt_enq_full_line = fill_done_store_merge;
+    assign st_wt_deq_same_line =
+        st_wt_deq_fire &&
+        (wt_addr_q[wt_head_q][63:LINE_BITS] ==
+         st_wt_enq_addr[63:LINE_BITS]);
     assign store_wt_busy = (wt_count_q != '0) || st_wt_enq_valid;
 
     // =========================================================================
@@ -743,13 +757,6 @@ module dcache
     // =========================================================================
     // Store byte expansion: compute full-line mask and data from byte mask
     // =========================================================================
-    logic [LINE_SIZE-1:0]   st_full_mask;
-    logic [LINE_SIZE*8-1:0] st_full_data;
-    logic [5:0]             st_line_off;
-    int                     st_line_byte [0:7];
-    logic [LINE_SIZE*8-1:0] fill_done_line_data;
-    logic                   fill_done_store_merge;
-
     always_comb begin
         st_full_mask = '0;
         st_full_data = '0;
@@ -809,6 +816,13 @@ module dcache
         st_wt_enq_data  = fill_done_store_merge
                         ? fill_done_line_data
                         : st_wt_line_data;
+        st_wt_push_data = st_wt_enq_data;
+        if (!st_wt_enq_full_line && st_wt_deq_same_line) begin
+            st_wt_push_data =
+                merge_store_overlay_into_line(wt_data_q[wt_head_q],
+                                              st_full_data,
+                                              st_full_mask);
+        end
     end
 
     // =========================================================================
@@ -839,12 +853,14 @@ module dcache
         dr_bwmask = '0;
 
         if (fill_done_avail) begin
-            // Install fill into cache (clean, tag update)
+            // Install fill into cache as clean. Store bytes merged into a fill
+            // are propagated through the write-through queue, so the L1D must
+            // not later emit a second dirty-victim writeback for the same line.
             tr_we     = 1'b1;
             tr_waddr  = mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO];
             tr_wway   = mshr[fill_done_idx].victim;
             tr_wvalid = 1'b1;
-            tr_wdirty = mshr[fill_done_idx].store_pending;
+            tr_wdirty = 1'b0;
             tr_wtag   = mshr[fill_done_idx].addr[TAG_HI:TAG_LO];
 
             dr_we     = 1'b1;
@@ -852,11 +868,8 @@ module dcache
             dr_wway   = mshr[fill_done_idx].victim;
             dr_wdata  = fill_done_line_data;
         end else if (s1_st_valid && st_cache_hit) begin
-            // Store hit: byte-enable write + dirty bit update
-            tr_dirty_we    = 1'b1;
-            tr_dirty_waddr = s1_st_index;
-            tr_dirty_wway  = st_hit_way;
-
+            // Store hit: byte-enable write. The lower hierarchy is updated via
+            // the write-through queue, so the L1D copy remains clean.
             dr_bwe    = 1'b1;
             dr_bwaddr = s1_st_index;
             dr_bwway  = st_hit_way;
@@ -1144,10 +1157,15 @@ module dcache
             l2_active_mshr_q <= l2_active_mshr_d;
 
             if (st_wt_merge_fire) begin
-                wt_data_q[wt_tail_prev] <= st_wt_enq_data;
+                wt_data_q[wt_tail_prev] <=
+                    st_wt_enq_full_line
+                    ? st_wt_enq_data
+                    : merge_store_overlay_into_line(wt_data_q[wt_tail_prev],
+                                                    st_full_data,
+                                                    st_full_mask);
             end else if (st_wt_push_fire) begin
                 wt_addr_q[wt_tail_q] <= st_wt_enq_addr;
-                wt_data_q[wt_tail_q] <= st_wt_enq_data;
+                wt_data_q[wt_tail_q] <= st_wt_push_data;
                 wt_tail_q <= wt_tail_q + WT_IDX_BITS'(1);
             end
             if (st_wt_deq_fire) begin

@@ -94,10 +94,12 @@ module l2_cache
     // =========================================================================
     // MSHR definitions
     // =========================================================================
-    typedef enum logic [1:0] {
-        MSHR_IDLE     = 2'd0,
-        MSHR_PENDING  = 2'd1,   // waiting to issue mem request
-        MSHR_WAIT_MEM = 2'd2    // mem request issued, waiting for response
+    typedef enum logic [2:0] {
+        MSHR_IDLE       = 3'd0,
+        MSHR_PENDING    = 3'd1,   // waiting to issue mem read
+        MSHR_WAIT_MEM   = 3'd2,   // mem read issued, waiting for response
+        MSHR_WRITEBACK  = 3'd3,   // dirty victim writeback before fill/install
+        MSHR_INSTALL_WB = 3'd4    // pure L1 writeback miss, install without read
     } mshr_state_e;
 
     typedef struct packed {
@@ -105,6 +107,13 @@ module l2_cache
         logic [63:0]    addr;
         logic [1:0]     source;
         mshr_state_e    state;
+        logic           is_writeback;
+        logic [511:0]   wb_data;
+        logic [2:0]     fill_way;
+        logic [63:0]    evict_addr;
+        logic [511:0]   evict_data;
+        logic           wb_merge_valid;
+        logic [511:0]   wb_merge_data;
     } mshr_entry_t;
 
     mshr_entry_t mshr [0:L2_MSHR_DEPTH-1];
@@ -160,7 +169,10 @@ module l2_cache
     // MSHR full / address-match checks
     logic mshr_full;
     logic mshr_addr_match;          // same address already tracked
-    logic mshr_addr_source_match;   // same address already tracked for this requester
+    logic [L2_WAYS-1:0] lookup_reserved_ways;
+    logic read_req_can_accept;
+    logic write_req_can_accept;
+    logic arb_fire;
 
     // Free MSHR slot
     logic [4:0]  mshr_free_idx;
@@ -169,6 +181,10 @@ module l2_cache
     // MSHR to issue to memory
     logic [4:0]  mshr_issue_idx;
     logic        mshr_has_issue;
+    logic [4:0]  mshr_wb_issue_idx;
+    logic        mshr_has_wb_issue;
+    logic [4:0]  mshr_install_idx;
+    logic        mshr_has_install;
 
     // Memory response routing
     logic [4:0]  mshr_resp_idx;
@@ -194,6 +210,8 @@ module l2_cache
     logic         mem_resp_capture;
     logic         mem_resp_direct;
     logic [1:0]   mem_resp_source;
+    logic         mem_resp_wb_merge_now;
+    logic [511:0] mem_resp_data_merged;
     logic         hit_resp_collision_enq;
     logic         respq_mem_source_pending;
 
@@ -203,7 +221,7 @@ module l2_cache
     // Eviction / fill helpers
     logic need_evict;         // victim is dirty, must write back first
     logic [2:0] victim_way;
-    logic mem_resp_dirty_victim;
+    logic victim_available;
 
     // =========================================================================
     // PLRU tree: standard binary tree for 8-way (7 bits)
@@ -238,6 +256,7 @@ module l2_cache
         hit_data = '0;
         for (int w = 0; w < L2_WAYS; w++) begin
             if (valid_ram[lookup_set][w] &&
+                !lookup_reserved_ways[w] &&
                 (tag_ram[lookup_set][w] == lookup_tag)) begin
                 hit_any  = 1'b1;
                 hit_way  = 3'(w);
@@ -250,8 +269,10 @@ module l2_cache
     // Combinational: PLRU victim for this set
     // =========================================================================
     always_comb begin
-        // Inline plru_get_victim for lookup_set
+        // Inline plru_get_victim for lookup_set, then skip ways already
+        // reserved by in-flight MSHRs for this set.
         begin
+            int cand_idx;
             logic [6:0] _ps;
             _ps = plru_state[lookup_set];
             if (!_ps[0]) begin
@@ -265,38 +286,37 @@ module l2_cache
                 else
                     plru_victim = _ps[6] ? 3'd7 : 3'd6;
             end
-        end
-        victim_way  = plru_victim;
-        need_evict  = valid_ram[lookup_set][victim_way] &&
-                      dirty_ram[lookup_set][victim_way];
-    end
 
-    always_comb begin
-        logic [L2_SET_BITS-1:0] resp_fill_set;
-        logic [6:0]             resp_plru_state;
-        logic [2:0]             resp_fill_victim;
+            victim_way       = plru_victim;
+            victim_available = 1'b0;
+            need_evict       = 1'b0;
 
-        resp_fill_set       = mshr[mshr_resp_idx].addr[INDEX_HI:INDEX_LO];
-        resp_plru_state     = plru_state[resp_fill_set];
-        resp_fill_victim    = 3'd0;
-        mem_resp_dirty_victim = 1'b0;
+            for (int w = 0; w < L2_WAYS; w++) begin
+                if (!valid_ram[lookup_set][w] &&
+                    !lookup_reserved_ways[w] &&
+                    !victim_available) begin
+                    victim_way       = 3'(w);
+                    victim_available = 1'b1;
+                end
+            end
 
-        if (!resp_plru_state[0]) begin
-            if (!resp_plru_state[1])
-                resp_fill_victim = resp_plru_state[3] ? 3'd1 : 3'd0;
-            else
-                resp_fill_victim = resp_plru_state[4] ? 3'd3 : 3'd2;
-        end else begin
-            if (!resp_plru_state[2])
-                resp_fill_victim = resp_plru_state[5] ? 3'd5 : 3'd4;
-            else
-                resp_fill_victim = resp_plru_state[6] ? 3'd7 : 3'd6;
-        end
+            if (!victim_available) begin
+                for (int off = 0; off < L2_WAYS; off++) begin
+                    cand_idx = int'(plru_victim) + off;
+                    if (cand_idx >= L2_WAYS)
+                        cand_idx = cand_idx - L2_WAYS;
+                    if (!lookup_reserved_ways[cand_idx] &&
+                        !victim_available) begin
+                        victim_way       = 3'(cand_idx);
+                        victim_available = 1'b1;
+                    end
+                end
+            end
 
-        if (mem_resp_valid && mshr_resp_found) begin
-            mem_resp_dirty_victim =
-                valid_ram[resp_fill_set][resp_fill_victim] &&
-                dirty_ram[resp_fill_set][resp_fill_victim];
+            if (victim_available) begin
+                need_evict = valid_ram[lookup_set][victim_way] &&
+                             dirty_ram[lookup_set][victim_way];
+            end
         end
     end
 
@@ -308,7 +328,7 @@ module l2_cache
         mshr_has_free   = 1'b0;
         mshr_free_idx   = 5'd0;
         mshr_addr_match = 1'b0;
-        mshr_addr_source_match = 1'b0;
+        lookup_reserved_ways = '0;
         for (int i = 0; i < L2_MSHR_DEPTH; i++) begin
             if (!mshr[i].valid) begin
                 if (!mshr_has_free) begin
@@ -320,9 +340,9 @@ module l2_cache
                 // Check if same cache-line address already outstanding
                 if (mshr[i].addr[63:LINE_BITS] == arb_addr[63:LINE_BITS]) begin
                     mshr_addr_match = 1'b1;
-                    if (mshr[i].source == arb_source)
-                        mshr_addr_source_match = 1'b1;
                 end
+                if (mshr[i].addr[INDEX_HI:INDEX_LO] == lookup_set)
+                    lookup_reserved_ways[mshr[i].fill_way] = 1'b1;
             end
         end
     end
@@ -338,6 +358,30 @@ module l2_cache
                 !mshr_has_issue) begin
                 mshr_has_issue = 1'b1;
                 mshr_issue_idx = 5'(i);
+            end
+        end
+    end
+
+    always_comb begin
+        mshr_has_wb_issue = 1'b0;
+        mshr_wb_issue_idx = 5'd0;
+        for (int i = 0; i < L2_MSHR_DEPTH; i++) begin
+            if (mshr[i].valid && (mshr[i].state == MSHR_WRITEBACK) &&
+                !mshr_has_wb_issue) begin
+                mshr_has_wb_issue = 1'b1;
+                mshr_wb_issue_idx = 5'(i);
+            end
+        end
+    end
+
+    always_comb begin
+        mshr_has_install = 1'b0;
+        mshr_install_idx = 5'd0;
+        for (int i = 0; i < L2_MSHR_DEPTH; i++) begin
+            if (mshr[i].valid && (mshr[i].state == MSHR_INSTALL_WB) &&
+                !mshr_has_install) begin
+                mshr_has_install = 1'b1;
+                mshr_install_idx = 5'(i);
             end
         end
     end
@@ -399,28 +443,50 @@ module l2_cache
     // =========================================================================
     // Ready signals: accept when not full / no duplicate / not invalidating
     // =========================================================================
+    assign read_req_can_accept =
+        hit_any || (!mshr_addr_match && mshr_has_free && victim_available);
+
+    assign write_req_can_accept =
+        hit_any || mshr_addr_match ||
+        (mshr_has_free && victim_available);
+
     always_comb begin
-        dcache_req_ready   = (inv_state == INV_IDLE) && !mshr_full;
-        ptw_req_ready      = (inv_state == INV_IDLE) && !mshr_full &&
+        dcache_req_ready   = (inv_state == INV_IDLE) &&
+                             (dcache_req_we ? write_req_can_accept
+                                            : read_req_can_accept);
+        ptw_req_ready      = (inv_state == INV_IDLE) && read_req_can_accept &&
                              !dcache_req_valid;
-        icache_req_ready   = (inv_state == INV_IDLE) && !mshr_full &&
+        icache_req_ready   = (inv_state == INV_IDLE) && read_req_can_accept &&
                              !dcache_req_valid && !ptw_req_valid;
-        prefetch_req_ready = (inv_state == INV_IDLE) && !mshr_full &&
+        prefetch_req_ready = (inv_state == INV_IDLE) && read_req_can_accept &&
                              !dcache_req_valid && !ptw_req_valid &&
                              !icache_req_valid;
     end
 
+    always_comb begin
+        arb_fire = 1'b0;
+        if (arb_valid) begin
+            case (arb_source)
+                SRC_DCACHE:   arb_fire = dcache_req_ready;
+                SRC_PTW:      arb_fire = ptw_req_ready;
+                SRC_ICACHE:   arb_fire = icache_req_ready;
+                SRC_PREFETCH: arb_fire = prefetch_req_ready;
+                default:      arb_fire = 1'b0;
+            endcase
+        end
+    end
+
     assign icache_req_accepted =
-        arb_valid &&
+        arb_fire &&
         (arb_source == SRC_ICACHE) &&
         !arb_we &&
-        (hit_any || (!mshr_addr_source_match && mshr_has_free));
+        read_req_can_accept;
 
     assign ptw_req_accepted =
-        arb_valid &&
+        arb_fire &&
         (arb_source == SRC_PTW) &&
         !arb_we &&
-        (hit_any || (!mshr_addr_source_match && mshr_has_free));
+        read_req_can_accept;
 
     // =========================================================================
     // Invalidate busy
@@ -441,7 +507,7 @@ module l2_cache
         end else begin
             // Stage 0: insert a hit on a fill request (read hit)
             // A write (writeback from D$) goes directly to data_ram — no resp needed
-            hit_pipe[0].valid     <= arb_valid && hit_any && !arb_we;
+            hit_pipe[0].valid     <= arb_fire && hit_any && !arb_we;
             hit_pipe[0].addr      <= arb_addr;
             hit_pipe[0].data      <= hit_data;
             hit_pipe[0].source <= arb_source;
@@ -494,6 +560,16 @@ module l2_cache
     assign mem_resp_direct     = mem_resp_capture &&
                                  respq_can_accept &&
                                  !respq_mem_source_pending;
+    assign mem_resp_wb_merge_now =
+        mem_resp_capture &&
+        arb_fire &&
+        arb_we &&
+        (arb_addr[63:LINE_BITS] ==
+         mshr[mshr_resp_idx].addr[63:LINE_BITS]);
+    assign mem_resp_data_merged =
+        mem_resp_wb_merge_now ? arb_wdata :
+        (mshr[mshr_resp_idx].wb_merge_valid ?
+         mshr[mshr_resp_idx].wb_merge_data : mem_resp_data);
     assign hit_resp_collision_enq =
         mem_resp_direct &&
         hit_resp_valid &&
@@ -515,11 +591,11 @@ module l2_cache
           respq_deq_addr : mshr[mshr_resp_idx].addr));
     assign dcache_resp_data    =
         (mem_resp_direct && (mem_resp_source == SRC_DCACHE)) ?
-        mem_resp_data :
+        mem_resp_data_merged :
         ((hit_resp_valid && (hit_resp_source == SRC_DCACHE)) ?
          hit_pipe[L2_HIT_LATENCY-1].data :
          ((respq_deq && (respq_deq_source == SRC_DCACHE)) ?
-          respq_deq_data : mem_resp_data));
+          respq_deq_data : mem_resp_data_merged));
 
     assign icache_resp_valid   =
         (mem_resp_direct && (mem_resp_source == SRC_ICACHE)) ||
@@ -534,11 +610,11 @@ module l2_cache
           respq_deq_addr : mshr[mshr_resp_idx].addr));
     assign icache_resp_data    =
         (mem_resp_direct && (mem_resp_source == SRC_ICACHE)) ?
-        mem_resp_data :
+        mem_resp_data_merged :
         ((hit_resp_valid && (hit_resp_source == SRC_ICACHE)) ?
          hit_pipe[L2_HIT_LATENCY-1].data :
          ((respq_deq && (respq_deq_source == SRC_ICACHE)) ?
-          respq_deq_data : mem_resp_data));
+          respq_deq_data : mem_resp_data_merged));
 
     assign prefetch_resp_valid =
         (mem_resp_direct && (mem_resp_source == SRC_PREFETCH)) ||
@@ -553,11 +629,11 @@ module l2_cache
           respq_deq_addr : mshr[mshr_resp_idx].addr));
     assign prefetch_resp_data  =
         (mem_resp_direct && (mem_resp_source == SRC_PREFETCH)) ?
-        mem_resp_data :
+        mem_resp_data_merged :
         ((hit_resp_valid && (hit_resp_source == SRC_PREFETCH)) ?
          hit_pipe[L2_HIT_LATENCY-1].data :
          ((respq_deq && (respq_deq_source == SRC_PREFETCH)) ?
-          respq_deq_data : mem_resp_data));
+          respq_deq_data : mem_resp_data_merged));
 
     assign ptw_resp_valid =
         (mem_resp_direct && (mem_resp_source == SRC_PTW)) ||
@@ -572,11 +648,11 @@ module l2_cache
           respq_deq_addr : mshr[mshr_resp_idx].addr));
     assign ptw_resp_data  =
         (mem_resp_direct && (mem_resp_source == SRC_PTW)) ?
-        mem_resp_data :
+        mem_resp_data_merged :
         ((hit_resp_valid && (hit_resp_source == SRC_PTW)) ?
          hit_pipe[L2_HIT_LATENCY-1].data :
          ((respq_deq && (respq_deq_source == SRC_PTW)) ?
-          respq_deq_data : mem_resp_data));
+          respq_deq_data : mem_resp_data_merged));
 
     // =========================================================================
     // Memory request mux: MSHR issue vs invalidation writeback
@@ -593,6 +669,11 @@ module l2_cache
             mem_req_addr  = inv_wb_addr;
             mem_req_we    = 1'b1;
             mem_req_wdata = inv_wb_data;
+        end else if (mshr_has_wb_issue) begin
+            mem_req_valid = 1'b1;
+            mem_req_addr  = mshr[mshr_wb_issue_idx].evict_addr;
+            mem_req_we    = 1'b1;
+            mem_req_wdata = mshr[mshr_wb_issue_idx].evict_data;
         end else if (mshr_has_issue && respq_can_accept) begin
             // MSHR fill or writeback request
             mem_req_valid = 1'b1;
@@ -622,6 +703,13 @@ module l2_cache
                 mshr[i].addr      <= '0;
                 mshr[i].source     <= SRC_ICACHE;
                 mshr[i].state     <= MSHR_IDLE;
+                mshr[i].is_writeback <= 1'b0;
+                mshr[i].wb_data      <= '0;
+                mshr[i].fill_way     <= '0;
+                mshr[i].evict_addr   <= '0;
+                mshr[i].evict_data   <= '0;
+                mshr[i].wb_merge_valid <= 1'b0;
+                mshr[i].wb_merge_data  <= '0;
             end
             inv_state      <= INV_IDLE;
             inv_set        <= '0;
@@ -658,7 +746,7 @@ module l2_cache
                         mshr[mshr_resp_idx].addr;
                     respq_data[respq_count_q - 3'd1]   <=
                         hit_resp_collision_enq ? hit_pipe[L2_HIT_LATENCY-1].data :
-                        mem_resp_data;
+                        mem_resp_data_merged;
                     respq_source[respq_count_q - 3'd1] <=
                         hit_resp_collision_enq ? hit_resp_source :
                         mshr[mshr_resp_idx].source;
@@ -668,7 +756,7 @@ module l2_cache
                         mshr[mshr_resp_idx].addr;
                     respq_data[respq_count_q]   <=
                         hit_resp_collision_enq ? hit_pipe[L2_HIT_LATENCY-1].data :
-                        mem_resp_data;
+                        mem_resp_data_merged;
                     respq_source[respq_count_q] <=
                         hit_resp_collision_enq ? hit_resp_source :
                         mshr[mshr_resp_idx].source;
@@ -684,7 +772,18 @@ module l2_cache
             // ------------------------------------------------------------------
             // 1. Handle incoming arbitrated request
             // ------------------------------------------------------------------
-            if (arb_valid) begin
+            if (arb_fire) begin
+                if (arb_we && mshr_addr_match) begin
+                    for (int i = 0; i < L2_MSHR_DEPTH; i++) begin
+                        if (mshr[i].valid &&
+                            (mshr[i].addr[63:LINE_BITS] ==
+                             arb_addr[63:LINE_BITS])) begin
+                            mshr[i].wb_merge_valid <= 1'b1;
+                            mshr[i].wb_merge_data  <= arb_wdata;
+                        end
+                    end
+                end
+
                 if (hit_any) begin
                     // ---- HIT ----
                     if (arb_we) begin
@@ -709,56 +808,85 @@ module l2_cache
                     end
                 end else begin
                     // ---- MISS ----
-                    // Only allocate MSHR for fill requests (not writebacks)
-                    // For writebacks on a miss: just allocate as a write-through
-                    // (write directly to MSHR-less path; handle inline)
                     if ((arb_we && !mshr_addr_match) ||
-                        (!arb_we && !mshr_addr_source_match)) begin
-                        if (arb_we) begin
-                            // D-cache dirty writeback, line not in L2:
-                            // allocate a victim, evict if dirty, install wb data
-                            if (!need_evict) begin
-                                data_ram[lookup_set][victim_way]  <= arb_wdata;
-                                tag_ram[lookup_set][victim_way]   <= lookup_tag;
-                                valid_ram[lookup_set][victim_way] <= 1'b1;
-                                dirty_ram[lookup_set][victim_way] <= 1'b1;
-                                begin
-                                    automatic logic [6:0] _ns2 = plru_state[lookup_set];
-                                    _ns2[0] = ~victim_way[2];
-                                    if (!victim_way[2]) begin
-                                        _ns2[1] = ~victim_way[1];
-                                        if (!victim_way[1]) _ns2[3] = ~victim_way[0];
-                                        else                _ns2[4] = ~victim_way[0];
-                                    end else begin
-                                        _ns2[2] = ~victim_way[1];
-                                        if (!victim_way[1]) _ns2[5] = ~victim_way[0];
-                                        else                _ns2[6] = ~victim_way[0];
-                                    end
-                                    plru_state[lookup_set] <= _ns2;
-                                end
-                            end
-                            // If need_evict: writeback handling below via
-                            // eviction path (simplified: skip for bringup,
-                            // the MSHR path covers read misses).
-                        end else begin
-                            // Fill request miss: allocate MSHR
-                            if (mshr_has_free) begin
-                                mshr[mshr_free_idx].valid     <= 1'b1;
-                                mshr[mshr_free_idx].addr      <= arb_addr;
-                                mshr[mshr_free_idx].source <= arb_source;
-                                mshr[mshr_free_idx].state     <= MSHR_PENDING;
-                            end
+                        (!arb_we && !mshr_addr_match)) begin
+                        if (mshr_has_free && victim_available) begin
+                            mshr[mshr_free_idx].valid     <= 1'b1;
+                            mshr[mshr_free_idx].addr      <= arb_addr;
+                            mshr[mshr_free_idx].source    <= arb_source;
+                            mshr[mshr_free_idx].state     <=
+                                need_evict ? MSHR_WRITEBACK :
+                                (arb_we ? MSHR_INSTALL_WB : MSHR_PENDING);
+                            mshr[mshr_free_idx].is_writeback <= arb_we;
+                            mshr[mshr_free_idx].wb_data      <= arb_wdata;
+                            mshr[mshr_free_idx].fill_way     <= victim_way;
+                            mshr[mshr_free_idx].evict_addr   <=
+                                {tag_ram[lookup_set][victim_way],
+                                 lookup_set,
+                                 {LINE_BITS{1'b0}}};
+                            mshr[mshr_free_idx].evict_data   <=
+                                data_ram[lookup_set][victim_way];
+                            mshr[mshr_free_idx].wb_merge_valid <= 1'b0;
+                            mshr[mshr_free_idx].wb_merge_data  <= '0;
                         end
                     end
                 end
             end
 
             // ------------------------------------------------------------------
-            // 2. Advance MSHR: issue pending request to memory
+            // 2. Advance MSHR: write back dirty victim or issue fill read
             // ------------------------------------------------------------------
+            if (mshr_has_wb_issue && mem_req_ready && !inv_wb_pending) begin
+                mshr[mshr_wb_issue_idx].state <=
+                    mshr[mshr_wb_issue_idx].is_writeback ?
+                    MSHR_INSTALL_WB : MSHR_PENDING;
+            end
+
             if (mshr_has_issue && respq_can_accept && mem_req_ready &&
-                !inv_wb_pending) begin
+                !inv_wb_pending && !mshr_has_wb_issue) begin
                 mshr[mshr_issue_idx].state <= MSHR_WAIT_MEM;
+            end
+
+            if (mshr_has_install) begin
+                begin
+                    logic [L2_SET_BITS-1:0] wb_set;
+                    logic [L2_TAG_BITS-1:0] wb_tag;
+                    logic [2:0]             wb_way;
+                    logic [511:0]           wb_data;
+
+                    wb_set  = mshr[mshr_install_idx].addr[INDEX_HI:INDEX_LO];
+                    wb_tag  = mshr[mshr_install_idx].addr[TAG_HI:TAG_LO];
+                    wb_way  = mshr[mshr_install_idx].fill_way;
+                    wb_data = mshr[mshr_install_idx].wb_merge_valid ?
+                              mshr[mshr_install_idx].wb_merge_data :
+                              mshr[mshr_install_idx].wb_data;
+
+                    data_ram[wb_set][wb_way]  <= wb_data;
+                    tag_ram[wb_set][wb_way]   <= wb_tag;
+                    valid_ram[wb_set][wb_way] <= 1'b1;
+                    dirty_ram[wb_set][wb_way] <= 1'b1;
+
+                    begin
+                        automatic logic [6:0] _wins = plru_state[wb_set];
+                        _wins[0] = ~wb_way[2];
+                        if (!wb_way[2]) begin
+                            _wins[1] = ~wb_way[1];
+                            if (!wb_way[1]) _wins[3] = ~wb_way[0];
+                            else            _wins[4] = ~wb_way[0];
+                        end else begin
+                            _wins[2] = ~wb_way[1];
+                            if (!wb_way[1]) _wins[5] = ~wb_way[0];
+                            else            _wins[6] = ~wb_way[0];
+                        end
+                        plru_state[wb_set] <= _wins;
+                    end
+
+                    mshr[mshr_install_idx].valid <= 1'b0;
+                    mshr[mshr_install_idx].state <= MSHR_IDLE;
+                    mshr[mshr_install_idx].is_writeback <= 1'b0;
+                    mshr[mshr_install_idx].wb_merge_valid <= 1'b0;
+                    mshr[mshr_install_idx].wb_merge_data  <= '0;
+                end
             end
 
             // ------------------------------------------------------------------
@@ -774,44 +902,14 @@ module l2_cache
 
                     fill_set    = mshr[mshr_resp_idx].addr[INDEX_HI:INDEX_LO];
                     fill_tag    = mshr[mshr_resp_idx].addr[TAG_HI:TAG_LO];
-                    // Inline plru_get_victim for fill_set
-                    begin
-                        automatic logic [6:0] _fps = plru_state[fill_set];
-                        if (!_fps[0]) begin
-                            if (!_fps[1])
-                                fill_victim = _fps[3] ? 3'd1 : 3'd0;
-                            else
-                                fill_victim = _fps[4] ? 3'd3 : 3'd2;
-                        end else begin
-                            if (!_fps[2])
-                                fill_victim = _fps[5] ? 3'd5 : 3'd4;
-                            else
-                                fill_victim = _fps[6] ? 3'd7 : 3'd6;
-                        end
-                    end
-
-                    // Writeback dirty victim before installing fill data
-                    // (simplified: queue writeback only if dirty — for
-                    //  bringup we mark it clean and overwrite; a full impl
-                    //  would use a write buffer)
-                    if (valid_ram[fill_set][fill_victim] &&
-                        dirty_ram[fill_set][fill_victim]) begin
-                        // Flush victim to memory via inv_wb path (reuse)
-                        inv_wb_addr    <= {tag_ram[fill_set][fill_victim],
-                                           fill_set,
-                                           {LINE_BITS{1'b0}}};
-                        inv_wb_data    <= data_ram[fill_set][fill_victim];
-                        inv_wb_pending <= 1'b1;
-                        // Invalidate the victim slot now so re-fill can proceed
-                        valid_ram[fill_set][fill_victim] <= 1'b0;
-                        dirty_ram[fill_set][fill_victim] <= 1'b0;
-                    end
+                    fill_victim = mshr[mshr_resp_idx].fill_way;
 
                     // Install fill data
-                    data_ram[fill_set][fill_victim]  <= mem_resp_data;
+                    data_ram[fill_set][fill_victim]  <= mem_resp_data_merged;
                     tag_ram[fill_set][fill_victim]   <= fill_tag;
                     valid_ram[fill_set][fill_victim] <= 1'b1;
-                    dirty_ram[fill_set][fill_victim] <= 1'b0;
+                    dirty_ram[fill_set][fill_victim] <=
+                        mshr[mshr_resp_idx].wb_merge_valid;
 
                     // Inline plru_update for fill_set
                     begin
@@ -832,15 +930,16 @@ module l2_cache
                     // Deallocate MSHR
                     mshr[mshr_resp_idx].valid <= 1'b0;
                     mshr[mshr_resp_idx].state <= MSHR_IDLE;
+                    mshr[mshr_resp_idx].is_writeback <= 1'b0;
+                    mshr[mshr_resp_idx].wb_merge_valid <= 1'b0;
+                    mshr[mshr_resp_idx].wb_merge_data  <= '0;
                 end
             end
 
             // ------------------------------------------------------------------
             // 4. Clear inv_wb_pending when memory accepts the writeback
             // ------------------------------------------------------------------
-            if (inv_wb_pending && mem_req_ready &&
-                !(mem_resp_capture && respq_can_accept &&
-                  mem_resp_dirty_victim)) begin
+            if (inv_wb_pending && mem_req_ready) begin
                 inv_wb_pending <= 1'b0;
             end
 
