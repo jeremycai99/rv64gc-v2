@@ -160,6 +160,16 @@ Implemented software-image correction:
   should not depend on inherited `.config` state:
   `CONFIG_BLK_DEV_LOOP=y`, `CONFIG_DEBUG_PLIST=y`,
   `CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y`, and `CONFIG_CRYPTO_TEST=n`.
+- May 25 follow-up found another v1-methodology drift: the active v2 image
+  printed `LSM: initializing lsm=capability,integrity`, the archived v1
+  minimal console log did not, and the long-run status PC stayed in kernel
+  SHA3/Keccak code. The build script now pins the v1-minimal security and
+  crypto surface by disabling `CONFIG_SECURITY`, `CONFIG_INTEGRITY`,
+  `CONFIG_KEYS`, optional IV/AEAD crypto algorithms, `CONFIG_CRYPTO_DRBG`,
+  `CONFIG_CRYPTO_JITTERENTROPY`, `CONFIG_CRYPTO_SHA3`, and
+  `CONFIG_CRYPTO_DEV_VIRTIO`, and also pins v1-minimal peripheral rows such
+  as `CONFIG_WIRELESS=n`, `CONFIG_BT=n`, `CONFIG_SOUND=n`, and
+  `CONFIG_SERIO=n`.
 - The kernel version string is normalized to
   `6.6.130-rv64gc-v2-sim (rv64gc-v2@linux-sim)` so the UART log does not carry
   a misleading SCM `dirty` marker from the reused Linux source tree.
@@ -217,6 +227,23 @@ Fresh partial validation:
 - The run reached the `100,000,000` cycle status checkpoint with active
   retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop, and no
   no-commit stop. The status PC still resolves to `keccakf_round`.
+- The `stage3_v1trim_boot_dsim_500m_bg_20260525c` run was stopped after the
+  security/integrity drift was found. Its last checkpoint remained clean, so
+  this is not a functional failure; it is a stale-image methodology stop.
+- Post-follow-up config verification for the rebuilt payload confirms
+  `CONFIG_KEYS`, `CONFIG_SECURITY`, `CONFIG_INTEGRITY`,
+  `CONFIG_CRYPTO_SHA3`, `CONFIG_CRYPTO_DRBG_MENU`,
+  `CONFIG_CRYPTO_JITTERENTROPY`, `CONFIG_CRYPTO_AUTHENC`,
+  `CONFIG_CRYPTO_GCM`, `CONFIG_CRYPTO_GENIV`, `CONFIG_CRYPTO_SEQIV`,
+  `CONFIG_CRYPTO_ECHAINIV`, `CONFIG_CRYPTO_DEV_VIRTIO`, `CONFIG_MD`,
+  `CONFIG_RAID6_PQ`, `CONFIG_XOR_BLOCKS`, `CONFIG_PCI`, `CONFIG_SCSI`,
+  `CONFIG_ATA`, `CONFIG_SERIO`, `CONFIG_MMC`, `CONFIG_EXT4_FS`, and
+  `CONFIG_BTRFS_FS` are disabled, with `CONFIG_LSM=""`,
+  `CONFIG_BLK_DEV_LOOP=y`, and `CONFIG_DEBUG_PLIST=y`.
+- The rebuilt `vmlinux` no longer contains `keccakf_round`, `sha3`, `drbg`,
+  `jitter`, `jent`, `raid6`, or `xor_` symbols. Remaining `sha384` and
+  block queue integrity symbol names are unrelated generic code, not the
+  stale LSM/integrity/SHA3 execution path.
 
 Current verdict:
 
@@ -232,6 +259,9 @@ Current verdict:
   `Run /init as init process`. The current `#41` v1-trimmed v2 image has no
   `raid6`, `xor`, `SCSI`, `libata`, `PCI`, `kvm`, `Unable to handle`, `Oops`,
   `BUG`, or panic line through the recorded 100M-cycle DSim checkpoints.
+- The active root-cause verdict is image-methodology drift, not a proven core
+  RTL bug. The next run must use the post-follow-up rebuilt payload before
+  spending RTL debug time on the stale Oops.
 - The next DSim proof should use the trimmed v1-like image and keep
   `+LINUX_STOP_ON_PANIC`, `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and
   `+LINUX_STOP_ON_NO_COMMIT` enabled.
