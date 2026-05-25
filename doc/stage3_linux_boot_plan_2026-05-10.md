@@ -267,6 +267,10 @@ Fresh partial validation:
   active retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop,
   and no no-commit stop. This checkpoint is now stronger evidence than the
   stale May 24 Oops path because it uses the post-follow-up v1-aligned image.
+- The proof reached the `50,000,000` cycle status checkpoint with active
+  retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop, and no
+  no-commit stop. The run remains active; the next evidence target is the
+  later serial/loop/plist handoff sequence from the v1 reference log.
 
 Current verdict:
 
