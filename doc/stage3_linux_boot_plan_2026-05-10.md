@@ -191,6 +191,11 @@ Fresh partial validation:
   license server rejected it with `Already at maxLeases (1)`. Per the Stage 3
   simulator policy, the long proof was moved to the Verilator backup path while
   the DSim lease clears.
+- After the lease cleared, the Verilator backup was stopped and the primary
+  DSim proof was relaunched as
+  `linux_boot_results/stage3_v1trim_boot_dsim_500m_bg_20260525c` with the same
+  panic, lost-owner, and no-commit guards. The run has reached the Linux banner
+  and is still progressing through early Linux memory setup.
 
 Current verdict:
 
@@ -200,9 +205,8 @@ Current verdict:
 - The next DSim proof should use the trimmed v1-like image and keep
   `+LINUX_STOP_ON_PANIC`, `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and
   `+LINUX_STOP_ON_NO_COMMIT` enabled.
-- The active backup long-run artifact is
-  `linux_boot_results/stage3_v1trim_boot_verilator_500m_bg_20260525a` until a
-  DSim lease is available again.
+- The active long-run artifact is
+  `linux_boot_results/stage3_v1trim_boot_dsim_500m_bg_20260525c`.
 - If the trimmed image reproduces a fresh Oops, capture the complete trap frame
   and initcall context before making RTL changes.
 
