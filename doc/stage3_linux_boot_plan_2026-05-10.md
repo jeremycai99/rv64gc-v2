@@ -4,15 +4,13 @@ Date: May 10, 2026
 
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
 phase. The RV64GC instruction compliance prerequisite is closed on the current
-RTL candidate and the DS/CM hard performance gate remains mandatory. The active
-DSim Linux blocker is the deterministic lost-load-owner/no-retire path in
-OpenSBI `mtimer_event_start`. The latest root cause is the LSU LMB fill
-writeback arbitration against split-load writeback. The repaired RTL passes a
-focused 65M DSim smoke, the DS/CM hard guard, and the 100M DSim Linux proof
-with no lost-owner, no no-commit, and no panic-class marker. Verilator
-`Active region did not converge` remains an ASIC-quality backup-simulator
-blocker and must not be hidden with warning suppression or convergence-limit
-workarounds.
+RTL candidate and the DS/CM hard performance gate remains mandatory. The
+latest kernel-visible Oops was found on a v2 Linux image that had drifted away
+from the passing v1 methodology by enabling RAID6/XOR, SCSI/libata, PCI, KVM,
+MMC, MD, and Btrfs paths. That Oops is therefore not yet a proven RTL root
+cause. The current action is to keep the v1-like trimmed image as the Linux
+bring-up baseline, reproduce any remaining failure on a rebuilt simulator, and
+only then classify it as RTL, platform, or software-image work.
 
 ## Goal
 
@@ -114,6 +112,99 @@ Current compliance status:
   instruction compliance.
 - Linux kernel debug may proceed only while this compliance gate and the DS/CM
   hard performance gate stay clean after each RTL change.
+
+## May 24 v1-Methodology Oops Triage
+
+The latest UART-visible Oops was real, but the failing software image was not
+equivalent to the archived v1 Linux boot methodology.
+
+Failing artifact:
+
+- `linux_boot_results/stage3_500m_linux_probe_dsim_20260524b_notrap`.
+- DSim stopped at cycle `248,746,794` after UART printed
+  `Unable to handle kernel NULL pointer dereference at virtual address
+  0000000000000008` and `Oops`.
+- The simulator `last_pc=ffffffff80485a3c` maps into UART/printk output, so it
+  identifies where the Oops text was being printed, not the original faulting
+  kernel instruction.
+
+v1 reference:
+
+- `/home/jeremycai/agent-workspace/rv64gc-v1/tmp/linux_boot/mainline_console_minimal.log`
+  reaches:
+  `clocksource: Switched to clocksource riscv_clocksource`,
+  `loop: module loaded`, `start plist test`, `end plist test`, and
+  `Run /init as init process`.
+- The archived v1 payload has `CONFIG_BLK_DEV_LOOP=y`,
+  `CONFIG_VIRTIO_BLK=y`, `CONFIG_DEBUG_PLIST=y`,
+  `CONFIG_LIBNVDIMM=y`, `CONFIG_BLK_DEV_PMEM=y`, `CONFIG_OF_PMEM=y`, and
+  `CONFIG_DAX=y`, but keeps PCI, KVM, full SCSI, ATA, MD, RAID6, XOR, MMC,
+  and Btrfs disabled.
+
+v2 mismatch found:
+
+- The failed v2 UART log entered extra init paths that v1 did not run:
+  `raid6`, `xor`, `SCSI subsystem initialized`, `libata`, `PCI`, and `kvm`.
+- The old v2 config enabled the corresponding subsystems:
+  `CONFIG_PCI=y`, `CONFIG_KVM=y`, `CONFIG_SCSI=y`, `CONFIG_ATA=y`,
+  `CONFIG_MD=y`, `CONFIG_RAID6_PQ=y`, `CONFIG_RAID6_PQ_BENCHMARK=y`,
+  `CONFIG_XOR_BLOCKS=y`, `CONFIG_MMC=y`, and `CONFIG_BTRFS_FS=y`.
+- This broadened driver and storage surface is a software-image/methodology
+  drift from v1. It is not a valid first Linux boot baseline for v2.
+
+Implemented software-image correction:
+
+- `sw/linux_boot/build_linux_boot.sh` now forces the v1-absent subsystems off
+  for the Stage 3 Linux simulation image.
+- The kernel version string is normalized to
+  `6.6.130-rv64gc-v2-sim (rv64gc-v2@linux-sim)` so the UART log does not carry
+  a misleading SCM `dirty` marker from the reused Linux source tree.
+- A debug-only DTS,
+  `sw/linux_boot/dts/rv64gc_v2_linux_initcall_debug.dts`, is available for an
+  `initcall_debug` payload when the exact initcall owner must be captured.
+
+Fresh partial validation:
+
+- The Linux payload was rebuilt after the trim:
+  `build/linux_boot/fw_payload.{elf,bin,hex}`.
+- Rebuilt Verilator Linux binary:
+  `verilator_linux_work/Vtb_linux`.
+- Fresh smoke artifact:
+  `linux_boot_results/stage3_v1trim_boot_verilator_rebuilt_20260524a`.
+- That run reached `clocksource: Switched to clocksource riscv_clocksource`
+  and the `20,000,000` cycle status checkpoint with active retirement and no
+  `Oops`, `Kernel panic`, or lost-load-owner stop. It was manually stopped
+  because the backup Verilator path is too slow for the full milestone in an
+  interactive debug turn.
+- Rebuilt DSim Linux platform artifact:
+  `linux_boot_results/stage3_v1trim_dsim_rebuild_20260525a`.
+- Foreground DSim proof attempt:
+  `linux_boot_results/stage3_v1trim_boot_dsim_500m_20260525a`.
+  This run reached the `25,000,000` cycle status checkpoint and
+  `clocksource: Switched to clocksource riscv_clocksource` with active
+  retirement, no trap, no panic/Oops marker, and no lost-load-owner stop. It
+  was manually terminated at the clean checkpoint because the full 500M proof
+  is too long for an interactive foreground turn. Its `exit code -15` summary
+  is manual termination, not a functional failure.
+- A detached DSim retry was attempted as
+  `linux_boot_results/stage3_v1trim_boot_dsim_500m_bg_20260525b`, but the
+  license server rejected it with `Already at maxLeases (1)`. Per the Stage 3
+  simulator policy, the long proof was moved to the Verilator backup path while
+  the DSim lease clears.
+
+Current verdict:
+
+- Do not classify the May 24 Oops as a proven RTL failure yet. The strongest
+  evidence is that the v2 boot image drifted away from the passing v1 boot
+  surface and exercised unrelated storage/driver init paths.
+- The next DSim proof should use the trimmed v1-like image and keep
+  `+LINUX_STOP_ON_PANIC`, `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and
+  `+LINUX_STOP_ON_NO_COMMIT` enabled.
+- The active backup long-run artifact is
+  `linux_boot_results/stage3_v1trim_boot_verilator_500m_bg_20260525a` until a
+  DSim lease is available again.
+- If the trimmed image reproduces a fresh Oops, capture the complete trap frame
+  and initcall context before making RTL changes.
 
 ## May 23 AMO Wait Owner Checker Update
 
