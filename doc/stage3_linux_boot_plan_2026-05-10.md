@@ -202,6 +202,9 @@ Fresh partial validation:
   active retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop,
   and no no-commit stop. The run remains active toward the 500M proof and
   `BOOT OK` target.
+- The status PCs are consistent with active Linux work, not a no-retire hang:
+  the `25,000,000` cycle PC resolves to `__memset`, and the `50,000,000` cycle
+  PC resolves to `keccakf_round` in the kernel SHA3 implementation.
 
 Current verdict:
 
