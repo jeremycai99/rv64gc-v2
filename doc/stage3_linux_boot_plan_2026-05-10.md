@@ -219,6 +219,15 @@ Current verdict:
 - Do not classify the May 24 Oops as a proven RTL failure yet. The strongest
   evidence is that the v2 boot image drifted away from the passing v1 boot
   surface and exercised unrelated storage/driver init paths.
+- May 25 recheck against the v1 archive keeps the same classification. The
+  failing `#39` v2 UART log enters `raid6`, `xor`, `SCSI subsystem
+  initialized`, `libata`, `PCI`, and `kvm` before `loop: module loaded`, then
+  prints the NULL-dereference Oops. The v1
+  `mainline_console_minimal.log` never enters those subsystems; after
+  `loop: module loaded` it reaches `start plist test`, `end plist test`, and
+  `Run /init as init process`. The current `#41` v1-trimmed v2 image has no
+  `raid6`, `xor`, `SCSI`, `libata`, `PCI`, `kvm`, `Unable to handle`, `Oops`,
+  `BUG`, or panic line through the recorded 100M-cycle DSim checkpoints.
 - The next DSim proof should use the trimmed v1-like image and keep
   `+LINUX_STOP_ON_PANIC`, `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and
   `+LINUX_STOP_ON_NO_COMMIT` enabled.
