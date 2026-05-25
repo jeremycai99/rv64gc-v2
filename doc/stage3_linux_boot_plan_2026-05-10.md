@@ -210,6 +210,9 @@ Fresh partial validation:
   no-commit stop. The status PC still resolves to `keccakf_round`, so the run
   is still progressing through kernel crypto work rather than sitting in a
   platform-visible deadlock.
+- The run reached the `100,000,000` cycle status checkpoint with active
+  retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop, and no
+  no-commit stop. The status PC still resolves to `keccakf_round`.
 
 Current verdict:
 
