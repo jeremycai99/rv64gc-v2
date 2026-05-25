@@ -205,6 +205,11 @@ Fresh partial validation:
 - The status PCs are consistent with active Linux work, not a no-retire hang:
   the `25,000,000` cycle PC resolves to `__memset`, and the `50,000,000` cycle
   PC resolves to `keccakf_round` in the kernel SHA3 implementation.
+- The run reached the `75,000,000` cycle status checkpoint with active
+  retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop, and no
+  no-commit stop. The status PC still resolves to `keccakf_round`, so the run
+  is still progressing through kernel crypto work rather than sitting in a
+  platform-visible deadlock.
 
 Current verdict:
 
