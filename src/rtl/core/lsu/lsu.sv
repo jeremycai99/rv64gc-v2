@@ -3578,7 +3578,7 @@ module lsu
                     (!dcache_load_resp_valid[li] ||
                      ((li == 0) && p0_dcache_hit_blocked) ||
                      ((li == 1) && p1_dcache_hit_blocked)) &&
-                    !flush_in.valid) begin
+                    load_pipe_flush_keep[li]) begin
                     spec_cancel_valid[li] = 1'b1;
                     spec_cancel_tag[li]   = load_issue_data_r[li].pdst;
                 end

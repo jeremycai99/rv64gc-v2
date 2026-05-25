@@ -4,13 +4,12 @@ Date: May 10, 2026
 
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
 phase. The RV64GC instruction compliance prerequisite is closed on the current
-RTL candidate and the DS/CM hard performance gate remains mandatory. The
-latest kernel-visible Oops was found on a v2 Linux image that had drifted away
-from the passing v1 methodology by enabling RAID6/XOR, SCSI/libata, PCI, KVM,
-MMC, MD, and Btrfs paths. That Oops is therefore not yet a proven RTL root
-cause. The current action is to keep the v1-like trimmed image as the Linux
-bring-up baseline, reproduce any remaining failure on a rebuilt simulator, and
-only then classify it as RTL, platform, or software-image work.
+RTL candidate and the DS/CM hard performance gate remains mandatory. The stale
+May 24 broad-image Oops was image-methodology drift, but the later May 25
+v1-trimmed Oops is a separate RTL-quality blocker candidate. The current
+working fix is the LSU speculative wakeup cancel owner repair in `lsu.sv`;
+patched RTL must still pass DS/CM, then prove Linux progress past the old
+Oops window.
 
 ## Goal
 
@@ -271,31 +270,116 @@ Fresh partial validation:
   retirement, `trap=0`, no panic/Oops marker, no lost-load-owner stop, and no
   no-commit stop. The run remains active; the next evidence target is the
   later serial/loop/plist handoff sequence from the v1 reference log.
+- Follow-up result for that same proof:
+  `linux_boot_results/stage3_v1trim_nosec_boot_dsim_500m_bg_20260525b`
+  later failed at cycle `97,345,681` after UART printed
+  `Unable to handle kernel NULL pointer dereference at virtual address
+  0000000000000008` and `Oops`. The prior `25M` and `50M` rows are therefore
+  partial progress checkpoints only, not Linux boot proof.
+- v1 reference comparison now narrows the fresh Oops to the initcall window
+  after `SuperH (H)SCI(F) driver initialized` and before
+  `loop: module loaded`. The archived v1 log crosses this window and reaches
+  `loop: module loaded`, `start plist test`, `end plist test`, and
+  `Run /init as init process`.
+- The May 25 rebuild now aligns the important v1 surface rows. The embedded
+  config has `CONFIG_PORTABLE=y`, `CONFIG_NONPORTABLE` disabled, SiFive,
+  StarFive, virt, T-Head, I2C, SPI, thermal, RTC, 8250 DMA, SH SCI DMA,
+  PCI, KVM, SCSI, ATA, MD, RAID6, XOR, MMC, Btrfs, security, and keys
+  disabled. Remaining differences must still be audited, but the old
+  RAID6/SCSI/PCI/KVM explanation no longer covers the fresh Oops unless the
+  rebuilt image proves otherwise.
+- Static disassembly gives one strong RTL suspect if the next trap-PC capture
+  lands in the sysfs/topology path. `internal_create_group` loads an attribute
+  pointer, checks it for zero, and then `topology_is_visible` reads
+  `attr->mode` at offset `8`. A real trap at virtual address `0x8` in this
+  sequence means the branch consumed a stale nonzero value while the later load
+  saw the correct null pointer. That points at the load-use or load-to-branch
+  wakeup/cancel contract, not at UART, OpenSBI, or the timer path.
+- Focused trap-PC captures were attempted after the rebuild:
+  `stage3_v1aligned_oops_guard_verilator_20260525a` and
+  `stage3_v1aligned_oops_guard_dsim_20260525b`. Both were intentionally stopped
+  during interactive debug before the old 97M-cycle Oops window. Their only
+  observed trap was the expected early kernel instruction page fault during VM
+  bring-up, not the final null dereference.
+
+Root-cause audit against the v1 reference:
+
+| Candidate | Evidence | Current verdict |
+|---|---|---|
+| Old broad-image software drift | The May 24 image entered RAID6/SCSI/PCI/KVM paths that v1 never exercised. | Explains stale broad-image Oops only. |
+| Remaining v1/v2 boot surface mismatch | Key platform and peripheral rows are now v1-aligned in the rebuilt embedded config. | Still audit remaining deltas, but not the leading cause. |
+| UART / OpenSBI timer bug | v1 and v2 both pass OpenSBI timer setup; the fresh Oops is after serial init, not in `mtimer_event_start`. | Unlikely. |
+| sysfs/topology null attribute path | v1 crosses `SuperH` -> `loop` -> plist -> `/init`; v2 Oopses in the same window with VA `0x8`. The disassembly has a null-check then offset-8 load pattern. | Leading software symptom. |
+| LSU speculative load wakeup cancel race | `lsu.sv` canceled speculative load wakeups only when `!flush_in.valid`, while older issued loads can survive partial flushes via `load_pipe_flush_keep`. A same-cycle partial flush plus miss can leave a consumer spec-ready without a cancel. | Leading RTL mechanism; minimal fix applied. |
+
+Current root-cause checkpoint:
+
+- The v1 reference log proves the same software crosses the window:
+  `SuperH (H)SCI(F) driver initialized`, `loop: module loaded`, plist self
+  test, then `Run /init as init process`.
+- Current symbol/initcall order places the suspect v2 window between
+  `sci_init`/`sifive_serial_init` and `loop_init`. The relevant initcalls are
+  `topology_sysfs_init` and `cacheinfo_sysfs_init`.
+- `topology_sysfs_init` registers `topology_add_dev`, which calls
+  `sysfs_create_group(&dev->kobj, &topology_attr_group)`. The sysfs loop in
+  `fs/sysfs/group.c` checks `*attr` before reading `(*attr)->mode` and before
+  calling `topology_is_visible`.
+- The static topology attribute list is intentionally NULL terminated. A real
+  load page fault at virtual address `0x8` in this path means the consumer
+  reached `attr->mode` with `attr == NULL` after a preceding software null
+  check should have prevented it. That is not a valid Linux/OpenSBI behavior
+  difference versus v1.
+- The concrete RTL issue matching this failure class is in
+  `src/rtl/core/lsu/lsu.sv`: load hit, miss, retry, and writeback paths use the
+  partial-flush owner rule through `load_pipe_flush_keep`, but the speculative
+  wakeup cancel path still suppresses cancel on every `flush_in.valid`. Thus an
+  older load that survives a partial flush can miss or be blocked without
+  cancelling the already-latched speculative ready bit in the issue queue.
+- This can let a dependent branch or load consume the old physical-register
+  value. In the sysfs loop that manifests exactly as a stale nonzero value for
+  the null-check branch followed by the correct zero value being used as the
+  address for the later `lhu ..., 8(attr)`.
+- The failing DSim artifact
+  `stage3_v1trim_nosec_boot_dsim_500m_bg_20260525b` did not include
+  `+LINUX_TRACE_TRAP`, so it stopped on the UART `Oops` text rather than on the
+  committed exception. The current payload was rebuilt afterward as image
+  `#45`.
+- On May 25, the first patched RTL slice changed `lsu.sv` so
+  `spec_cancel_valid` is generated when `load_pipe_flush_keep[li]` is true,
+  rather than suppressing cancel on every `flush_in.valid`. This keeps the
+  speculative wakeup/cancel contract aligned with the existing load completion
+  owner rule for partial flushes.
+- Focused Verilator probe `probe_load_spec_cancel_partial_flush` passed on the
+  patched RTL. The Stage 3 DS/CM guard also passed on patched RTL with
+  Verilator: DS100 `3.139802 DMIPS/MHz`, DS300 `3.276072 DMIPS/MHz`, CM1
+  `6.605412 CM/MHz`, CM10 `6.793229 CM/MHz`. These are all above the locked
+  Stage 3 metric floor.
+- The patched DSim Linux platform rebuild succeeded in
+  `linux_boot_results/stage3_lsu_spec_cancel_rebuild_dsim_20260525c`.
+- A near-term DSim proof run,
+  `linux_boot_results/stage3_lsu_spec_cancel_loop_dsim_20260525a`, was started
+  with `UART_PASS_PATTERN=loop: module loaded` and committed-trap capture. It
+  was manually interrupted during root-cause reporting before the old
+  97M-cycle Oops window, at about `8.9M` cycles. It had reached early Linux
+  and had not emitted `Oops`, panic, lost-load-owner, no-commit, or `tval=8`;
+  this is partial smoke only, not Linux proof.
 
 Current verdict:
 
-- Do not classify the May 24 Oops as a proven RTL failure yet. The strongest
-  evidence is that the v2 boot image drifted away from the passing v1 boot
-  surface and exercised unrelated storage/driver init paths.
-- May 25 recheck against the v1 archive keeps the same classification. The
-  failing `#39` v2 UART log enters `raid6`, `xor`, `SCSI subsystem
-  initialized`, `libata`, `PCI`, and `kvm` before `loop: module loaded`, then
-  prints the NULL-dereference Oops. The v1
-  `mainline_console_minimal.log` never enters those subsystems; after
-  `loop: module loaded` it reaches `start plist test`, `end plist test`, and
-  `Run /init as init process`. The current `#41` v1-trimmed v2 image has no
-  `raid6`, `xor`, `SCSI`, `libata`, `PCI`, `kvm`, `Unable to handle`, `Oops`,
-  `BUG`, or panic line through the recorded 100M-cycle DSim checkpoints.
-- The active root-cause verdict is image-methodology drift, not a proven core
-  RTL bug. The next run must use the post-follow-up rebuilt payload before
-  spending RTL debug time on the stale Oops.
-- The next DSim proof should use the trimmed v1-like image and keep
-  `+LINUX_STOP_ON_PANIC`, `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and
-  `+LINUX_STOP_ON_NO_COMMIT` enabled.
-- The active long-run artifact is
-  `linux_boot_results/stage3_v1trim_nosec_boot_dsim_500m_bg_20260525b`.
-- If the trimmed image reproduces a fresh Oops, capture the complete trap frame
-  and initcall context before making RTL changes.
+- The old May 24 broad-image Oops remains image-methodology drift. The newer
+  May 25 v1-trimmed Oops is a fresh blocker and must not be dismissed as the
+  same RAID6/SCSI/PCI/KVM issue.
+- The first RTL fix is intentionally narrow and behavior-preserving for
+  non-flush cycles. It changes only the cancel ownership predicate to match the
+  already-existing load completion ownership predicate.
+- The next proof run must keep committed-trap capture:
+  `+LINUX_STOP_TRAP_TVAL=0000000000000008`, `+LINUX_TRACE_TRAP`,
+  `+LINUX_TRACE_REGS`, `+LINUX_TRACE_FAULT_ONLY`,
+  `+LINUX_STOP_ON_LOST_LOAD_OWNER`, and `+LINUX_STOP_ON_NO_COMMIT`.
+- Linux proof is not closed until a rebuilt simulator reaches at least the old
+  97M-cycle Oops window without `Oops`, panic, lost-load-owner, or no-commit
+  stop. DSim is preferred; Verilator is acceptable while the DSim license is
+  blocked.
 
 ## May 23 AMO Wait Owner Checker Update
 

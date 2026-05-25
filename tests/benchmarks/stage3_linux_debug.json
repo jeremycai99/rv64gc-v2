@@ -42,6 +42,16 @@
       "notes": "Directed LQ/ROB pressure probe for the current Linux mtimer freeze class: many cold loads target x0 so every ROB load must complete without consuming physical integer registers."
     },
     {
+      "name": "probe_load_spec_cancel_partial_flush",
+      "kind": "generic",
+      "hex": "tests/hex/probe_load_spec_cancel_partial_flush.hex",
+      "max_cycles": 200000,
+      "require_stop": false,
+      "require_loop_buffer_zero": true,
+      "require_decoded_op_replay_zero": true,
+      "notes": "Directed LSU/IQ probe for the Stage 3 Linux NULL-deref class: an older cold load and dependent branch must not keep a stale speculative-ready bit when a younger branch causes a partial flush."
+    },
+    {
       "name": "probe_mtimer_head_load_pressure",
       "kind": "generic",
       "hex": "tests/hex/probe_mtimer_head_load_pressure.hex",
