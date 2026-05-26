@@ -4416,11 +4416,35 @@ BOOT OK marker visibility update:
 - `linux_boot_results/stage3_bootok_console_rebuild_20260526a` rebuilt the
   Linux payload from that source.  The rebuilt initramfs binary contains both
   `/dev/console` and `BOOT OK`.
-- `linux_boot_results/stage3_bootok_console_verilator_20260526a_bg` is the
-  active Verilator backup proof from the rebuilt payload, with target milestone
-  `boot_ok`, `140,000,000` max cycles, and the same lost-owner, no-commit,
-  trap-value, Oops, and panic stop hooks.  Treat this run as the next authority
-  for whether Stage 3 reaches the final userspace marker.
+- `linux_boot_results/stage3_bootok_console_verilator_20260526a_bg` completed
+  as the Verilator backup proof from the rebuilt payload.  It used target
+  milestone `boot_ok`, `140,000,000` max cycles, and the same lost-owner,
+  no-commit, trap-value, Oops, and panic stop hooks.
+- That run passed with status `PASS` and reason
+  `reached target milestone: Initramfs BOOT OK`.  It reached OpenSBI platform
+  probe, Linux early console, `riscv_clocksource`, the NS16550 UART driver,
+  `Freeing unused kernel image`, `Run /init as init process`, and finally
+  `BOOT OK` at cycle `120,241,858`.
+- The final UART log has no `Unable to handle`, no `Oops`, no `BUG:`, no
+  `Kernel panic`, no lost-load-owner stop, no no-commit stop, and no trap stop.
+
+Current Oops classification against the v1 reference:
+
+- The retained Oops artifacts are historical.  The current rebuilt
+  `boot_ok` proof does not reproduce them.
+- The old broad-image May 24 Oops remains classified as image-methodology
+  drift because it enabled RAID6/SCSI/PCI/KVM paths that the archived v1
+  minimal Linux run never executed.
+- The May 25 v1-trimmed `0x8` Oops was a real v2 RTL memory-hierarchy bug.
+  The v1 reference log crosses `SuperH (H)SCI(F) driver initialized`,
+  `loop: module loaded`, `start plist test`, `end plist test`, and
+  `Run /init as init process`, while the failing v2 trace showed the correct
+  `kernfs_add_one` parent-pointer store reaching D-cache/L2 and then being
+  overwritten by a stale same-line dirty-victim writeback.
+- Commit `aec2f9e` fixes that class by making the L1D clean under the
+  write-through policy and repairing L2 writeback/fill ownership.  The DSim
+  post-fix `loop` proof and the Verilator `BOOT OK` proof both cross the old
+  Oops window cleanly.
 
 ## Near-Term Non-Goals
 
@@ -4440,14 +4464,16 @@ BOOT OK marker visibility update:
 | CLINT or ACLINT? | CLINT is acceptable for first boot because v1 already used it; ACLINT can replace it later if we want newer platform naming. |
 | ELF loader or hex only? | Add ELF/binary loading in the runner or memory model. Keep byte-hex compatibility for existing tests. |
 | How to stop the sim? | UART milestone or syscon poweroff. Never a core `tohost` port. |
-| What is the first success milestone? | OpenSBI platform probe, full RV64GC instruction compliance, and Linux early console are achieved. Next Linux success is `riscv_clocksource`, then initramfs `BOOT OK`. |
+| What is the first success milestone? | OpenSBI platform probe, full RV64GC instruction compliance, Linux early console, `riscv_clocksource`, UART driver bring-up, `/init` handoff, and Verilator initramfs `BOOT OK` are achieved. A DSim `BOOT OK` replay remains optional signoff evidence. |
 
 ## Current Verdict
 
-Stage 3 remains feasible. The first platform blockers are resolved: v2 can
-execute an M-mode UART smoke, reach the OpenSBI platform-probe milestone
+Stage 3 is functionally through the trimmed initramfs Linux boot milestone on
+the Verilator backup simulator. The first platform blockers are resolved: v2
+can execute an M-mode UART smoke, reach the OpenSBI platform-probe milestone
 through device-visible UART and CLINT paths, pass the full RV64GC instruction
-compliance prerequisite, and reach Linux early console while preserving the
+compliance prerequisite, reach Linux early console, initialize the UART driver,
+hand off to `/init`, and emit the final `BOOT OK` marker while preserving the
 DS/CM performance gate.
 
 - v2 has the right clean core boundary for ASIC-style Linux bring-up.
@@ -4470,26 +4496,25 @@ DS/CM performance gate.
   open.
 - v2 now has a coherent 128 MB trimmed Linux image path and can execute OpenSBI
   through S-mode payload handoff from that image. It reaches Linux early
-  console. The previous Oops path is fixed by frontend owner-line identity
-  and runahead-successor ordering repairs, and the later 11.668M frontend
-  no-progress point is fixed by ICQ future-line capture/drop for active and
-  next FTQ owners. The clean-payload `timebase-frequency`, timer-vector,
-  `bad_range+0xc`, and scheduler-atomic panic classes each have directed
+  console, `riscv_clocksource`, the NS16550 UART driver, `loop`, plist self
+  test, `/init`, and `BOOT OK`. The previous Oops paths are fixed or
+  classified as stale, and the later frontend no-progress, clean-payload
+  `timebase-frequency`, timer-vector, `bad_range+0xc`, scheduler-atomic,
+  lost-load-owner, and L1D write-through dirty-evict classes each have directed
   root-cause evidence and repaired RTL candidates with DS/CM guard coverage.
-  The latest AMO/SC commit-precision repair passes the old scheduler panic
-  window to 19M cycles and reaches `clocksource: riscv_clocksource`,
-  `sched_clock`, and mount-cache setup without a kernel panic.
-- v2 has reached the Linux `riscv_clocksource` console banner and scheduler
-  setup in the latest path, but it does not yet reach the UART driver milestone,
-  Linux-visible PLIC/external interrupts, or validated Linux timer behavior.
+- v2 has not yet completed a full DSim `BOOT OK` replay. DSim remains the
+  primary simulator for signoff when a license and runtime window are
+  available; Verilator remains the approved backup for long turnaround when
+  DSim is blocked.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 action is not to wait blindly. Rebuild the DSim Linux image
-from the current worktree and capture the no-commit LQ/LMB dump for the
-`mtimer_event_start` freeze. If a fresh UART-visible `Oops`, `BUG`, or panic
-appears instead, use that exact run as the root-cause artifact. Do not add
-debug logic to synthesizable core RTL. Any RTL change on that path must still
-pass impacted compliance tests and the DS/CM hard guard before promotion.
-Sv39 should stay as a directed-test subset, but the primary Linux path is
-four-level Sv48 because that matches the intended Linux signoff configuration.
+The next Stage 3 action is to decide whether the Verilator `BOOT OK` proof is
+sufficient for this phase closeout or whether a DSim `BOOT OK` replay is
+required before signoff. If a fresh UART-visible `Oops`, `BUG`, panic,
+lost-owner, no-commit, or trap stop appears in a future run, use that exact
+run as the root-cause artifact. Do not add debug logic to synthesizable core
+RTL. Any RTL change on that path must still pass impacted compliance tests and
+the DS/CM hard guard before promotion. Sv39 should stay as a directed-test
+subset, but the primary Linux path is four-level Sv48 because that matches the
+intended Linux signoff configuration.
