@@ -4475,6 +4475,11 @@ Primary-simulator replay status:
   and no no-commit stop.  The UART log has crossed OpenSBI domain setup and
   Linux early console; this remains progress evidence only, not final boot
   proof.
+- Follow-up polling shows the same DSim replay has also reached the Linux
+  `riscv_clocksource` banner, `sched_clock`, `devtmpfs: initialized`, and the
+  `clocksource: jiffies` line.  The run is still active and clean, with no
+  UART `Oops`, `BUG:`, `Unable to handle`, `Kernel panic`, lost-owner,
+  no-commit, or trap stop marker.
 
 ## Near-Term Non-Goals
 
