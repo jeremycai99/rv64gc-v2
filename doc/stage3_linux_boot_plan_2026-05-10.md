@@ -4470,6 +4470,11 @@ Primary-simulator replay status:
   same rebuilt payload and the same lost-owner, no-commit, trap-value, Oops,
   and panic stop policy.  This row is not proof until it emits a `PASS`
   summary or a first-failure artifact.
+- The same DSim replay reached the `10,000,000` cycle status checkpoint with
+  active retirement, `trap=0`, no UART failure marker, no lost-load-owner stop,
+  and no no-commit stop.  The UART log has crossed OpenSBI domain setup and
+  Linux early console; this remains progress evidence only, not final boot
+  proof.
 
 ## Near-Term Non-Goals
 
