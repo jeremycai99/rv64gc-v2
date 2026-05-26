@@ -12,6 +12,8 @@ FLATTEN="${VERILATOR_FLATTEN:-1}"
 X_MODE="${VERILATOR_X_MODE:-0}"
 TRACE="${VERILATOR_TRACE:-0}"
 REPORT_UNOPTFLAT="${VERILATOR_REPORT_UNOPTFLAT:-1}"
+THREADS="${VERILATOR_THREADS:-0}"
+EXTRA_CFLAGS="${VERILATOR_CFLAGS:-}"
 
 if ! command -v "$VERILATOR_BIN" >/dev/null 2>&1; then
     echo "ERROR: Verilator not found: $VERILATOR_BIN"
@@ -53,11 +55,22 @@ if [[ "$TRACE" != "0" ]]; then
     TRACE_ARGS=("--trace")
 fi
 
-"$VERILATOR_BIN" --binary --timing "${TRACE_ARGS[@]}" "${FLATTEN_ARGS[@]}" \
+THREAD_ARGS=()
+if [[ "$THREADS" != "0" ]]; then
+    THREAD_ARGS=("--threads" "$THREADS")
+fi
+
+CFLAGS_ARGS=()
+if [[ -n "$EXTRA_CFLAGS" ]]; then
+    CFLAGS_ARGS=("-CFLAGS" "$EXTRA_CFLAGS")
+fi
+
+"$VERILATOR_BIN" --binary --timing "${TRACE_ARGS[@]}" "${FLATTEN_ARGS[@]}" "${THREAD_ARGS[@]}" \
     --converge-limit "$CONVERGE_LIMIT" \
     --x-assign "$X_MODE" \
     --x-initial "$X_MODE" \
     -j "$JOBS" \
+    "${CFLAGS_ARGS[@]}" \
     -DSIMULATION \
     -Iexternal/cvfpu-src/src/common_cells/include \
     -Wno-WIDTHEXPAND \

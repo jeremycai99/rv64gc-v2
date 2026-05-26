@@ -35,6 +35,7 @@ metrics.db
 # Verilator simulator artefacts
 verilator_work/
 verilator_linux_work/
+verilator_linux_work*/
 
 # xsim simulator artefacts
 xsim.dir/
