@@ -4484,6 +4484,12 @@ Primary-simulator replay status:
   active retirement, `trap=0`, no lost-owner stop, no no-commit stop, and
   `timecmp` programmed.  This crosses the early Linux timer/clocksource setup
   region under the primary simulator, but final `BOOT OK` remains pending.
+- The same DSim replay crossed
+  `clocksource: Switched to clocksource riscv_clocksource` and reached the
+  `30,000,000` cycle status checkpoint.  The status row still has active
+  retirement, `trap=0`, no lost-owner stop, no no-commit stop, and no UART
+  failure marker.  This validates the previously suspicious clocksource/timer
+  region under the primary simulator.
 
 ## Near-Term Non-Goals
 
