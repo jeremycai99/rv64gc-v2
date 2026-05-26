@@ -4480,6 +4480,10 @@ Primary-simulator replay status:
   `clocksource: jiffies` line.  The run is still active and clean, with no
   UART `Oops`, `BUG:`, `Unable to handle`, `Kernel panic`, lost-owner,
   no-commit, or trap stop marker.
+- The same DSim replay reached the `20,000,000` cycle status checkpoint with
+  active retirement, `trap=0`, no lost-owner stop, no no-commit stop, and
+  `timecmp` programmed.  This crosses the early Linux timer/clocksource setup
+  region under the primary simulator, but final `BOOT OK` remains pending.
 
 ## Near-Term Non-Goals
 
