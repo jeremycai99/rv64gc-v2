@@ -4385,22 +4385,22 @@ Post-loop `/init` proof progress:
   plain `nohup` background attempt, but it did not survive the launching tool
   session and left empty logs.  Do not use that directory as boot evidence.
 - `linux_boot_results/stage3_post_l1d_init_verilator_20260525c_bg` is the
-  active managed background `/init` proof, launched with `setsid` so it is not
-  tied to an interactive tool session.  It uses the same rebuilt Verilator
+  completed managed background `/init` proof, launched with `setsid` so it was
+  not tied to an interactive tool session.  It used the same rebuilt Verilator
   binary, `500,000,000` max cycles, target milestone `init_handoff`
   (`Run /init as init process`), and the same fault, lost-load-owner, and
-  no-commit stop hooks.  Check `pids.txt`, `runner.setsid.log`,
-  `verilator.log`, `uart.log`, and `summary.json` in that directory for
-  completion.
-- Current evidence from that detached run: it reached clean `10,000,000`
-  through `100,000,000` cycle status checkpoints.  The `100,000,000` snapshot
-  had `mcycle=100,000,000`, `minstret=71,057,133`, active retirement,
-  `last_commit_cyc=99,999,995`, `trap=0`, no UART Oops, no `Unable to handle`,
-  no kernel panic, no lost-load-owner stop, and no no-commit stop.  Its UART
-  log reached `clocksource: Switched to clocksource riscv_clocksource`,
-  `Serial: 8250/16550`, `SuperH (H)SCI(F) driver initialized`, and
-  `loop: module loaded`.  The run remains active toward the `init_handoff`
-  target.
+  no-commit stop hooks.
+- That detached run passed with status `PASS` and reason `reached target
+  milestone: Initramfs handoff`.  Its UART reached `loop: module loaded`,
+  `start plist test`, `end plist test`, `clk: Disabling unused clocks`,
+  `Freeing unused kernel image`, and `Run /init as init process`.  The final
+  matched cycle was `119,668,638`; the final Verilator IPC line reported
+  `mcycle=100,168,715`, `minstret=71,167,037`, and `IPC=0.710472`.
+- The `/init` proof has no UART `Oops`, no `Unable to handle`, no kernel
+  panic, no lost-load-owner stop, no no-commit stop, and no trap stop.
+  However, it is only the initramfs handoff milestone.  Stage 3 Linux boot is
+  not complete until the tiny initramfs emits the final `BOOT OK` marker or a
+  replacement final userspace pass condition is explicitly adopted.
 
 ## Near-Term Non-Goals
 
