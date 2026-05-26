@@ -4393,12 +4393,14 @@ Post-loop `/init` proof progress:
   `verilator.log`, `uart.log`, and `summary.json` in that directory for
   completion.
 - Current evidence from that detached run: it reached clean `10,000,000`
-  through `60,000,000` cycle status checkpoints.  The `60,000,000` snapshot
-  had `mcycle=60,000,000`, `minstret=44,494,924`, active retirement,
-  `last_commit_cyc=59,999,991`, `trap=0`, no UART Oops, no `Unable to handle`,
+  through `100,000,000` cycle status checkpoints.  The `100,000,000` snapshot
+  had `mcycle=100,000,000`, `minstret=71,057,133`, active retirement,
+  `last_commit_cyc=99,999,995`, `trap=0`, no UART Oops, no `Unable to handle`,
   no kernel panic, no lost-load-owner stop, and no no-commit stop.  Its UART
-  log reached `clocksource: Switched to clocksource riscv_clocksource`; later
-  status snapshots show timer MMIO activity and continued S-mode retirement.
+  log reached `clocksource: Switched to clocksource riscv_clocksource`,
+  `Serial: 8250/16550`, `SuperH (H)SCI(F) driver initialized`, and
+  `loop: module loaded`.  The run remains active toward the `init_handoff`
+  target.
 
 ## Near-Term Non-Goals
 
