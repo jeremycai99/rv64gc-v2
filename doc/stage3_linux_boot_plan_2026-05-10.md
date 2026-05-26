@@ -4392,12 +4392,13 @@ Post-loop `/init` proof progress:
   no-commit stop hooks.  Check `pids.txt`, `runner.setsid.log`,
   `verilator.log`, `uart.log`, and `summary.json` in that directory for
   completion.
-- Current evidence from that detached run: it reached clean `10,000,000` and
-  `20,000,000` cycle status checkpoints.  The `20,000,000` snapshot had
-  `mcycle=20,000,000`, `minstret=16,222,157`, active retirement,
-  `last_commit_cyc=19,999,998`, `trap=0`, no UART Oops, no `Unable to handle`,
+- Current evidence from that detached run: it reached clean `10,000,000`
+  through `60,000,000` cycle status checkpoints.  The `60,000,000` snapshot
+  had `mcycle=60,000,000`, `minstret=44,494,924`, active retirement,
+  `last_commit_cyc=59,999,991`, `trap=0`, no UART Oops, no `Unable to handle`,
   no kernel panic, no lost-load-owner stop, and no no-commit stop.  Its UART
-  log reached `clocksource: Switched to clocksource riscv_clocksource`.
+  log reached `clocksource: Switched to clocksource riscv_clocksource`; later
+  status snapshots show timer MMIO activity and continued S-mode retirement.
 
 ## Near-Term Non-Goals
 
