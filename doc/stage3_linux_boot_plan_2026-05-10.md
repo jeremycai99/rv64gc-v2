@@ -4502,6 +4502,15 @@ Primary-simulator replay status:
   `mtimer_event_start` lost-load-owner failure at cycle `62,720,645` under
   the primary simulator.  The historical lost-load-owner blocker is therefore
   not reproduced by the current rebuilt image and RTL in this replay.
+- The same DSim replay reached the `90,000,000` cycle checkpoint and then the
+  `100,000,000` cycle checkpoint cleanly.  UART reached
+  `Serial: 8250/16550 driver`, `loop: module loaded`, and `start plist test`.
+  The `100,000,000` row has active retirement, `trap=0`, no lost-owner stop,
+  no no-commit stop, and no UART `Oops`, `BUG:`, `Unable to handle`, or
+  `Kernel panic` marker.  This crosses the old v1-trimmed kernfs
+  NULL-parent-pointer Oops window at cycle `97,345,681` under DSim.  The
+  historical `0x8` Oops is therefore not reproduced by the current rebuilt
+  image and RTL in this replay.
 
 ## Near-Term Non-Goals
 
