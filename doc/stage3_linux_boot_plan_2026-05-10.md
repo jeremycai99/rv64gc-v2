@@ -4402,6 +4402,26 @@ Post-loop `/init` proof progress:
   not complete until the tiny initramfs emits the final `BOOT OK` marker or a
   replacement final userspace pass condition is explicitly adopted.
 
+BOOT OK marker visibility update:
+
+- The completed `/init` proof also printed
+  `Warning: unable to open an initial console.`  That means the original
+  initramfs program, which only wrote `BOOT OK` to `STDOUT_FILENO`, could reach
+  userspace without making the final pass marker observable on UART.
+- `sw/linux_boot/initramfs/init.c` now creates `/dev/console` as character
+  device `5:1`, opens it with `O_WRONLY | O_NOCTTY`, writes `BOOT OK` to that
+  console fd, and falls back to stdout only if the console open fails.  This is
+  a Linux boot harness fix, not an RTL change, and it keeps the pass/fail path
+  platform-visible instead of reintroducing `tohost`.
+- `linux_boot_results/stage3_bootok_console_rebuild_20260526a` rebuilt the
+  Linux payload from that source.  The rebuilt initramfs binary contains both
+  `/dev/console` and `BOOT OK`.
+- `linux_boot_results/stage3_bootok_console_verilator_20260526a_bg` is the
+  active Verilator backup proof from the rebuilt payload, with target milestone
+  `boot_ok`, `140,000,000` max cycles, and the same lost-owner, no-commit,
+  trap-value, Oops, and panic stop hooks.  Treat this run as the next authority
+  for whether Stage 3 reaches the final userspace marker.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
