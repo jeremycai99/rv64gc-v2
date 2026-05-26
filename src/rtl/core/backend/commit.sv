@@ -1,5 +1,5 @@
 /* file: commit.sv
- Description: Six-wide in-order commit unit with checkpoint recovery.
+ Description: PIPE_WIDTH-wide in-order commit unit with checkpoint recovery.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
@@ -197,7 +197,7 @@ module commit
             slot_can_commit[i] = 1'b0;
         end
 
-        // Scan slots 0..5 in order, stopping at the first gap
+        // Scan slots 0 through PIPE_WIDTH-1 in order, stopping at the first gap
         for (int i = 0; i < PIPE_WIDTH; i++) begin
             // Stop if we already found an exception, mispredict, return,
             // replay, or gap.

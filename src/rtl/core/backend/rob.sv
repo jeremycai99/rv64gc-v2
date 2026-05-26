@@ -11,8 +11,8 @@ module rob
     input  logic clk,
     input  logic rst_n,
 
-    // Allocate: up to 6 entries per cycle from rename
-    input  logic [2:0]              alloc_count,     // 0..6 valid entries to allocate
+    // Allocate: up to PIPE_WIDTH entries per cycle from rename
+    input  logic [2:0]              alloc_count,     // 0..PIPE_WIDTH valid entries to allocate
     output logic [ROB_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],  // allocated ROB indices
     output logic                    alloc_ready,     // can accept alloc_count entries
     input  logic [PIPE_WIDTH-1:0]   alloc_ready_now, // entries complete at rename
@@ -42,7 +42,7 @@ module rob
     input  logic [PIPE_WIDTH-1:0]   alloc_is_div,
     input  logic [PIPE_WIDTH-1:0]   alloc_is_bru,
 
-    // Writeback: CDB marks entries as complete (up to 6 per cycle)
+    // Writeback: CDB marks up to CDB_WIDTH entries as complete
     input  logic [CDB_WIDTH-1:0]              wb_valid,
     input  logic [ROB_IDX_BITS-1:0]           wb_idx [0:CDB_WIDTH-1],
     input  logic [CDB_WIDTH-1:0]              wb_has_exception,
@@ -102,7 +102,7 @@ module rob
 
     // Commit: read head entries for commit unit
     output logic [ROB_IDX_BITS-1:0]           head_idx,
-    output logic [PIPE_WIDTH-1:0]             head_valid,     // which of the 6 head entries are valid
+    output logic [PIPE_WIDTH-1:0]             head_valid,     // which head entries are valid
     output logic [PIPE_WIDTH-1:0]             head_ready,     // which are completed (ready to retire)
     output logic [63:0]                       head_pc [0:PIPE_WIDTH-1],
     output logic [63:0]                       head_trap_pc [0:PIPE_WIDTH-1],
@@ -134,7 +134,7 @@ module rob
     output logic [4:0]                        head_fp_fflags [0:PIPE_WIDTH-1],
 
     // Commit acknowledgment: advance head pointer
-    input  logic [2:0]              commit_count,    // 0..6 entries committed this cycle
+    input  logic [2:0]              commit_count,    // 0..PIPE_WIDTH entries committed this cycle
 
     // Flush
     input  logic                    flush_valid,
