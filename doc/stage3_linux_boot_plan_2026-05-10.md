@@ -4490,6 +4490,12 @@ Primary-simulator replay status:
   retirement, `trap=0`, no lost-owner stop, no no-commit stop, and no UART
   failure marker.  This validates the previously suspicious clocksource/timer
   region under the primary simulator.
+- The same DSim replay reached the `40,000,000`, `50,000,000`, and
+  `60,000,000` cycle status checkpoints.  All three rows still show active
+  retirement, `trap=0`, programmed timer compares, no lost-owner stop, no
+  no-commit stop, and no UART `Oops`, `BUG:`, `Unable to handle`, or
+  `Kernel panic` marker.  This remains progress evidence only: the run is
+  still active and has not yet reached the DSim `BOOT OK` pass condition.
 
 ## Near-Term Non-Goals
 
