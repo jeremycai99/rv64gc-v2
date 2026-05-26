@@ -4496,6 +4496,12 @@ Primary-simulator replay status:
   no-commit stop, and no UART `Oops`, `BUG:`, `Unable to handle`, or
   `Kernel panic` marker.  This remains progress evidence only: the run is
   still active and has not yet reached the DSim `BOOT OK` pass condition.
+- The same DSim replay reached the `70,000,000` cycle status checkpoint with
+  active retirement, `trap=0`, no lost-owner stop, no no-commit stop, and no
+  UART failure marker.  This crosses the old deterministic OpenSBI
+  `mtimer_event_start` lost-load-owner failure at cycle `62,720,645` under
+  the primary simulator.  The historical lost-load-owner blocker is therefore
+  not reproduced by the current rebuilt image and RTL in this replay.
 
 ## Near-Term Non-Goals
 
