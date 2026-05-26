@@ -4361,6 +4361,38 @@ Validation status for this slice:
   v1-valid `loop` milestone.  It does not yet claim full `/init` completion;
   the next Linux proof should continue from the clean post-loop state.
 
+Post-loop `/init` proof progress:
+
+- `linux_boot_results/stage3_post_l1d_init_dsim_20260525a` was a foreground
+  DSim `/init` proof from the same rebuilt image.  It was stopped manually
+  after a clean `10,000,000` cycle checkpoint because the full `500,000,000`
+  cycle proof was too slow for interactive debug.  The checkpoint had active
+  retirement, `trap=0`, no UART Oops, no `Unable to handle`, no kernel panic,
+  no lost-load-owner stop, and no no-commit stop.
+- `linux_boot_results/stage3_post_l1d_verilator_rebuild_20260525a` rebuilt the
+  Stage 3 Verilator Linux binary from the current worktree.  The build
+  completed without the previous runtime convergence blocker.
+- `linux_boot_results/stage3_post_l1d_init_verilator_20260525a` was the first
+  foreground Verilator `/init` proof from that rebuilt binary.  It was stopped
+  manually after a clean `20,000,000` cycle checkpoint to relaunch as a managed
+  background run.  It crossed the high-half VM transition, memory-zone setup,
+  `clocksource: riscv_clocksource`, `sched_clock`, `devtmpfs`, and
+  `clocksource: Switched to clocksource riscv_clocksource`.  Both the
+  `10,000,000` and `20,000,000` status snapshots had active retirement,
+  `trap=0`, no UART Oops, no `Unable to handle`, no kernel panic, no
+  lost-load-owner stop, and no no-commit stop.
+- `linux_boot_results/stage3_post_l1d_init_verilator_20260525b_bg` was a
+  plain `nohup` background attempt, but it did not survive the launching tool
+  session and left empty logs.  Do not use that directory as boot evidence.
+- `linux_boot_results/stage3_post_l1d_init_verilator_20260525c_bg` is the
+  active managed background `/init` proof, launched with `setsid` so it is not
+  tied to an interactive tool session.  It uses the same rebuilt Verilator
+  binary, `500,000,000` max cycles, target milestone `init_handoff`
+  (`Run /init as init process`), and the same fault, lost-load-owner, and
+  no-commit stop hooks.  Check `pids.txt`, `runner.setsid.log`,
+  `verilator.log`, `uart.log`, and `summary.json` in that directory for
+  completion.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
