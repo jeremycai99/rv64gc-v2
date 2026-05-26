@@ -4446,6 +4446,31 @@ Current Oops classification against the v1 reference:
   post-fix `loop` proof and the Verilator `BOOT OK` proof both cross the old
   Oops window cleanly.
 
+Fresh current-tree performance guard:
+
+- `benchmark_results/stage3_rtl_guard_20260526_bootok_current_guard` rebuilt
+  the DSim benchmark image from the current worktree and reran the Stage 3
+  DS/CM hard guard after the Verilator `BOOT OK` proof.
+- The only uncommitted RTL differences at the time of this guard were
+  comment-only wording updates in `commit.sv` and `rob.sv`; no core semantic
+  RTL changed after the committed L1D/L2 repair.
+- The guard passed all required rows within the `0.01%` no-regression rule:
+  DS100 `3.150055` DMIPS/MHz, DS300 `3.218761` DMIPS/MHz, CM1 `6.649113`
+  CoreMark/MHz, and CM10 `6.851483` CoreMark/MHz.
+- Diagnostic timed cycles also moved in the favorable direction versus the
+  locked Stage 3 baseline: DS100 `18,068` vs `18,161`, DS300 `53,047` vs
+  `53,469`, CM1 `150,396` vs `154,233`, and CM10 `1,459,538` vs `1,491,334`.
+
+Primary-simulator replay status:
+
+- `linux_boot_results/stage3_bootok_console_dsim_rebuild_20260526a` rebuilt
+  the DSim Linux platform image from the current worktree.
+- `linux_boot_results/stage3_bootok_console_dsim_20260526a_bg` is now the
+  primary DSim replay attempt for the final `boot_ok` milestone, using the
+  same rebuilt payload and the same lost-owner, no-commit, trap-value, Oops,
+  and panic stop policy.  This row is not proof until it emits a `PASS`
+  summary or a first-failure artifact.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
