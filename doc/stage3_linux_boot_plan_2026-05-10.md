@@ -4465,11 +4465,10 @@ Primary-simulator replay status:
 
 - `linux_boot_results/stage3_bootok_console_dsim_rebuild_20260526a` rebuilt
   the DSim Linux platform image from the current worktree.
-- `linux_boot_results/stage3_bootok_console_dsim_20260526a_bg` is now the
-  primary DSim replay attempt for the final `boot_ok` milestone, using the
+- `linux_boot_results/stage3_bootok_console_dsim_20260526a_bg` is the
+  completed primary DSim replay for the final `boot_ok` milestone, using the
   same rebuilt payload and the same lost-owner, no-commit, trap-value, Oops,
-  and panic stop policy.  This row is not proof until it emits a `PASS`
-  summary or a first-failure artifact.
+  and panic stop policy.
 - The same DSim replay reached the `10,000,000` cycle status checkpoint with
   active retirement, `trap=0`, no UART failure marker, no lost-load-owner stop,
   and no no-commit stop.  The UART log has crossed OpenSBI domain setup and
@@ -4511,6 +4510,13 @@ Primary-simulator replay status:
   NULL-parent-pointer Oops window at cycle `97,345,681` under DSim.  The
   historical `0x8` Oops is therefore not reproduced by the current rebuilt
   image and RTL in this replay.
+- The same DSim replay then reached `end plist test`, `Freeing unused kernel
+  image`, `Run /init as init process`, and finally `BOOT OK`.  The run
+  completed with status `PASS`, reason
+  `reached target milestone: Initramfs BOOT OK`, and matched the UART pass
+  marker at cycle `121,274,074`.  A final failure-marker scan found no
+  `Oops`, `BUG:`, `Unable to handle`, `Kernel panic`, `LINUX_STOP`,
+  lost-owner, no-commit, or convergence marker in the DSim or UART logs.
 
 ## Near-Term Non-Goals
 
@@ -4530,12 +4536,13 @@ Primary-simulator replay status:
 | CLINT or ACLINT? | CLINT is acceptable for first boot because v1 already used it; ACLINT can replace it later if we want newer platform naming. |
 | ELF loader or hex only? | Add ELF/binary loading in the runner or memory model. Keep byte-hex compatibility for existing tests. |
 | How to stop the sim? | UART milestone or syscon poweroff. Never a core `tohost` port. |
-| What is the first success milestone? | OpenSBI platform probe, full RV64GC instruction compliance, Linux early console, `riscv_clocksource`, UART driver bring-up, `/init` handoff, and Verilator initramfs `BOOT OK` are achieved. A DSim `BOOT OK` replay remains optional signoff evidence. |
+| What is the first success milestone? | OpenSBI platform probe, full RV64GC instruction compliance, Linux early console, `riscv_clocksource`, UART driver bring-up, `/init` handoff, and initramfs `BOOT OK` are achieved on both primary DSim and Verilator backup evidence. |
 
 ## Current Verdict
 
 Stage 3 is functionally through the trimmed initramfs Linux boot milestone on
-the Verilator backup simulator. The first platform blockers are resolved: v2
+the primary DSim simulator and the Verilator backup simulator. The first
+platform blockers are resolved: v2
 can execute an M-mode UART smoke, reach the OpenSBI platform-probe milestone
 through device-visible UART and CLINT paths, pass the full RV64GC instruction
 compliance prerequisite, reach Linux early console, initialize the UART driver,
@@ -4568,19 +4575,18 @@ DS/CM performance gate.
   `timebase-frequency`, timer-vector, `bad_range+0xc`, scheduler-atomic,
   lost-load-owner, and L1D write-through dirty-evict classes each have directed
   root-cause evidence and repaired RTL candidates with DS/CM guard coverage.
-- v2 has not yet completed a full DSim `BOOT OK` replay. DSim remains the
-  primary simulator for signoff when a license and runtime window are
-  available; Verilator remains the approved backup for long turnaround when
-  DSim is blocked.
+- v2 completed the full DSim `BOOT OK` replay in
+  `linux_boot_results/stage3_bootok_console_dsim_20260526a_bg`.  DSim remains
+  the primary simulator for signoff; Verilator remains the approved backup for
+  long turnaround when DSim is blocked.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-The next Stage 3 action is to decide whether the Verilator `BOOT OK` proof is
-sufficient for this phase closeout or whether a DSim `BOOT OK` replay is
-required before signoff. If a fresh UART-visible `Oops`, `BUG`, panic,
-lost-owner, no-commit, or trap stop appears in a future run, use that exact
-run as the root-cause artifact. Do not add debug logic to synthesizable core
-RTL. Any RTL change on that path must still pass impacted compliance tests and
-the DS/CM hard guard before promotion. Sv39 should stay as a directed-test
-subset, but the primary Linux path is four-level Sv48 because that matches the
-intended Linux signoff configuration.
+Stage 3 Linux boot is closed for the trimmed initramfs target.  If a fresh
+UART-visible `Oops`, `BUG`, panic, lost-owner, no-commit, or trap stop appears
+in a future broader-image or feature-expansion run, use that exact run as the
+root-cause artifact. Do not add debug logic to synthesizable core RTL. Any RTL
+change on that path must still pass impacted compliance tests and the DS/CM
+hard guard before promotion. Sv39 should stay as a directed-test subset, but
+the primary Linux path is four-level Sv48 because that matches the intended
+Linux signoff configuration.
