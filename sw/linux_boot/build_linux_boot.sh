@@ -239,8 +239,8 @@ CONFIG_LOCALVERSION="$LINUX_LOCALVERSION"
 CONFIG_LOCALVERSION_AUTO=n
 CONFIG_DEFAULT_HOSTNAME="rv64gc-v2"
 CONFIG_MMU=y
-CONFIG_NONPORTABLE=y
-CONFIG_PORTABLE=n
+CONFIG_NONPORTABLE=n
+CONFIG_PORTABLE=y
 CONFIG_RELOCATABLE=y
 CONFIG_PGTABLE_LEVELS=4
 CONFIG_RISCV_ISA_C=y
@@ -252,9 +252,11 @@ CONFIG_RISCV_ISA_SVNAPOT=n
 CONFIG_RISCV_ISA_SVPBMT=n
 CONFIG_RISCV_ISA_FALLBACK=y
 CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_DMA=n
 CONFIG_SERIAL_8250_CONSOLE=y
 CONFIG_SERIAL_EARLYCON=y
 CONFIG_SERIAL_EARLYCON_RISCV_SBI=y
+CONFIG_SERIAL_SH_SCI_DMA=n
 CONFIG_HVC_RISCV_SBI=y
 CONFIG_RISCV_SBI_V01=y
 CONFIG_RISCV_TIMER=y
@@ -318,14 +320,53 @@ CONFIG_COMPAT=n
 CONFIG_KEYS=n
 CONFIG_SECURITY=n
 CONFIG_INTEGRITY=n
-CONFIG_LSM=""
+CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,bpf"
 CONFIG_DEBUG_INFO_NONE=y
+CONFIG_SOC_SIFIVE=n
+CONFIG_SOC_STARFIVE=n
+CONFIG_SOC_VIRT=n
+CONFIG_ARCH_SIFIVE=n
+CONFIG_ARCH_STARFIVE=n
+CONFIG_ARCH_VIRT=n
+CONFIG_ARCH_THEAD=n
+CONFIG_I2C=n
+CONFIG_SPI=n
+CONFIG_THERMAL=n
+CONFIG_RTC_CLASS=n
+CONFIG_DEBUG_VM_PGTABLE=n
 SIMCFG
 
     linux_make defconfig -j"$NPROC"
     (
         cd "$LINUX_DIR"
         scripts/kconfig/merge_config.sh -m .config "$simcfg"
+        scripts/config \
+            --enable PORTABLE \
+            --disable NONPORTABLE \
+            --disable SOC_SIFIVE \
+            --disable SOC_STARFIVE \
+            --disable SOC_VIRT \
+            --disable ARCH_SIFIVE \
+            --disable ARCH_STARFIVE \
+            --disable ARCH_VIRT \
+            --disable ARCH_THEAD \
+            --disable I2C \
+            --disable SPI \
+            --disable THERMAL \
+            --disable RTC_CLASS \
+            --disable SERIAL_8250_DMA \
+            --disable SERIAL_SH_SCI_DMA \
+            --disable DEBUG_VM_PGTABLE \
+            --disable PCI \
+            --disable KVM \
+            --disable SCSI \
+            --disable ATA \
+            --disable MD \
+            --disable RAID6_PQ \
+            --disable RAID6_PQ_BENCHMARK \
+            --disable XOR_BLOCKS \
+            --disable MMC \
+            --disable BTRFS_FS
     )
     linux_make olddefconfig
     linux_make -j"$NPROC" Image

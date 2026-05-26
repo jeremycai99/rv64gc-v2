@@ -4259,7 +4259,7 @@ Pending Linux confirmation:
 
 ### 2026-05-25 Kernfs Oops L1D Write-Through Dirty-Evict Root Cause
 
-The current UART-visible Oops is not aligned with the earlier OpenSBI
+The May 25 UART-visible Oops is not aligned with the earlier OpenSBI
 `mtimer_event_start` lost-load-owner failure.  The fresh failure is a Linux
 `kernfs_add_one` NULL parent-pointer dereference:
 
@@ -4337,19 +4337,29 @@ Validation status for this slice:
 - Basic Sv48 VM smoke rows pass under Verilator.  The existing timer-vector
   VM rows still time out, matching older xsim evidence, so they are not yet
   attributed to this L2 change.
-- A DSim Linux proof was started but was too slow for interactive root-cause
-  confirmation and was intentionally stopped after entering early Linux.
 - `linux_boot_results/stage3_l1d_writethrough_clean_kernfs_trace_verilator_20260525b`
   crossed the old `26,203,308` kernfs Oops point and timed out cleanly at
   `26,350,000` cycles with no `LINUX_STOP_TRAP`, no UART Oops, and no kernel
   panic.
+- `linux_boot_results/stage3_post_l1d_rebuild_auto_20260525b` rebuilt the
+  DSim Linux image from the current worktree after the L1D/L2 repair.
+- `linux_boot_results/stage3_post_l1d_loop_dsim_20260525a` is the
+  authoritative post-rebuild DSim proof for this Oops window.  It matched
+  `loop: module loaded` at cycle `99,089,155`, with
+  `mcycle=99,089,155`, `minstret=70,829,664`, and `IPC=0.714807`.
+- That DSim proof crosses both the older OpenSBI lost-load-owner point at
+  `62,720,645` cycles and the v1-trimmed kernfs Oops point at `97,345,681`
+  cycles.  The UART log reaches `Serial: 8250/16550`, enables `ttyS0`,
+  reaches `SuperH (H)SCI(F) driver initialized`, then reaches
+  `loop: module loaded` with no `Oops`, no `Unable to handle`, no
+  `Kernel panic`, no lost-load-owner stop, no no-commit stop, and no trap stop.
 - `benchmark_results/stage3_l1d_writethrough_clean_guard_dsim_20260525a`
   passed the Stage 3 DS/CM hard guard with the `0.01%` no-regression rule:
   DS100 `3.150055` DMIPS/MHz, DS300 `3.218761` DMIPS/MHz, CM1 `6.649113`
   CoreMark/MHz, CM10 `6.851483` CoreMark/MHz.
-- Next proof should be a longer DSim or Verilator Linux run past the current
-  focused window.  Do not claim full Linux boot completion from the focused
-  kernfs proof alone.
+- This promotes the L1D write-through dirty-evict fix as clean through the
+  v1-valid `loop` milestone.  It does not yet claim full `/init` completion;
+  the next Linux proof should continue from the clean post-loop state.
 
 ## Near-Term Non-Goals
 
