@@ -27,7 +27,22 @@ esac
 
 PROJ_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SW_DIR="$PROJ_DIR/sw/linux_boot"
-OUT_DIR="${OUT_DIR:-$PROJ_DIR/build/linux_boot}"
+LINUX_PROFILE="${LINUX_PROFILE:-trimmed}"
+case "$LINUX_PROFILE" in
+    trimmed|full)
+        ;;
+    *)
+        echo "ERROR: unsupported LINUX_PROFILE=$LINUX_PROFILE, expected trimmed or full" >&2
+        exit 2
+        ;;
+esac
+if [[ -z "${OUT_DIR:-}" ]]; then
+    if [[ "$LINUX_PROFILE" == "full" ]]; then
+        OUT_DIR="$PROJ_DIR/build/linux_boot_full"
+    else
+        OUT_DIR="$PROJ_DIR/build/linux_boot"
+    fi
+fi
 DTS="${DTS:-$SW_DIR/dts/rv64gc_v2_linux.dts}"
 DTB="${DTB:-$OUT_DIR/rv64gc_v2_linux.dtb}"
 LINUX_DIR="${LINUX_DIR:-$PROJ_DIR/../rv64gc-v1/sw/linux}"
@@ -279,20 +294,17 @@ CONFIG_BLK_DEV_LOOP=y
 CONFIG_DEBUG_PLIST=y
 CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y
 CONFIG_CRYPTO_TEST=n
-CONFIG_CRYPTO_AUTHENC=n
-CONFIG_CRYPTO_GCM=n
-CONFIG_CRYPTO_GENIV=n
-CONFIG_CRYPTO_SEQIV=n
-CONFIG_CRYPTO_ECHAINIV=n
-CONFIG_CRYPTO_DRBG_MENU=n
-CONFIG_CRYPTO_DRBG=n
-CONFIG_CRYPTO_JITTERENTROPY=n
-CONFIG_CRYPTO_SHA3=n
-CONFIG_CRYPTO_DEV_VIRTIO=n
+CONFIG_RAID6_PQ_BENCHMARK=n
 CONFIG_TTY=y
+CONFIG_BLOCK=y
+CONFIG_DEBUG_INFO_NONE=y
+CONFIG_DEBUG_VM_PGTABLE=n
+SIMCFG
+
+    if [[ "$LINUX_PROFILE" == "trimmed" ]]; then
+        cat >> "$simcfg" <<SIMCFG
 CONFIG_VT=n
 CONFIG_SWAP=n
-CONFIG_BLOCK=y
 CONFIG_NET=n
 CONFIG_INET=n
 CONFIG_WIRELESS=n
@@ -327,6 +339,16 @@ CONFIG_ACPI=n
 CONFIG_HW_RANDOM=n
 CONFIG_IOMMU_SUPPORT=n
 CONFIG_COMPAT=n
+CONFIG_CRYPTO_AUTHENC=n
+CONFIG_CRYPTO_GCM=n
+CONFIG_CRYPTO_GENIV=n
+CONFIG_CRYPTO_SEQIV=n
+CONFIG_CRYPTO_ECHAINIV=n
+CONFIG_CRYPTO_DRBG_MENU=n
+CONFIG_CRYPTO_DRBG=n
+CONFIG_CRYPTO_JITTERENTROPY=n
+CONFIG_CRYPTO_SHA3=n
+CONFIG_CRYPTO_DEV_VIRTIO=n
 CONFIG_KEYS=n
 CONFIG_SECURITY=n
 CONFIG_INTEGRITY=n
@@ -343,8 +365,12 @@ CONFIG_I2C=n
 CONFIG_SPI=n
 CONFIG_THERMAL=n
 CONFIG_RTC_CLASS=n
-CONFIG_DEBUG_VM_PGTABLE=n
 SIMCFG
+    else
+        cat >> "$simcfg" <<SIMCFG
+CONFIG_DRM_NOUVEAU=n
+SIMCFG
+    fi
 
     linux_make defconfig -j"$NPROC"
     (
@@ -353,30 +379,36 @@ SIMCFG
         scripts/config \
             --enable PORTABLE \
             --disable NONPORTABLE \
-            --disable SOC_SIFIVE \
-            --disable SOC_STARFIVE \
-            --disable SOC_VIRT \
-            --disable ARCH_SIFIVE \
-            --disable ARCH_STARFIVE \
-            --disable ARCH_VIRT \
-            --disable ARCH_THEAD \
-            --disable I2C \
-            --disable SPI \
-            --disable THERMAL \
-            --disable RTC_CLASS \
             --disable SERIAL_8250_DMA \
             --disable SERIAL_SH_SCI_DMA \
-            --disable DEBUG_VM_PGTABLE \
-            --disable PCI \
-            --disable KVM \
-            --disable SCSI \
-            --disable ATA \
-            --disable MD \
-            --disable RAID6_PQ \
             --disable RAID6_PQ_BENCHMARK \
-            --disable XOR_BLOCKS \
-            --disable MMC \
-            --disable BTRFS_FS
+            --disable DEBUG_VM_PGTABLE
+        if [[ "$LINUX_PROFILE" == "trimmed" ]]; then
+            scripts/config \
+                --disable SOC_SIFIVE \
+                --disable SOC_STARFIVE \
+                --disable SOC_VIRT \
+                --disable ARCH_SIFIVE \
+                --disable ARCH_STARFIVE \
+                --disable ARCH_VIRT \
+                --disable ARCH_THEAD \
+                --disable I2C \
+                --disable SPI \
+                --disable THERMAL \
+                --disable RTC_CLASS \
+                --disable PCI \
+                --disable KVM \
+                --disable SCSI \
+                --disable ATA \
+                --disable MD \
+                --disable RAID6_PQ \
+                --disable XOR_BLOCKS \
+                --disable MMC \
+                --disable BTRFS_FS
+        else
+            scripts/config \
+                --disable DRM_NOUVEAU
+        fi
     )
     linux_make olddefconfig
     linux_make -j"$NPROC" Image

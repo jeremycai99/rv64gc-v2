@@ -7,7 +7,10 @@ phase. The RV64GC instruction compliance prerequisite is closed on the current
 RTL candidate, the DS/CM hard performance gate remains mandatory after every
 RTL change, and the trimmed initramfs Linux target reaches `BOOT OK` on primary
 DSim and backup Verilator evidence. The latest May 27 console-node fix is a
-Linux image-build correction only; no RTL changed.
+Linux image-build correction only; no RTL changed. The next qualification step
+is a broader mainline-profile Linux image run using the same ASIC-style
+platform path, while preserving the trimmed image as the fast regression
+baseline.
 
 ## Goal
 
@@ -23,6 +26,40 @@ platform simulation stack:
 - print deterministic boot progress through a real platform console,
 - terminate simulation through platform-level events or log milestones, not
   through a core-specific `tohost` port.
+
+## Linux Image Profiles
+
+The Stage 3 flow now has two explicit Linux software profiles:
+
+- `trimmed`: fast boot baseline. This is the closed May 27 evidence path that
+  disables v1-absent or slow subsystems and reaches `BOOT OK` on DSim.
+- `full`: broad mainline-profile qualification. This keeps the normal RISC-V
+  `defconfig` driver and subsystem surface unless a setting is required by the
+  v2 platform or core capability. It still uses the optimized v2 boot handoff:
+  embedded initramfs, `/dev/console` in the initramfs spec, fixed UART/CLINT
+  DTB, normalized version metadata, single-hart execution, Sv48, and disabled
+  boot-time self-tests such as crypto tests and RAID6 benchmarking. The
+  non-platform Nouveau DRM driver is also disabled because the current v1
+  Linux source tree fails to build that driver and the v2 platform exposes no
+  GPU device.
+
+The full profile is no longer treated as methodology drift. A UART-visible
+`Oops`, `BUG`, panic, lost-owner, no-commit, or trap stop in this profile is a
+real Stage 3 debug artifact. Do not patch the kernel image to mask it. Root
+cause the core, MMU, memory hierarchy, platform device, or kernel-config
+contract that failed.
+
+Build and run examples:
+
+```bash
+python3 tools/run_linux_boot.py --build --build-mode linux --linux-profile full \
+  --run-dir linux_boot_results/stage3_full_mainline_rebuild_YYYYMMDDa
+
+python3 tools/run_linux_boot.py --run --simulator dsim --build-mode linux \
+  --linux-profile full --max-cycles 1000000000 \
+  --target-milestone boot_ok \
+  --run-dir linux_boot_results/stage3_full_mainline_dsim_1b_YYYYMMDDa
+```
 
 ## Ground Rules
 
@@ -4615,11 +4652,14 @@ DS/CM performance gate.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-Stage 3 Linux boot is closed for the trimmed initramfs target.  If a fresh
+Stage 3 Linux boot is closed for the trimmed initramfs target. The active
+follow-up is a full mainline-profile Linux qualification run using
+`LINUX_PROFILE=full` or `tools/run_linux_boot.py --linux-profile full`.  That
+run intentionally broadens the kernel subsystem surface again while retaining
+the v2 optimized boot handoff and platform-required constraints. If a fresh
 UART-visible `Oops`, `BUG`, panic, lost-owner, no-commit, or trap stop appears
-in a future broader-image or feature-expansion run, use that exact run as the
-root-cause artifact. Do not add debug logic to synthesizable core RTL. Any RTL
-change on that path must still pass impacted compliance tests and the DS/CM
-hard guard before promotion. Sv39 should stay as a directed-test subset, but
-the primary Linux path is four-level Sv48 because that matches the intended
-Linux signoff configuration.
+in that broader-image run, use that exact run as the root-cause artifact. Do
+not add debug logic to synthesizable core RTL. Any RTL change on that path must
+still pass impacted compliance tests and the DS/CM hard guard before promotion.
+Sv39 should stay as a directed-test subset, but the primary Linux path is
+four-level Sv48 because that matches the intended Linux signoff configuration.

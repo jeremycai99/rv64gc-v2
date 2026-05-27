@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -92,10 +93,15 @@ MILESTONE_IDS = [str(milestone["id"]) for milestone in MILESTONES]
 MILESTONE_BY_ID = {str(milestone["id"]): milestone for milestone in MILESTONES}
 
 
-def run_cmd(cmd: list[str], cwd: Path, log_path: Path | None) -> int:
+def run_cmd(
+    cmd: list[str],
+    cwd: Path,
+    log_path: Path | None,
+    env: dict[str, str] | None = None,
+) -> int:
     print("+ " + " ".join(cmd))
     if log_path is None:
-        return subprocess.run(cmd, cwd=cwd).returncode
+        return subprocess.run(cmd, cwd=cwd, env=env).returncode
     with log_path.open("w", encoding="utf-8") as log:
         proc = subprocess.run(
             cmd,
@@ -103,6 +109,7 @@ def run_cmd(cmd: list[str], cwd: Path, log_path: Path | None) -> int:
             stdout=log,
             stderr=subprocess.STDOUT,
             text=True,
+            env=env,
         )
     return proc.returncode
 
@@ -287,6 +294,17 @@ def main(argv: list[str] | None = None) -> int:
         default="smoke",
     )
     parser.add_argument(
+        "--linux-profile",
+        choices=("trimmed", "full"),
+        default=os.environ.get("LINUX_PROFILE", "trimmed"),
+        help=(
+            "Linux kernel image profile used by sw/linux_boot/build_linux_boot.sh. "
+            "'trimmed' is the fast Stage 3 boot baseline; 'full' keeps the "
+            "broader mainline defconfig surface with only platform-required "
+            "constraints and boot-test disables."
+        ),
+    )
+    parser.add_argument(
         "--image",
         type=Path,
         default=None,
@@ -391,7 +409,12 @@ def main(argv: list[str] | None = None) -> int:
             "linux": "fw_payload.hex",
             "all": "fw_payload.hex",
         }[args.build_mode]
-        args.image = REPO_ROOT / "build" / "linux_boot" / image_name
+        build_dir_name = (
+            "linux_boot_full"
+            if args.linux_profile == "full" and args.build_mode in ("linux", "all")
+            else "linux_boot"
+        )
+        args.image = REPO_ROOT / "build" / build_dir_name / image_name
 
     if args.target_milestone is None:
         if args.smoke_check or args.build_mode == "smoke":
@@ -462,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
                     "uart_log": "",
                     "sim_log": "",
                     "simulator": selected_simulator,
+                    "linux_profile": args.linux_profile,
                     "target_milestone": args.target_milestone,
                     "last_milestone": "",
                     "milestones_reached": [],
@@ -470,10 +494,19 @@ def main(argv: list[str] | None = None) -> int:
             return sim_build_rc
 
     if args.build:
+        build_env = os.environ.copy()
+        build_env["LINUX_PROFILE"] = args.linux_profile
+        if (
+            args.linux_profile == "full" and
+            args.build_mode in ("linux", "all") and
+            "OUT_DIR" not in build_env
+        ):
+            build_env["OUT_DIR"] = str(REPO_ROOT / "build" / "linux_boot_full")
         build_rc = run_cmd(
             ["bash", str(args.build_script), f"--{args.build_mode}"],
             REPO_ROOT,
             build_log,
+            build_env,
         )
         if build_rc != 0:
             summarize(
@@ -484,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
                     "image": str(args.image),
                     "uart_log": "",
                     "sim_log": "",
+                    "linux_profile": args.linux_profile,
                     "target_milestone": args.target_milestone,
                     "last_milestone": "",
                     "milestones_reached": [],
@@ -501,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
                 "uart_log": "",
                 "sim_log": "",
                 "simulator": selected_simulator,
+                "linux_profile": args.linux_profile,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
@@ -530,6 +565,7 @@ def main(argv: list[str] | None = None) -> int:
                 "image": str(image),
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
+                "linux_profile": args.linux_profile,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
@@ -546,6 +582,7 @@ def main(argv: list[str] | None = None) -> int:
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
                 "simulator": selected_simulator,
+                "linux_profile": args.linux_profile,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
@@ -562,6 +599,7 @@ def main(argv: list[str] | None = None) -> int:
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
                 "simulator": selected_simulator,
+                "linux_profile": args.linux_profile,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
@@ -578,6 +616,7 @@ def main(argv: list[str] | None = None) -> int:
                 "uart_log": str(uart_log),
                 "sim_log": str(sim_log),
                 "simulator": selected_simulator,
+                "linux_profile": args.linux_profile,
                 "target_milestone": args.target_milestone,
                 "last_milestone": "",
                 "milestones_reached": [],
@@ -695,6 +734,7 @@ def main(argv: list[str] | None = None) -> int:
             "sim_returncode": rc,
             "simulator": selected_simulator,
             "requested_simulator": args.simulator,
+            "linux_profile": args.linux_profile,
             "target_milestone": args.target_milestone,
             "last_milestone": classification.get("last_milestone", ""),
             "milestones_reached": classification.get("milestones_reached", []),
