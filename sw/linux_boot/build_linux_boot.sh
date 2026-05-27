@@ -222,11 +222,21 @@ build_linux() {
     build_dtb
 
     local initramfs_dir="$OUT_DIR/initramfs"
+    local initramfs_list="$OUT_DIR/initramfs.list"
     mkdir -p "$initramfs_dir/dev" "$initramfs_dir/proc" "$initramfs_dir/sys"
     "${CROSS_LINUX}gcc" -static -Os -s \
         "$SW_DIR/initramfs/init.c" \
         -o "$initramfs_dir/init"
     chmod 0755 "$initramfs_dir/init"
+    cat > "$initramfs_list" <<INITRAMFS
+dir /dev 0755 0 0
+nod /dev/console 0600 0 0 c 5 1
+nod /dev/null 0666 0 0 c 1 3
+nod /dev/ttyS0 0600 0 0 c 4 64
+dir /proc 0755 0 0
+dir /sys 0755 0 0
+file /init $initramfs_dir/init 0755 0 0
+INITRAMFS
 
     local simcfg
     simcfg="$(mktemp /tmp/rv64gc_v2_linux.XXXXXX.config)"
@@ -260,7 +270,7 @@ CONFIG_SERIAL_SH_SCI_DMA=n
 CONFIG_HVC_RISCV_SBI=y
 CONFIG_RISCV_SBI_V01=y
 CONFIG_RISCV_TIMER=y
-CONFIG_INITRAMFS_SOURCE="$initramfs_dir"
+CONFIG_INITRAMFS_SOURCE="$initramfs_list"
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_RD_GZIP=y
 CONFIG_DEVTMPFS=y

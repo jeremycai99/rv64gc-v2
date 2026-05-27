@@ -4,12 +4,10 @@ Date: May 10, 2026
 
 Status: performance optimization is paused. Stage 3 is the Linux boot bring-up
 phase. The RV64GC instruction compliance prerequisite is closed on the current
-RTL candidate and the DS/CM hard performance gate remains mandatory. The stale
-May 24 broad-image Oops was image-methodology drift, but the later May 25
-v1-trimmed Oops is a separate RTL-quality blocker candidate. The current
-working fix is the LSU speculative wakeup cancel owner repair in `lsu.sv`;
-patched RTL must still pass DS/CM, then prove Linux progress past the old
-Oops window.
+RTL candidate, the DS/CM hard performance gate remains mandatory after every
+RTL change, and the trimmed initramfs Linux target reaches `BOOT OK` on primary
+DSim and backup Verilator evidence. The latest May 27 console-node fix is a
+Linux image-build correction only; no RTL changed.
 
 ## Goal
 
@@ -4413,6 +4411,14 @@ BOOT OK marker visibility update:
   console fd, and falls back to stdout only if the console open fails.  This is
   a Linux boot harness fix, not an RTL change, and it keeps the pass/fail path
   platform-visible instead of reintroducing `tohost`.
+- May 27 follow-up found that creating `/dev/console` inside `/init` is still
+  too late for the kernel's initial console-open path.  The build script now
+  emits `build/linux_boot/initramfs.list` and points
+  `CONFIG_INITRAMFS_SOURCE` at that spec instead of the raw initramfs
+  directory.  The spec embeds `/dev/console` as character device `5:1`,
+  `/dev/null` as `1:3`, `/dev/ttyS0` as `4:64`, and the static `/init`
+  payload.  This keeps the fix in the Linux image construction path and does
+  not add any core-specific simulation ABI.
 - `linux_boot_results/stage3_bootok_console_rebuild_20260526a` rebuilt the
   Linux payload from that source.  The rebuilt initramfs binary contains both
   `/dev/console` and `BOOT OK`.
@@ -4518,6 +4524,31 @@ Primary-simulator replay status:
   `Oops`, `BUG:`, `Unable to handle`, `Kernel panic`, `LINUX_STOP`,
   lost-owner, no-commit, or convergence marker in the DSim or UART logs.
 
+Initial console node rerun:
+
+- `linux_boot_results/stage3_console_node_rebuild_20260527a` rebuilt the Linux
+  payload after switching `CONFIG_INITRAMFS_SOURCE` to the generated
+  initramfs spec with embedded device nodes.
+- `linux_boot_results/stage3_console_node_dsim_20260527a` is the primary DSim
+  replay from that payload.  It used the same `boot_ok` target, `140,000,000`
+  max-cycle bound, and lost-owner, no-commit, trap-value, Oops, and panic stop
+  hooks as the prior DSim proof.
+- Result: `PASS`, reason `reached target milestone: Initramfs BOOT OK`.
+  Milestones reached: OpenSBI banner, OpenSBI platform probe, Linux early
+  console, `riscv_clocksource`, NS16550 UART driver, kernel image free,
+  initramfs handoff, and `BOOT OK`.
+- UART evidence: `10000000.serial: ttyS0 at MMIO 0x10000000 ... is a 16550A`,
+  `printk: console [ttyS0] enabled`, `Run /init as init process`, and
+  `BOOT OK`.  The old `Warning: unable to open an initial console` line is not
+  present.
+- The UART pass marker matched at cycle `121,412,763`.  A final marker scan
+  found no `Oops`, `BUG:`, `Unable to handle`, `Kernel panic`, `LINUX_STOP`,
+  lost-owner, no-commit, trap stop, or convergence marker in the DSim or UART
+  logs.
+- This was not an RTL change, so it does not require a new DS/CM performance
+  guard.  The existing Stage 3 DS/CM guard remains the required baseline for
+  the next RTL change.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -4576,9 +4607,11 @@ DS/CM performance gate.
   lost-load-owner, and L1D write-through dirty-evict classes each have directed
   root-cause evidence and repaired RTL candidates with DS/CM guard coverage.
 - v2 completed the full DSim `BOOT OK` replay in
-  `linux_boot_results/stage3_bootok_console_dsim_20260526a_bg`.  DSim remains
-  the primary simulator for signoff; Verilator remains the approved backup for
-  long turnaround when DSim is blocked.
+  `linux_boot_results/stage3_bootok_console_dsim_20260526a_bg`, and the
+  follow-up console-node-corrected replay in
+  `linux_boot_results/stage3_console_node_dsim_20260527a`.  DSim remains the
+  primary simulator for signoff; Verilator remains the approved backup for long
+  turnaround when DSim is blocked.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
