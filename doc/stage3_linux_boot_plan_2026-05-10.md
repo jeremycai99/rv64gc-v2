@@ -4586,6 +4586,33 @@ Initial console node rerun:
   guard.  The existing Stage 3 DS/CM guard remains the required baseline for
   the next RTL change.
 
+Full mainline-profile rerun:
+
+- `linux_boot_results/stage3_full_mainline_rebuild_20260527b` rebuilt the
+  broader `LINUX_PROFILE=full` payload after quarantining only the broken
+  non-platform Nouveau DRM driver and keeping boot self-tests disabled.  The
+  resulting `fw_payload.hex` is the full-profile image under
+  `build/linux_boot_full/`.
+- The full-profile kernel config keeps broad subsystem coverage enabled,
+  including PCI, KVM, SCSI, ATA, MD, RAID6, MMC, Btrfs, networking, security,
+  integrity, keys, and SHA3.  This is intentionally no longer the v1-trimmed
+  fast image.
+- `linux_boot_results/stage3_full_mainline_dsim_1b_20260527b` ran the full
+  profile on primary DSim with a `1,000,000,000` cycle cap and stopped early at
+  the `BOOT OK` milestone.
+- Result: `PASS`, reason `reached target milestone: Initramfs BOOT OK`.
+  DSim reports the UART pass marker at cycle `277,340,272`, with
+  `mcycle=236,943,789`, `minstret=213,145,512`, and final IPC `0.899562`.
+- UART reached OpenSBI, Linux early console, `riscv_clocksource`, NS16550 UART
+  driver bind, broad subsystem initialization including KVM-unavailable,
+  networking, XOR, SCSI/block, DRM Radeon, USB, IPVS, Btrfs, kernel image
+  free, `/init` handoff, and final `BOOT OK`.
+- No UART `Oops`, `BUG:`, `Unable to handle`, or `Kernel panic` marker is
+  present.  The run also stopped without lost-load-owner or no-commit markers,
+  and the SVA ordering summary reports zero ordering, replay-valid,
+  adjacent-cycle, flush-window, burst, repeated-ROB, mispredict-follow, and
+  post-replay watchdog violations.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
@@ -4649,17 +4676,18 @@ DS/CM performance gate.
   `linux_boot_results/stage3_console_node_dsim_20260527a`.  DSim remains the
   primary simulator for signoff; Verilator remains the approved backup for long
   turnaround when DSim is blocked.
+- v2 also completed the broad full mainline-profile DSim `BOOT OK` replay in
+  `linux_boot_results/stage3_full_mainline_dsim_1b_20260527b`, proving that
+  the current core and platform can boot the broader mainline image, not only
+  the fast v1-trimmed image.
 - v1 provides useful references for those pieces, but its `tohost`/HTIF-style
   completion should not be carried forward.
 
-Stage 3 Linux boot is closed for the trimmed initramfs target. The active
-follow-up is a full mainline-profile Linux qualification run using
-`LINUX_PROFILE=full` or `tools/run_linux_boot.py --linux-profile full`.  That
-run intentionally broadens the kernel subsystem surface again while retaining
-the v2 optimized boot handoff and platform-required constraints. If a fresh
-UART-visible `Oops`, `BUG`, panic, lost-owner, no-commit, or trap stop appears
-in that broader-image run, use that exact run as the root-cause artifact. Do
-not add debug logic to synthesizable core RTL. Any RTL change on that path must
-still pass impacted compliance tests and the DS/CM hard guard before promotion.
-Sv39 should stay as a directed-test subset, but the primary Linux path is
-four-level Sv48 because that matches the intended Linux signoff configuration.
+Stage 3 Linux boot is closed for both the trimmed initramfs target and the
+current broad mainline-profile target.  If a fresh UART-visible `Oops`, `BUG`,
+panic, lost-owner, no-commit, or trap stop appears in a future broader-image or
+longer workload run, use that exact run as the root-cause artifact. Do not add
+debug logic to synthesizable core RTL. Any RTL change on that path must still
+pass impacted compliance tests and the DS/CM hard guard before promotion. Sv39
+should stay as a directed-test subset, but the primary Linux path is four-level
+Sv48 because that matches the intended Linux signoff configuration.
