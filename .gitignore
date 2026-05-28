@@ -25,6 +25,7 @@ obj_iv/
 # DSim simulator artefacts
 dsim_work/
 dsim_linux_work/
+dsim_core_synth_work/
 dsim_image/
 dsim.env
 dsim*.log
