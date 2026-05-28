@@ -4613,6 +4613,35 @@ Full mainline-profile rerun:
   adjacent-cycle, flush-window, burst, repeated-ROB, mispredict-follow, and
   post-replay watchdog violations.
 
+Post RTL style-refactor full mainline replay:
+
+- The RTL style cleanup is recorded in commits `1ef2f92`, `2738bc3`, and
+  `3f31640`.  Those commits normalize input/output port declarations and add a
+  synthesis-view parse check; they are intended to be behavior-neutral.
+- `benchmark_results/stage3_rtl_guard_rtl_style_ports_20260527a` is the
+  post-refactor Stage 3 DS/CM hard-guard run.  It passed the `0.01%`
+  no-regression rule with DS100 `18,068` timed cycles and `3.150055`
+  DMIPS/MHz, DS300 `53,047` timed cycles and `3.218761` DMIPS/MHz, CM1
+  `150,396` timed cycles and `6.649113` CoreMark/MHz, and CM10 `1,459,538`
+  timed cycles and `6.851483` CoreMark/MHz.
+- `linux_boot_results/stage3_full_mainline_dsim_post_rtl_style_20260527a` is
+  the post-refactor primary DSim full-profile replay.  It used the current
+  `build/linux_boot_full/fw_payload.hex`, a `1,000,000,000` cycle cap, target
+  milestone `boot_ok`, and the Stage 3 lost-owner/no-commit/fault stop hooks.
+- Result: `PASS`, reason
+  `reached target milestone: Initramfs BOOT OK`.  The run reached OpenSBI
+  banner, OpenSBI platform probe, Linux early console, `riscv_clocksource`,
+  NS16550 UART driver bind, freeing unused kernel image, `/init` handoff, and
+  final `BOOT OK`.
+- DSim reported `BOOT OKPASS` at cycle `277,340,272`, with
+  `mcycle=236,943,789`, `minstret=213,145,512`, and IPC `0.899562`.
+- A final log scan found no `Oops`, `BUG:`, `Unable to handle`,
+  `Kernel panic`, `LINUX_STOP`, lost-owner, or no-commit marker in
+  `dsim.log` or `uart.log`.  The SVA ordering summary also stayed clean for
+  the tracked replay/order violation classes.  This confirms the RTL style
+  refactor did not break the full mainline-profile Linux boot path or the
+  Stage 3 DS/CM performance guard.
+
 ## Near-Term Non-Goals
 
 - Do not boot a disk-backed root filesystem.
