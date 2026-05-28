@@ -12,8 +12,8 @@ module ras
     input  wire        push_valid,    // CALL detected (JAL/JALR with rd=x1 or rd=x5)
     input  wire [63:0] push_addr,     // return address (PC + 4 or PC + 2 for RVC)
     input  wire        pop_valid,     // RET detected (JALR with rs1=x1/x5, rd=x0)
-    output logic [63:0] pop_addr,      // predicted return target (top of stack)
-    output logic [4:0]  tos,           // top-of-stack pointer (for checkpoint save)
+    output reg [63:0] pop_addr,      // predicted return target (top of stack)
+    output reg [4:0]  tos,           // top-of-stack pointer (for checkpoint save)
     input  wire        clear,
     // Restore on mispredict
     input  wire        restore_valid,

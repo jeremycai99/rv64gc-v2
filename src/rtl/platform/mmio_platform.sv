@@ -16,20 +16,20 @@ module mmio_platform
     input  wire [63:0] req_wdata_i,
     input  wire [7:0]  req_wmask_i,
     input  wire [1:0]  req_size_i,
-    output logic        req_ready_o,
-    output logic        resp_valid_o,
-    output logic [63:0] resp_data_o,
+    output reg        req_ready_o,
+    output reg        resp_valid_o,
+    output reg [63:0] resp_data_o,
 
-    output logic [63:0] time_val_o,
-    output logic        mtip_o,
-    output logic        msip_o,
-    output logic        meip_o,
-    output logic        stip_o,
-    output logic        ssip_o,
-    output logic        seip_o,
+    output reg [63:0] time_val_o,
+    output reg        mtip_o,
+    output reg        msip_o,
+    output reg        meip_o,
+    output reg        stip_o,
+    output reg        ssip_o,
+    output reg        seip_o,
 
-    output logic        uart_tx_valid_o,
-    output logic [7:0]  uart_tx_data_o
+    output reg        uart_tx_valid_o,
+    output reg [7:0]  uart_tx_data_o
 );
 
     logic        resp_valid_r;

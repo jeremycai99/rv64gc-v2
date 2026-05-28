@@ -18,21 +18,21 @@ module predecode
     input  wire [63:0]                  ras_pop_addr_i,
     input  wire                         owner_tage_pred_taken_i,
 
-    output logic                         ctl_found_o,
-    output logic [2:0]                   ctl_slot_o,
-    output logic [2:0]                   ctl_type_o,
-    output logic [63:0]                  ctl_pc_o,
-    output logic [63:0]                  ctl_target_o,
+    output reg                         ctl_found_o,
+    output reg [2:0]                   ctl_slot_o,
+    output reg [2:0]                   ctl_type_o,
+    output reg [63:0]                  ctl_pc_o,
+    output reg [63:0]                  ctl_target_o,
 
-    output logic                         second_ctl_found_o,
-    output logic [2:0]                   second_ctl_slot_o,
-    output logic [2:0]                   second_ctl_type_o,
-    output logic [63:0]                  second_ctl_pc_o,
-    output logic [63:0]                  second_ctl_target_o,
+    output reg                         second_ctl_found_o,
+    output reg [2:0]                   second_ctl_slot_o,
+    output reg [2:0]                   second_ctl_type_o,
+    output reg [63:0]                  second_ctl_pc_o,
+    output reg [63:0]                  second_ctl_target_o,
 
-    output logic                         owner_cond_pred_found_o,
-    output logic [2:0]                   owner_cond_pred_slot_o,
-    output logic [63:0]                  owner_cond_pred_target_o
+    output reg                         owner_cond_pred_found_o,
+    output reg [2:0]                   owner_cond_pred_slot_o,
+    output reg [63:0]                  owner_cond_pred_target_o
 );
 
     localparam logic [2:0] BT_COND = 3'd0;

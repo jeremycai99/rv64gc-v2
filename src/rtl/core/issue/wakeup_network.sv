@@ -22,10 +22,10 @@ module wakeup_network
     input  wire [PHYS_REG_BITS-1:0] spec_wakeup_tag,
 
     // Output: new ready status
-    output logic                     rs1_wakeup,       // rs1 becomes definitively ready this cycle
-    output logic                     rs2_wakeup,
-    output logic                     rs1_spec_wakeup,  // rs1 speculatively ready this cycle
-    output logic                     rs2_spec_wakeup
+    output reg                     rs1_wakeup,       // rs1 becomes definitively ready this cycle
+    output reg                     rs2_wakeup,
+    output reg                     rs1_spec_wakeup,  // rs1 speculatively ready this cycle
+    output reg                     rs2_spec_wakeup
 );
 
     // -----------------------------------------------------------------------

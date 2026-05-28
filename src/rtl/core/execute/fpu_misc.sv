@@ -15,8 +15,8 @@ module fpu_misc
     input  fp_fmt_e fmt_i,
     input  wire [63:0] rs1_data_i,
     input  wire [63:0] rs2_data_i,
-    output logic valid_o,
-    output logic [63:0] result_o,
+    output reg valid_o,
+    output reg [63:0] result_o,
     output fp_status_t status_o
 );
 

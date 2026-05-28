@@ -32,19 +32,19 @@ module lsu
     input  wire [63:0] std_rs2,
 
     // Writeback to CDB (load results)
-    output logic [1:0] load_wb_valid,
-    output logic [ROB_IDX_BITS-1:0] load_wb_rob_idx [0:1],
-    output logic [PHYS_REG_BITS-1:0] load_wb_pdst [0:1],
-    output logic [63:0] load_wb_data [0:1],
+    output reg [1:0] load_wb_valid,
+    output reg [ROB_IDX_BITS-1:0] load_wb_rob_idx [0:1],
+    output reg [PHYS_REG_BITS-1:0] load_wb_pdst [0:1],
+    output reg [63:0] load_wb_data [0:1],
     output mem_size_e load_wb_mem_size [0:1],
-    output logic [1:0] load_wb_has_exception,
-    output logic [3:0] load_wb_exc_code [0:1],
+    output reg [1:0] load_wb_has_exception,
+    output reg [3:0] load_wb_exc_code [0:1],
 
     // STA writeback (mark store ROB entry as address-computed)
-    output logic sta_wb_valid,
-    output logic [ROB_IDX_BITS-1:0] sta_wb_rob_idx,
-    output logic std_wb_valid,
-    output logic [ROB_IDX_BITS-1:0] std_wb_rob_idx,
+    output reg sta_wb_valid,
+    output reg [ROB_IDX_BITS-1:0] sta_wb_rob_idx,
+    output reg std_wb_valid,
+    output reg [ROB_IDX_BITS-1:0] std_wb_rob_idx,
 
     // Commit counts (from commit unit)
     input  wire [2:0] commit_count,
@@ -52,28 +52,28 @@ module lsu
     input  wire [2:0] load_commit_count,
 
     // Speculative wakeup (load issues -> wake dependents)
-    output logic [1:0] spec_wakeup_valid,
-    output logic [PHYS_REG_BITS-1:0] spec_wakeup_tag [0:1],
+    output reg [1:0] spec_wakeup_valid,
+    output reg [PHYS_REG_BITS-1:0] spec_wakeup_tag [0:1],
     // Cancel (cache miss -> cancel speculative wakeup)
-    output logic [1:0] spec_cancel_valid,
-    output logic [PHYS_REG_BITS-1:0] spec_cancel_tag [0:1],
+    output reg [1:0] spec_cancel_valid,
+    output reg [PHYS_REG_BITS-1:0] spec_cancel_tag [0:1],
 
     // LQ/SQ allocation (from rename)
     input  wire [2:0] lq_alloc_count,
     input  wire [2:0] sq_alloc_count,
     input  wire [ROB_IDX_BITS-1:0] lq_alloc_rob_idx [0:PIPE_WIDTH-1],
     input  wire [ROB_IDX_BITS-1:0] sq_alloc_rob_idx [0:PIPE_WIDTH-1],
-    output logic [LQ_IDX_BITS-1:0] lq_alloc_idx [0:PIPE_WIDTH-1],
-    output logic [SQ_IDX_BITS-1:0] sq_alloc_idx [0:PIPE_WIDTH-1],
-    output logic lq_full,
-    output logic sq_full,
+    output reg [LQ_IDX_BITS-1:0] lq_alloc_idx [0:PIPE_WIDTH-1],
+    output reg [SQ_IDX_BITS-1:0] sq_alloc_idx [0:PIPE_WIDTH-1],
+    output reg lq_full,
+    output reg sq_full,
     input  wire [ROB_IDX_BITS-1:0] rob_head,
 
     // Ordering violation (to commit for flush)
-    output logic ordering_violation,
-    output logic [ROB_IDX_BITS-1:0] violation_rob_idx,
-    output logic [1:0] load_issue_suppress,
-    output logic sta_issue_suppress,
+    output reg ordering_violation,
+    output reg [ROB_IDX_BITS-1:0] violation_rob_idx,
+    output reg [1:0] load_issue_suppress,
+    output reg sta_issue_suppress,
 
     // DTLB sideband. Data VM is asserted when SATP translation applies to the
     // effective data privilege mode.
@@ -82,33 +82,33 @@ module lsu
     input  wire [63:0] dtlb_pa_i,
     input  wire dtlb_fault_i,
     input  wire [3:0] dtlb_fault_code_i,
-    output logic dtlb_lookup_valid_o,
-    output logic [63:0] dtlb_lookup_va_o,
-    output logic dtlb_lookup_is_store_o,
-    output logic dtlb_miss_valid_o,
-    output logic [63:0] dtlb_miss_va_o,
-    output logic [ROB_IDX_BITS-1:0] dtlb_miss_rob_idx_o,
-    output logic dtlb_miss_is_store_o,
-    output logic dtlb_exc_valid_o,
-    output logic [63:0] dtlb_exc_va_o,
-    output logic [ROB_IDX_BITS-1:0] dtlb_exc_rob_idx_o,
-    output logic [3:0] dtlb_exc_code_o,
+    output reg dtlb_lookup_valid_o,
+    output reg [63:0] dtlb_lookup_va_o,
+    output reg dtlb_lookup_is_store_o,
+    output reg dtlb_miss_valid_o,
+    output reg [63:0] dtlb_miss_va_o,
+    output reg [ROB_IDX_BITS-1:0] dtlb_miss_rob_idx_o,
+    output reg dtlb_miss_is_store_o,
+    output reg dtlb_exc_valid_o,
+    output reg [63:0] dtlb_exc_va_o,
+    output reg [ROB_IDX_BITS-1:0] dtlb_exc_rob_idx_o,
+    output reg [3:0] dtlb_exc_code_o,
 
     // D-cache interface
-    output logic [1:0] dcache_load_req_valid,
-    output logic [63:0] dcache_load_req_addr [0:1],
-    output logic [1:0] dcache_load_req_size [0:1],
-    output logic [1:0] dcache_load_req_is_unsigned,
+    output reg [1:0] dcache_load_req_valid,
+    output reg [63:0] dcache_load_req_addr [0:1],
+    output reg [1:0] dcache_load_req_size [0:1],
+    output reg [1:0] dcache_load_req_is_unsigned,
     input  wire [1:0] dcache_load_resp_valid,
     input  wire [63:0] dcache_load_resp_data [0:1],
     input  wire [1:0] dcache_load_resp_hit,
     input  wire [1:0] dcache_load_miss_retry,
 
     // D-cache store port (from CSB)
-    output logic dcache_store_req_valid,
-    output logic [63:0] dcache_store_req_addr,
-    output logic [63:0] dcache_store_req_data,
-    output logic [7:0] dcache_store_req_byte_mask,
+    output reg dcache_store_req_valid,
+    output reg [63:0] dcache_store_req_addr,
+    output reg [63:0] dcache_store_req_data,
+    output reg [7:0] dcache_store_req_byte_mask,
     input  wire dcache_store_ack,
 
     // L2 fill snoop (for load miss handling)
@@ -122,16 +122,16 @@ module lsu
     input  wire [LINE_SIZE*8-1:0] dcache_fill_data,
 
     // Uncached data MMIO interface
-    output logic        data_mmio_req_valid,
-    output logic        data_mmio_req_we,
-    output logic [63:0] data_mmio_req_addr,
-    output logic [63:0] data_mmio_req_wdata,
-    output logic [7:0]  data_mmio_req_wmask,
-    output logic [1:0]  data_mmio_req_size,
+    output reg        data_mmio_req_valid,
+    output reg        data_mmio_req_we,
+    output reg [63:0] data_mmio_req_addr,
+    output reg [63:0] data_mmio_req_wdata,
+    output reg [7:0]  data_mmio_req_wmask,
+    output reg [1:0]  data_mmio_req_size,
     input  wire        data_mmio_req_ready,
     input  wire        data_mmio_resp_valid,
     input  wire [63:0] data_mmio_resp_data,
-    output logic        fence_i_ready,
+    output reg        fence_i_ready,
 
     // Flush
     input flush_t flush_in

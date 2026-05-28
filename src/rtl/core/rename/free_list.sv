@@ -15,9 +15,9 @@ module free_list
 
     // Allocate: up to 6 per cycle
     input  wire [2:0] alloc_req_count,
-    output logic [PHYS_REG_BITS-1:0] alloc_preg [0:PIPE_WIDTH-1],
-    output logic [2:0] alloc_avail_count,
-    output logic [PHYS_REG_BITS:0] free_count,
+    output reg [PHYS_REG_BITS-1:0] alloc_preg [0:PIPE_WIDTH-1],
+    output reg [2:0] alloc_avail_count,
+    output reg [PHYS_REG_BITS:0] free_count,
 
     // Release: up to 6 per cycle (from commit, old_pdst returns to free)
     input  wire [2:0] release_count,

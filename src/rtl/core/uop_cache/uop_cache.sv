@@ -36,10 +36,10 @@ module uop_cache
 
     // Replay-side output (to rename input mux)
     output decoded_insn_t       uoc_insn   [0:PIPE_WIDTH-1],
-    output logic [2:0]          uoc_count,
-    output logic                active,              // 1 = playback owns rename input
-    output logic                handoff_valid,       // 1-cycle pulse on PLAYING→IDLE
-    output logic [63:0]         handoff_pc,
+    output reg [2:0]          uoc_count,
+    output reg                active,              // 1 = playback owns rename input
+    output reg                handoff_valid,       // 1-cycle pulse on PLAYING→IDLE
+    output reg [63:0]         handoff_pc,
 
     // Frontend redirect (commit flush, BRU early redirect, FENCE.I)
     input  wire                redirect_valid,
@@ -50,22 +50,22 @@ module uop_cache
     input  wire                stall,
 
     // Telemetry counters (driven combinational; tb samples them)
-    output logic                ev_lookup,
-    output logic                ev_hit,
-    output logic                ev_miss,
-    output logic                ev_fill,
-    output logic                ev_fill_evict_valid,
-    output logic                ev_enter_playing,
-    output logic                ev_exit_playing_miss,
-    output logic                ev_exit_playing_nohit,
-    output logic                ev_exit_playing_unsafe,
-    output logic                ev_emit,
-    output logic                ev_emit_control,
-    output logic                ev_emit_cond,
-    output logic                ev_emit_jal,
-    output logic                ev_emit_jalr,
-    output logic                ev_emit_pred_taken,
-    output logic                ev_invalidate
+    output reg                ev_lookup,
+    output reg                ev_hit,
+    output reg                ev_miss,
+    output reg                ev_fill,
+    output reg                ev_fill_evict_valid,
+    output reg                ev_enter_playing,
+    output reg                ev_exit_playing_miss,
+    output reg                ev_exit_playing_nohit,
+    output reg                ev_exit_playing_unsafe,
+    output reg                ev_emit,
+    output reg                ev_emit_control,
+    output reg                ev_emit_cond,
+    output reg                ev_emit_jal,
+    output reg                ev_emit_jalr,
+    output reg                ev_emit_pred_taken,
+    output reg                ev_invalidate
 );
 
     // =========================================================================

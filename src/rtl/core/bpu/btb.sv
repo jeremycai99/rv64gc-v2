@@ -11,25 +11,25 @@ module btb
     input  wire        rst_n,
     // Lookup (combinational, same cycle as fetch)
     input  wire [63:0] lookup_pc,
-    output logic        hit,
-    output logic [63:0] target,
-    output logic [2:0]  branch_type,  // 0=cond, 1=jal, 2=jalr, 3=call, 4=ret
-    output logic [5:0]  branch_offset, // byte offset of branch within cache line
-    output logic        alt_hit,
-    output logic [63:0] alt_target,
-    output logic [2:0]  alt_branch_type,
-    output logic [5:0]  alt_branch_offset,
+    output reg        hit,
+    output reg [63:0] target,
+    output reg [2:0]  branch_type,  // 0=cond, 1=jal, 2=jalr, 3=call, 4=ret
+    output reg [5:0]  branch_offset, // byte offset of branch within cache line
+    output reg        alt_hit,
+    output reg [63:0] alt_target,
+    output reg [2:0]  alt_branch_type,
+    output reg [5:0]  alt_branch_offset,
     // Independent auxiliary lookup.  This lets the frontend inspect the
     // current F1 PC while the main lookup may be steered to a redirect target.
     input  wire [63:0] aux_lookup_pc,
-    output logic        aux_hit,
-    output logic [63:0] aux_target,
-    output logic [2:0]  aux_branch_type,
-    output logic [5:0]  aux_branch_offset,
-    output logic        aux_alt_hit,
-    output logic [63:0] aux_alt_target,
-    output logic [2:0]  aux_alt_branch_type,
-    output logic [5:0]  aux_alt_branch_offset,
+    output reg        aux_hit,
+    output reg [63:0] aux_target,
+    output reg [2:0]  aux_branch_type,
+    output reg [5:0]  aux_branch_offset,
+    output reg        aux_alt_hit,
+    output reg [63:0] aux_alt_target,
+    output reg [2:0]  aux_alt_branch_type,
+    output reg [5:0]  aux_alt_branch_offset,
     // Update (from commit/BRU resolution)
     input  wire        update_valid,
     input  wire [63:0] update_pc,

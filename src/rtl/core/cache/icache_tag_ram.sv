@@ -11,8 +11,8 @@ module icache_tag_ram
     input  wire                        rst_n,
     // Read port
     input  wire [L1I_SET_BITS-1:0]     raddr,
-    output logic [L1I_WAYS-1:0]         valid_out,
-    output logic [L1I_TAG_BITS-1:0]     tag_out [0:L1I_WAYS-1],
+    output reg [L1I_WAYS-1:0]         valid_out,
+    output reg [L1I_TAG_BITS-1:0]     tag_out [0:L1I_WAYS-1],
     // Write port
     input  wire                        we,
     input  wire [L1I_SET_BITS-1:0]     waddr,

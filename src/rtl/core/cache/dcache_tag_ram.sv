@@ -11,14 +11,14 @@ module dcache_tag_ram
     input  wire                        rst_n,
     // Read port A (load port 0 / store)
     input  wire [L1D_SET_BITS-1:0]     raddr,
-    output logic [L1D_WAYS-1:0]         valid_out,
-    output logic [L1D_WAYS-1:0]         dirty_out,
-    output logic [L1D_TAG_BITS-1:0]     tag_out [0:L1D_WAYS-1],
+    output reg [L1D_WAYS-1:0]         valid_out,
+    output reg [L1D_WAYS-1:0]         dirty_out,
+    output reg [L1D_TAG_BITS-1:0]     tag_out [0:L1D_WAYS-1],
     // Read port B (load port 1)
     input  wire [L1D_SET_BITS-1:0]     raddr2,
-    output logic [L1D_WAYS-1:0]         valid_out2,
-    output logic [L1D_WAYS-1:0]         dirty_out2,
-    output logic [L1D_TAG_BITS-1:0]     tag_out2 [0:L1D_WAYS-1],
+    output reg [L1D_WAYS-1:0]         valid_out2,
+    output reg [L1D_WAYS-1:0]         dirty_out2,
+    output reg [L1D_TAG_BITS-1:0]     tag_out2 [0:L1D_WAYS-1],
     // Write port
     input  wire                        we,
     input  wire [L1D_SET_BITS-1:0]     waddr,

@@ -15,11 +15,11 @@ module clint #(
     input  wire [15:0] req_addr_i,
     input  wire [63:0] req_wdata_i,
     input  wire [7:0]  req_wmask_i,
-    output logic [63:0] resp_rdata_o,
+    output reg [63:0] resp_rdata_o,
 
-    output logic [63:0] mtime_o,
-    output logic        msip_o,
-    output logic        mtip_o
+    output reg [63:0] mtime_o,
+    output reg        msip_o,
+    output reg        mtip_o
 );
 
     localparam logic [15:0] MSIP_OFFSET     = 16'h0000;

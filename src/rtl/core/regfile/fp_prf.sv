@@ -12,7 +12,7 @@ module fp_prf
 (
     input  wire clk,
     input  wire [6:0] rd_addr [0:7],
-    output logic [63:0] rd_data [0:7],
+    output reg [63:0] rd_data [0:7],
     input  wire [3:0] wr_en,
     input  wire [6:0] wr_addr [0:3],
     input  wire [63:0] wr_data [0:3]

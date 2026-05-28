@@ -14,26 +14,26 @@ module fetch_packet_buffer
 
     input  wire          enq_valid,
     input  fetch_packet_t enq_packet,
-    output logic          enq_ready,
-    output logic          enq_fire,
+    output reg          enq_ready,
+    output reg          enq_fire,
 
     input  wire          deq_ready,
-    output logic          deq_valid,
+    output reg          deq_valid,
     output fetch_packet_t deq_packet,
-    output logic          deq_fire,
-    output logic          deq_flowthrough,
+    output reg          deq_fire,
+    output reg          deq_flowthrough,
 
     input  wire                          owner_valid,
     input  wire [FTQ_IDX_BITS-1:0]       owner_idx,
     input  wire [FTQ_EPOCH_BITS-1:0]     owner_epoch,
     input  wire [FTQ_ALLOC_TAG_BITS-1:0] owner_tag,
-    output logic                          deq_owner_match,
-    output logic                          deq_stale_owner,
-    output logic                          deq_owner_complete,
+    output reg                          deq_owner_match,
+    output reg                          deq_stale_owner,
+    output reg                          deq_owner_complete,
 
-    output logic          full,
-    output logic          empty,
-    output logic [3:0]    count
+    output reg          full,
+    output reg          empty,
+    output reg [3:0]    count
 );
 
     localparam int DEPTH = 8;

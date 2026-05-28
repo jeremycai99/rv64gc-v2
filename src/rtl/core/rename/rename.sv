@@ -17,25 +17,25 @@ module rename
 
     // Output: renamed instructions to dispatch queue (up to 6)
     output renamed_insn_t ren_insn [0:PIPE_WIDTH-1],
-    output logic [2:0]    ren_count,     // how many renamed this cycle (0..6)
+    output reg [2:0]    ren_count,     // how many renamed this cycle (0..6)
 
     // Move/zero elimination flags for each output slot (set when the
     // instruction was eliminated at rename and must NOT be dispatched)
-    output logic [PIPE_WIDTH-1:0] ren_move_eliminated,
-    output logic [PIPE_WIDTH-1:0] ren_zero_eliminated,
+    output reg [PIPE_WIDTH-1:0] ren_move_eliminated,
+    output reg [PIPE_WIDTH-1:0] ren_zero_eliminated,
 
     // ROB allocation interface
     input  wire [ROB_IDX_BITS-1:0] rob_alloc_idx [0:PIPE_WIDTH-1],
     input  wire                    rob_alloc_ready,  // ROB can accept
-    output logic [PHYS_REG_BITS:0]  free_preg_count,
+    output reg [PHYS_REG_BITS:0]  free_preg_count,
 
     // Optional backend admission governor. When asserted, rename admits only
     // the oldest slots and holds the younger tail for a later cycle.
     input  wire                    backend_admission_throttle,
 
     // Stall output (backpressure to decode/fetch)
-    output logic stall,
-    output logic recovery_headroom_ok,
+    output reg stall,
+    output reg recovery_headroom_ok,
 
     // Dispatch queue backpressure
     input  wire dq_full,

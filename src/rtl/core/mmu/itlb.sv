@@ -20,10 +20,10 @@ module itlb
     input  wire [1:0]           priv_i,
     input  wire [15:0]          asid_i,
 
-    output logic                 hit_o,
-    output logic [63:0]          pa_o,
-    output logic                 fault_o,
-    output logic [3:0]           fault_code_o,
+    output reg                 hit_o,
+    output reg [63:0]          pa_o,
+    output reg                 fault_o,
+    output reg [3:0]           fault_code_o,
 
     input  wire                 fill_valid_i,
     input  wire [35:0]          fill_vpn_i,

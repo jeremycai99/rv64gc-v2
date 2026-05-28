@@ -44,21 +44,21 @@ module icache_resp_queue
 
     // To F2 (FIFO order)
     input  wire                          deq_ready_i,
-    output logic                          deq_valid_o,
-    output logic [511:0]                  deq_data_o,
-    output logic                          deq_hit_o,
-    output logic [63:0]                   deq_pc_o,
-    output logic [63:LINE_BITS]           deq_line_addr_o,
-    output logic                          deq_ftq_valid_o,
-    output logic [FTQ_IDX_BITS-1:0]       deq_ftq_idx_o,
-    output logic [FTQ_EPOCH_BITS-1:0]     deq_ftq_epoch_o,
-    output logic [FTQ_ALLOC_TAG_BITS-1:0] deq_ftq_alloc_tag_o,
+    output reg                          deq_valid_o,
+    output reg [511:0]                  deq_data_o,
+    output reg                          deq_hit_o,
+    output reg [63:0]                   deq_pc_o,
+    output reg [63:LINE_BITS]           deq_line_addr_o,
+    output reg                          deq_ftq_valid_o,
+    output reg [FTQ_IDX_BITS-1:0]       deq_ftq_idx_o,
+    output reg [FTQ_EPOCH_BITS-1:0]     deq_ftq_epoch_o,
+    output reg [FTQ_ALLOC_TAG_BITS-1:0] deq_ftq_alloc_tag_o,
     output ftq_entry_t                    deq_ftq_entry_o,
 
     // Status (for backpressure to F1 fire)
-    output logic                          full,
-    output logic                          empty,
-    output logic [$clog2(DEPTH+1)-1:0]    count
+    output reg                          full,
+    output reg                          empty,
+    output reg [$clog2(DEPTH+1)-1:0]    count
 );
 
     typedef struct packed {

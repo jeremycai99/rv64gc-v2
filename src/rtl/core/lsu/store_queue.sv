@@ -17,8 +17,8 @@ module store_queue
     // Allocate (from rename, up to 6 per cycle)
     input  wire [2:0] alloc_count,
     input  wire [ROB_IDX_BITS-1:0] alloc_rob_idx [0:PIPE_WIDTH-1],
-    output logic [SQ_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],
-    output logic full,
+    output reg [SQ_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],
+    output reg full,
 
     // STA fill (store address computed by store AGU)
     input  wire sta_valid,
@@ -39,32 +39,32 @@ module store_queue
     input  wire [63:0] fwd_req_addr,
     input  wire [1:0] fwd_req_size,
     input  wire [ROB_IDX_BITS-1:0] fwd_req_rob_idx,
-    output logic fwd_hit,
-    output logic fwd_partial,
-    output logic fwd_wait,
-    output logic fwd_wait_addr_unknown,
-    output logic fwd_wait_data_missing,
-    output logic [63:0] fwd_data,
+    output reg fwd_hit,
+    output reg fwd_partial,
+    output reg fwd_wait,
+    output reg fwd_wait_addr_unknown,
+    output reg fwd_wait_data_missing,
+    output reg [63:0] fwd_data,
 
     // Address-known / data-not-ready hazard check for a second load request
     input  wire wait_req_valid,
     input  wire [63:0] wait_req_addr,
     input  wire [1:0] wait_req_size,
     input  wire [ROB_IDX_BITS-1:0] wait_req_rob_idx,
-    output logic wait_fwd_hit,
-    output logic wait_partial,
-    output logic wait_wait,
-    output logic wait_wait_addr_unknown,
-    output logic wait_wait_data_missing,
-    output logic [63:0] wait_data,
-    output logic wait_hit,
+    output reg wait_fwd_hit,
+    output reg wait_partial,
+    output reg wait_wait,
+    output reg wait_wait_addr_unknown,
+    output reg wait_wait_data_missing,
+    output reg [63:0] wait_data,
+    output reg wait_hit,
     input  wire [ROB_IDX_BITS-1:0] rob_head,
 
     // Commit (from commit unit)
     input  wire [2:0] commit_count,
 
     // Drain to committed store buffer
-    output logic drain_valid,
+    output reg drain_valid,
     output sq_entry_t drain_entry,
     input  wire drain_ready,
 

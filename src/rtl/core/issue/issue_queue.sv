@@ -23,7 +23,7 @@ module issue_queue
     // Enqueue (from dispatch, up to NUM_ENQUEUE per cycle)
     input  wire [NUM_ENQUEUE-1:0] enq_valid,
     input  iq_entry_t              enq_data [0:NUM_ENQUEUE-1],
-    output logic                   full,       // no space for NUM_ENQUEUE entries
+    output reg                   full,       // no space for NUM_ENQUEUE entries
 
     // Wakeup via CDB broadcast
     input  wire [CDB_WIDTH-1:0]     cdb_valid,
@@ -55,8 +55,8 @@ module issue_queue
     // Issue output (NUM_SELECT ports)
     // issue_candidate_valid is the oldest-ready selection before suppression.
     // issue_valid is the final fire signal after per-port suppress/hold.
-    output logic [NUM_SELECT-1:0]  issue_candidate_valid,
-    output logic [NUM_SELECT-1:0]  issue_valid,
+    output reg [NUM_SELECT-1:0]  issue_candidate_valid,
+    output reg [NUM_SELECT-1:0]  issue_valid,
     output iq_entry_t              issue_data [0:NUM_SELECT-1],
 
     // Backpressure: suppress issue on selected ports and preserve the
@@ -66,7 +66,7 @@ module issue_queue
     input  wire                   enq_issue_bypass_alu_only,
     input  wire [1:0]             older_probe_valid,
     input  wire [ROB_IDX_BITS-1:0] older_probe_rob_idx [0:1],
-    output logic [1:0]             has_older_entry,
+    output reg [1:0]             has_older_entry,
 
     // ROB head for age comparison
     input  wire [ROB_IDX_BITS-1:0] rob_head,
@@ -77,7 +77,7 @@ module issue_queue
     input  wire                    flush_full,        // invalidate everything
 
     // Current occupancy (for dispatch load-balancing)
-    output logic [$clog2(DEPTH+1)-1:0] occupancy
+    output reg [$clog2(DEPTH+1)-1:0] occupancy
 );
 
     // =====================================================================

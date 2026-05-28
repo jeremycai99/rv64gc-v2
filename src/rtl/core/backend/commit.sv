@@ -57,23 +57,23 @@ module commit
     input  wire [GHR_BITS-1:0]                head_bp_ghr [0:PIPE_WIDTH-1],
 
     // Outputs
-    output logic [2:0]              commit_count,       // how many entries retired this cycle
+    output reg [2:0]              commit_count,       // how many entries retired this cycle
     output commit_t                 commit_out [0:PIPE_WIDTH-1],  // per-entry commit info (for free list)
-    output logic [2:0]              store_commit_count,  // how many stores committed (for SQ)
-    output logic [2:0]              load_commit_count,   // how many loads committed (for LQ)
+    output reg [2:0]              store_commit_count,  // how many stores committed (for SQ)
+    output reg [2:0]              load_commit_count,   // how many loads committed (for LQ)
 
     // Flush output (mispredict or exception)
     output flush_t                  flush_out,
 
     // CSR write (at most 1 per cycle, serialized)
-    output logic                    csr_commit_valid,
-    output logic [11:0]             csr_commit_addr,
-    output logic [63:0]             csr_commit_wdata,
-    output logic [1:0]              csr_commit_op,
+    output reg                    csr_commit_valid,
+    output reg [11:0]             csr_commit_addr,
+    output reg [63:0]             csr_commit_wdata,
+    output reg [1:0]              csr_commit_op,
 
     // Checkpoint release (for checkpoint manager)
-    output logic [PIPE_WIDTH-1:0]              release_checkpoint,
-    output logic [CHECKPOINT_BITS-1:0]         release_checkpoint_id [0:PIPE_WIDTH-1],
+    output reg [PIPE_WIDTH-1:0]              release_checkpoint,
+    output reg [CHECKPOINT_BITS-1:0]         release_checkpoint_id [0:PIPE_WIDTH-1],
 
     // Trap vector and return addresses (from CSR file)
     input  wire [63:0]             mtvec,
@@ -88,11 +88,11 @@ module commit
     input  wire                    irq_pending,
     input  wire [63:0]             irq_cause,
     input  wire                    irq_to_supervisor,
-    output logic                    interrupt_taken,
-    output logic                    trap_to_supervisor,
+    output reg                    interrupt_taken,
+    output reg                    trap_to_supervisor,
 
     // Performance counter
-    output logic [3:0]              insn_retired_count  // architectural instructions for minstret
+    output reg [3:0]              insn_retired_count  // architectural instructions for minstret
 );
 
     // =========================================================================

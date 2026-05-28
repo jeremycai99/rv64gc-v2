@@ -17,8 +17,8 @@ module csr_file
     // CSR read (for CSR instructions – combinational)
     input  wire [11:0] read_addr,
     input  wire        read_write_intent,
-    output logic [63:0] read_data,
-    output logic        read_illegal,
+    output reg [63:0] read_data,
+    output reg        read_illegal,
 
     // CSR write (from commit — serialized, at most 1/cycle)
     input  wire        write_valid,
@@ -42,22 +42,22 @@ module csr_file
     input  wire        sret_valid,
 
     // Outputs for pipeline use
-    output logic [63:0] mtvec,
-    output logic [63:0] stvec,
-    output logic [63:0] mepc,
-    output logic [63:0] sepc,
-    output logic [1:0]  priv_mode,
-    output logic [2:0]  frm_out,
+    output reg [63:0] mtvec,
+    output reg [63:0] stvec,
+    output reg [63:0] mepc,
+    output reg [63:0] sepc,
+    output reg [1:0]  priv_mode,
+    output reg [2:0]  frm_out,
 
     // Interrupt outputs
-    output logic        irq_pending,
-    output logic [63:0] irq_cause,
-    output logic        irq_to_supervisor,
+    output reg        irq_pending,
+    output reg [63:0] irq_cause,
+    output reg        irq_to_supervisor,
 
     // Performance counters
     input  wire [3:0]  insn_retired_count,  // architectural instructions from commit
-    output logic [63:0] mcycle_val,
-    output logic [63:0] minstret_val,
+    output reg [63:0] mcycle_val,
+    output reg [63:0] minstret_val,
 
     // Timer (from external CLINT)
     input  wire [63:0] time_val,
@@ -67,15 +67,15 @@ module csr_file
     input  wire        stip, ssip, seip,
 
     // Privileged translation state
-    output logic        mstatus_mprv,
-    output logic [1:0]  mstatus_mpp,
-    output logic        mstatus_spp,
-    output logic [1:0]  mstatus_fs,
-    output logic        mstatus_sum,
-    output logic        mstatus_mxr,
-    output logic [63:0] satp,
-    output logic [63:0] medeleg,
-    output logic [63:0] mideleg
+    output reg        mstatus_mprv,
+    output reg [1:0]  mstatus_mpp,
+    output reg        mstatus_spp,
+    output reg [1:0]  mstatus_fs,
+    output reg        mstatus_sum,
+    output reg        mstatus_mxr,
+    output reg [63:0] satp,
+    output reg [63:0] medeleg,
+    output reg [63:0] mideleg
 );
 
     // =========================================================================

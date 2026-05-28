@@ -19,21 +19,21 @@ module dcache
     input  wire [63:0] load_req_addr [0:1],
     input  wire [1:0]  load_req_size [0:1],
     input  wire [1:0]  load_req_is_unsigned,
-    output logic [1:0]  load_resp_valid,
-    output logic [63:0] load_resp_data [0:1],
-    output logic [1:0]  load_resp_hit,
-    output logic [1:0]  load_miss_retry,
+    output reg [1:0]  load_resp_valid,
+    output reg [63:0] load_resp_data [0:1],
+    output reg [1:0]  load_resp_hit,
+    output reg [1:0]  load_miss_retry,
     // Store port (1, from CSB)
     input  wire        store_req_valid,
     input  wire [63:0] store_req_addr,
     input  wire [63:0] store_req_data,
     input  wire [7:0]  store_req_byte_mask,
-    output logic        store_ack,
+    output reg        store_ack,
     // L2 interface (miss handling)
-    output logic        l2_req_valid,
-    output logic [63:0] l2_req_addr,
-    output logic        l2_req_we,           // 1=writeback, 0=fill
-    output logic [511:0] l2_req_wdata,       // writeback data
+    output reg        l2_req_valid,
+    output reg [63:0] l2_req_addr,
+    output reg        l2_req_we,           // 1=writeback, 0=fill
+    output reg [511:0] l2_req_wdata,       // writeback data
     input  wire        l2_req_ready,
     input  wire        l2_resp_valid,
     input  wire [63:0] l2_resp_addr,
@@ -41,15 +41,15 @@ module dcache
     // Fill snoop (to LSU for missed-load late response)
     // Fires the cycle a fill is installed into the cache.  The LSU uses
     // this to wake up any pending loads in its miss buffer.
-    output logic        fill_snoop_valid,
-    output logic [63:0] fill_snoop_addr,
-    output logic [511:0] fill_snoop_data,
+    output reg        fill_snoop_valid,
+    output reg [63:0] fill_snoop_addr,
+    output reg [511:0] fill_snoop_data,
     // Store write-through drain state, used to hold FENCE.I until older
     // committed stores are instruction-visible in the backing hierarchy.
-    output logic        store_wt_busy,
+    output reg        store_wt_busy,
     // Invalidate
     input  wire        invalidate_all,
-    output logic        invalidate_busy
+    output reg        invalidate_busy
 );
 
     // =========================================================================

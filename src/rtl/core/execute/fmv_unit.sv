@@ -13,9 +13,9 @@ module fmv_unit
     input  fmv_op_e op_i,
     input  wire [63:0] int_data_i,
     input  wire [63:0] fp_data_i,
-    output logic valid_o,
-    output logic [63:0] int_result_o,
-    output logic [63:0] fp_result_o
+    output reg valid_o,
+    output reg [63:0] int_result_o,
+    output reg [63:0] fp_result_o
 );
 
     always_comb begin

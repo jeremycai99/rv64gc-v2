@@ -19,11 +19,11 @@ module bru
     input  wire        bp_taken,      // predicted taken
     input  wire [63:0] bp_target,     // predicted target
     input  wire        is_rvc,        // compressed instruction (PC+2 for link)
-    output logic [63:0] result,        // link address (PC+4 for JAL/JALR, unused for branches)
-    output logic        taken,         // actual branch outcome
-    output logic [63:0] target,        // actual redirect target
-    output logic [63:0] taken_target,  // static taken target (pc+imm / jalr dest)
-    output logic        mispredict     // taken != bp_taken || target != bp_target
+    output reg [63:0] result,        // link address (PC+4 for JAL/JALR, unused for branches)
+    output reg        taken,         // actual branch outcome
+    output reg [63:0] target,        // actual redirect target
+    output reg [63:0] taken_target,  // static taken target (pc+imm / jalr dest)
+    output reg        mispredict     // taken != bp_taken || target != bp_target
 );
 
     // =========================================================================

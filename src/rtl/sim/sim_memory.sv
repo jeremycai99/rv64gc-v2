@@ -18,9 +18,9 @@ module sim_memory
     input  wire [63:0] mem_req_addr,
     input  wire        mem_req_we,
     input  wire [511:0] mem_req_wdata,
-    output logic        mem_req_ready,
-    output logic        mem_resp_valid,
-    output logic [511:0] mem_resp_data
+    output reg        mem_req_ready,
+    output reg        mem_resp_valid,
+    output reg [511:0] mem_resp_data
 );
 
     // =========================================================================

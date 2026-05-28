@@ -23,10 +23,10 @@ module dtlb
     input  wire                 sum_i,
     input  wire                 mxr_i,
 
-    output logic                 hit_o,
-    output logic [63:0]          pa_o,
-    output logic                 fault_o,
-    output logic [3:0]           fault_code_o,
+    output reg                 hit_o,
+    output reg [63:0]          pa_o,
+    output reg                 fault_o,
+    output reg [3:0]           fault_code_o,
 
     input  wire                 fill_valid_i,
     input  wire [35:0]          fill_vpn_i,
@@ -36,9 +36,9 @@ module dtlb
     input  wire [7:0]           fill_perm_i,
     input  wire [63:0]          fill_pte_pa_i,
 
-    output logic                 dirty_wb_valid_o,
-    output logic [63:0]          dirty_wb_pte_pa_o,
-    output logic [63:0]          dirty_wb_pte_value_o,
+    output reg                 dirty_wb_valid_o,
+    output reg [63:0]          dirty_wb_pte_pa_o,
+    output reg [63:0]          dirty_wb_pte_value_o,
     input  wire                 dirty_wb_ready_i,
 
     input  wire                 inv_all_i,

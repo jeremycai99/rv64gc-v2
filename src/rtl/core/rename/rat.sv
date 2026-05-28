@@ -16,9 +16,9 @@ module rat
     input  wire [ARCH_REG_BITS-1:0] rs1_arch [0:PIPE_WIDTH-1],
     input  wire [ARCH_REG_BITS-1:0] rs2_arch [0:PIPE_WIDTH-1],
     input  wire [ARCH_REG_BITS-1:0] rs3_arch [0:PIPE_WIDTH-1],
-    output logic [PHYS_REG_BITS-1:0] rs1_phys [0:PIPE_WIDTH-1],
-    output logic [PHYS_REG_BITS-1:0] rs2_phys [0:PIPE_WIDTH-1],
-    output logic [PHYS_REG_BITS-1:0] rs3_phys [0:PIPE_WIDTH-1],
+    output reg [PHYS_REG_BITS-1:0] rs1_phys [0:PIPE_WIDTH-1],
+    output reg [PHYS_REG_BITS-1:0] rs2_phys [0:PIPE_WIDTH-1],
+    output reg [PHYS_REG_BITS-1:0] rs3_phys [0:PIPE_WIDTH-1],
 
     // 6-wide destination write (rename result)
     input  wire [PIPE_WIDTH-1:0] wr_en,
@@ -26,7 +26,7 @@ module rat
     input  wire [PHYS_REG_BITS-1:0] wr_phys [0:PIPE_WIDTH-1],
 
     // Old mapping output (for ROB old_pdst)
-    output logic [PHYS_REG_BITS-1:0] old_phys [0:PIPE_WIDTH-1],
+    output reg [PHYS_REG_BITS-1:0] old_phys [0:PIPE_WIDTH-1],
 
     // Commit update to committed RAT (from commit unit)
     input  wire [PIPE_WIDTH-1:0]          commit_wr_en,

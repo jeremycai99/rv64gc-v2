@@ -16,9 +16,9 @@ module divider
     input  div_op_e     op,
     input  wire        is_w_op,
     input  wire        flush,         // cancel in-progress divide
-    output logic        busy,          // cannot accept new input
-    output logic        valid_out,
-    output logic [63:0] result
+    output reg        busy,          // cannot accept new input
+    output reg        valid_out,
+    output reg [63:0] result
 );
 
     // =========================================================================

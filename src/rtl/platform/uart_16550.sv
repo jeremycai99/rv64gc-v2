@@ -12,11 +12,11 @@ module uart_16550 (
     input  wire       req_we_i,
     input  wire [2:0] req_addr_i,
     input  wire [7:0] req_wdata_i,
-    output logic [7:0] resp_rdata_o,
+    output reg [7:0] resp_rdata_o,
 
-    output logic       tx_valid_o,
-    output logic [7:0] tx_data_o,
-    output logic       irq_o
+    output reg       tx_valid_o,
+    output reg [7:0] tx_data_o,
+    output reg       irq_o
 );
 
     logic [7:0] ier_r;

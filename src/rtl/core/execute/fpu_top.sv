@@ -30,13 +30,13 @@ module fpu_top
     input  wire [63:0] rs3_data_i,
     input  wire [ROB_IDX_BITS-1:0] rob_idx_i,
     input  wire [PHYS_REG_BITS-1:0] pdst_i,
-    output logic ready_o,
-    output logic out_valid_o,
-    output logic [ROB_IDX_BITS-1:0] out_rob_idx_o,
-    output logic [PHYS_REG_BITS-1:0] out_pdst_o,
-    output logic [63:0] out_data_o,
+    output reg ready_o,
+    output reg out_valid_o,
+    output reg [ROB_IDX_BITS-1:0] out_rob_idx_o,
+    output reg [PHYS_REG_BITS-1:0] out_pdst_o,
+    output reg [63:0] out_data_o,
     output fp_status_t out_status_o,
-    output logic unsupported_o
+    output reg unsupported_o
 );
 
     logic fmv_valid;

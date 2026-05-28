@@ -11,12 +11,12 @@ module tb_top
 (
     input  wire        clk,
     input  wire        rst_n,
-    output logic        tohost_valid,
-    output logic [63:0] tohost_value,
+    output reg        tohost_valid,
+    output reg [63:0] tohost_value,
 
     // Performance counters (for benchmark IPC reporting)
-    output logic [63:0] perf_mcycle,
-    output logic [63:0] perf_minstret
+    output reg [63:0] perf_mcycle,
+    output reg [63:0] perf_minstret
 );
 
     // =========================================================================

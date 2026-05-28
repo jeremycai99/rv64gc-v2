@@ -8,9 +8,9 @@ module rvc_expander
     import rv64gc_pkg::*;
 (
     input  wire [15:0] raw_hw_i [0:PIPE_WIDTH-1],
-    output logic [31:0] decomp_out_o [0:PIPE_WIDTH-1],
-    output logic        decomp_is_rvc_o [0:PIPE_WIDTH-1],
-    output logic        decomp_illegal_o [0:PIPE_WIDTH-1]
+    output reg [31:0] decomp_out_o [0:PIPE_WIDTH-1],
+    output reg        decomp_is_rvc_o [0:PIPE_WIDTH-1],
+    output reg        decomp_illegal_o [0:PIPE_WIDTH-1]
 );
 
     genvar gi;

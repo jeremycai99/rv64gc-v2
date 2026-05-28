@@ -16,49 +16,49 @@ module l2_cache
     input  wire [63:0] dcache_req_addr,
     input  wire        dcache_req_we,        // 1=writeback from D$, 0=fill request
     input  wire [511:0] dcache_req_wdata,    // writeback data
-    output logic        dcache_req_ready,     // can accept request
-    output logic        dcache_resp_valid,
-    output logic [63:0] dcache_resp_addr,
-    output logic [511:0] dcache_resp_data,
+    output reg        dcache_req_ready,     // can accept request
+    output reg        dcache_resp_valid,
+    output reg [63:0] dcache_resp_addr,
+    output reg [511:0] dcache_resp_data,
 
     // I-cache port (fill requests only — I$ is read-only)
     input  wire        icache_req_valid,
     input  wire [63:0] icache_req_addr,
-    output logic        icache_req_ready,
-    output logic        icache_req_accepted,
-    output logic        icache_resp_valid,
-    output logic [63:0] icache_resp_addr,
-    output logic [511:0] icache_resp_data,
+    output reg        icache_req_ready,
+    output reg        icache_req_accepted,
+    output reg        icache_resp_valid,
+    output reg [63:0] icache_resp_addr,
+    output reg [511:0] icache_resp_data,
 
     // Prefetch port (lowest priority, read-only)
     input  wire        prefetch_req_valid,
     input  wire [63:0] prefetch_req_addr,
-    output logic        prefetch_req_ready,
-    output logic        prefetch_resp_valid,
-    output logic [63:0] prefetch_resp_addr,
-    output logic [511:0] prefetch_resp_data,
+    output reg        prefetch_req_ready,
+    output reg        prefetch_resp_valid,
+    output reg [63:0] prefetch_resp_addr,
+    output reg [511:0] prefetch_resp_data,
 
     // PTW port (read-only page table walker)
     input  wire        ptw_req_valid,
     input  wire [63:0] ptw_req_addr,
-    output logic        ptw_req_ready,
-    output logic        ptw_req_accepted,
-    output logic        ptw_resp_valid,
-    output logic [63:0] ptw_resp_addr,
-    output logic [511:0] ptw_resp_data,
+    output reg        ptw_req_ready,
+    output reg        ptw_req_accepted,
+    output reg        ptw_resp_valid,
+    output reg [63:0] ptw_resp_addr,
+    output reg [511:0] ptw_resp_data,
 
     // Main memory interface (sim_memory / external)
-    output logic        mem_req_valid,
-    output logic [63:0] mem_req_addr,
-    output logic        mem_req_we,
-    output logic [511:0] mem_req_wdata,
+    output reg        mem_req_valid,
+    output reg [63:0] mem_req_addr,
+    output reg        mem_req_we,
+    output reg [511:0] mem_req_wdata,
     input  wire        mem_req_ready,
     input  wire        mem_resp_valid,
     input  wire [511:0] mem_resp_data,
 
     // Invalidate (FENCE.I — flush dirty lines, invalidate all)
     input  wire        invalidate_all,
-    output logic        invalidate_busy
+    output reg        invalidate_busy
 );
 
     // =========================================================================

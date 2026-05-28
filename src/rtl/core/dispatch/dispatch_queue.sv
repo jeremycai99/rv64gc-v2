@@ -17,12 +17,12 @@ module dispatch_queue
     // Enqueue from rename (up to 6 per cycle)
     input  wire [2:0]    enq_count,
     input  renamed_insn_t enq_data [0:PIPE_WIDTH-1],
-    output logic          full,          // backpressure to rename
+    output reg          full,          // backpressure to rename
 
     // Dequeue to issue queues (up to PIPE_WIDTH per cycle)
-    output logic [2:0]    deq_count,
+    output reg [2:0]    deq_count,
     output renamed_insn_t deq_data [0:PIPE_WIDTH-1],
-    output logic [1:0]    deq_iq_target [0:PIPE_WIDTH-1],  // 0,1,2 = int IQ; 3 = mem IQ
+    output reg [1:0]    deq_iq_target [0:PIPE_WIDTH-1],  // 0,1,2 = int IQ; 3 = mem IQ
     input  wire [NUM_INT_IQS-1:0] iq_full,                // per-IQ backpressure
     input  wire [5:0]    iq_occ [0:NUM_INT_IQS-1],        // per-IQ occupancy (for load-balanced routing)
     input  wire [1:0]    load_iq_credit,                  // load IQ free slots, capped at 2

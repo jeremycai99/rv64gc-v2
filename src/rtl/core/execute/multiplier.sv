@@ -16,8 +16,8 @@ module multiplier
     input  mul_op_e     op,
     input  wire        is_w_op,
     input  wire        flush,         // cancel in-flight operations
-    output logic        valid_out,
-    output logic [63:0] result
+    output reg        valid_out,
+    output reg [63:0] result
 );
 
     // =========================================================================

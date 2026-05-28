@@ -13,7 +13,7 @@ module alu
     input  alu_op_e     op,
     input  wire        is_w_op,     // 1 = 32-bit W suffix operation
     input  wire        is_unsigned, // 1 = Zba unsigned-word variant
-    output logic [63:0] result
+    output reg [63:0] result
 );
 
     // =========================================================================

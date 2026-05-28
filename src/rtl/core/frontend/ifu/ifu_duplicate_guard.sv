@@ -28,15 +28,15 @@ module ifu_duplicate_guard
     input  wire [FTQ_EPOCH_BITS-1:0]     work_ftq_epoch_i,
     input  wire [FTQ_ALLOC_TAG_BITS-1:0] work_ftq_alloc_tag_i,
 
-    output logic                          duplicate_suppressed_o,
-    output logic [63:0]                   duplicate_next_pc_o,
-    output logic                          last_emit_hit_o,
-    output logic                          replay_block_hit_o,
-    output logic                          last_emit_valid_o,
-    output logic [63:0]                   last_emit_pc_o,
-    output logic [63:0]                   last_emit_next_pc_o,
-    output logic [63:0]                   replay_block_pc_o,
-    output logic [1:0]                    replay_block_age_o
+    output reg                          duplicate_suppressed_o,
+    output reg [63:0]                   duplicate_next_pc_o,
+    output reg                          last_emit_hit_o,
+    output reg                          replay_block_hit_o,
+    output reg                          last_emit_valid_o,
+    output reg [63:0]                   last_emit_pc_o,
+    output reg [63:0]                   last_emit_next_pc_o,
+    output reg [63:0]                   replay_block_pc_o,
+    output reg [1:0]                    replay_block_age_o
 );
 
     logic        last_emit_valid_r;

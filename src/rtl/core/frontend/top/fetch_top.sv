@@ -13,19 +13,19 @@ module fetch_top
     input  wire        rst_n,
 
     // Output to decode
-    output logic [2:0]  fetch_count,
-    output logic [31:0] fetch_insn [0:PIPE_WIDTH-1],
-    output logic [63:0] fetch_pc [0:PIPE_WIDTH-1],
-    output logic [PIPE_WIDTH-1:0] fetch_is_rvc,
-    output logic [PIPE_WIDTH-1:0] fetch_bp_taken,
-    output logic [63:0] fetch_bp_target [0:PIPE_WIDTH-1],
-    output logic        fetch_bp_owner_valid,
-    output logic [2:0]  fetch_bp_owner_slot,
-    output logic        fetch_bp_owner_from_subgroup,
-    output logic [63:0] fetch_bp_lookup_pc,
-    output logic [4:0]  fetch_bp_ras_tos,
-    output logic [63:0] fetch_bp_ras_top,
-    output logic [GHR_BITS-1:0] fetch_bp_ghr,
+    output reg [2:0]  fetch_count,
+    output reg [31:0] fetch_insn [0:PIPE_WIDTH-1],
+    output reg [63:0] fetch_pc [0:PIPE_WIDTH-1],
+    output reg [PIPE_WIDTH-1:0] fetch_is_rvc,
+    output reg [PIPE_WIDTH-1:0] fetch_bp_taken,
+    output reg [63:0] fetch_bp_target [0:PIPE_WIDTH-1],
+    output reg        fetch_bp_owner_valid,
+    output reg [2:0]  fetch_bp_owner_slot,
+    output reg        fetch_bp_owner_from_subgroup,
+    output reg [63:0] fetch_bp_lookup_pc,
+    output reg [4:0]  fetch_bp_ras_tos,
+    output reg [63:0] fetch_bp_ras_top,
+    output reg [GHR_BITS-1:0] fetch_bp_ghr,
 
     // Stall from downstream (decode/rename backpressure)
     input  wire        backend_stall,
@@ -37,7 +37,7 @@ module fetch_top
     // candidate, including the cycle that starts a replay window.
     input  wire        frontend_replay_blocking,
     input  wire        frontend_replay_start,
-    output logic        recovery_headroom_ok,
+    output reg        recovery_headroom_ok,
 
     // Redirect (from commit -- mispredict or exception)
     input  wire        redirect_valid,
@@ -48,10 +48,10 @@ module fetch_top
     input  wire        itlb_hit,
     input  wire [63:0] itlb_pa,
     input  wire        itlb_fault,
-    output logic        itlb_lookup_valid,
-    output logic [63:0] itlb_lookup_va,
-    output logic        itlb_miss_valid,
-    output logic [63:0] itlb_miss_va,
+    output reg        itlb_lookup_valid,
+    output reg [63:0] itlb_lookup_va,
+    output reg        itlb_miss_valid,
+    output reg [63:0] itlb_miss_va,
 
     // BPU update (from commit -- actual branch outcome)
     input  wire        bpu_update_valid,
@@ -71,7 +71,7 @@ module fetch_top
     // GHR checkpoint restore
     input  wire        ghr_restore_valid,
     input  wire [GHR_BITS-1:0] ghr_restore_val,
-    output logic [GHR_BITS-1:0] ghr_out,
+    output reg [GHR_BITS-1:0] ghr_out,
 
     // RAS restore
     input  wire        ras_restore_valid,
@@ -81,8 +81,8 @@ module fetch_top
     input  wire        ras_context_clear,
 
     // Memory interface (I-cache to L2)
-    output logic        icache_fill_req_valid,
-    output logic [63:0] icache_fill_req_addr,
+    output reg        icache_fill_req_valid,
+    output reg [63:0] icache_fill_req_addr,
     input  wire        icache_fill_req_accepted,
     input  wire        icache_fill_resp_valid,
     input  wire [63:0] icache_fill_resp_addr,
@@ -91,8 +91,8 @@ module fetch_top
     // Invalidate (FENCE.I)
     input  wire        fence_i,
     // Prefetch L2 interface (from NLPB)
-    output logic         pf_l2_req_valid,
-    output logic [63:0]  pf_l2_req_addr,
+    output reg         pf_l2_req_valid,
+    output reg [63:0]  pf_l2_req_addr,
     input  wire         pf_l2_req_ready,
     input  wire         pf_l2_resp_valid,
     input  wire [63:0]  pf_l2_resp_addr,

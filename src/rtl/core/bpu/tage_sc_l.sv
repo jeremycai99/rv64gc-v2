@@ -13,13 +13,13 @@ module tage_sc_l
     // Predict (combinational lookup)
     input  wire [63:0] pc,
     input  wire [63:0] target,
-    output logic        pred_taken,
-    output logic        pred_confident,   // high confidence -> no checkpoint needed
+    output reg        pred_taken,
+    output reg        pred_confident,   // high confidence -> no checkpoint needed
     input  wire [63:0] aux_pc,
     input  wire [63:0] aux_target,
     input  wire [GHR_BITS-1:0] aux_ghr,
-    output logic        aux_pred_taken,
-    output logic        aux_pred_confident,
+    output reg        aux_pred_taken,
+    output reg        aux_pred_confident,
 
     // Update (from commit — actual branch outcome)
     input  wire        update_valid,
@@ -38,7 +38,7 @@ module tage_sc_l
     input  wire        loop_spec_taken,
     input  wire        ghr_restore_valid,  // restore GHR on mispredict
     input  wire [GHR_BITS-1:0] ghr_restore_val,
-    output logic [GHR_BITS-1:0] ghr_out,   // current GHR for checkpoint save
+    output reg [GHR_BITS-1:0] ghr_out,   // current GHR for checkpoint save
 
     // Flush
     input  wire        flush

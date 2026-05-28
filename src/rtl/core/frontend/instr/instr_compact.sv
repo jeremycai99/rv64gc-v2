@@ -54,10 +54,10 @@ module instr_compact
     input  wire [63:0]                  ras_top_i,
     input  wire [GHR_BITS-1:0]          ghr_i,
 
-    output logic                         has_emit_payload_o,
-    output logic                         will_emit_o,
-    output logic                         pc_consumed_o,
-    output logic                         packet_enq_o,
+    output reg                         has_emit_payload_o,
+    output reg                         will_emit_o,
+    output reg                         pc_consumed_o,
+    output reg                         packet_enq_o,
     output fetch_packet_t                packet_o
 );
 

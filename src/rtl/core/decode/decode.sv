@@ -29,7 +29,7 @@ module decode
 
     // Output to fusion detector (or directly to rename if no fusion)
     output decoded_insn_t                   dec_insn [0:PIPE_WIDTH-1],
-    output logic [2:0]                      dec_count,
+    output reg [2:0]                      dec_count,
 
     // Stall from downstream
     input  wire                            stall,

@@ -17,16 +17,16 @@ module next_line_prefetch_buffer
     // Lookup port from IFU line fetch, combinational, same cycle as icache.
     input  wire         lookup_valid,
     input  wire [63:0]  lookup_addr,
-    output logic         hit,
-    output logic [511:0] hit_data,
+    output reg         hit,
+    output reg [511:0] hit_data,
 
     // Auxiliary observation port.  This is used by frontend probes to inspect
     // the current F1 line while the primary port follows the live icache
     // request address.
     input  wire         aux_lookup_valid,
     input  wire [63:0]  aux_lookup_addr,
-    output logic         aux_hit,
-    output logic [511:0] aux_hit_data,
+    output reg         aux_hit,
+    output reg [511:0] aux_hit_data,
 
     // Prefetch trigger (icache delivered a line this cycle)
     input  wire         trigger_valid,
@@ -37,8 +37,8 @@ module next_line_prefetch_buffer
     input  wire         fence_i,        // FENCE.I: clear all entries
 
     // L2 prefetch request
-    output logic         pf_req_valid,
-    output logic [63:0]  pf_req_addr,
+    output reg         pf_req_valid,
+    output reg [63:0]  pf_req_addr,
     input  wire         pf_req_ready,
 
     // L2 prefetch response

@@ -19,20 +19,20 @@ module instr_boundary
     input  wire [511:0] data_line_i,
     input  wire [2:0]  final_count_i,
 
-    output logic [5:0]  start_offset_o,
-    output logic [15:0] raw_hw_o [0:PIPE_WIDTH-1],
-    output logic [31:0] raw_insn_o [0:PIPE_WIDTH-1],
-    output logic        slot_is_rvc_o [0:PIPE_WIDTH-1],
-    output logic        slot_valid_o [0:PIPE_WIDTH-1],
-    output logic [63:0] slot_pc_o [0:PIPE_WIDTH-1],
-    output logic [2:0]  extract_count_o,
-    output logic        straddle_detected_o,
-    output logic [63:0] straddle_pc_o,
-    output logic        seq_valid_o,
-    output logic [63:0] seq_next_pc_o,
-    output logic        line_straddle_advance_o,
-    output logic        consume_remainder_o,
-    output logic        remainder_valid_o
+    output reg [5:0]  start_offset_o,
+    output reg [15:0] raw_hw_o [0:PIPE_WIDTH-1],
+    output reg [31:0] raw_insn_o [0:PIPE_WIDTH-1],
+    output reg        slot_is_rvc_o [0:PIPE_WIDTH-1],
+    output reg        slot_valid_o [0:PIPE_WIDTH-1],
+    output reg [63:0] slot_pc_o [0:PIPE_WIDTH-1],
+    output reg [2:0]  extract_count_o,
+    output reg        straddle_detected_o,
+    output reg [63:0] straddle_pc_o,
+    output reg        seq_valid_o,
+    output reg [63:0] seq_next_pc_o,
+    output reg        line_straddle_advance_o,
+    output reg        consume_remainder_o,
+    output reg        remainder_valid_o
 );
 
     logic        remainder_valid_r;

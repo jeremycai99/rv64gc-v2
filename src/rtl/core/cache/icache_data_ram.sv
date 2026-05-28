@@ -11,7 +11,7 @@ module icache_data_ram
     // Read port
     input  wire [L1I_SET_BITS-1:0]     raddr,
     input  wire [1:0]                  rway,
-    output logic [LINE_SIZE*8-1:0]      rdata,
+    output reg [LINE_SIZE*8-1:0]      rdata,
     // Write port
     input  wire                        we,
     input  wire [L1I_SET_BITS-1:0]     waddr,

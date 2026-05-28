@@ -13,7 +13,7 @@ module tb_int_prf
     input  wire                      clk,
     // 12 read ports
     input  wire [PHYS_REG_BITS-1:0] raddr [0:11],
-    output logic [63:0]              rdata [0:11],
+    output reg [63:0]              rdata [0:11],
     // 6 write ports
     input  wire [5:0]               wen,
     input  wire [PHYS_REG_BITS-1:0] waddr [0:5],

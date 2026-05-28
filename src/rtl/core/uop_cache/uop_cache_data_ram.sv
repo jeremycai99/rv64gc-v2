@@ -18,7 +18,7 @@ module uop_cache_data_ram
     // Read port (F0 → F1)
     input  wire [UOC_INDEX_BITS-1:0]   raddr,
     output decoded_insn_t               rdata [0:UOC_PER_ENTRY-1],
-    output logic [2:0]                  rcount,
+    output reg [2:0]                  rcount,
     // Write port (F2 fill)
     input  wire                        we,
     input  wire [UOC_INDEX_BITS-1:0]   waddr,

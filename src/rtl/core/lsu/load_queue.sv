@@ -17,8 +17,8 @@ module load_queue
     // Allocate (from rename)
     input  wire [2:0] alloc_count,
     input  wire [ROB_IDX_BITS-1:0] alloc_rob_idx [0:PIPE_WIDTH-1],
-    output logic [LQ_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],
-    output logic full,
+    output reg [LQ_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],
+    output reg full,
 
     // Load execution (from load AGU — address computed)
     input  wire exec_valid,
@@ -55,8 +55,8 @@ module load_queue
     input  wire [1:0] st_size,
     input  wire [ROB_IDX_BITS-1:0] st_rob_idx,
     input  wire [ROB_IDX_BITS-1:0] rob_head,
-    output logic ordering_violation,
-    output logic [ROB_IDX_BITS-1:0] violation_rob_idx,
+    output reg ordering_violation,
+    output reg [ROB_IDX_BITS-1:0] violation_rob_idx,
 
     // Commit: retire head entries
     input  wire [2:0] commit_count,

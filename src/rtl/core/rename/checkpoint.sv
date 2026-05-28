@@ -12,8 +12,8 @@ module checkpoint
 
     // Save: allocate a checkpoint (triggered at predicted-taken branches)
     input  wire                       save_valid,
-    output logic [CHECKPOINT_BITS-1:0] save_id,      // which slot was allocated
-    output logic                       save_avail,   // at least 1 slot free
+    output reg [CHECKPOINT_BITS-1:0] save_id,      // which slot was allocated
+    output reg                       save_avail,   // at least 1 slot free
 
     // Snapshot data to save
     input  wire [PHYS_REG_BITS-1:0]   rat_snapshot [0:31],
@@ -23,9 +23,9 @@ module checkpoint
     // Restore: triggered on branch mispredict (frees all checkpoints)
     input  wire                       restore_valid,
     input  wire [CHECKPOINT_BITS-1:0] restore_id,
-    output logic [PHYS_REG_BITS-1:0]   restored_rat [0:31],
-    output logic [INT_PRF_DEPTH-1:0]   restored_fl_bitmap,
-    output logic [ROB_IDX_BITS-1:0]    restored_rob_tail,
+    output reg [PHYS_REG_BITS-1:0]   restored_rat [0:31],
+    output reg [INT_PRF_DEPTH-1:0]   restored_fl_bitmap,
+    output reg [ROB_IDX_BITS-1:0]    restored_rob_tail,
 
     // Release: checkpoint no longer needed (branch committed without mispredict)
     input  wire [PIPE_WIDTH-1:0]              release_valid,  // per-commit-slot release

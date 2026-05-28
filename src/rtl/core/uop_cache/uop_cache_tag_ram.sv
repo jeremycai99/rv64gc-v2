@@ -15,8 +15,8 @@ module uop_cache_tag_ram
     input  wire                        rst_n,
     // Read port (F0 → F1)
     input  wire [UOC_INDEX_BITS-1:0]   raddr,
-    output logic [UOC_WAYS-1:0]         valid_out,
-    output logic [UOC_TAG_BITS-1:0]     tag_out  [0:UOC_WAYS-1],
+    output reg [UOC_WAYS-1:0]         valid_out,
+    output reg [UOC_TAG_BITS-1:0]     tag_out  [0:UOC_WAYS-1],
     // Write port (F2 fill)
     input  wire                        we,
     input  wire [UOC_INDEX_BITS-1:0]   waddr,

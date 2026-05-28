@@ -13,8 +13,8 @@ module rob
 
     // Allocate: up to PIPE_WIDTH entries per cycle from rename
     input  wire [2:0]              alloc_count,     // 0..PIPE_WIDTH valid entries to allocate
-    output logic [ROB_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],  // allocated ROB indices
-    output logic                    alloc_ready,     // can accept alloc_count entries
+    output reg [ROB_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],  // allocated ROB indices
+    output reg                    alloc_ready,     // can accept alloc_count entries
     input  wire [PIPE_WIDTH-1:0]   alloc_ready_now, // entries complete at rename
     input  wire [PIPE_WIDTH-1:0]   alloc_has_exception,
     input  wire [3:0]              alloc_exc_code [0:PIPE_WIDTH-1],
@@ -101,37 +101,37 @@ module rob
     input  wire [ROB_IDX_BITS-1:0]           replay_rob_idx_from,
 
     // Commit: read head entries for commit unit
-    output logic [ROB_IDX_BITS-1:0]           head_idx,
-    output logic [PIPE_WIDTH-1:0]             head_valid,     // which head entries are valid
-    output logic [PIPE_WIDTH-1:0]             head_ready,     // which are completed (ready to retire)
-    output logic [63:0]                       head_pc [0:PIPE_WIDTH-1],
-    output logic [63:0]                       head_trap_pc [0:PIPE_WIDTH-1],
-    output logic [PIPE_WIDTH-1:0]             head_has_exception,
-    output logic [3:0]                        head_exc_code [0:PIPE_WIDTH-1],
-    output logic [63:0]                       head_exc_tval [0:PIPE_WIDTH-1],
-    output logic [PIPE_WIDTH-1:0]             head_is_branch,
-    output logic [2:0]                       head_bpu_type [0:PIPE_WIDTH-1],
-    output logic [PIPE_WIDTH-1:0]             head_is_store,
-    output logic [PIPE_WIDTH-1:0]             head_is_load,
-    output logic [PIPE_WIDTH-1:0]             head_is_csr,
-    output logic [PIPE_WIDTH-1:0]             head_is_fence,
-    output logic [PIPE_WIDTH-1:0]             head_is_fence_i,
-    output logic [PIPE_WIDTH-1:0]             head_is_mret,
-    output logic [PIPE_WIDTH-1:0]             head_is_sret,
-    output logic [PIPE_WIDTH-1:0]             head_is_sfence_vma,
-    output logic [PIPE_WIDTH-1:0]             head_is_ecall,
-    output logic [PIPE_WIDTH-1:0]             head_is_wfi,
-    output logic [PIPE_WIDTH-1:0]             head_is_fused,
-    output logic [PIPE_WIDTH-1:0]             head_is_fp_instr,
-    output logic [PIPE_WIDTH-1:0]             head_branch_taken,
-    output logic [63:0]                       head_branch_target [0:PIPE_WIDTH-1],
-    output logic [63:0]                       head_branch_taken_target [0:PIPE_WIDTH-1],
-    output logic [PIPE_WIDTH-1:0]             head_branch_mispredict,
-    output logic [11:0]                       head_csr_addr [0:PIPE_WIDTH-1],
-    output logic [63:0]                       head_csr_wdata [0:PIPE_WIDTH-1],
-    output logic [PIPE_WIDTH-1:0]             head_csr_we,
-    output logic [1:0]                        head_csr_op [0:PIPE_WIDTH-1],
-    output logic [4:0]                        head_fp_fflags [0:PIPE_WIDTH-1],
+    output reg [ROB_IDX_BITS-1:0]           head_idx,
+    output reg [PIPE_WIDTH-1:0]             head_valid,     // which head entries are valid
+    output reg [PIPE_WIDTH-1:0]             head_ready,     // which are completed (ready to retire)
+    output reg [63:0]                       head_pc [0:PIPE_WIDTH-1],
+    output reg [63:0]                       head_trap_pc [0:PIPE_WIDTH-1],
+    output reg [PIPE_WIDTH-1:0]             head_has_exception,
+    output reg [3:0]                        head_exc_code [0:PIPE_WIDTH-1],
+    output reg [63:0]                       head_exc_tval [0:PIPE_WIDTH-1],
+    output reg [PIPE_WIDTH-1:0]             head_is_branch,
+    output reg [2:0]                       head_bpu_type [0:PIPE_WIDTH-1],
+    output reg [PIPE_WIDTH-1:0]             head_is_store,
+    output reg [PIPE_WIDTH-1:0]             head_is_load,
+    output reg [PIPE_WIDTH-1:0]             head_is_csr,
+    output reg [PIPE_WIDTH-1:0]             head_is_fence,
+    output reg [PIPE_WIDTH-1:0]             head_is_fence_i,
+    output reg [PIPE_WIDTH-1:0]             head_is_mret,
+    output reg [PIPE_WIDTH-1:0]             head_is_sret,
+    output reg [PIPE_WIDTH-1:0]             head_is_sfence_vma,
+    output reg [PIPE_WIDTH-1:0]             head_is_ecall,
+    output reg [PIPE_WIDTH-1:0]             head_is_wfi,
+    output reg [PIPE_WIDTH-1:0]             head_is_fused,
+    output reg [PIPE_WIDTH-1:0]             head_is_fp_instr,
+    output reg [PIPE_WIDTH-1:0]             head_branch_taken,
+    output reg [63:0]                       head_branch_target [0:PIPE_WIDTH-1],
+    output reg [63:0]                       head_branch_taken_target [0:PIPE_WIDTH-1],
+    output reg [PIPE_WIDTH-1:0]             head_branch_mispredict,
+    output reg [11:0]                       head_csr_addr [0:PIPE_WIDTH-1],
+    output reg [63:0]                       head_csr_wdata [0:PIPE_WIDTH-1],
+    output reg [PIPE_WIDTH-1:0]             head_csr_we,
+    output reg [1:0]                        head_csr_op [0:PIPE_WIDTH-1],
+    output reg [4:0]                        head_fp_fflags [0:PIPE_WIDTH-1],
 
     // Commit acknowledgment: advance head pointer
     input  wire [2:0]              commit_count,    // 0..PIPE_WIDTH entries committed this cycle
@@ -143,10 +143,10 @@ module rob
     input  wire                    flush_clear_branch_mispredict,
 
     // Status
-    output logic [ROB_IDX_BITS-1:0] tail_idx,
-    output logic [ROB_IDX_BITS:0]   free_count_o,
-    output logic                    empty,
-    output logic                    full
+    output reg [ROB_IDX_BITS-1:0] tail_idx,
+    output reg [ROB_IDX_BITS:0]   free_count_o,
+    output reg                    empty,
+    output reg                    full
 );
 
     // =========================================================================

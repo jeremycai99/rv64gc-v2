@@ -18,8 +18,8 @@ module bypass_network
     input  wire [PHYS_REG_BITS-1:0] need_tag,
     input  wire [63:0]              prf_data,      // data from PRF read
     // Output
-    output logic [63:0]              result_data,   // bypassed or PRF data
-    output logic                     hit            // bypass matched
+    output reg [63:0]              result_data,   // bypassed or PRF data
+    output reg                     hit            // bypass matched
 );
 
     // Per-source match signals

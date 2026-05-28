@@ -11,11 +11,11 @@ module dcache_data_ram
     // Read port A: returns the line for the current raddr, one per way.
     input  wire [L1D_SET_BITS-1:0]     raddr,
     input  wire [1:0]                  rway,       // unused (legacy), kept for compat
-    output logic [LINE_SIZE*8-1:0]      rdata,       // muxed: way selected by rway_q
-    output logic [LINE_SIZE*8-1:0]      rdata_all [0:L1D_WAYS-1], // all ways
+    output reg [LINE_SIZE*8-1:0]      rdata,       // muxed: way selected by rway_q
+    output reg [LINE_SIZE*8-1:0]      rdata_all [0:L1D_WAYS-1], // all ways
     // Read port B: second port for dual-issue loads
     input  wire [L1D_SET_BITS-1:0]     raddr2,
-    output logic [LINE_SIZE*8-1:0]      rdata_all2 [0:L1D_WAYS-1],
+    output reg [LINE_SIZE*8-1:0]      rdata_all2 [0:L1D_WAYS-1],
     // Write port (full cache-line, e.g., fill from L2)
     input  wire                        we,
     input  wire [L1D_SET_BITS-1:0]     waddr,
