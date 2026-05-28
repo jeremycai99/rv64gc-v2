@@ -11,60 +11,60 @@ module load_queue
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input logic clk,
-    input logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Allocate (from rename)
-    input logic [2:0] alloc_count,
-    input logic [ROB_IDX_BITS-1:0] alloc_rob_idx [0:PIPE_WIDTH-1],
+    input  wire [2:0] alloc_count,
+    input  wire [ROB_IDX_BITS-1:0] alloc_rob_idx [0:PIPE_WIDTH-1],
     output logic [LQ_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],
     output logic full,
 
     // Load execution (from load AGU — address computed)
-    input logic exec_valid,
-    input logic [LQ_IDX_BITS-1:0] exec_idx,
-    input logic [ROB_IDX_BITS-1:0] exec_rob_idx,
-    input logic [63:0] exec_addr,
-    input logic [1:0] exec_size,
-    input logic exec_is_unsigned,
+    input  wire exec_valid,
+    input  wire [LQ_IDX_BITS-1:0] exec_idx,
+    input  wire [ROB_IDX_BITS-1:0] exec_rob_idx,
+    input  wire [63:0] exec_addr,
+    input  wire [1:0] exec_size,
+    input  wire exec_is_unsigned,
 
     // Second load execution/address fill port.  Port 1 exists so a dual-load
     // cache issue records both executed load addresses in the LQ in the same
     // cycle; delaying port 1 can hide a younger executed load from a later STA
     // ordering check.
-    input logic exec1_valid,
-    input logic [LQ_IDX_BITS-1:0] exec1_idx,
-    input logic [ROB_IDX_BITS-1:0] exec1_rob_idx,
-    input logic [63:0] exec1_addr,
-    input logic [1:0] exec1_size,
-    input logic exec1_is_unsigned,
+    input  wire exec1_valid,
+    input  wire [LQ_IDX_BITS-1:0] exec1_idx,
+    input  wire [ROB_IDX_BITS-1:0] exec1_rob_idx,
+    input  wire [63:0] exec1_addr,
+    input  wire [1:0] exec1_size,
+    input  wire exec1_is_unsigned,
 
     // Load result (from D-cache or store forwarding)
-    input logic result0_valid,
-    input logic [LQ_IDX_BITS-1:0] result0_idx,
-    input logic [ROB_IDX_BITS-1:0] result0_rob_idx,
-    input logic [63:0] result0_data,
-    input logic result1_valid,
-    input logic [LQ_IDX_BITS-1:0] result1_idx,
-    input logic [ROB_IDX_BITS-1:0] result1_rob_idx,
-    input logic [63:0] result1_data,
+    input  wire result0_valid,
+    input  wire [LQ_IDX_BITS-1:0] result0_idx,
+    input  wire [ROB_IDX_BITS-1:0] result0_rob_idx,
+    input  wire [63:0] result0_data,
+    input  wire result1_valid,
+    input  wire [LQ_IDX_BITS-1:0] result1_idx,
+    input  wire [ROB_IDX_BITS-1:0] result1_rob_idx,
+    input  wire [63:0] result1_data,
 
     // Store-to-load ordering violation check
-    input logic st_addr_valid,
-    input logic [63:0] st_addr,
-    input logic [1:0] st_size,
-    input logic [ROB_IDX_BITS-1:0] st_rob_idx,
-    input logic [ROB_IDX_BITS-1:0] rob_head,
+    input  wire st_addr_valid,
+    input  wire [63:0] st_addr,
+    input  wire [1:0] st_size,
+    input  wire [ROB_IDX_BITS-1:0] st_rob_idx,
+    input  wire [ROB_IDX_BITS-1:0] rob_head,
     output logic ordering_violation,
     output logic [ROB_IDX_BITS-1:0] violation_rob_idx,
 
     // Commit: retire head entries
-    input logic [2:0] commit_count,
+    input  wire [2:0] commit_count,
 
     // Flush
-    input logic flush_valid,
-    input logic [ROB_IDX_BITS-1:0] flush_rob_tail,
-    input logic flush_full
+    input  wire flush_valid,
+    input  wire [ROB_IDX_BITS-1:0] flush_rob_tail,
+    input  wire flush_full
 );
 
     // =========================================================================

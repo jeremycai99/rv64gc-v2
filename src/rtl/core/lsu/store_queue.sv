@@ -11,34 +11,34 @@ module store_queue
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input logic clk,
-    input logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Allocate (from rename, up to 6 per cycle)
-    input logic [2:0] alloc_count,
-    input logic [ROB_IDX_BITS-1:0] alloc_rob_idx [0:PIPE_WIDTH-1],
+    input  wire [2:0] alloc_count,
+    input  wire [ROB_IDX_BITS-1:0] alloc_rob_idx [0:PIPE_WIDTH-1],
     output logic [SQ_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],
     output logic full,
 
     // STA fill (store address computed by store AGU)
-    input logic sta_valid,
-    input logic [SQ_IDX_BITS-1:0] sta_idx,
-    input logic [ROB_IDX_BITS-1:0] sta_rob_idx,
-    input logic [63:0] sta_addr,
-    input logic [1:0] sta_size,
+    input  wire sta_valid,
+    input  wire [SQ_IDX_BITS-1:0] sta_idx,
+    input  wire [ROB_IDX_BITS-1:0] sta_rob_idx,
+    input  wire [63:0] sta_addr,
+    input  wire [1:0] sta_size,
 
     // STD fill (store data from register file)
-    input logic std_valid,
-    input logic [SQ_IDX_BITS-1:0] std_idx,
-    input logic [ROB_IDX_BITS-1:0] std_rob_idx,
-    input logic [63:0] std_data,
-    input logic [7:0] std_byte_mask,
+    input  wire std_valid,
+    input  wire [SQ_IDX_BITS-1:0] std_idx,
+    input  wire [ROB_IDX_BITS-1:0] std_rob_idx,
+    input  wire [63:0] std_data,
+    input  wire [7:0] std_byte_mask,
 
     // Store-to-load forwarding (from load queue)
-    input logic fwd_req_valid,
-    input logic [63:0] fwd_req_addr,
-    input logic [1:0] fwd_req_size,
-    input logic [ROB_IDX_BITS-1:0] fwd_req_rob_idx,
+    input  wire fwd_req_valid,
+    input  wire [63:0] fwd_req_addr,
+    input  wire [1:0] fwd_req_size,
+    input  wire [ROB_IDX_BITS-1:0] fwd_req_rob_idx,
     output logic fwd_hit,
     output logic fwd_partial,
     output logic fwd_wait,
@@ -47,10 +47,10 @@ module store_queue
     output logic [63:0] fwd_data,
 
     // Address-known / data-not-ready hazard check for a second load request
-    input logic wait_req_valid,
-    input logic [63:0] wait_req_addr,
-    input logic [1:0] wait_req_size,
-    input logic [ROB_IDX_BITS-1:0] wait_req_rob_idx,
+    input  wire wait_req_valid,
+    input  wire [63:0] wait_req_addr,
+    input  wire [1:0] wait_req_size,
+    input  wire [ROB_IDX_BITS-1:0] wait_req_rob_idx,
     output logic wait_fwd_hit,
     output logic wait_partial,
     output logic wait_wait,
@@ -58,20 +58,20 @@ module store_queue
     output logic wait_wait_data_missing,
     output logic [63:0] wait_data,
     output logic wait_hit,
-    input logic [ROB_IDX_BITS-1:0] rob_head,
+    input  wire [ROB_IDX_BITS-1:0] rob_head,
 
     // Commit (from commit unit)
-    input logic [2:0] commit_count,
+    input  wire [2:0] commit_count,
 
     // Drain to committed store buffer
     output logic drain_valid,
     output sq_entry_t drain_entry,
-    input logic drain_ready,
+    input  wire drain_ready,
 
     // Flush
-    input logic flush_valid,
-    input logic [ROB_IDX_BITS-1:0] flush_rob_tail,
-    input logic flush_full
+    input  wire flush_valid,
+    input  wire [ROB_IDX_BITS-1:0] flush_rob_tail,
+    input  wire flush_full
 );
 
 `ifndef SYNTHESIS

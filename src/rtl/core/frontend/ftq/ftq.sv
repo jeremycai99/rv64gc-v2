@@ -8,21 +8,21 @@ module ftq
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic                         clk,
-    input  logic                         rst_n,
-    input  logic                         flush,
+    input  wire                         clk,
+    input  wire                         rst_n,
+    input  wire                         flush,
 
-    input  logic                         enq_valid,
+    input  wire                         enq_valid,
     input  ftq_entry_t                   enq_entry,
     output logic                         enq_ready,
     output logic [FTQ_IDX_BITS-1:0]      enq_idx,
     output logic [FTQ_EPOCH_BITS-1:0]    enq_epoch,
     output logic [FTQ_ALLOC_TAG_BITS-1:0] enq_tag,
 
-    input  logic                         ifu_req_pop_valid,
-    input  logic                         ifu_cancel_next_valid,
-    input  logic                         delivery_push_valid,
-    input  logic                         pop_valid,
+    input  wire                         ifu_req_pop_valid,
+    input  wire                         ifu_cancel_next_valid,
+    input  wire                         delivery_push_valid,
+    input  wire                         pop_valid,
 
     output logic                         head_valid,
     output ftq_entry_t                   head_entry,
@@ -42,7 +42,7 @@ module ftq
     output logic [FTQ_IDX_BITS-1:0]      next_ifu_owner_idx,
     output logic [FTQ_ALLOC_TAG_BITS-1:0] next_ifu_owner_tag,
 
-    input  logic                         commit_pop_valid,
+    input  wire                         commit_pop_valid,
     output logic                         commit_head_valid,
     output ftq_entry_t                   commit_head_entry,
     output logic [FTQ_IDX_BITS-1:0]      commit_head_idx,

@@ -7,15 +7,15 @@
 module mmio_platform
     import rv64gc_pkg::*;
 (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
-    input  logic        req_valid_i,
-    input  logic        req_we_i,
-    input  logic [63:0] req_addr_i,
-    input  logic [63:0] req_wdata_i,
-    input  logic [7:0]  req_wmask_i,
-    input  logic [1:0]  req_size_i,
+    input  wire        req_valid_i,
+    input  wire        req_we_i,
+    input  wire [63:0] req_addr_i,
+    input  wire [63:0] req_wdata_i,
+    input  wire [7:0]  req_wmask_i,
+    input  wire [1:0]  req_size_i,
     output logic        req_ready_o,
     output logic        resp_valid_o,
     output logic [63:0] resp_data_o,

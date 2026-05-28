@@ -7,17 +7,17 @@
 module instr_boundary
     import rv64gc_pkg::*;
 (
-    input  logic        clk,
-    input  logic        rst_n,
-    input  logic        redirect_i,
-    input  logic        bpu_redirect_i,
-    input  logic        stall_i,
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire        redirect_i,
+    input  wire        bpu_redirect_i,
+    input  wire        stall_i,
 
-    input  logic        work_valid_i,
-    input  logic [63:0] work_pc_i,
-    input  logic        data_valid_i,
-    input  logic [511:0] data_line_i,
-    input  logic [2:0]  final_count_i,
+    input  wire        work_valid_i,
+    input  wire [63:0] work_pc_i,
+    input  wire        data_valid_i,
+    input  wire [511:0] data_line_i,
+    input  wire [2:0]  final_count_i,
 
     output logic [5:0]  start_offset_o,
     output logic [15:0] raw_hw_o [0:PIPE_WIDTH-1],

@@ -8,14 +8,14 @@ module divider
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic        clk,
-    input  logic        rst_n,
-    input  logic        valid_in,
-    input  logic [63:0] operand_a,     // dividend
-    input  logic [63:0] operand_b,     // divisor
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire        valid_in,
+    input  wire [63:0] operand_a,     // dividend
+    input  wire [63:0] operand_b,     // divisor
     input  div_op_e     op,
-    input  logic        is_w_op,
-    input  logic        flush,         // cancel in-progress divide
+    input  wire        is_w_op,
+    input  wire        flush,         // cancel in-progress divide
     output logic        busy,          // cannot accept new input
     output logic        valid_out,
     output logic [63:0] result

@@ -8,17 +8,17 @@ module ibuffer
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic          clk,
-    input  logic          rst_n,
-    input  logic          flush,
+    input  wire          clk,
+    input  wire          rst_n,
+    input  wire          flush,
 
-    input  logic          enq_valid,
+    input  wire          enq_valid,
     input  fetch_packet_t enq_packet,
     output logic          enq_ready,
     output logic          enq_fire,
 
-    input  logic          backend_stall_i,
-    input  logic          frontend_hold_i,
+    input  wire          backend_stall_i,
+    input  wire          frontend_hold_i,
     output logic          deq_ready,
     output logic          deq_valid,
     output fetch_packet_t deq_packet,
@@ -44,10 +44,10 @@ module ibuffer
     output logic [63:0]                  decode_fetch_bp_ras_top,
     output logic [GHR_BITS-1:0]          decode_fetch_bp_ghr,
 
-    input  logic                          owner_valid,
-    input  logic [FTQ_IDX_BITS-1:0]       owner_idx,
-    input  logic [FTQ_EPOCH_BITS-1:0]     owner_epoch,
-    input  logic [FTQ_ALLOC_TAG_BITS-1:0] owner_tag,
+    input  wire                          owner_valid,
+    input  wire [FTQ_IDX_BITS-1:0]       owner_idx,
+    input  wire [FTQ_EPOCH_BITS-1:0]     owner_epoch,
+    input  wire [FTQ_ALLOC_TAG_BITS-1:0] owner_tag,
     output logic                          deq_owner_match,
     output logic                          deq_stale_owner,
     output logic                          deq_owner_complete,

@@ -7,32 +7,32 @@
 module checkpoint
     import rv64gc_pkg::*;
 (
-    input  logic clk,
-    input  logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Save: allocate a checkpoint (triggered at predicted-taken branches)
-    input  logic                       save_valid,
+    input  wire                       save_valid,
     output logic [CHECKPOINT_BITS-1:0] save_id,      // which slot was allocated
     output logic                       save_avail,   // at least 1 slot free
 
     // Snapshot data to save
-    input  logic [PHYS_REG_BITS-1:0]   rat_snapshot [0:31],
-    input  logic [INT_PRF_DEPTH-1:0]   fl_bitmap_snapshot,
-    input  logic [ROB_IDX_BITS-1:0]    rob_tail_snapshot,
+    input  wire [PHYS_REG_BITS-1:0]   rat_snapshot [0:31],
+    input  wire [INT_PRF_DEPTH-1:0]   fl_bitmap_snapshot,
+    input  wire [ROB_IDX_BITS-1:0]    rob_tail_snapshot,
 
     // Restore: triggered on branch mispredict (frees all checkpoints)
-    input  logic                       restore_valid,
-    input  logic [CHECKPOINT_BITS-1:0] restore_id,
+    input  wire                       restore_valid,
+    input  wire [CHECKPOINT_BITS-1:0] restore_id,
     output logic [PHYS_REG_BITS-1:0]   restored_rat [0:31],
     output logic [INT_PRF_DEPTH-1:0]   restored_fl_bitmap,
     output logic [ROB_IDX_BITS-1:0]    restored_rob_tail,
 
     // Release: checkpoint no longer needed (branch committed without mispredict)
-    input  logic [PIPE_WIDTH-1:0]              release_valid,  // per-commit-slot release
-    input  logic [CHECKPOINT_BITS-1:0]         release_id [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0]              release_valid,  // per-commit-slot release
+    input  wire [CHECKPOINT_BITS-1:0]         release_id [0:PIPE_WIDTH-1],
 
     // Full flush
-    input  logic                       flush
+    input  wire                       flush
 );
 
     // -------------------------------------------------------------------------

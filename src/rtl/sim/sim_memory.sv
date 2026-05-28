@@ -10,14 +10,14 @@ module sim_memory
     parameter int MEM_SIZE_BYTES = 2 * 1024 * 1024
 )
 (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
     // L2 cache to memory interface
-    input  logic        mem_req_valid,
-    input  logic [63:0] mem_req_addr,
-    input  logic        mem_req_we,
-    input  logic [511:0] mem_req_wdata,
+    input  wire        mem_req_valid,
+    input  wire [63:0] mem_req_addr,
+    input  wire        mem_req_we,
+    input  wire [511:0] mem_req_wdata,
     output logic        mem_req_ready,
     output logic        mem_resp_valid,
     output logic [511:0] mem_resp_data

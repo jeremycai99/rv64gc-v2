@@ -8,17 +8,17 @@ module bru
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic [63:0] operand_a,     // rs1 value
-    input  logic [63:0] operand_b,     // rs2 value
-    input  logic [63:0] pc,
-    input  logic [63:0] imm,           // branch offset or JAL/JALR target offset
+    input  wire [63:0] operand_a,     // rs1 value
+    input  wire [63:0] operand_b,     // rs2 value
+    input  wire [63:0] pc,
+    input  wire [63:0] imm,           // branch offset or JAL/JALR target offset
     input  br_op_e      op,
-    input  logic        is_fused,      // fused compare-and-branch uop
-    input  logic [2:0]  fusion_type,   // which fused pattern
-    input  logic [31:0] fused_imm,      // first-op immediate for fused SLTI/SLTIU
-    input  logic        bp_taken,      // predicted taken
-    input  logic [63:0] bp_target,     // predicted target
-    input  logic        is_rvc,        // compressed instruction (PC+2 for link)
+    input  wire        is_fused,      // fused compare-and-branch uop
+    input  wire [2:0]  fusion_type,   // which fused pattern
+    input  wire [31:0] fused_imm,      // first-op immediate for fused SLTI/SLTIU
+    input  wire        bp_taken,      // predicted taken
+    input  wire [63:0] bp_target,     // predicted target
+    input  wire        is_rvc,        // compressed instruction (PC+2 for link)
     output logic [63:0] result,        // link address (PC+4 for JAL/JALR, unused for branches)
     output logic        taken,         // actual branch outcome
     output logic [63:0] target,        // actual redirect target

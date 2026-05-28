@@ -9,19 +9,19 @@ module ptw
     import rv64gc_pkg::*;
     import isa_pkg::*;
 (
-    input  logic                    clk,
-    input  logic                    rst_n,
+    input  wire                    clk,
+    input  wire                    rst_n,
 
-    input  logic [63:0]             satp_i,
+    input  wire [63:0]             satp_i,
 
-    input  logic                    dtlb_req_valid_i,
-    input  logic [63:0]             dtlb_req_va_i,
-    input  logic [ROB_IDX_BITS-1:0] dtlb_req_rob_idx_i,
-    input  logic                    dtlb_req_is_store_i,
+    input  wire                    dtlb_req_valid_i,
+    input  wire [63:0]             dtlb_req_va_i,
+    input  wire [ROB_IDX_BITS-1:0] dtlb_req_rob_idx_i,
+    input  wire                    dtlb_req_is_store_i,
     output logic                    dtlb_req_ready_o,
 
-    input  logic                    itlb_req_valid_i,
-    input  logic [63:0]             itlb_req_va_i,
+    input  wire                    itlb_req_valid_i,
+    input  wire [63:0]             itlb_req_va_i,
     output logic                    itlb_req_ready_o,
 
     output logic                    dtlb_fill_valid_o,
@@ -40,25 +40,25 @@ module ptw
     output logic [63:0]             fault_va_o,
 
     output logic                    dirty_wb_ready_o,
-    input  logic                    dirty_wb_valid_i,
-    input  logic [63:0]             dirty_wb_pte_pa_i,
-    input  logic [63:0]             dirty_wb_pte_value_i,
+    input  wire                    dirty_wb_valid_i,
+    input  wire [63:0]             dirty_wb_pte_pa_i,
+    input  wire [63:0]             dirty_wb_pte_value_i,
 
     output logic                    l2_req_valid_o,
     output logic [63:0]             l2_req_addr_o,
-    input  logic                    l2_req_ready_i,
-    input  logic                    l2_req_accepted_i,
-    input  logic                    l2_resp_valid_i,
-    input  logic [63:0]             l2_resp_addr_i,
-    input  logic [511:0]            l2_resp_data_i,
+    input  wire                    l2_req_ready_i,
+    input  wire                    l2_req_accepted_i,
+    input  wire                    l2_resp_valid_i,
+    input  wire [63:0]             l2_resp_addr_i,
+    input  wire [511:0]            l2_resp_data_i,
 
     output logic                    dcache_store_valid_o,
     output logic [63:0]             dcache_store_addr_o,
     output logic [63:0]             dcache_store_data_o,
-    input  logic                    dcache_store_ack_i,
+    input  wire                    dcache_store_ack_i,
 
-    input  logic                    flush_i,
-    input  logic                    translation_flush_i
+    input  wire                    flush_i,
+    input  wire                    translation_flush_i
 );
 
     typedef enum logic [2:0] {

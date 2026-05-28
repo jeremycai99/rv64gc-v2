@@ -11,35 +11,35 @@ module csr_file
     import rv64gc_pkg::*;
     import isa_pkg::*;
 (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
     // CSR read (for CSR instructions – combinational)
-    input  logic [11:0] read_addr,
-    input  logic        read_write_intent,
+    input  wire [11:0] read_addr,
+    input  wire        read_write_intent,
     output logic [63:0] read_data,
     output logic        read_illegal,
 
     // CSR write (from commit — serialized, at most 1/cycle)
-    input  logic        write_valid,
-    input  logic [11:0] write_addr,
-    input  logic [63:0] write_data,
-    input  logic [1:0]  write_op,       // csr_op_e: 0=RW, 1=RS, 2=RC
-    input  logic        fflags_acc_valid_i,
-    input  logic [4:0]  fflags_acc_bits_i,
-    input  logic        fp_state_dirty_i,
+    input  wire        write_valid,
+    input  wire [11:0] write_addr,
+    input  wire [63:0] write_data,
+    input  wire [1:0]  write_op,       // csr_op_e: 0=RW, 1=RS, 2=RC
+    input  wire        fflags_acc_valid_i,
+    input  wire [4:0]  fflags_acc_bits_i,
+    input  wire        fp_state_dirty_i,
 
     // Trap interface (from commit)
-    input  logic        trap_valid,
-    input  logic [63:0] trap_cause,
-    input  logic [63:0] trap_pc,        // PC of faulting/interrupting instruction
-    input  logic [63:0] trap_val,       // mtval/stval value
-    input  logic        trap_is_interrupt,
-    input  logic        trap_to_supervisor,
+    input  wire        trap_valid,
+    input  wire [63:0] trap_cause,
+    input  wire [63:0] trap_pc,        // PC of faulting/interrupting instruction
+    input  wire [63:0] trap_val,       // mtval/stval value
+    input  wire        trap_is_interrupt,
+    input  wire        trap_to_supervisor,
 
     // Return from trap
-    input  logic        mret_valid,
-    input  logic        sret_valid,
+    input  wire        mret_valid,
+    input  wire        sret_valid,
 
     // Outputs for pipeline use
     output logic [63:0] mtvec,
@@ -55,16 +55,16 @@ module csr_file
     output logic        irq_to_supervisor,
 
     // Performance counters
-    input  logic [3:0]  insn_retired_count,  // architectural instructions from commit
+    input  wire [3:0]  insn_retired_count,  // architectural instructions from commit
     output logic [63:0] mcycle_val,
     output logic [63:0] minstret_val,
 
     // Timer (from external CLINT)
-    input  logic [63:0] time_val,
+    input  wire [63:0] time_val,
 
     // External interrupts
-    input  logic        mtip, msip, meip,
-    input  logic        stip, ssip, seip,
+    input  wire        mtip, msip, meip,
+    input  wire        stip, ssip, seip,
 
     // Privileged translation state
     output logic        mstatus_mprv,

@@ -8,18 +8,18 @@ module wakeup_network
     import rv64gc_pkg::*;
 (
     // CDB broadcast (CDB_WIDTH sources, 4 in 4-wide config)
-    input  logic [CDB_WIDTH-1:0]     cdb_valid,
-    input  logic [PHYS_REG_BITS-1:0] cdb_tag [0:CDB_WIDTH-1],
+    input  wire [CDB_WIDTH-1:0]     cdb_valid,
+    input  wire [PHYS_REG_BITS-1:0] cdb_tag [0:CDB_WIDTH-1],
 
     // Entry's source tags to check
-    input  logic [PHYS_REG_BITS-1:0] entry_rs1_tag,
-    input  logic [PHYS_REG_BITS-1:0] entry_rs2_tag,
-    input  logic                     entry_rs1_ready,
-    input  logic                     entry_rs2_ready,
+    input  wire [PHYS_REG_BITS-1:0] entry_rs1_tag,
+    input  wire [PHYS_REG_BITS-1:0] entry_rs2_tag,
+    input  wire                     entry_rs1_ready,
+    input  wire                     entry_rs2_ready,
 
     // Speculative wakeup (from load issue / AGU)
-    input  logic                     spec_wakeup_valid,
-    input  logic [PHYS_REG_BITS-1:0] spec_wakeup_tag,
+    input  wire                     spec_wakeup_valid,
+    input  wire [PHYS_REG_BITS-1:0] spec_wakeup_tag,
 
     // Output: new ready status
     output logic                     rs1_wakeup,       // rs1 becomes definitively ready this cycle

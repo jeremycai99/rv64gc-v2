@@ -9,39 +9,39 @@ module rat
 #(
     parameter bit PROTECT_ZERO = 1'b1
 )(
-    input logic clk,
-    input logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // 4-wide source read (rs1/rs2/rs3 lookup)
-    input logic [ARCH_REG_BITS-1:0] rs1_arch [0:PIPE_WIDTH-1],
-    input logic [ARCH_REG_BITS-1:0] rs2_arch [0:PIPE_WIDTH-1],
-    input logic [ARCH_REG_BITS-1:0] rs3_arch [0:PIPE_WIDTH-1],
+    input  wire [ARCH_REG_BITS-1:0] rs1_arch [0:PIPE_WIDTH-1],
+    input  wire [ARCH_REG_BITS-1:0] rs2_arch [0:PIPE_WIDTH-1],
+    input  wire [ARCH_REG_BITS-1:0] rs3_arch [0:PIPE_WIDTH-1],
     output logic [PHYS_REG_BITS-1:0] rs1_phys [0:PIPE_WIDTH-1],
     output logic [PHYS_REG_BITS-1:0] rs2_phys [0:PIPE_WIDTH-1],
     output logic [PHYS_REG_BITS-1:0] rs3_phys [0:PIPE_WIDTH-1],
 
     // 6-wide destination write (rename result)
-    input logic [PIPE_WIDTH-1:0] wr_en,
-    input logic [ARCH_REG_BITS-1:0] wr_arch [0:PIPE_WIDTH-1],
-    input logic [PHYS_REG_BITS-1:0] wr_phys [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0] wr_en,
+    input  wire [ARCH_REG_BITS-1:0] wr_arch [0:PIPE_WIDTH-1],
+    input  wire [PHYS_REG_BITS-1:0] wr_phys [0:PIPE_WIDTH-1],
 
     // Old mapping output (for ROB old_pdst)
     output logic [PHYS_REG_BITS-1:0] old_phys [0:PIPE_WIDTH-1],
 
     // Commit update to committed RAT (from commit unit)
-    input logic [PIPE_WIDTH-1:0]          commit_wr_en,
-    input logic [ARCH_REG_BITS-1:0]       commit_arch [0:PIPE_WIDTH-1],
-    input logic [PHYS_REG_BITS-1:0]       commit_phys [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0]          commit_wr_en,
+    input  wire [ARCH_REG_BITS-1:0]       commit_arch [0:PIPE_WIDTH-1],
+    input  wire [PHYS_REG_BITS-1:0]       commit_phys [0:PIPE_WIDTH-1],
 
     // Checkpoint save
-    input logic ckpt_save,
-    input logic [CHECKPOINT_BITS-1:0] ckpt_save_id,
-    input logic [2:0] ckpt_save_slot,
+    input  wire ckpt_save,
+    input  wire [CHECKPOINT_BITS-1:0] ckpt_save_id,
+    input  wire [2:0] ckpt_save_slot,
     // Checkpoint restore
-    input logic ckpt_restore,
-    input logic [CHECKPOINT_BITS-1:0] ckpt_restore_id,
+    input  wire ckpt_restore,
+    input  wire [CHECKPOINT_BITS-1:0] ckpt_restore_id,
     // Full flush: restore from committed RAT
-    input logic flush
+    input  wire flush
 );
 
     // -------------------------------------------------------------------------

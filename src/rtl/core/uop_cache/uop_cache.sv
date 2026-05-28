@@ -26,13 +26,13 @@ module uop_cache
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic                clk,
-    input  logic                rst_n,
-    input  logic                en,
+    input  wire                clk,
+    input  wire                rst_n,
+    input  wire                en,
 
     // Capture-side input (from fusion stage, post-decode)
     input  decoded_insn_t       fused_insn [0:PIPE_WIDTH-1],
-    input  logic [2:0]          fused_count,
+    input  wire [2:0]          fused_count,
 
     // Replay-side output (to rename input mux)
     output decoded_insn_t       uoc_insn   [0:PIPE_WIDTH-1],
@@ -42,12 +42,12 @@ module uop_cache
     output logic [63:0]         handoff_pc,
 
     // Frontend redirect (commit flush, BRU early redirect, FENCE.I)
-    input  logic                redirect_valid,
-    input  logic [63:0]         redirect_pc,
-    input  logic                invalidate,          // FENCE.I or full-flush invalidate
+    input  wire                redirect_valid,
+    input  wire [63:0]         redirect_pc,
+    input  wire                invalidate,          // FENCE.I or full-flush invalidate
 
     // Backpressure from rename
-    input  logic                stall,
+    input  wire                stall,
 
     // Telemetry counters (driven combinational; tb samples them)
     output logic                ev_lookup,

@@ -9,8 +9,8 @@ module fetch_top
     import isa_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
     // Output to decode
     output logic [2:0]  fetch_count,
@@ -28,75 +28,75 @@ module fetch_top
     output logic [GHR_BITS-1:0] fetch_bp_ghr,
 
     // Stall from downstream (decode/rename backpressure)
-    input  logic        backend_stall,
+    input  wire        backend_stall,
     // Frontend quiesce while decoded-op replay owns rename input.
-    input  logic        frontend_hold,
+    input  wire        frontend_hold,
     // Stop new fetch work while preserving decode-side IBuffer drain.
-    input  logic        frontend_fetch_halt,
+    input  wire        frontend_fetch_halt,
     // Avoid packet fast-pathing while a replay structure is forming a
     // candidate, including the cycle that starts a replay window.
-    input  logic        frontend_replay_blocking,
-    input  logic        frontend_replay_start,
+    input  wire        frontend_replay_blocking,
+    input  wire        frontend_replay_start,
     output logic        recovery_headroom_ok,
 
     // Redirect (from commit -- mispredict or exception)
-    input  logic        redirect_valid,
-    input  logic [63:0] redirect_pc,
+    input  wire        redirect_valid,
+    input  wire [63:0] redirect_pc,
 
     // Instruction translation
-    input  logic        instr_vm_active,
-    input  logic        itlb_hit,
-    input  logic [63:0] itlb_pa,
-    input  logic        itlb_fault,
+    input  wire        instr_vm_active,
+    input  wire        itlb_hit,
+    input  wire [63:0] itlb_pa,
+    input  wire        itlb_fault,
     output logic        itlb_lookup_valid,
     output logic [63:0] itlb_lookup_va,
     output logic        itlb_miss_valid,
     output logic [63:0] itlb_miss_va,
 
     // BPU update (from commit -- actual branch outcome)
-    input  logic        bpu_update_valid,
-    input  logic [63:0] bpu_update_pc,
-    input  logic        bpu_tage_update_valid,
-    input  logic [63:0] bpu_tage_update_pc,
-    input  logic        bpu_tage_update_taken,
-    input  logic        bpu_tage_update_mispredict,
-    input  logic [63:0] bpu_tage_update_target,
-    input  logic [GHR_BITS-1:0] bpu_tage_update_ghr,
-    input  logic        bpu_update_taken,
-    input  logic        bpu_update_mispredict,
-    input  logic [63:0] bpu_update_target,
-    input  logic [2:0]  bpu_update_type,     // branch type for BTB
-    input  logic [GHR_BITS-1:0] bpu_update_ghr,
+    input  wire        bpu_update_valid,
+    input  wire [63:0] bpu_update_pc,
+    input  wire        bpu_tage_update_valid,
+    input  wire [63:0] bpu_tage_update_pc,
+    input  wire        bpu_tage_update_taken,
+    input  wire        bpu_tage_update_mispredict,
+    input  wire [63:0] bpu_tage_update_target,
+    input  wire [GHR_BITS-1:0] bpu_tage_update_ghr,
+    input  wire        bpu_update_taken,
+    input  wire        bpu_update_mispredict,
+    input  wire [63:0] bpu_update_target,
+    input  wire [2:0]  bpu_update_type,     // branch type for BTB
+    input  wire [GHR_BITS-1:0] bpu_update_ghr,
 
     // GHR checkpoint restore
-    input  logic        ghr_restore_valid,
-    input  logic [GHR_BITS-1:0] ghr_restore_val,
+    input  wire        ghr_restore_valid,
+    input  wire [GHR_BITS-1:0] ghr_restore_val,
     output logic [GHR_BITS-1:0] ghr_out,
 
     // RAS restore
-    input  logic        ras_restore_valid,
-    input  logic [4:0]  ras_restore_tos,
-    input  logic        ras_restore_top_valid,
-    input  logic [63:0] ras_restore_top_addr,
-    input  logic        ras_context_clear,
+    input  wire        ras_restore_valid,
+    input  wire [4:0]  ras_restore_tos,
+    input  wire        ras_restore_top_valid,
+    input  wire [63:0] ras_restore_top_addr,
+    input  wire        ras_context_clear,
 
     // Memory interface (I-cache to L2)
     output logic        icache_fill_req_valid,
     output logic [63:0] icache_fill_req_addr,
-    input  logic        icache_fill_req_accepted,
-    input  logic        icache_fill_resp_valid,
-    input  logic [63:0] icache_fill_resp_addr,
-    input  logic [511:0] icache_fill_resp_data,
+    input  wire        icache_fill_req_accepted,
+    input  wire        icache_fill_resp_valid,
+    input  wire [63:0] icache_fill_resp_addr,
+    input  wire [511:0] icache_fill_resp_data,
 
     // Invalidate (FENCE.I)
-    input  logic        fence_i,
+    input  wire        fence_i,
     // Prefetch L2 interface (from NLPB)
     output logic         pf_l2_req_valid,
     output logic [63:0]  pf_l2_req_addr,
-    input  logic         pf_l2_req_ready,
-    input  logic         pf_l2_resp_valid,
-    input  logic [63:0]  pf_l2_resp_addr,
-    input  logic [511:0] pf_l2_resp_data
+    input  wire         pf_l2_req_ready,
+    input  wire         pf_l2_resp_valid,
+    input  wire [63:0]  pf_l2_resp_addr,
+    input  wire [511:0] pf_l2_resp_data
 );
 
     // =========================================================================

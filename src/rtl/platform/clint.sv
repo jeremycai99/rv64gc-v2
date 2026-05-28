@@ -7,14 +7,14 @@
 module clint #(
     parameter int unsigned MTIME_DIV_P = 1
 ) (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
-    input  logic        req_valid_i,
-    input  logic        req_we_i,
-    input  logic [15:0] req_addr_i,
-    input  logic [63:0] req_wdata_i,
-    input  logic [7:0]  req_wmask_i,
+    input  wire        req_valid_i,
+    input  wire        req_we_i,
+    input  wire [15:0] req_addr_i,
+    input  wire [63:0] req_wdata_i,
+    input  wire [7:0]  req_wmask_i,
     output logic [63:0] resp_rdata_o,
 
     output logic [63:0] mtime_o,

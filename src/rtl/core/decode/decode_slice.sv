@@ -10,9 +10,9 @@ module decode_slice
     import fpu_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic [31:0]   insn,
-    input  logic [63:0]   pc,
-    input  logic          is_rvc,     // was this a compressed insn (PC+2 vs PC+4)
+    input  wire [31:0]   insn,
+    input  wire [63:0]   pc,
+    input  wire          is_rvc,     // was this a compressed insn (PC+2 vs PC+4)
     output decoded_insn_t decoded
 );
 

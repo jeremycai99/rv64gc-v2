@@ -8,12 +8,12 @@ module rename
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic clk,
-    input  logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Input: decoded instructions from decode (up to 6)
     input  decoded_insn_t dec_insn [0:PIPE_WIDTH-1],
-    input  logic [2:0]    dec_count,     // how many valid decoded insns (0..6)
+    input  wire [2:0]    dec_count,     // how many valid decoded insns (0..6)
 
     // Output: renamed instructions to dispatch queue (up to 6)
     output renamed_insn_t ren_insn [0:PIPE_WIDTH-1],
@@ -25,43 +25,43 @@ module rename
     output logic [PIPE_WIDTH-1:0] ren_zero_eliminated,
 
     // ROB allocation interface
-    input  logic [ROB_IDX_BITS-1:0] rob_alloc_idx [0:PIPE_WIDTH-1],
-    input  logic                    rob_alloc_ready,  // ROB can accept
+    input  wire [ROB_IDX_BITS-1:0] rob_alloc_idx [0:PIPE_WIDTH-1],
+    input  wire                    rob_alloc_ready,  // ROB can accept
     output logic [PHYS_REG_BITS:0]  free_preg_count,
 
     // Optional backend admission governor. When asserted, rename admits only
     // the oldest slots and holds the younger tail for a later cycle.
-    input  logic                    backend_admission_throttle,
+    input  wire                    backend_admission_throttle,
 
     // Stall output (backpressure to decode/fetch)
     output logic stall,
     output logic recovery_headroom_ok,
 
     // Dispatch queue backpressure
-    input  logic dq_full,
+    input  wire dq_full,
 
     // LQ/SQ allocation
-    input  logic [LQ_IDX_BITS-1:0]  lq_alloc_idx [0:PIPE_WIDTH-1],
-    input  logic [SQ_IDX_BITS-1:0]  sq_alloc_idx [0:PIPE_WIDTH-1],
-    input  logic                    lq_full,
-    input  logic                    sq_full,
+    input  wire [LQ_IDX_BITS-1:0]  lq_alloc_idx [0:PIPE_WIDTH-1],
+    input  wire [SQ_IDX_BITS-1:0]  sq_alloc_idx [0:PIPE_WIDTH-1],
+    input  wire                    lq_full,
+    input  wire                    sq_full,
 
     // PRF ready table (which physical registers have been written)
-    input  logic [PHYS_TAG_COUNT-1:0] preg_ready_table,
+    input  wire [PHYS_TAG_COUNT-1:0] preg_ready_table,
 
     // Flush (from commit)
     input  flush_t flush_in,
 
     // Commit: release old_pdst to free list + update committed RAT
-    input  logic [2:0]               commit_count,
-    input  logic [PHYS_REG_BITS-1:0] commit_old_pdst [0:PIPE_WIDTH-1],
-    input  logic [PIPE_WIDTH-1:0]    commit_rd_valid,
-    input  logic [PIPE_WIDTH-1:0]    commit_is_fp_dst,
-    input  logic [4:0]               commit_rd_arch  [0:PIPE_WIDTH-1],
-    input  logic [PHYS_REG_BITS-1:0] commit_pdst     [0:PIPE_WIDTH-1],
+    input  wire [2:0]               commit_count,
+    input  wire [PHYS_REG_BITS-1:0] commit_old_pdst [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0]    commit_rd_valid,
+    input  wire [PIPE_WIDTH-1:0]    commit_is_fp_dst,
+    input  wire [4:0]               commit_rd_arch  [0:PIPE_WIDTH-1],
+    input  wire [PHYS_REG_BITS-1:0] commit_pdst     [0:PIPE_WIDTH-1],
     // Checkpoint release from commit
-    input  logic [PIPE_WIDTH-1:0]              commit_release_cp,
-    input  logic [CHECKPOINT_BITS-1:0]         commit_cp_id [0:PIPE_WIDTH-1]
+    input  wire [PIPE_WIDTH-1:0]              commit_release_cp,
+    input  wire [CHECKPOINT_BITS-1:0]         commit_cp_id [0:PIPE_WIDTH-1]
 );
 
     // =========================================================================

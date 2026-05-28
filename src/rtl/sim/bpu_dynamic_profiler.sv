@@ -8,17 +8,17 @@
 module bpu_dynamic_profiler #(
     parameter int TOP_N = 128
 ) (
-    input  logic        clk,
-    input  logic        rst_n,
-    input  logic        update_valid,
-    input  logic [63:0] update_pc,
-    input  logic [63:0] update_target,
-    input  logic        update_taken,
-    input  logic        update_mispredict,
-    input  logic        upd_loop_hit,
-    input  logic        upd_any_hit,
-    input  logic [1:0]  upd_provider,
-    input  logic        upd_loop_backward
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire        update_valid,
+    input  wire [63:0] update_pc,
+    input  wire [63:0] update_target,
+    input  wire        update_taken,
+    input  wire        update_mispredict,
+    input  wire        upd_loop_hit,
+    input  wire        upd_any_hit,
+    input  wire [1:0]  upd_provider,
+    input  wire        upd_loop_backward
 );
 
     logic   sim_bpu_dyn_en;

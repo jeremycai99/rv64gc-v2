@@ -13,15 +13,15 @@
 module int_prf
     import rv64gc_pkg::*;
 (
-    input  logic                      clk,
-    input  logic                      rst_n,
+    input  wire                      clk,
+    input  wire                      rst_n,
     // 12 read ports (6 pairs)
-    input  logic [PHYS_REG_BITS-1:0] raddr [0:11],
+    input  wire [PHYS_REG_BITS-1:0] raddr [0:11],
     output logic [63:0]              rdata [0:11],
     // PRF_WRITE_PORTS write ports
-    input  logic [PRF_WRITE_PORTS-1:0] wen,
-    input  logic [PHYS_REG_BITS-1:0]   waddr [0:PRF_WRITE_PORTS-1],
-    input  logic [63:0]                 wdata [0:PRF_WRITE_PORTS-1]
+    input  wire [PRF_WRITE_PORTS-1:0] wen,
+    input  wire [PHYS_REG_BITS-1:0]   waddr [0:PRF_WRITE_PORTS-1],
+    input  wire [63:0]                 wdata [0:PRF_WRITE_PORTS-1]
 );
 
     // -------------------------------------------------------------------------

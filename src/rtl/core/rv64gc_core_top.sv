@@ -19,17 +19,17 @@ module rv64gc_core_top
     parameter logic UOP_CACHE_ENABLE                 = 1'b0
 )
 (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
     // L2-to-memory interface
     output logic        mem_req_valid,
     output logic [63:0] mem_req_addr,
     output logic        mem_req_we,
     output logic [511:0] mem_req_wdata,
-    input  logic        mem_req_ready,
-    input  logic        mem_resp_valid,
-    input  logic [511:0] mem_resp_data,
+    input  wire        mem_req_ready,
+    input  wire        mem_resp_valid,
+    input  wire [511:0] mem_resp_data,
 
     // Uncached data MMIO interface
     output logic        data_mmio_req_valid,
@@ -38,19 +38,19 @@ module rv64gc_core_top
     output logic [63:0] data_mmio_req_wdata,
     output logic [7:0]  data_mmio_req_wmask,
     output logic [1:0]  data_mmio_req_size,
-    input  logic        data_mmio_req_ready,
-    input  logic        data_mmio_resp_valid,
-    input  logic [63:0] data_mmio_resp_data,
+    input  wire        data_mmio_req_ready,
+    input  wire        data_mmio_resp_valid,
+    input  wire [63:0] data_mmio_resp_data,
 
     // External interrupts
-    input  logic        mtip, msip, meip,
-    input  logic        stip, ssip, seip,
+    input  wire        mtip, msip, meip,
+    input  wire        stip, ssip, seip,
 
     // Timer
-    input  logic [63:0] time_val,
+    input  wire [63:0] time_val,
 
     // Optional DSE controls
-    input  logic        backend_admission_throttle_enable,
+    input  wire        backend_admission_throttle_enable,
 
     // Performance counters (for IPC measurement / benchmarking)
     output logic [63:0] perf_mcycle,

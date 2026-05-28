@@ -2,8 +2,9 @@
  Description: ISA-level constants, CSR addresses, and opcode definitions.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
- Version: 2.0
-*/
+ Revision history:
+    - Apr. 09, 2026: Imported into rv64gc-v2 RTL tree.
+ */
 `ifndef ISA_PKG_SV
 `define ISA_PKG_SV
 package isa_pkg;

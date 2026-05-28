@@ -10,33 +10,33 @@ module free_list
     parameter int PRF_DEPTH = INT_PRF_DEPTH,
     parameter bit PROTECT_ZERO = 1'b1
 )(
-    input logic clk,
-    input logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Allocate: up to 6 per cycle
-    input logic [2:0] alloc_req_count,
+    input  wire [2:0] alloc_req_count,
     output logic [PHYS_REG_BITS-1:0] alloc_preg [0:PIPE_WIDTH-1],
     output logic [2:0] alloc_avail_count,
     output logic [PHYS_REG_BITS:0] free_count,
 
     // Release: up to 6 per cycle (from commit, old_pdst returns to free)
-    input logic [2:0] release_count,
-    input logic [PHYS_REG_BITS-1:0] release_preg [0:PIPE_WIDTH-1],
+    input  wire [2:0] release_count,
+    input  wire [PHYS_REG_BITS-1:0] release_preg [0:PIPE_WIDTH-1],
 
     // Commit pdst (new dest preg, to mark in-use in committed bitmap)
-    input logic [PIPE_WIDTH-1:0]          commit_wr_valid,
-    input logic [ARCH_REG_BITS-1:0]       commit_arch [0:PIPE_WIDTH-1],
-    input logic [PHYS_REG_BITS-1:0]       commit_pdst [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0]          commit_wr_valid,
+    input  wire [ARCH_REG_BITS-1:0]       commit_arch [0:PIPE_WIDTH-1],
+    input  wire [PHYS_REG_BITS-1:0]       commit_pdst [0:PIPE_WIDTH-1],
 
     // Checkpoint save
-    input logic ckpt_save,
-    input logic [CHECKPOINT_BITS-1:0] ckpt_save_id,
-    input logic [2:0] ckpt_save_alloc_count,
+    input  wire ckpt_save,
+    input  wire [CHECKPOINT_BITS-1:0] ckpt_save_id,
+    input  wire [2:0] ckpt_save_alloc_count,
     // Checkpoint restore
-    input logic ckpt_restore,
-    input logic [CHECKPOINT_BITS-1:0] ckpt_restore_id,
+    input  wire ckpt_restore,
+    input  wire [CHECKPOINT_BITS-1:0] ckpt_restore_id,
     // Full flush
-    input logic flush
+    input  wire flush
 );
 
     // -------------------------------------------------------------------------

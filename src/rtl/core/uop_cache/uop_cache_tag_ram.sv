@@ -11,20 +11,20 @@
 module uop_cache_tag_ram
     import rv64gc_pkg::*;
 (
-    input  logic                        clk,
-    input  logic                        rst_n,
+    input  wire                        clk,
+    input  wire                        rst_n,
     // Read port (F0 → F1)
-    input  logic [UOC_INDEX_BITS-1:0]   raddr,
+    input  wire [UOC_INDEX_BITS-1:0]   raddr,
     output logic [UOC_WAYS-1:0]         valid_out,
     output logic [UOC_TAG_BITS-1:0]     tag_out  [0:UOC_WAYS-1],
     // Write port (F2 fill)
-    input  logic                        we,
-    input  logic [UOC_INDEX_BITS-1:0]   waddr,
-    input  logic [UOC_WAY_BITS-1:0]     wway,
-    input  logic                        wvalid,
-    input  logic [UOC_TAG_BITS-1:0]     wtag,
+    input  wire                        we,
+    input  wire [UOC_INDEX_BITS-1:0]   waddr,
+    input  wire [UOC_WAY_BITS-1:0]     wway,
+    input  wire                        wvalid,
+    input  wire [UOC_TAG_BITS-1:0]     wtag,
     // Invalidation (FENCE.I, exception, full flush)
-    input  logic                        invalidate_all
+    input  wire                        invalidate_all
 );
 
     // =========================================================================

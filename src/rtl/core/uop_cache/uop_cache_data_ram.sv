@@ -14,16 +14,16 @@ module uop_cache_data_ram
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic                        clk,
+    input  wire                        clk,
     // Read port (F0 → F1)
-    input  logic [UOC_INDEX_BITS-1:0]   raddr,
+    input  wire [UOC_INDEX_BITS-1:0]   raddr,
     output decoded_insn_t               rdata [0:UOC_PER_ENTRY-1],
     output logic [2:0]                  rcount,
     // Write port (F2 fill)
-    input  logic                        we,
-    input  logic [UOC_INDEX_BITS-1:0]   waddr,
+    input  wire                        we,
+    input  wire [UOC_INDEX_BITS-1:0]   waddr,
     input  decoded_insn_t               wdata [0:UOC_PER_ENTRY-1],
-    input  logic [2:0]                  wcount
+    input  wire [2:0]                  wcount
 );
 
     // =========================================================================

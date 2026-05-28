@@ -13,7 +13,7 @@ module fusion_detector
     import uarch_pkg::*;
 (
     input  decoded_insn_t dec_in [0:PIPE_WIDTH-1],
-    input  logic [2:0]    dec_count_in,
+    input  wire [2:0]    dec_count_in,
     output decoded_insn_t dec_out [0:PIPE_WIDTH-1],
     output logic [2:0]    dec_count_out
 );

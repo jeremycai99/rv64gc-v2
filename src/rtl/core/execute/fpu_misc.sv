@@ -10,11 +10,11 @@
 module fpu_misc
     import fpu_pkg::*;
 (
-    input  logic valid_i,
+    input  wire valid_i,
     input  fpu_misc_op_e op_i,
     input  fp_fmt_e fmt_i,
-    input  logic [63:0] rs1_data_i,
-    input  logic [63:0] rs2_data_i,
+    input  wire [63:0] rs1_data_i,
+    input  wire [63:0] rs2_data_i,
     output logic valid_o,
     output logic [63:0] result_o,
     output fp_status_t status_o

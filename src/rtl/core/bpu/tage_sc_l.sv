@@ -7,41 +7,41 @@
 module tage_sc_l
     import rv64gc_pkg::*;
 (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
     // Predict (combinational lookup)
-    input  logic [63:0] pc,
-    input  logic [63:0] target,
+    input  wire [63:0] pc,
+    input  wire [63:0] target,
     output logic        pred_taken,
     output logic        pred_confident,   // high confidence -> no checkpoint needed
-    input  logic [63:0] aux_pc,
-    input  logic [63:0] aux_target,
-    input  logic [GHR_BITS-1:0] aux_ghr,
+    input  wire [63:0] aux_pc,
+    input  wire [63:0] aux_target,
+    input  wire [GHR_BITS-1:0] aux_ghr,
     output logic        aux_pred_taken,
     output logic        aux_pred_confident,
 
     // Update (from commit — actual branch outcome)
-    input  logic        update_valid,
-    input  logic [63:0] update_pc,
-    input  logic [63:0] update_target,
-    input  logic        update_taken,
-    input  logic        update_mispredict,
-    input  logic [GHR_BITS-1:0] update_ghr,
+    input  wire        update_valid,
+    input  wire [63:0] update_pc,
+    input  wire [63:0] update_target,
+    input  wire        update_taken,
+    input  wire        update_mispredict,
+    input  wire [GHR_BITS-1:0] update_ghr,
 
     // GHR management
-    input  logic        spec_update_valid,  // speculatively shift GHR on prediction
-    input  logic        spec_taken,
-    input  logic [63:0] spec_pc,
-    input  logic [63:0] spec_target,
-    input  logic        loop_spec_update_valid,
-    input  logic        loop_spec_taken,
-    input  logic        ghr_restore_valid,  // restore GHR on mispredict
-    input  logic [GHR_BITS-1:0] ghr_restore_val,
+    input  wire        spec_update_valid,  // speculatively shift GHR on prediction
+    input  wire        spec_taken,
+    input  wire [63:0] spec_pc,
+    input  wire [63:0] spec_target,
+    input  wire        loop_spec_update_valid,
+    input  wire        loop_spec_taken,
+    input  wire        ghr_restore_valid,  // restore GHR on mispredict
+    input  wire [GHR_BITS-1:0] ghr_restore_val,
     output logic [GHR_BITS-1:0] ghr_out,   // current GHR for checkpoint save
 
     // Flush
-    input  logic        flush
+    input  wire        flush
 );
 
     // =========================================================================

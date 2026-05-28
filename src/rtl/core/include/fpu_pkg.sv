@@ -2,8 +2,9 @@
  Description: Shared Phase 5 floating-point types and op encodings.
  Author: Jeremy Cai
  Date: Mar. 28, 2026
- Version: 0.1
-*/
+ Revision history:
+    - Mar. 28, 2026: Imported into rv64gc-v2 RTL tree.
+ */
 
 `ifndef FPU_PKG_SV
 `define FPU_PKG_SV

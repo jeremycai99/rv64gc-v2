@@ -9,8 +9,8 @@ module tb_top
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
     output logic        tohost_valid,
     output logic [63:0] tohost_value,
 

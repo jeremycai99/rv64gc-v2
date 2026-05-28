@@ -11,40 +11,40 @@
 module next_line_prefetch_buffer
     import rv64gc_pkg::*;
 (
-    input  logic         clk,
-    input  logic         rst_n,
+    input  wire         clk,
+    input  wire         rst_n,
 
     // Lookup port from IFU line fetch, combinational, same cycle as icache.
-    input  logic         lookup_valid,
-    input  logic [63:0]  lookup_addr,
+    input  wire         lookup_valid,
+    input  wire [63:0]  lookup_addr,
     output logic         hit,
     output logic [511:0] hit_data,
 
     // Auxiliary observation port.  This is used by frontend probes to inspect
     // the current F1 line while the primary port follows the live icache
     // request address.
-    input  logic         aux_lookup_valid,
-    input  logic [63:0]  aux_lookup_addr,
+    input  wire         aux_lookup_valid,
+    input  wire [63:0]  aux_lookup_addr,
     output logic         aux_hit,
     output logic [511:0] aux_hit_data,
 
     // Prefetch trigger (icache delivered a line this cycle)
-    input  logic         trigger_valid,
-    input  logic [63:0]  trigger_addr,   // line-aligned address that was just delivered
+    input  wire         trigger_valid,
+    input  wire [63:0]  trigger_addr,   // line-aligned address that was just delivered
 
     // Invalidation
-    input  logic         flush,          // redirect: cancel in-flight prefetch
-    input  logic         fence_i,        // FENCE.I: clear all entries
+    input  wire         flush,          // redirect: cancel in-flight prefetch
+    input  wire         fence_i,        // FENCE.I: clear all entries
 
     // L2 prefetch request
     output logic         pf_req_valid,
     output logic [63:0]  pf_req_addr,
-    input  logic         pf_req_ready,
+    input  wire         pf_req_ready,
 
     // L2 prefetch response
-    input  logic         pf_resp_valid,
-    input  logic [63:0]  pf_resp_addr,
-    input  logic [511:0] pf_resp_data
+    input  wire         pf_resp_valid,
+    input  wire [63:0]  pf_resp_addr,
+    input  wire [511:0] pf_resp_data
 );
 
     // =========================================================================

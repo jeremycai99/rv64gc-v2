@@ -7,26 +7,26 @@
 module dcache_data_ram
     import rv64gc_pkg::*;
 (
-    input  logic                        clk,
+    input  wire                        clk,
     // Read port A: returns the line for the current raddr, one per way.
-    input  logic [L1D_SET_BITS-1:0]     raddr,
-    input  logic [1:0]                  rway,       // unused (legacy), kept for compat
+    input  wire [L1D_SET_BITS-1:0]     raddr,
+    input  wire [1:0]                  rway,       // unused (legacy), kept for compat
     output logic [LINE_SIZE*8-1:0]      rdata,       // muxed: way selected by rway_q
     output logic [LINE_SIZE*8-1:0]      rdata_all [0:L1D_WAYS-1], // all ways
     // Read port B: second port for dual-issue loads
-    input  logic [L1D_SET_BITS-1:0]     raddr2,
+    input  wire [L1D_SET_BITS-1:0]     raddr2,
     output logic [LINE_SIZE*8-1:0]      rdata_all2 [0:L1D_WAYS-1],
     // Write port (full cache-line, e.g., fill from L2)
-    input  logic                        we,
-    input  logic [L1D_SET_BITS-1:0]     waddr,
-    input  logic [1:0]                  wway,
-    input  logic [LINE_SIZE*8-1:0]      wdata,
+    input  wire                        we,
+    input  wire [L1D_SET_BITS-1:0]     waddr,
+    input  wire [1:0]                  wway,
+    input  wire [LINE_SIZE*8-1:0]      wdata,
     // Byte-enable write port (store hit — partial line update)
-    input  logic                        bwe,
-    input  logic [L1D_SET_BITS-1:0]     bwaddr,
-    input  logic [1:0]                  bwway,
-    input  logic [LINE_SIZE*8-1:0]      bwdata,
-    input  logic [LINE_SIZE-1:0]        bwmask    // 1 bit per byte
+    input  wire                        bwe,
+    input  wire [L1D_SET_BITS-1:0]     bwaddr,
+    input  wire [1:0]                  bwway,
+    input  wire [LINE_SIZE*8-1:0]      bwdata,
+    input  wire [LINE_SIZE-1:0]        bwmask    // 1 bit per byte
 );
 
     // =========================================================================

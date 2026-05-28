@@ -11,11 +11,11 @@ module dispatch_queue
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic clk,
-    input  logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Enqueue from rename (up to 6 per cycle)
-    input  logic [2:0]    enq_count,
+    input  wire [2:0]    enq_count,
     input  renamed_insn_t enq_data [0:PIPE_WIDTH-1],
     output logic          full,          // backpressure to rename
 
@@ -23,16 +23,16 @@ module dispatch_queue
     output logic [2:0]    deq_count,
     output renamed_insn_t deq_data [0:PIPE_WIDTH-1],
     output logic [1:0]    deq_iq_target [0:PIPE_WIDTH-1],  // 0,1,2 = int IQ; 3 = mem IQ
-    input  logic [NUM_INT_IQS-1:0] iq_full,                // per-IQ backpressure
-    input  logic [5:0]    iq_occ [0:NUM_INT_IQS-1],        // per-IQ occupancy (for load-balanced routing)
-    input  logic [1:0]    load_iq_credit,                  // load IQ free slots, capped at 2
-    input  logic [1:0]    store_iq_credit,                 // STA/STD paired store credits, capped at 2
+    input  wire [NUM_INT_IQS-1:0] iq_full,                // per-IQ backpressure
+    input  wire [5:0]    iq_occ [0:NUM_INT_IQS-1],        // per-IQ occupancy (for load-balanced routing)
+    input  wire [1:0]    load_iq_credit,                  // load IQ free slots, capped at 2
+    input  wire [1:0]    store_iq_credit,                 // STA/STD paired store credits, capped at 2
 
     // Flush
-    input  logic          flush_valid,
-    input  logic          flush_full,
-    input  logic [ROB_IDX_BITS-1:0] flush_rob_tail,
-    input  logic [ROB_IDX_BITS-1:0] rob_head
+    input  wire          flush_valid,
+    input  wire          flush_full,
+    input  wire [ROB_IDX_BITS-1:0] flush_rob_tail,
+    input  wire [ROB_IDX_BITS-1:0] rob_head
 );
 
     // =========================================================================

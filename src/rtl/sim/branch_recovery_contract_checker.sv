@@ -10,21 +10,21 @@ module branch_recovery_contract_checker
 #(
     parameter int CKPT_SEQ_BITS = CHECKPOINT_BITS + 1
 ) (
-    input logic                            clk,
-    input logic                            rst_n,
-    input logic                            save_valid,
-    input logic [CHECKPOINT_BITS-1:0]      save_id,
-    input logic                            save_avail,
-    input logic                            restore_valid,
-    input logic [CHECKPOINT_BITS-1:0]      restore_id,
-    input logic [PIPE_WIDTH-1:0]           release_valid,
-    input logic [CHECKPOINT_BITS-1:0]      release_id [0:PIPE_WIDTH-1],
-    input logic                            flush,
-    input logic [NUM_CHECKPOINTS-1:0]      occupied,
-    input logic [NUM_CHECKPOINTS-1:0]      occupied_after_release,
-    input logic [NUM_CHECKPOINTS-1:0]      restore_keep_mask,
-    input logic [CKPT_SEQ_BITS-1:0]        slot_seq [0:NUM_CHECKPOINTS-1],
-    input logic [CKPT_SEQ_BITS-1:0]        next_seq_r
+    input  wire                            clk,
+    input  wire                            rst_n,
+    input  wire                            save_valid,
+    input  wire [CHECKPOINT_BITS-1:0]      save_id,
+    input  wire                            save_avail,
+    input  wire                            restore_valid,
+    input  wire [CHECKPOINT_BITS-1:0]      restore_id,
+    input  wire [PIPE_WIDTH-1:0]           release_valid,
+    input  wire [CHECKPOINT_BITS-1:0]      release_id [0:PIPE_WIDTH-1],
+    input  wire                            flush,
+    input  wire [NUM_CHECKPOINTS-1:0]      occupied,
+    input  wire [NUM_CHECKPOINTS-1:0]      occupied_after_release,
+    input  wire [NUM_CHECKPOINTS-1:0]      restore_keep_mask,
+    input  wire [CKPT_SEQ_BITS-1:0]        slot_seq [0:NUM_CHECKPOINTS-1],
+    input  wire [CKPT_SEQ_BITS-1:0]        next_seq_r
 );
 
     localparam int BRANCH_RECOVERY_PRINT_LIMIT = 16;

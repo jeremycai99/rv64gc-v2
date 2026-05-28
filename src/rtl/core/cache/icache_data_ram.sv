@@ -7,16 +7,16 @@
 module icache_data_ram
     import rv64gc_pkg::*;
 (
-    input  logic                        clk,
+    input  wire                        clk,
     // Read port
-    input  logic [L1I_SET_BITS-1:0]     raddr,
-    input  logic [1:0]                  rway,
+    input  wire [L1I_SET_BITS-1:0]     raddr,
+    input  wire [1:0]                  rway,
     output logic [LINE_SIZE*8-1:0]      rdata,
     // Write port
-    input  logic                        we,
-    input  logic [L1I_SET_BITS-1:0]     waddr,
-    input  logic [1:0]                  wway,
-    input  logic [LINE_SIZE*8-1:0]      wdata
+    input  wire                        we,
+    input  wire [L1I_SET_BITS-1:0]     waddr,
+    input  wire [1:0]                  wway,
+    input  wire [LINE_SIZE*8-1:0]      wdata
 );
 
     // =========================================================================

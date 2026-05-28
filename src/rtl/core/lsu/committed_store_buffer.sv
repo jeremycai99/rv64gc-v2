@@ -8,10 +8,10 @@ module committed_store_buffer
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic clk,
-    input  logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
     // Enqueue from store queue (drain)
-    input  logic        enq_valid,
+    input  wire        enq_valid,
     input  sq_entry_t   enq_data,
     output logic        enq_ready,     // has space
     // Dequeue to D-cache
@@ -20,17 +20,17 @@ module committed_store_buffer
     output logic [63:0] deq_data,
     output logic [7:0]  deq_byte_mask,
     output logic [1:0]  deq_size,
-    input  logic        deq_ack,       // D-cache accepted the write
+    input  wire        deq_ack,       // D-cache accepted the write
     // Store-to-load forwarding (check CSB before going to cache)
-    input  logic        fwd_valid,
-    input  logic [63:0] fwd_addr,
-    input  logic [1:0]  fwd_size,
+    input  wire        fwd_valid,
+    input  wire [63:0] fwd_addr,
+    input  wire [1:0]  fwd_size,
     output logic        fwd_hit,
     output logic        fwd_partial,
     output logic [63:0] fwd_data,
-    input  logic        fwd1_valid,
-    input  logic [63:0] fwd1_addr,
-    input  logic [1:0]  fwd1_size,
+    input  wire        fwd1_valid,
+    input  wire [63:0] fwd1_addr,
+    input  wire [1:0]  fwd1_size,
     output logic        fwd1_hit,
     output logic        fwd1_partial,
     output logic [63:0] fwd1_data,

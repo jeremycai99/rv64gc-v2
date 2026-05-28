@@ -8,11 +8,11 @@ module alu
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic [63:0] operand_a,   // rs1 value or PC
-    input  logic [63:0] operand_b,   // rs2 value or immediate
+    input  wire [63:0] operand_a,   // rs1 value or PC
+    input  wire [63:0] operand_b,   // rs2 value or immediate
     input  alu_op_e     op,
-    input  logic        is_w_op,     // 1 = 32-bit W suffix operation
-    input  logic        is_unsigned, // 1 = Zba unsigned-word variant
+    input  wire        is_w_op,     // 1 = 32-bit W suffix operation
+    input  wire        is_unsigned, // 1 = Zba unsigned-word variant
     output logic [63:0] result
 );
 

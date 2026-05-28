@@ -2,8 +2,9 @@
  Description: Microarchitectural types: decoded_insn_t, iq_entry_t, etc.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
- Version: 2.0
-*/
+ Revision history:
+    - Apr. 09, 2026: Imported into rv64gc-v2 RTL tree.
+ */
 `ifndef UARCH_PKG_SV
 `define UARCH_PKG_SV
 package uarch_pkg;

@@ -5,13 +5,13 @@
  Version: 1.0
 */
 module uart_16550 (
-    input  logic       clk,
-    input  logic       rst_n,
+    input  wire       clk,
+    input  wire       rst_n,
 
-    input  logic       req_valid_i,
-    input  logic       req_we_i,
-    input  logic [2:0] req_addr_i,
-    input  logic [7:0] req_wdata_i,
+    input  wire       req_valid_i,
+    input  wire       req_we_i,
+    input  wire [2:0] req_addr_i,
+    input  wire [7:0] req_wdata_i,
     output logic [7:0] resp_rdata_o,
 
     output logic       tx_valid_o,

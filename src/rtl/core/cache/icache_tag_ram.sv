@@ -7,20 +7,20 @@
 module icache_tag_ram
     import rv64gc_pkg::*;
 (
-    input  logic                        clk,
-    input  logic                        rst_n,
+    input  wire                        clk,
+    input  wire                        rst_n,
     // Read port
-    input  logic [L1I_SET_BITS-1:0]     raddr,
+    input  wire [L1I_SET_BITS-1:0]     raddr,
     output logic [L1I_WAYS-1:0]         valid_out,
     output logic [L1I_TAG_BITS-1:0]     tag_out [0:L1I_WAYS-1],
     // Write port
-    input  logic                        we,
-    input  logic [L1I_SET_BITS-1:0]     waddr,
-    input  logic [1:0]                  wway,       // which way to write
-    input  logic                        wvalid,
-    input  logic [L1I_TAG_BITS-1:0]     wtag,
+    input  wire                        we,
+    input  wire [L1I_SET_BITS-1:0]     waddr,
+    input  wire [1:0]                  wway,       // which way to write
+    input  wire                        wvalid,
+    input  wire [L1I_TAG_BITS-1:0]     wtag,
     // Invalidation
-    input  logic                        invalidate_all
+    input  wire                        invalidate_all
 );
 
     // =========================================================================

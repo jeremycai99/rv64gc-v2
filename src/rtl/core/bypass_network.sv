@@ -11,12 +11,12 @@ module bypass_network
     import rv64gc_pkg::*;
 (
     // NUM_BYPASS_SRCS bypass sources: CDB0..3 plus two load writeback lanes.
-    input  logic [NUM_BYPASS_SRCS-1:0]    bypass_valid,
-    input  logic [PHYS_REG_BITS-1:0]      bypass_tag  [0:NUM_BYPASS_SRCS-1],
-    input  logic [63:0]                    bypass_data [0:NUM_BYPASS_SRCS-1],
+    input  wire [NUM_BYPASS_SRCS-1:0]    bypass_valid,
+    input  wire [PHYS_REG_BITS-1:0]      bypass_tag  [0:NUM_BYPASS_SRCS-1],
+    input  wire [63:0]                    bypass_data [0:NUM_BYPASS_SRCS-1],
     // Operand to check
-    input  logic [PHYS_REG_BITS-1:0] need_tag,
-    input  logic [63:0]              prf_data,      // data from PRF read
+    input  wire [PHYS_REG_BITS-1:0] need_tag,
+    input  wire [63:0]              prf_data,      // data from PRF read
     // Output
     output logic [63:0]              result_data,   // bypassed or PRF data
     output logic                     hit            // bypass matched

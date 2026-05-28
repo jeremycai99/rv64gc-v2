@@ -12,33 +12,33 @@ module itlb
     parameter int IDX_BITS = $clog2(DEPTH)
 )
 (
-    input  logic                 clk,
-    input  logic                 rst_n,
+    input  wire                 clk,
+    input  wire                 rst_n,
 
-    input  logic                 lookup_valid_i,
-    input  logic [63:0]          va_i,
-    input  logic [1:0]           priv_i,
-    input  logic [15:0]          asid_i,
+    input  wire                 lookup_valid_i,
+    input  wire [63:0]          va_i,
+    input  wire [1:0]           priv_i,
+    input  wire [15:0]          asid_i,
 
     output logic                 hit_o,
     output logic [63:0]          pa_o,
     output logic                 fault_o,
     output logic [3:0]           fault_code_o,
 
-    input  logic                 fill_valid_i,
-    input  logic [35:0]          fill_vpn_i,
-    input  logic [43:0]          fill_ppn_i,
-    input  logic [15:0]          fill_asid_i,
-    input  logic [1:0]           fill_page_size_i,
-    input  logic [7:0]           fill_perm_i,
+    input  wire                 fill_valid_i,
+    input  wire [35:0]          fill_vpn_i,
+    input  wire [43:0]          fill_ppn_i,
+    input  wire [15:0]          fill_asid_i,
+    input  wire [1:0]           fill_page_size_i,
+    input  wire [7:0]           fill_perm_i,
 
-    input  logic                 inv_all_i,
-    input  logic                 inv_va_valid_i,
-    input  logic [63:0]          inv_va_i,
-    input  logic                 inv_asid_valid_i,
-    input  logic [15:0]          inv_asid_i,
+    input  wire                 inv_all_i,
+    input  wire                 inv_va_valid_i,
+    input  wire [63:0]          inv_va_i,
+    input  wire                 inv_asid_valid_i,
+    input  wire [15:0]          inv_asid_i,
 
-    input  logic                 flush_i
+    input  wire                 flush_i
 );
 
     logic [DEPTH-1:0]       valid_r;

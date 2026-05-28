@@ -10,12 +10,12 @@
 module fp_prf
     import rv64gc_pkg::*;
 (
-    input  logic clk,
-    input  logic [6:0] rd_addr [0:7],
+    input  wire clk,
+    input  wire [6:0] rd_addr [0:7],
     output logic [63:0] rd_data [0:7],
-    input  logic [3:0] wr_en,
-    input  logic [6:0] wr_addr [0:3],
-    input  logic [63:0] wr_data [0:3]
+    input  wire [3:0] wr_en,
+    input  wire [6:0] wr_addr [0:3],
+    input  wire [63:0] wr_data [0:3]
 );
 
     logic [63:0] regfile_copy0 [0:FP_PRF_DEPTH-1];

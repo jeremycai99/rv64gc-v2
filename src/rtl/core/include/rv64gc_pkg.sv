@@ -2,8 +2,9 @@
  Description: Top-level package with microarchitectural parameters.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
- Version: 2.0
-*/
+ Revision history:
+    - Apr. 09, 2026: Imported into rv64gc-v2 RTL tree.
+ */
 `ifndef RV64GC_PKG_SV
 `define RV64GC_PKG_SV
 package rv64gc_pkg;

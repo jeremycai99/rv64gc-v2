@@ -7,10 +7,10 @@
 module btb
     import rv64gc_pkg::*;
 (
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
     // Lookup (combinational, same cycle as fetch)
-    input  logic [63:0] lookup_pc,
+    input  wire [63:0] lookup_pc,
     output logic        hit,
     output logic [63:0] target,
     output logic [2:0]  branch_type,  // 0=cond, 1=jal, 2=jalr, 3=call, 4=ret
@@ -21,7 +21,7 @@ module btb
     output logic [5:0]  alt_branch_offset,
     // Independent auxiliary lookup.  This lets the frontend inspect the
     // current F1 PC while the main lookup may be steered to a redirect target.
-    input  logic [63:0] aux_lookup_pc,
+    input  wire [63:0] aux_lookup_pc,
     output logic        aux_hit,
     output logic [63:0] aux_target,
     output logic [2:0]  aux_branch_type,
@@ -31,12 +31,12 @@ module btb
     output logic [2:0]  aux_alt_branch_type,
     output logic [5:0]  aux_alt_branch_offset,
     // Update (from commit/BRU resolution)
-    input  logic        update_valid,
-    input  logic [63:0] update_pc,
-    input  logic [63:0] update_target,
-    input  logic [2:0]  update_type,
+    input  wire        update_valid,
+    input  wire [63:0] update_pc,
+    input  wire [63:0] update_target,
+    input  wire [2:0]  update_type,
     // Flush
-    input  logic        flush
+    input  wire        flush
 );
 
     // =========================================================================

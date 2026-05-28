@@ -2,8 +2,9 @@
  Description: Memory interface package for simulation.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
- Version: 2.0
-*/
+ Revision history:
+    - Apr. 09, 2026: Imported into rv64gc-v2 RTL tree.
+ */
 `ifndef MEM_IF_PKG_SV
 `define MEM_IF_PKG_SV
 package mem_if_pkg;

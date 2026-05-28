@@ -7,16 +7,16 @@
 module predecode
     import rv64gc_pkg::*;
 (
-    input  logic                         valid_i,
-    input  logic [2:0]                   extract_count_i,
-    input  logic [31:0]                  raw_insn_i [0:PIPE_WIDTH-1],
-    input  logic [31:0]                  decomp_insn_i [0:PIPE_WIDTH-1],
-    input  logic                         slot_is_rvc_i [0:PIPE_WIDTH-1],
-    input  logic                         slot_valid_i [0:PIPE_WIDTH-1],
-    input  logic [63:0]                  slot_pc_i [0:PIPE_WIDTH-1],
-    input  logic [4:0]                   ras_tos_i,
-    input  logic [63:0]                  ras_pop_addr_i,
-    input  logic                         owner_tage_pred_taken_i,
+    input  wire                         valid_i,
+    input  wire [2:0]                   extract_count_i,
+    input  wire [31:0]                  raw_insn_i [0:PIPE_WIDTH-1],
+    input  wire [31:0]                  decomp_insn_i [0:PIPE_WIDTH-1],
+    input  wire                         slot_is_rvc_i [0:PIPE_WIDTH-1],
+    input  wire                         slot_valid_i [0:PIPE_WIDTH-1],
+    input  wire [63:0]                  slot_pc_i [0:PIPE_WIDTH-1],
+    input  wire [4:0]                   ras_tos_i,
+    input  wire [63:0]                  ras_pop_addr_i,
+    input  wire                         owner_tage_pred_taken_i,
 
     output logic                         ctl_found_o,
     output logic [2:0]                   ctl_slot_o,

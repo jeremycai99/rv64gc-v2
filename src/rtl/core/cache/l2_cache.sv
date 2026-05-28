@@ -8,22 +8,22 @@ module l2_cache
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic clk,
-    input  logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // D-cache port (fill requests and writebacks)
-    input  logic        dcache_req_valid,
-    input  logic [63:0] dcache_req_addr,
-    input  logic        dcache_req_we,        // 1=writeback from D$, 0=fill request
-    input  logic [511:0] dcache_req_wdata,    // writeback data
+    input  wire        dcache_req_valid,
+    input  wire [63:0] dcache_req_addr,
+    input  wire        dcache_req_we,        // 1=writeback from D$, 0=fill request
+    input  wire [511:0] dcache_req_wdata,    // writeback data
     output logic        dcache_req_ready,     // can accept request
     output logic        dcache_resp_valid,
     output logic [63:0] dcache_resp_addr,
     output logic [511:0] dcache_resp_data,
 
     // I-cache port (fill requests only — I$ is read-only)
-    input  logic        icache_req_valid,
-    input  logic [63:0] icache_req_addr,
+    input  wire        icache_req_valid,
+    input  wire [63:0] icache_req_addr,
     output logic        icache_req_ready,
     output logic        icache_req_accepted,
     output logic        icache_resp_valid,
@@ -31,16 +31,16 @@ module l2_cache
     output logic [511:0] icache_resp_data,
 
     // Prefetch port (lowest priority, read-only)
-    input  logic        prefetch_req_valid,
-    input  logic [63:0] prefetch_req_addr,
+    input  wire        prefetch_req_valid,
+    input  wire [63:0] prefetch_req_addr,
     output logic        prefetch_req_ready,
     output logic        prefetch_resp_valid,
     output logic [63:0] prefetch_resp_addr,
     output logic [511:0] prefetch_resp_data,
 
     // PTW port (read-only page table walker)
-    input  logic        ptw_req_valid,
-    input  logic [63:0] ptw_req_addr,
+    input  wire        ptw_req_valid,
+    input  wire [63:0] ptw_req_addr,
     output logic        ptw_req_ready,
     output logic        ptw_req_accepted,
     output logic        ptw_resp_valid,
@@ -52,12 +52,12 @@ module l2_cache
     output logic [63:0] mem_req_addr,
     output logic        mem_req_we,
     output logic [511:0] mem_req_wdata,
-    input  logic        mem_req_ready,
-    input  logic        mem_resp_valid,
-    input  logic [511:0] mem_resp_data,
+    input  wire        mem_req_ready,
+    input  wire        mem_resp_valid,
+    input  wire [511:0] mem_resp_data,
 
     // Invalidate (FENCE.I — flush dirty lines, invalidate all)
-    input  logic        invalidate_all,
+    input  wire        invalidate_all,
     output logic        invalidate_busy
 );
 

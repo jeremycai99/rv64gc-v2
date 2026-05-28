@@ -8,80 +8,80 @@ module rob
     import rv64gc_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic clk,
-    input  logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Allocate: up to PIPE_WIDTH entries per cycle from rename
-    input  logic [2:0]              alloc_count,     // 0..PIPE_WIDTH valid entries to allocate
+    input  wire [2:0]              alloc_count,     // 0..PIPE_WIDTH valid entries to allocate
     output logic [ROB_IDX_BITS-1:0] alloc_idx [0:PIPE_WIDTH-1],  // allocated ROB indices
     output logic                    alloc_ready,     // can accept alloc_count entries
-    input  logic [PIPE_WIDTH-1:0]   alloc_ready_now, // entries complete at rename
-    input  logic [PIPE_WIDTH-1:0]   alloc_has_exception,
-    input  logic [3:0]              alloc_exc_code [0:PIPE_WIDTH-1],
-    input  logic [63:0]             alloc_exc_tval [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0]   alloc_ready_now, // entries complete at rename
+    input  wire [PIPE_WIDTH-1:0]   alloc_has_exception,
+    input  wire [3:0]              alloc_exc_code [0:PIPE_WIDTH-1],
+    input  wire [63:0]             alloc_exc_tval [0:PIPE_WIDTH-1],
     // Data to write at allocation time (per-entry fields)
-    input  logic [63:0]             alloc_pc [0:PIPE_WIDTH-1],
-    input  logic [63:0]             alloc_trap_pc [0:PIPE_WIDTH-1],
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_branch,
-    input  logic [2:0]             alloc_bpu_type [0:PIPE_WIDTH-1],
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_store,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_load,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_csr,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_fence,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_fence_i,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_mret,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_sret,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_sfence_vma,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_ecall,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_wfi,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_fused,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_fp_instr,
+    input  wire [63:0]             alloc_pc [0:PIPE_WIDTH-1],
+    input  wire [63:0]             alloc_trap_pc [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_branch,
+    input  wire [2:0]             alloc_bpu_type [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_store,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_load,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_csr,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_fence,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_fence_i,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_mret,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_sret,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_sfence_vma,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_ecall,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_wfi,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_fused,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_fp_instr,
     // Sub-classification of the head-stall "other" bucket
     // (perf-instr only; sim-only path uses these arrays).
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_mul,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_div,
-    input  logic [PIPE_WIDTH-1:0]   alloc_is_bru,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_mul,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_div,
+    input  wire [PIPE_WIDTH-1:0]   alloc_is_bru,
 
     // Writeback: CDB marks up to CDB_WIDTH entries as complete
-    input  logic [CDB_WIDTH-1:0]              wb_valid,
-    input  logic [ROB_IDX_BITS-1:0]           wb_idx [0:CDB_WIDTH-1],
-    input  logic [CDB_WIDTH-1:0]              wb_has_exception,
-    input  logic [3:0]                        wb_exc_code [0:CDB_WIDTH-1],
+    input  wire [CDB_WIDTH-1:0]              wb_valid,
+    input  wire [ROB_IDX_BITS-1:0]           wb_idx [0:CDB_WIDTH-1],
+    input  wire [CDB_WIDTH-1:0]              wb_has_exception,
+    input  wire [3:0]                        wb_exc_code [0:CDB_WIDTH-1],
     // Branch resolution fields
-    input  logic [CDB_WIDTH-1:0]              wb_is_branch,
-    input  logic [CDB_WIDTH-1:0]              wb_branch_taken,
-    input  logic [63:0]                       wb_branch_target [0:CDB_WIDTH-1],
-    input  logic [63:0]                       wb_branch_taken_target [0:CDB_WIDTH-1],
-    input  logic [CDB_WIDTH-1:0]              wb_branch_mispredict,
+    input  wire [CDB_WIDTH-1:0]              wb_is_branch,
+    input  wire [CDB_WIDTH-1:0]              wb_branch_taken,
+    input  wire [63:0]                       wb_branch_target [0:CDB_WIDTH-1],
+    input  wire [63:0]                       wb_branch_taken_target [0:CDB_WIDTH-1],
+    input  wire [CDB_WIDTH-1:0]              wb_branch_mispredict,
     // CSR writeback fields
-    input  logic [CDB_WIDTH-1:0]              wb_csr_we,
-    input  logic [11:0]                       wb_csr_addr [0:CDB_WIDTH-1],
-    input  logic [63:0]                       wb_csr_wdata [0:CDB_WIDTH-1],
-    input  logic [1:0]                        wb_csr_op [0:CDB_WIDTH-1],
-    input  logic [CDB_WIDTH-1:0]              wb_fp_fflags_valid,
-    input  logic [4:0]                        wb_fp_fflags [0:CDB_WIDTH-1],
+    input  wire [CDB_WIDTH-1:0]              wb_csr_we,
+    input  wire [11:0]                       wb_csr_addr [0:CDB_WIDTH-1],
+    input  wire [63:0]                       wb_csr_wdata [0:CDB_WIDTH-1],
+    input  wire [1:0]                        wb_csr_op [0:CDB_WIDTH-1],
+    input  wire [CDB_WIDTH-1:0]              wb_fp_fflags_valid,
+    input  wire [4:0]                        wb_fp_fflags [0:CDB_WIDTH-1],
 
     // STA sideband writeback (marks store ROB entry as ready, no data)
-    input  logic                              sta_wb_valid,
-    input  logic [ROB_IDX_BITS-1:0]           sta_wb_rob_idx,
-    input  logic                              std_wb_valid,
-    input  logic [ROB_IDX_BITS-1:0]           std_wb_rob_idx,
+    input  wire                              sta_wb_valid,
+    input  wire [ROB_IDX_BITS-1:0]           sta_wb_rob_idx,
+    input  wire                              std_wb_valid,
+    input  wire [ROB_IDX_BITS-1:0]           std_wb_rob_idx,
 
     // Load writeback sideband (separate from CDB[0:CDB_WIDTH-1]; loads use
     // speculative wakeup so they do not need a CDB broadcast slot but still
     // need to mark the ROB entry complete and report exceptions).
     // 2 load ports: load_wb_valid[0]=Load0, load_wb_valid[1]=Load1.
-    input  logic [1:0]               load_wb_valid_r,
-    input  logic [ROB_IDX_BITS-1:0]  load_wb_idx_r    [0:1],
-    input  logic [1:0]               load_wb_has_exception_r,
-    input  logic [3:0]               load_wb_exc_code_r [0:1],
+    input  wire [1:0]               load_wb_valid_r,
+    input  wire [ROB_IDX_BITS-1:0]  load_wb_idx_r    [0:1],
+    input  wire [1:0]               load_wb_has_exception_r,
+    input  wire [3:0]               load_wb_exc_code_r [0:1],
 
     // Sideband exception write: used by long-latency walkers or units that
     // discover an exception after issue without producing a normal CDB result.
-    input  logic                              sideband_exc_valid,
-    input  logic [ROB_IDX_BITS-1:0]           sideband_exc_rob_idx,
-    input  logic [3:0]                        sideband_exc_code,
-    input  logic [63:0]                       sideband_exc_tval,
+    input  wire                              sideband_exc_valid,
+    input  wire [ROB_IDX_BITS-1:0]           sideband_exc_rob_idx,
+    input  wire [3:0]                        sideband_exc_code,
+    input  wire [63:0]                       sideband_exc_tval,
 
     // Memory ordering violation: a younger load executed before an older
     // store with overlapping bytes was visible.  Mark the violating load
@@ -89,16 +89,16 @@ module rob
     // flushes to the load's own PC and re-executes it against the
     // now-visible store.  replay_valid stays on the port list for the
     // future partial-replay design, but is intentionally unused here.
-    input  logic                              ordering_violation_valid,
-    input  logic [ROB_IDX_BITS-1:0]           ordering_violation_rob_idx,
+    input  wire                              ordering_violation_valid,
+    input  wire [ROB_IDX_BITS-1:0]           ordering_violation_rob_idx,
 
     // Partial-replay bus reserved for the future Phase-3 design
     // (doc/partial_replay_spec.md).  The ports remain in place so the
     // LSU/commit interfaces do not churn, but the current ROB fix does
     // not consume them; ordering violations use the legacy exc_code=15
     // path above.
-    input  logic                              replay_valid,
-    input  logic [ROB_IDX_BITS-1:0]           replay_rob_idx_from,
+    input  wire                              replay_valid,
+    input  wire [ROB_IDX_BITS-1:0]           replay_rob_idx_from,
 
     // Commit: read head entries for commit unit
     output logic [ROB_IDX_BITS-1:0]           head_idx,
@@ -134,13 +134,13 @@ module rob
     output logic [4:0]                        head_fp_fflags [0:PIPE_WIDTH-1],
 
     // Commit acknowledgment: advance head pointer
-    input  logic [2:0]              commit_count,    // 0..PIPE_WIDTH entries committed this cycle
+    input  wire [2:0]              commit_count,    // 0..PIPE_WIDTH entries committed this cycle
 
     // Flush
-    input  logic                    flush_valid,
-    input  logic [ROB_IDX_BITS-1:0] flush_rob_tail,  // restore tail to this value (from checkpoint)
-    input  logic                    flush_full,       // full flush: reset head and tail to 0
-    input  logic                    flush_clear_branch_mispredict,
+    input  wire                    flush_valid,
+    input  wire [ROB_IDX_BITS-1:0] flush_rob_tail,  // restore tail to this value (from checkpoint)
+    input  wire                    flush_full,       // full flush: reset head and tail to 0
+    input  wire                    flush_clear_branch_mispredict,
 
     // Status
     output logic [ROB_IDX_BITS-1:0] tail_idx,

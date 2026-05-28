@@ -7,7 +7,7 @@
 module rvc_decompress
     import isa_pkg::*;
 (
-    input  logic [15:0] insn_in,
+    input  wire [15:0] insn_in,
     output logic [31:0] insn_out,
     output logic        is_rvc,      // 1 if input was a valid compressed insn
     output logic        illegal      // 1 if compressed encoding is illegal/reserved

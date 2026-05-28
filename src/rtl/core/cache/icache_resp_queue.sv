@@ -25,25 +25,25 @@ module icache_resp_queue
 #(
     parameter int DEPTH = 4
 )(
-    input  logic                          clk,
-    input  logic                          rst_n,
-    input  logic                          flush,
+    input  wire                          clk,
+    input  wire                          rst_n,
+    input  wire                          flush,
 
     // From icache (registered response, 1 cycle after request)
-    input  logic                          resp_valid_i,
-    input  logic [511:0]                  resp_data_i,
-    input  logic                          resp_hit_i,
+    input  wire                          resp_valid_i,
+    input  wire [511:0]                  resp_data_i,
+    input  wire                          resp_hit_i,
     // Caller is responsible for capturing the PC of the request that
     // produced this response and the FTQ identity that allocated it.
-    input  logic [63:0]                   resp_pc_i,
-    input  logic                          resp_ftq_valid_i,
-    input  logic [FTQ_IDX_BITS-1:0]       resp_ftq_idx_i,
-    input  logic [FTQ_EPOCH_BITS-1:0]     resp_ftq_epoch_i,
-    input  logic [FTQ_ALLOC_TAG_BITS-1:0] resp_ftq_alloc_tag_i,
+    input  wire [63:0]                   resp_pc_i,
+    input  wire                          resp_ftq_valid_i,
+    input  wire [FTQ_IDX_BITS-1:0]       resp_ftq_idx_i,
+    input  wire [FTQ_EPOCH_BITS-1:0]     resp_ftq_epoch_i,
+    input  wire [FTQ_ALLOC_TAG_BITS-1:0] resp_ftq_alloc_tag_i,
     input  ftq_entry_t                    resp_ftq_entry_i,
 
     // To F2 (FIFO order)
-    input  logic                          deq_ready_i,
+    input  wire                          deq_ready_i,
     output logic                          deq_valid_o,
     output logic [511:0]                  deq_data_o,
     output logic                          deq_hit_o,

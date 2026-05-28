@@ -7,11 +7,11 @@
 module icache
     import rv64gc_pkg::*;
 (
-    input  logic         clk,
-    input  logic         rst_n,
+    input  wire         clk,
+    input  wire         rst_n,
     // Fetch request (from fetch unit)
-    input  logic         req_valid,
-    input  logic [63:0]  req_addr,
+    input  wire         req_valid,
+    input  wire [63:0]  req_addr,
     // Fetch response (to fetch unit)
     output logic         resp_valid,
     output logic [511:0] resp_data,    // full 64-byte cache line
@@ -19,12 +19,12 @@ module icache
     // Fill from L2 (miss handling)
     output logic         fill_req_valid,
     output logic [63:0]  fill_req_addr,  // line-aligned
-    input  logic         fill_req_accepted,
-    input  logic         fill_resp_valid,
-    input  logic [63:0]  fill_resp_addr, // line-aligned, used to filter stale L2 hit-pipe replays
-    input  logic [511:0] fill_resp_data,
+    input  wire         fill_req_accepted,
+    input  wire         fill_resp_valid,
+    input  wire [63:0]  fill_resp_addr, // line-aligned, used to filter stale L2 hit-pipe replays
+    input  wire [511:0] fill_resp_data,
     // Invalidate (FENCE.I)
-    input  logic         invalidate_all,
+    input  wire         invalidate_all,
     output logic         invalidate_busy
 );
 

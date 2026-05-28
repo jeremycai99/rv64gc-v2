@@ -7,31 +7,31 @@
 module dcache_tag_ram
     import rv64gc_pkg::*;
 (
-    input  logic                        clk,
-    input  logic                        rst_n,
+    input  wire                        clk,
+    input  wire                        rst_n,
     // Read port A (load port 0 / store)
-    input  logic [L1D_SET_BITS-1:0]     raddr,
+    input  wire [L1D_SET_BITS-1:0]     raddr,
     output logic [L1D_WAYS-1:0]         valid_out,
     output logic [L1D_WAYS-1:0]         dirty_out,
     output logic [L1D_TAG_BITS-1:0]     tag_out [0:L1D_WAYS-1],
     // Read port B (load port 1)
-    input  logic [L1D_SET_BITS-1:0]     raddr2,
+    input  wire [L1D_SET_BITS-1:0]     raddr2,
     output logic [L1D_WAYS-1:0]         valid_out2,
     output logic [L1D_WAYS-1:0]         dirty_out2,
     output logic [L1D_TAG_BITS-1:0]     tag_out2 [0:L1D_WAYS-1],
     // Write port
-    input  logic                        we,
-    input  logic [L1D_SET_BITS-1:0]     waddr,
-    input  logic [1:0]                  wway,
-    input  logic                        wvalid,
-    input  logic                        wdirty,
-    input  logic [L1D_TAG_BITS-1:0]     wtag,
+    input  wire                        we,
+    input  wire [L1D_SET_BITS-1:0]     waddr,
+    input  wire [1:0]                  wway,
+    input  wire                        wvalid,
+    input  wire                        wdirty,
+    input  wire [L1D_TAG_BITS-1:0]     wtag,
     // Dirty bit update (store hit — update dirty without full write)
-    input  logic                        dirty_we,
-    input  logic [L1D_SET_BITS-1:0]     dirty_waddr,
-    input  logic [1:0]                  dirty_wway,
+    input  wire                        dirty_we,
+    input  wire [L1D_SET_BITS-1:0]     dirty_waddr,
+    input  wire [1:0]                  dirty_wway,
     // Invalidate
-    input  logic                        invalidate_all
+    input  wire                        invalidate_all
 );
 
     // =========================================================================

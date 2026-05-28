@@ -9,32 +9,32 @@ module decode
     import isa_pkg::*;
     import uarch_pkg::*;
 (
-    input  logic clk,
-    input  logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Input from fetch (raw instruction bytes, already decompressed or 32-bit)
-    input  logic [2:0]                      fetch_count,     // how many instructions fetched (0..6)
-    input  logic [31:0]                     fetch_insn   [0:PIPE_WIDTH-1],
-    input  logic [63:0]                     fetch_pc     [0:PIPE_WIDTH-1],
-    input  logic [PIPE_WIDTH-1:0]           fetch_is_rvc,
-    input  logic [PIPE_WIDTH-1:0]           fetch_bp_taken,
-    input  logic [63:0]                     fetch_bp_target [0:PIPE_WIDTH-1],
-    input  logic                            fetch_bp_owner_valid,
-    input  logic [2:0]                      fetch_bp_owner_slot,
-    input  logic                            fetch_bp_owner_from_subgroup,
-    input  logic [63:0]                     fetch_bp_lookup_pc,
-    input  logic [4:0]                      fetch_bp_ras_tos,
-    input  logic [63:0]                     fetch_bp_ras_top,
-    input  logic [GHR_BITS-1:0]             fetch_bp_ghr,
+    input  wire [2:0]                      fetch_count,     // how many instructions fetched (0..6)
+    input  wire [31:0]                     fetch_insn   [0:PIPE_WIDTH-1],
+    input  wire [63:0]                     fetch_pc     [0:PIPE_WIDTH-1],
+    input  wire [PIPE_WIDTH-1:0]           fetch_is_rvc,
+    input  wire [PIPE_WIDTH-1:0]           fetch_bp_taken,
+    input  wire [63:0]                     fetch_bp_target [0:PIPE_WIDTH-1],
+    input  wire                            fetch_bp_owner_valid,
+    input  wire [2:0]                      fetch_bp_owner_slot,
+    input  wire                            fetch_bp_owner_from_subgroup,
+    input  wire [63:0]                     fetch_bp_lookup_pc,
+    input  wire [4:0]                      fetch_bp_ras_tos,
+    input  wire [63:0]                     fetch_bp_ras_top,
+    input  wire [GHR_BITS-1:0]             fetch_bp_ghr,
 
     // Output to fusion detector (or directly to rename if no fusion)
     output decoded_insn_t                   dec_insn [0:PIPE_WIDTH-1],
     output logic [2:0]                      dec_count,
 
     // Stall from downstream
-    input  logic                            stall,
+    input  wire                            stall,
     // Flush
-    input  logic                            flush
+    input  wire                            flush
 );
 
     // ---------------------------------------------------------------

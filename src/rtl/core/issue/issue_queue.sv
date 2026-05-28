@@ -17,40 +17,40 @@ module issue_queue
     // Set to a fu_type_e value (e.g., 3'd1 for FU_BRU) or 0 to disable.
     parameter int PORT0_ONLY_FU = 0
 )(
-    input  logic clk,
-    input  logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Enqueue (from dispatch, up to NUM_ENQUEUE per cycle)
-    input  logic [NUM_ENQUEUE-1:0] enq_valid,
+    input  wire [NUM_ENQUEUE-1:0] enq_valid,
     input  iq_entry_t              enq_data [0:NUM_ENQUEUE-1],
     output logic                   full,       // no space for NUM_ENQUEUE entries
 
     // Wakeup via CDB broadcast
-    input  logic [CDB_WIDTH-1:0]     cdb_valid,
-    input  logic [PHYS_REG_BITS-1:0] cdb_tag [0:CDB_WIDTH-1],
+    input  wire [CDB_WIDTH-1:0]     cdb_valid,
+    input  wire [PHYS_REG_BITS-1:0] cdb_tag [0:CDB_WIDTH-1],
 
     // Speculative wakeup (from load AGU -- may be cancelled on cache miss)
-    input  logic                     spec_wk_valid,
-    input  logic [PHYS_REG_BITS-1:0] spec_wk_tag,
-    input  logic                     spec_wk_valid1,
-    input  logic [PHYS_REG_BITS-1:0] spec_wk_tag1,
+    input  wire                     spec_wk_valid,
+    input  wire [PHYS_REG_BITS-1:0] spec_wk_tag,
+    input  wire                     spec_wk_valid1,
+    input  wire [PHYS_REG_BITS-1:0] spec_wk_tag1,
     // Speculative cancel (cache miss -- undo speculative wakeup, replay)
-    input  logic                     spec_cancel_valid,
-    input  logic [PHYS_REG_BITS-1:0] spec_cancel_tag,
-    input  logic                     spec_cancel_valid1,
-    input  logic [PHYS_REG_BITS-1:0] spec_cancel_tag1,
+    input  wire                     spec_cancel_valid,
+    input  wire [PHYS_REG_BITS-1:0] spec_cancel_tag,
+    input  wire                     spec_cancel_valid1,
+    input  wire [PHYS_REG_BITS-1:0] spec_cancel_tag1,
     // Definitive load writeback wakeup (Stage 2: loads removed from CDB).
     // Fires on the cycle the load data is available (combinational, matches
     // the PRF write).  Two ports for the 2 load writeback lanes.  Unlike
     // spec_wk, this is non-speculative: no cancel path needed.
-    input  logic                     load_wb_wk_valid0,
-    input  logic [PHYS_REG_BITS-1:0] load_wb_wk_tag0,
-    input  logic                     load_wb_wk_valid1,
-    input  logic [PHYS_REG_BITS-1:0] load_wb_wk_tag1,
+    input  wire                     load_wb_wk_valid0,
+    input  wire [PHYS_REG_BITS-1:0] load_wb_wk_tag0,
+    input  wire                     load_wb_wk_valid1,
+    input  wire [PHYS_REG_BITS-1:0] load_wb_wk_tag1,
 
     // PRF ready table: lets enqueue see "already-broadcast" producers even
     // when the entry arrives several cycles after the CDB pulse.
-    input  logic [PHYS_TAG_COUNT-1:0] preg_ready_table,
+    input  wire [PHYS_TAG_COUNT-1:0] preg_ready_table,
 
     // Issue output (NUM_SELECT ports)
     // issue_candidate_valid is the oldest-ready selection before suppression.
@@ -61,20 +61,20 @@ module issue_queue
 
     // Backpressure: suppress issue on selected ports and preserve the
     // corresponding entry for re-issue on a later cycle.
-    input  logic [NUM_SELECT-1:0]  issue_suppress,
-    input  logic                   enq_issue_bypass_enable,
-    input  logic                   enq_issue_bypass_alu_only,
-    input  logic [1:0]             older_probe_valid,
-    input  logic [ROB_IDX_BITS-1:0] older_probe_rob_idx [0:1],
+    input  wire [NUM_SELECT-1:0]  issue_suppress,
+    input  wire                   enq_issue_bypass_enable,
+    input  wire                   enq_issue_bypass_alu_only,
+    input  wire [1:0]             older_probe_valid,
+    input  wire [ROB_IDX_BITS-1:0] older_probe_rob_idx [0:1],
     output logic [1:0]             has_older_entry,
 
     // ROB head for age comparison
-    input  logic [ROB_IDX_BITS-1:0] rob_head,
+    input  wire [ROB_IDX_BITS-1:0] rob_head,
 
     // Flush
-    input  logic                    flush_valid,
-    input  logic [ROB_IDX_BITS-1:0] flush_rob_tail,  // first ROB entry to invalidate
-    input  logic                    flush_full,        // invalidate everything
+    input  wire                    flush_valid,
+    input  wire [ROB_IDX_BITS-1:0] flush_rob_tail,  // first ROB entry to invalidate
+    input  wire                    flush_full,        // invalidate everything
 
     // Current occupancy (for dispatch load-balancing)
     output logic [$clog2(DEPTH+1)-1:0] occupancy

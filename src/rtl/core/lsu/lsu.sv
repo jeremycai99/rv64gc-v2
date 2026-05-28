@@ -12,24 +12,24 @@ module lsu
     import isa_pkg::*;
     import uarch_pkg::*;
 (
-    input logic clk,
-    input logic rst_n,
+    input  wire clk,
+    input  wire rst_n,
 
     // Issue inputs (from issue queues)
-    input logic [1:0] load_issue_candidate_valid,
-    input logic [1:0] load_issue_valid,
+    input  wire [1:0] load_issue_candidate_valid,
+    input  wire [1:0] load_issue_valid,
     input iq_entry_t load_issue_data [0:1],
-    input logic sta_issue_candidate_valid,
-    input logic sta_issue_valid,
+    input  wire sta_issue_candidate_valid,
+    input  wire sta_issue_valid,
     input iq_entry_t sta_issue_data,
-    input logic std_issue_valid,
+    input  wire std_issue_valid,
     input iq_entry_t std_issue_data,
 
     // PRF read data (from regfile)
-    input logic [63:0] load_rs1 [0:1],
-    input logic [63:0] load_rs2 [0:1],
-    input logic [63:0] sta_rs1,
-    input logic [63:0] std_rs2,
+    input  wire [63:0] load_rs1 [0:1],
+    input  wire [63:0] load_rs2 [0:1],
+    input  wire [63:0] sta_rs1,
+    input  wire [63:0] std_rs2,
 
     // Writeback to CDB (load results)
     output logic [1:0] load_wb_valid,
@@ -47,9 +47,9 @@ module lsu
     output logic [ROB_IDX_BITS-1:0] std_wb_rob_idx,
 
     // Commit counts (from commit unit)
-    input logic [2:0] commit_count,
-    input logic [2:0] store_commit_count,
-    input logic [2:0] load_commit_count,
+    input  wire [2:0] commit_count,
+    input  wire [2:0] store_commit_count,
+    input  wire [2:0] load_commit_count,
 
     // Speculative wakeup (load issues -> wake dependents)
     output logic [1:0] spec_wakeup_valid,
@@ -59,15 +59,15 @@ module lsu
     output logic [PHYS_REG_BITS-1:0] spec_cancel_tag [0:1],
 
     // LQ/SQ allocation (from rename)
-    input logic [2:0] lq_alloc_count,
-    input logic [2:0] sq_alloc_count,
-    input logic [ROB_IDX_BITS-1:0] lq_alloc_rob_idx [0:PIPE_WIDTH-1],
-    input logic [ROB_IDX_BITS-1:0] sq_alloc_rob_idx [0:PIPE_WIDTH-1],
+    input  wire [2:0] lq_alloc_count,
+    input  wire [2:0] sq_alloc_count,
+    input  wire [ROB_IDX_BITS-1:0] lq_alloc_rob_idx [0:PIPE_WIDTH-1],
+    input  wire [ROB_IDX_BITS-1:0] sq_alloc_rob_idx [0:PIPE_WIDTH-1],
     output logic [LQ_IDX_BITS-1:0] lq_alloc_idx [0:PIPE_WIDTH-1],
     output logic [SQ_IDX_BITS-1:0] sq_alloc_idx [0:PIPE_WIDTH-1],
     output logic lq_full,
     output logic sq_full,
-    input logic [ROB_IDX_BITS-1:0] rob_head,
+    input  wire [ROB_IDX_BITS-1:0] rob_head,
 
     // Ordering violation (to commit for flush)
     output logic ordering_violation,
@@ -77,11 +77,11 @@ module lsu
 
     // DTLB sideband. Data VM is asserted when SATP translation applies to the
     // effective data privilege mode.
-    input logic data_vm_active_i,
-    input logic dtlb_hit_i,
-    input logic [63:0] dtlb_pa_i,
-    input logic dtlb_fault_i,
-    input logic [3:0] dtlb_fault_code_i,
+    input  wire data_vm_active_i,
+    input  wire dtlb_hit_i,
+    input  wire [63:0] dtlb_pa_i,
+    input  wire dtlb_fault_i,
+    input  wire [3:0] dtlb_fault_code_i,
     output logic dtlb_lookup_valid_o,
     output logic [63:0] dtlb_lookup_va_o,
     output logic dtlb_lookup_is_store_o,
@@ -99,17 +99,17 @@ module lsu
     output logic [63:0] dcache_load_req_addr [0:1],
     output logic [1:0] dcache_load_req_size [0:1],
     output logic [1:0] dcache_load_req_is_unsigned,
-    input logic [1:0] dcache_load_resp_valid,
-    input logic [63:0] dcache_load_resp_data [0:1],
-    input logic [1:0] dcache_load_resp_hit,
-    input logic [1:0] dcache_load_miss_retry,
+    input  wire [1:0] dcache_load_resp_valid,
+    input  wire [63:0] dcache_load_resp_data [0:1],
+    input  wire [1:0] dcache_load_resp_hit,
+    input  wire [1:0] dcache_load_miss_retry,
 
     // D-cache store port (from CSB)
     output logic dcache_store_req_valid,
     output logic [63:0] dcache_store_req_addr,
     output logic [63:0] dcache_store_req_data,
     output logic [7:0] dcache_store_req_byte_mask,
-    input logic dcache_store_ack,
+    input  wire dcache_store_ack,
 
     // L2 fill snoop (for load miss handling)
     // The LSU watches L2 → D-cache fill responses and matches them against
@@ -117,9 +117,9 @@ module lsu
     // arrives for a line that has a pending load, the LSU extracts the
     // requested bytes from the fill line and writes back the load result
     // via the CDB.  This is the "late response" path for missed loads.
-    input logic        dcache_fill_valid,
-    input logic [63:0] dcache_fill_addr,
-    input logic [LINE_SIZE*8-1:0] dcache_fill_data,
+    input  wire        dcache_fill_valid,
+    input  wire [63:0] dcache_fill_addr,
+    input  wire [LINE_SIZE*8-1:0] dcache_fill_data,
 
     // Uncached data MMIO interface
     output logic        data_mmio_req_valid,
@@ -128,9 +128,9 @@ module lsu
     output logic [63:0] data_mmio_req_wdata,
     output logic [7:0]  data_mmio_req_wmask,
     output logic [1:0]  data_mmio_req_size,
-    input  logic        data_mmio_req_ready,
-    input  logic        data_mmio_resp_valid,
-    input  logic [63:0] data_mmio_resp_data,
+    input  wire        data_mmio_req_ready,
+    input  wire        data_mmio_resp_valid,
+    input  wire [63:0] data_mmio_resp_data,
     output logic        fence_i_ready,
 
     // Flush
