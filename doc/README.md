@@ -26,6 +26,16 @@ under `doc/archive/`.
 - `stage3_linux_boot_plan_2026-05-10.md` - Stage 3 Linux boot plan, v1
   infrastructure references, ASIC-style endpoint policy, and mandatory DS/CM
   performance regression gate for any RTL change.
+- `stage4_perf_campaign_plan_2026-05-28.md` - Stage 4 performance campaign plan
+  of record (supersedes `stage4_performance_exploration_2026-05-28.md`, which is
+  a failed-attempt log).
+- `stage4_phase0_findings_2026-05-28.md` - Stage 4 Phase 0 evidence refresh:
+  per-row commit-stall breakdown, Slices 2/3 refuted, Slice 1 refuted at the
+  fusibility gate.
+- `stage4_lever_ceiling_verdict_2026-05-28.md` - **Stage 4 close-out (SIGN OFF):**
+  lever-ceiling probe + current-baseline confirmation. Well-tuned floor; the
+  "25% ALU chain" is a pre-bypass artifact (registered CDB resolves 81-86%);
+  no lever clears the +3% gate.
 - `stage4_uvm_verification_placeholder_2026-05-12.md` - Stage 4 placeholder
   for UVM-based verification infrastructure after Stage 3 bring-up.
 - `rv64gc_v2_uarch.md` - current rv64gc-v2 microarchitecture specification.

@@ -1,11 +1,37 @@
 # Stage 4 Lever-Ceiling Verdict
 
 Date: May 28, 2026
-Status: **Stage 4 active-RTL campaign has converged.** Three parallel read-only
-ceiling probes (no RTL committed, no long sims) establish that **no remaining
-lever clears the +3% promotion gate.** rv64gc-v2 is at a well-tuned design point.
-Builds on `doc/stage4_phase0_findings_2026-05-28.md`; plan of record
+Status: **Stage 4 active-RTL campaign closed — well-tuned floor, CONFIRMED on the
+current baseline (zero new sim).** Three parallel read-only ceiling probes plus a
+current-baseline confirmation (§ "Current-baseline confirmation" below) establish
+that **no remaining lever clears the +3% promotion gate.** No RTL was promoted;
+`src/rtl` is byte-identical to the Stage 3 boot-OK commit `ce93aea`, so the
+`BOOT OK` artifact is intact by construction. Builds on
+`doc/stage4_phase0_findings_2026-05-28.md`; plan of record
 `doc/stage4_perf_campaign_plan_2026-05-28.md`.
+
+## Current-baseline confirmation (zero new sim — from baseline dsim.log STAT_DUMP)
+
+The bypass-fire counters are emitted in each baseline-run `dsim.log` (the RTL has
+`rob_head_arith_wb_bypass_fire_cnt` / `rob_head_load_wb_bypass_fire_cnt`,
+`rob.sv:1057-1126`). Exposed head-stall = (rob_head_not_ready by class) − (WB
+bypass fires) — the same arithmetic that reproduces the 2026-05-03 trace exactly
+(517,857 − 451,853 = 66,004). On the CURRENT baseline:
+
+| Row | cyc | head-not-ready (pre-bypass) | bypass-resolved | EXPOSED total | exp. ALU(other) | exp. load | exp. branch | exp. store |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| DS100 | 18,532 | 4,202 (22.7%) | 3,627 (86%) | **575 (3.1%)** | 394 (2.1%) | 45 (0.24%) | 13 | 123 |
+| DS300 | 53,536 | 12,385 (23.1%) | 10,626 (86%) | **1,759 (3.3%)** | 492 (0.9%) | 37 (0.07%) | 611 | 619 |
+| CM1 | 159,123 | 65,177 (41.0%) | 52,957 (81%) | **12,220 (7.7%)** | 4,003 (2.5%) | 2,740 (1.7%) | 3,105 | 2,367 |
+| CM10 | 1,468,279 | 600,298 (40.9%) | 506,566 (84%) | **93,732 (6.4%)** | 32,228 (2.2%) | 19,063 (1.3%) | 23,370 | 19,066 |
+
+The reframe HOLDS on current RTL and tightens: the registered CDB resolves 81–86%
+of head-not-ready. **Max exposed single class = 2.5% (CM ALU); total exposed
+reclaimable head-stall is 3.1–3.3% (Dhrystone) / 6.4–7.7% (CoreMark).** Every
+single-lever ceiling is below the +3% gate. Notably **Dhrystone's "19% load"
+stall is 99.6% bypassed (exposed load = 0.07%)**, so the dcache-2→1 / prefetch
+levers are firmly DEAD for Dhrystone (revise the §table "1–4%" down to ~0% DS,
+≤1.7% CM). The stale-trace caveat below is RESOLVED.
 
 ## TL;DR
 
@@ -79,29 +105,35 @@ rework past an already-better-than-BOOM design point (CM 6.85 > ~6.2; DS load-to
 use faster than BOOM). This re-confirms — now rigorously and at a +30% higher
 performance level — the 2026-05-01 PARTIAL-FLOOR conclusion.
 
-## Caveat and cheap confirmations
+## Caveat — RESOLVED
 
-The bypass-reframe numbers come from a **2026-05-03** trace (CM10 = 1,860,512
-cycles; current baseline is 1,459,538). The *qualitative* conclusion (bypass
-hides ~85% of ALU stall; exposed stall is branch/serial-load-fed dominated; no
-single lever > a few %) is robust, but the exact exposed percentages should be
-re-derived on the current baseline before formal sign-off. Three cheap
-confirmations (no/minimal DSim license), each of which would only firm the DROP:
+The bypass-reframe was originally derived from a 2026-05-03 trace. It is now
+confirmed directly on the current baseline (§ "Current-baseline confirmation"):
+the bypass decomposition is emitted in each baseline `dsim.log` STAT_DUMP, so no
+new sim was needed. The qualitative conclusion holds and the exposed percentages
+are tighter than the old trace (max single-class 2.5%). The two remaining
+optional probes (Spike value-trace for a precise VP hit-rate; state-branch
+latency-vs-mispredict split) would only further firm an already sub-gate DROP and
+are not required for sign-off.
 
-1. **Regenerate `trace_summary_v2` on the current baseline** (one CM10 + one DS300
-   trace via the existing trace tooling) — updates the exposed-stall table.
-2. **Spike value-trace** for CM1 (`spike -l --log-commits`) → offline last-value/
-   stride predictor over the head-stall PC set → firm value-prediction hit-rate.
-3. **Classify `core_state_transition` head-stall** as latency- vs mispredict-bound
-   from the existing trace — the one input that could lift chained-ALU from
-   ~0.3% to ~1–1.5% (still sub-gate).
+## Recommendation — SIGN OFF
 
-## Recommendation
+**Accept the well-tuned floor as the Stage 4 outcome.** Confirmed on the current
+baseline: total exposed reclaimable head-stall is 3.1–3.3% (Dhrystone) /
+6.4–7.7% (CoreMark), with no single-lever ceiling above 2.5% — all below the +3%
+promotion gate. The campaign's deliverable is the discipline: 5+ levers refuted
+on evidence **before** any wasted RTL/sim, plus a verified bypass-corrected
+bottleneck characterization showing the registered CDB already does the work the
+original ladder assumed was open.
 
-Accept the well-tuned floor as the Stage 4 outcome and document it (this doc +
-`stage4_phase0_findings`). The disciplined value delivered: 5+ levers refuted on
-evidence **before** spending RTL/sim effort, and a precise, bypass-corrected
-bottleneck characterization. Any further IPC requires either relaxing the +3%
-gate for a marginal (~1–2%) structural win, a multi-month dcache 2→1 / pointer-
-prediction effort, or a different optimization axis (Fmax, area/power, a broader
-workload suite).
+Any further IPC at this design point requires one of:
+- **Relax the +3% gate** for a marginal (~1–2%) structural win (narrow chained
+  ALU on the CM ALU residual) — explicit policy change.
+- **Multi-month structural** work (dcache 2→1 hit, pointer/address prediction for
+  the list pointer-chase) — past an already-better-than-BOOM design point.
+- **A different optimization axis** — Fmax/timing closure, area/power efficiency,
+  or a broader/representative workload suite (the 2 benchmarks here are
+  near-floor; target workloads may expose different headroom).
+
+Stage 4 (IPC-on-current-benchmarks) is closed at the well-tuned floor:
+**CoreMark 6.85 CM/MHz (> BOOM ~6.2), Dhrystone 3.22 DMIPS/MHz.**
