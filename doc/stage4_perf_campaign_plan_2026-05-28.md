@@ -111,8 +111,23 @@ cycle-identical to baseline (enforced by the data-driven discipline harness).
 
 ## 4. The ranked DSE ladder
 
-Default sequence (escalating risk). Phase 0 confirms or re-ranks by ceiling
-estimate, but this is the plan's prescribed order.
+> **PHASE 0 UPDATE (2026-05-28) — see `doc/stage4_phase0_findings_2026-05-28.md`.**
+> The evidence refresh re-ranked this ladder:
+> - **Slice 1 (fusion + move/zero-elim) = confirmed LEAD** — attacks the dominant
+>   CoreMark head-stall (`rob_head_not_ready_other` ~25%, the ALU chain).
+> - **Slices 2 & 3 (exact SQ disambiguation, MDP + speculative load/replay) =
+>   DROPPED, refuted pre-implementation** — the load-consumer ROB-head block is 0
+>   on every row, so load forwarding/ordering is not the bottleneck. Dhrystone's
+>   ~19% load-head-stall is load-*completion* latency (hits), not forwarding.
+> - **Slice 4 (selective-squash recovery) = demoted** — branch head-stall ~2%.
+> - **NEW candidate: load-completion-latency lever** (dcache 2→1 hit / prefetch)
+>   attacks the largest shared stall (DS ~19% + CM ~14%); needs a hit/miss split
+>   before committing (Dhrystone is hit-latency → structural).
+> The original table below is retained for provenance; the findings doc is
+> authoritative for current ordering.
+
+Original provisional sequence (escalating risk), now superseded by the Phase 0
+re-rank above:
 
 | # | Target | Mechanism | Spec? | State | RTL touch | Risk |
 |---|---|---|:--:|---|---|---|
