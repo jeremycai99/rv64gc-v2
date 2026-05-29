@@ -36,6 +36,10 @@ under `doc/archive/`.
   lever-ceiling probe + current-baseline confirmation. Well-tuned floor; the
   "25% ALU chain" is a pre-bypass artifact (registered CDB resolves 81-86%);
   no lever clears the +3% gate.
+- `stage4_critical_path_profile_2026-05-28.md` - empirical per-uop critical-path
+  profile (`+TRACE_UOPLIFE`, current baseline, `tools/uoplife_critical_path.py`):
+  execute latency 0.16 cyc/uop (dcache 2→1 / chained-ALU dead); bottleneck is
+  operand-wait + head-commit-wait (recurrence latency). Confirms the floor.
 - `stage4_uvm_verification_placeholder_2026-05-12.md` - Stage 4 placeholder
   for UVM-based verification infrastructure after Stage 3 bring-up.
 - `rv64gc_v2_uarch.md` - current rv64gc-v2 microarchitecture specification.
