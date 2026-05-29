@@ -98,22 +98,57 @@ RV64 W-suffix ops — consistent with the crc16 bit-serial loop
 5. ~~Exact SQ disambiguation~~ / ~~MDP + speculative load~~ — **DROPPED**, refuted
    by the consumer-block=0 viability gate.
 
-## Slice 1 selection
+## Slice 1 fusibility gate — REFUTED (pre-implementation, no RTL touched)
 
-**Mechanism:** extend `src/rtl/core/decode/fusion_detector.sv` with the fusible
-dependent op-pairs in the crc16 logic/W-op chain, and confirm/extend
-`src/rtl/core/rename/rename.sv` move/zero-elim coverage so `mv`/`li 0` links
-leave the chain. **Targeted counter:** `xs_bottleneck_rob_head_not_ready_other`
-(and the `dep_alu_blocked_prod_logic`/`_wop` pressure companions). **Predicted
-decrease:** set by the fusibility sub-analysis in Task 1.1 (count of
-chain-adjacent fusible pairs in the CM hot loop) before the gated run.
+Task 1.1's fusibility sub-analysis disqualified Slice 1 before any RTL change.
+The dominant CoreMark chain is the `crcu8` bit-serial CRC loop; its critical
+dependent chain on the CRC register `a2` is `srliw a2,a2,1 → xori a2,a2,K →
+ori a2,a2,K` (a 3-deep RAW chain) plus the `andi→xor` test path — **every link
+is a genuine dependent ALU→ALU edge** (consumer needs the producer's *computed*
+result as an input operand).
 
-**Honest caveat carried into Slice 1:** classic macro-op fusion collapses
-*adjacent* ops into one uop; collapsing a *dependent* ALU pair into a single
-1-cycle issue requires a 2-deep combinational ALU path, which re-introduces the
-latency the registered CDB exists to avoid. Task 1.1 must first quantify how many
-chain links are genuinely collapsible (move/zero-elim removals + truly fusible
-patterns) vs how much needs the structural value-prediction rung.
+Verified crux counters (from baseline `results.json`):
+
+| Counter (CM1 / CM10) | Value | Meaning |
+|---|---:|---|
+| `dep_alu_blocked_prod_fused` | **0 / 0** | the fusion detector covers ZERO blocked producers |
+| `dep_alu_blocked_prod_zero_candidate` | **0 / 0** | no zero-elim candidates in the blocked chain |
+| `dep_alu_blocked_prod_move_candidate` | 9,175 / 100,476 (~1.1%) | move candidates are ~1% and live in matrix/list code, NOT the CRC chain |
+
+The current `fusion_detector.sv` only fuses pre-compute-at-decode pairs
+(LUI+ADDI, AUIPC+JALR/ADDI) and compare-and-branch pairs (SLT*/SEXT.W + B*) —
+all single-ALU-pass, none touching dependent ALU→ALU data edges. `rename.sv`
+move-elim is intentionally disabled (needs refcount/lifetime support); zero-elim
+is active but has 0 candidates in the chain. Collapsing `srliw→xori→ori` into one
+cycle would require a **2-deep combinational ALU**, re-introducing exactly the
+select→ALU→wakeup→re-select loop the registered CDB (`core_top.sv:145-151`)
+exists to break.
+
+**Realistic Slice 1 ceiling: ≤~0.5% of total CoreMark cycles. Verdict: do NOT
+spend an RTL cycle on fusion/move-elim.** This is a clean pre-implementation
+refutation — recorded as DSE-only evidence per campaign §6.
+
+## What remains (the levers with a real ceiling are all hard)
+
+With Slices 1, 2, 3 refuted and 4 demoted, the addressable headroom is genuinely
+structural/speculative — the "easy" tuning is exhausted at this (already strong)
+design point:
+
+- **Value prediction on the ALU chain (CM ~25%)** — the textbook chain-breaker,
+  BUT the dominant chain is CRC, whose values are pseudo-random by construction
+  and likely poorly predictable. Ceiling depends entirely on producer
+  predictability, which is unmeasured → probe before building.
+- **Narrow 2-deep / chained ALU for shift→logic dependent pairs** — directly
+  collapses the `srliw→xori→ori` chain for specific patterns; bounded timing
+  risk (narrow, not a general 0-cycle wakeup). Ceiling = the collapsible chain
+  fraction.
+- **Load-use latency (dcache 2→1 hit) for the DS ~19% + CM ~14% load-head-stall**
+  — structural, multi-month; rv64gc-v2 is already faster load-to-use than BOOM,
+  so low ROI.
+
+Recommended next step: a cheap **lever-ceiling probe** (measure ALU-producer
+value-predictability and count collapsible shift→logic pairs) before committing
+weeks to any structural/speculative build.
 
 ## Headroom reframing (for the target decision)
 
