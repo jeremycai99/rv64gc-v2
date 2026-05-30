@@ -40,6 +40,11 @@ under `doc/archive/`.
   profile (`+TRACE_UOPLIFE`, current baseline, `tools/uoplife_critical_path.py`):
   execute latency 0.16 cyc/uop (dcache 2→1 / chained-ALU dead); bottleneck is
   operand-wait + head-commit-wait (recurrence latency). Confirms the floor.
+- `stage4_dhrystone_binary_normalization_2026-05-29.md` - **the Dhrystone-vs-BOOM
+  gap was the BINARY, not the uarch:** old `-fno-builtin` forced byte-at-a-time
+  strcpy/strcmp/memcpy. Normalized to BOOM/riscv-tests `-O2` methodology →
+  **4.27 DMIPS/MHz (DS300), above BOOM's 3.93**, IPC unchanged. DS signoff
+  re-baselined. rv64gc-v2 now beats BOOM's public floor on CoreMark AND Dhrystone.
 - `stage4_uvm_verification_placeholder_2026-05-12.md` - Stage 4 placeholder
   for UVM-based verification infrastructure after Stage 3 bring-up.
 - `rv64gc_v2_uarch.md` - current rv64gc-v2 microarchitecture specification.

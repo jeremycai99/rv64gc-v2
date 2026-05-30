@@ -23,8 +23,8 @@
       "expected_checksum": 24,
       "expected_flags": 0,
       "expected_control": 2,
-      "expected_hex_sha256": "5227bf2e909cb8ee5fda8c600aeda4f019260f60ecf0e76d8d226f8ace66f4a9",
-      "expected_elf_sha256": "f764e76e6ad626e9361a82e6b24b2e35b0c42419f575fcc0abfdafbc82f5a44e",
+      "expected_hex_sha256": "e5d830c91e5e9a0940dd04646503d93836ddf77b7d4632788c467985bf170e81",
+      "expected_elf_sha256": "ca6d96d3f3142590b0ab457d8fcf7d3ba480adc5037df472c218bbced46161e4",
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "counter_invariants": {
@@ -59,8 +59,8 @@
       "expected_checksum": 24,
       "expected_flags": 0,
       "expected_control": 2,
-      "expected_hex_sha256": "26d541addf59d385dcd47621c5004f495b2659db83f623f32c59c516928f7b91",
-      "expected_elf_sha256": "0411f5643cff6c67dd1d44237ce45da211605ef4810013c65504299a386cc70c",
+      "expected_hex_sha256": "6d885dcc0a5c3c6713f9eee52856ff4ae2f1032a4b0f75d3e6a323bb8aeaad36",
+      "expected_elf_sha256": "13b25e7a9c68a81047004d74983d6300f9430a48ba8dfa773924bf765153b69e",
       "require_loop_buffer_zero": true,
       "require_decoded_op_replay_zero": true,
       "counter_invariants": {

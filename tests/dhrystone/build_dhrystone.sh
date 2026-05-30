@@ -17,10 +17,16 @@ CFLAGS=(
   -march=rv64gc_zba_zbb_zbs_zicond
   -mabi=lp64d
   -mcmodel=medany
-  -ffreestanding
+  # Normalized to BOOM/riscv-tests Dhrystone methodology (2026-05-29): string/mem
+  # builtins ON (riscv-tests disables only -fno-builtin-printf), and NO -ffreestanding.
+  # The old full -fno-builtin + -ffreestanding forced byte-at-a-time strcpy/strcmp/
+  # memcpy (~90% of instr/iter; DMIPS 3.22). Normalized -O2 build = 4.27 DMIPS/MHz,
+  # above BOOM's published 3.93 at matched methodology. IPC unchanged (~2.8) -> the
+  # gap was the binary, not the microarchitecture. See memory project_dhrystone_gap_rootcause.
+  -ffast-math
+  -fno-tree-loop-distribute-patterns
   -fno-pic
   -fno-pie
-  -fno-builtin
   -fno-common
   -fno-asynchronous-unwind-tables
   -fno-unwind-tables
