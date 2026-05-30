@@ -30,18 +30,25 @@ Microarchitecture spec: `doc/rv64gc_v2_uarch.md`. Stage 1 frontend refactor
 status: `doc/stage1_frontend_refactor_status_2026-05-06.md`. Reference cores:
 `doc/reference_core_unified_audit_2026-05-03.md`.
 
-## Current Status (2026-05-05)
+## Current Status (2026-05-29 — Release Candidate)
 
-**Master:** `5fd8577` after Stage 1 prep.
+Authoritative RC state: `doc/release_candidate_signoff_2026-05-29.md`. Stage 4
+(architectural performance) is CLOSED at a well-tuned floor
+(`doc/stage4_lever_ceiling_verdict_2026-05-28.md`); the Dhrystone binary was
+normalized to BOOM/riscv-tests methodology
+(`doc/stage4_dhrystone_binary_normalization_2026-05-29.md`).
 
-| Workload | Timed cycles | Score | Stage 1 target | Gap |
-|---|---:|---:|---:|---:|
-| Dhrystone 300 | 76,738 | 2.225 DMIPS/MHz | < 70,783 | +5,955 |
-| CoreMark iter10 | 2,034,653 | 4.915 CM/MHz | < 1,850,040 | +184,613 |
-| Dhrystone 100 | 26,394 | 2.156 DMIPS/MHz | (sanity row) | — |
+| Workload | Score | vs BOOM public floor |
+|---|---:|---|
+| CoreMark iter10 | 6.85 CM/MHz | > 6.2 ✅ |
+| CoreMark iter1 | 6.65 CM/MHz | — |
+| Dhrystone 300 | 4.27 DMIPS/MHz | > 3.93 ✅ |
+| Dhrystone 100 | 4.26 DMIPS/MHz | — |
 
-All 3 signoff rows PASS, `flags=0`, checksums match, golden PC scoreboard
-PASS, all 5 owner-identity counter invariants hold zero.
+rv64gc-v2 beats BOOM's public floor on **both** benchmarks. Release gates: 16-row
+signoff, RV64GC compliance, and Stage 3 Linux `BOOT OK` (RTL byte-identical to the
+boot-OK commit `ce93aea`). The historical Stage 1 status below is retained for
+provenance.
 
 ### Key recent commits
 
@@ -206,24 +213,28 @@ sw/                   # Linux boot: opensbi, device tree, initramfs
 
 ## Key Design Parameters (from uarch spec)
 
-These are the authoritative values — do not deviate without gem5 evidence:
+These are the **as-built** values, verified against
+`src/rtl/core/include/rv64gc_pkg.sv` (2026-05-29). Several are smaller than the
+original gem5-study targets (ROB, Int PRF, Int IQ, LQ/SQ were sized down); do not
+deviate without data.
 
-| Parameter | Value (post-4wide-pivot) | Do NOT change to |
+| Parameter | As-built value | Note |
 |-----------|-------|------------------|
-| Pipeline width | **4-wide** (decode/rename/commit) | 6-wide (Stage 2 question, not parameter tweak) |
-| ROB | 192 entries | >192 (+0.05% IPC, +67% area) |
-| FTQ | 24 entries, 3-pointer split | (post-FTQ-split-scaffold) |
-| Int PRF | 256 × 64-bit, 12R6W | — |
-| FP PRF | 128 × 64-bit | — |
-| Int IQs | 3 × 32, dual-select | >32 per IQ (symptom, not cause) |
-| ALUs | 4 | 5 (+0.000 IPC) |
-| LQ/SQ | 64/64 (power-of-2) | 48 (pointer-wrap bug) |
-| L1D | 64 kB, 4-way, 4-bank | >64 kB (zero gain) |
+| Pipeline width | **4-wide** (decode/rename/commit) | 6-wide is a structural question, not a parameter tweak |
+| ROB | **128** entries (`ROB_DEPTH`) | gem5-study knee was 192; as-built is 128 |
+| FTQ | 24 entries, 3-pointer split | — |
+| Int PRF | **160** × 64-bit, 12R6W (`INT_PRF_DEPTH`) | gem5 target was 256 |
+| FP PRF | **96** × 64-bit (`FP_PRF_DEPTH`) | (was documented 128) |
+| Int IQs | **3 × 24** (`IQ_INT_DEPTH`); IQ0 dual-select, IQ1/IQ2 single | MEM IQs 3 × 32 (`IQ_MEM_DEPTH`) |
+| ALUs | 4 | 5 = +0.000 IPC |
+| LQ / SQ / CSB | **32 / 32 / 32** (`LQ_DEPTH`/`SQ_DEPTH`/`CSB_DEPTH`) | was documented 64/64 |
+| L1D | 64 kB, 4-way | >64 kB = zero gain |
 | L1I | 32 kB, 4-way | — |
-| L2 | 2 MB, 8-way, 32 MSHRs | >2 MB (zero gain) |
-| Branch predictor | TAGE-SC-L | Perceptron (−20% on RISC-V) |
-| BTB | 2048 × 8-way (rv64gc-v2) | (8× larger than BOOM v4 Mega — verified by audit) |
-| Recovery | 16 checkpoints | — |
+| L2 | 2 MB, 8-way | >2 MB = zero gain |
+| L1D MSHR | 16 (`L1D_MSHR_DEPTH`) | miss-under-miss |
+| Branch predictor | TAGE-SC-L | Perceptron −20% on RISC-V |
+| BTB | 2048 × 8-way | (8× larger than BOOM v4 Mega) |
+| Recovery | **64** checkpoints (`NUM_CHECKPOINTS`) | was documented 16 |
 | Loop buffer | **REMOVED** (banished, was 64 µops) | DO NOT RE-ADD; loop-exit prediction belongs in BPU/FTQ |
 | `fetch_packet_buffer` | 8-entry FIFO (operationally 1-deep) | — |
 

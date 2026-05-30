@@ -65,3 +65,13 @@ tests/spec/work/
 
 # Baseline pipe.v1 traces (large, regenerable)
 traces/
+
+# Editor / OS / compiled-lib local cruft (never release docs or logs)
+.DS_Store
+*.swp
+*.swo
+*~
+*.bak
+*.orig
+*.so
+*.a

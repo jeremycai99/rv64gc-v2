@@ -2,7 +2,7 @@
 
 Date: May 28, 2026
 Status: ACTIVE. This is the Stage 4 plan of record. It **supersedes**
-`stage4_performance_exploration_2026-05-28.md`, which is retained only as a
+`archive/stage4/stage4_performance_exploration_2026-05-28.md`, which is retained only as a
 failed-attempt log (two quarantined DSE branches), not a plan.
 
 ## 0. Why this plan exists
