@@ -2662,6 +2662,60 @@ module rv64gc_core_top
     endgenerate
 
     // =========================================================================
+    // 9b. FP OPERAND BYPASS NETWORK (4 ports: FPU rs1/rs2/rs3 + FP store-data)
+    //
+    // fp_prf is NOT write-first (see fp_prf.sv).  A speculatively-woken FP
+    // consumer issues at T+2 but the producer's result lands in the FP PRF at
+    // T+3, so reading fp_prf_rdata raw returns STALE data -> every FP op that
+    // reads an FP source register computes on garbage (RV64F/D compliance
+    // failures; the bug was latent because CoreMark/Dhrystone/Linux are
+    // integer-only).  Mirror the integer bypass for the four FP read ports.
+    //
+    // Sources reuse the integer bypass_valid/bypass_tag (unified phys tag
+    // space; FP tags >= FP_PHYS_BASE, so they only match FP reads).  CDB lane
+    // [3] carries the already-NaN-boxed FPU result.  The combinational load
+    // lanes [4:5] carry RAW load_wb_data, so single (MEM_WORD) FP loads must be
+    // NaN-boxed here to match the fp_prf write path (fp_prf_wdata[1:2]).
+    logic [63:0]              fp_bypass_data   [0:NUM_BYPASS_SRCS-1];
+    logic [63:0]              fp_bypassed_data [0:3];
+    logic [3:0]               fp_bypass_hit;
+    logic [PHYS_REG_BITS-1:0] fp_need_tag      [0:3];
+    logic [63:0]              fp_prf_rd        [0:3];
+
+    assign fp_bypass_data[0] = bypass_data[0];
+    assign fp_bypass_data[1] = bypass_data[1];
+    assign fp_bypass_data[2] = bypass_data[2];
+    assign fp_bypass_data[3] = bypass_data[3];
+    assign fp_bypass_data[4] = (load_wb_mem_size[0] == MEM_WORD)
+                             ? {32'hffff_ffff, load_wb_data[0][31:0]} : load_wb_data[0];
+    assign fp_bypass_data[5] = (load_wb_mem_size[1] == MEM_WORD)
+                             ? {32'hffff_ffff, load_wb_data[1][31:0]} : load_wb_data[1];
+
+    assign fp_need_tag[0] = iq2_issue_data[0].rs1_phys;
+    assign fp_need_tag[1] = iq2_issue_data[0].rs2_phys;
+    assign fp_need_tag[2] = iq2_issue_data[0].rs3_phys;
+    assign fp_need_tag[3] = routed_std_data.rs2_phys;
+    assign fp_prf_rd[0]   = fp_prf_rdata[0];
+    assign fp_prf_rd[1]   = fp_prf_rdata[1];
+    assign fp_prf_rd[2]   = fp_prf_rdata[2];
+    assign fp_prf_rd[3]   = fp_prf_rdata[3];
+
+    genvar fbi;
+    generate
+        for (fbi = 0; fbi < 4; fbi++) begin : gen_fp_bypass
+            bypass_network u_fp_bypass (
+                .bypass_valid (bypass_valid),
+                .bypass_tag   (bypass_tag),
+                .bypass_data  (fp_bypass_data),
+                .need_tag     (fp_need_tag[fbi]),
+                .prf_data     (fp_prf_rd[fbi]),
+                .result_data  (fp_bypassed_data[fbi]),
+                .hit          (fp_bypass_hit[fbi])
+            );
+        end
+    endgenerate
+
+    // =========================================================================
     // 10. ALUs x4
     // =========================================================================
     // ALU0 (IQ0 port 0)
@@ -2771,11 +2825,11 @@ module rv64gc_core_top
             iq2_issue_valid[0] && iq2_issue_data[0].is_fp_op;
         assign fpu_valid_in = fpu_req_valid_r;
         assign fpu_issue_rs1_data =
-            iq2_issue_data[0].rs1_is_fp ? fp_prf_rdata[0] : bypassed_data[6];
+            iq2_issue_data[0].rs1_is_fp ? fp_bypassed_data[0] : bypassed_data[6];
         assign fpu_issue_rs2_data =
-            iq2_issue_data[0].rs2_is_fp ? fp_prf_rdata[1] : bypassed_data[7];
+            iq2_issue_data[0].rs2_is_fp ? fp_bypassed_data[1] : bypassed_data[7];
         assign fpu_issue_rs3_data =
-            iq2_issue_data[0].rs3_is_fp ? fp_prf_rdata[2] : 64'd0;
+            iq2_issue_data[0].rs3_is_fp ? fp_bypassed_data[2] : 64'd0;
         assign fpu_rs1_data = fpu_req_rs1_data_r;
         assign fpu_rs2_data = fpu_req_rs2_data_r;
         assign fpu_rs3_data = fpu_req_rs3_data_r;
@@ -4785,7 +4839,7 @@ module rv64gc_core_top
         .load_rs2               (lsu_load_rs2_arr),
         .sta_rs1                (bypassed_data[10]),
         .std_rs2                (routed_std_data.rs2_is_fp
-                                  ? fp_prf_rdata[3]
+                                  ? fp_bypassed_data[3]
                                   : bypassed_data[11]),
         // Writeback
         .load_wb_valid          (lsu_load_wb_valid),
