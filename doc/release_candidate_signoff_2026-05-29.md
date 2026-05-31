@@ -1,26 +1,28 @@
 # Release Candidate Signoff
 
-Date: May 29, 2026
-Master: `18a034f` (+ this RC cleanup commit). RTL is **byte-identical** to the
-Stage 3 Linux boot-OK commit `ce93aea` — no RTL changed in Stage 4.
+Date: May 29–30, 2026
+Master: `21842ac`. RTL = the Stage 3 boot-OK baseline `ce93aea` + the FP operand
+bypass fix (`21842ac`); no other RTL change. (Earlier RC revisions cited the RTL
+as byte-identical to `ce93aea`; that held until the FP fix landed on 2026-05-30.)
 
-## TL;DR
+## TL;DR — all release gates GREEN
 
 | Gate | Result |
 |---|---|
-| 16-row benchmark signoff | ✅ **16 / 16 PASS** |
+| 16-row benchmark signoff | ✅ **16 / 16 PASS**, 0 cycle regression |
 | Performance vs BOOM public floor | ✅ **CoreMark 6.85 > 6.2**, **Dhrystone 4.27 > 3.93** |
-| Linux `BOOT OK` | ✅ valid by construction (RTL == `ce93aea`) |
-| RV64GC ISA compliance | ⚠️ **98 / 113 pass; 15 floating-point (F/D) tests FAIL** — **NOT release-clean** |
+| RV64GC ISA compliance | ✅ **113 / 113 PASS** (status + gate) — full RV64GC, incl. F/D |
+| Linux `BOOT OK` | ✅ re-verified on the FP-fix RTL (all 8 milestones) |
 
-**This is a performance/benchmark release candidate. It is NOT a clean full
-RV64GC signoff: the FPU fails ISA compliance (pre-existing).** See §3.
+**This is a clean full-ISA release candidate.** The earlier FP-compliance blocker
+was root-caused and fixed (§3).
 
 ## 1. Benchmark signoff — 16/16 PASS
 
 Full `--goal stage1 --run-class signoff` (DSim, normalized Dhrystone binary,
 strict fetch-owner/delivery/branch-recovery checks, golden-PC, counter
-invariants). Run: `benchmark_results/rc_signoff_20260529`.
+invariants). Run: `benchmark_results/fpfix_signoff_20260530` (post-FP-fix;
+cycle-identical to the pre-fix `rc_signoff_20260529`).
 
 | Row | timed cycles | IPC | Score | vs BOOM |
 |---|---:|---:|---:|---|
@@ -30,12 +32,14 @@ invariants). Run: `benchmark_results/rc_signoff_20260529`.
 | Dhrystone 100 | 13,698 | 2.59 | **4.261 DMIPS/MHz** | — |
 
 Plus 12 frontend/memory/backend/hotspot rows — all PASS, `flags=0`, golden-PC
-clean, owner-identity counter invariants zero.
+clean, owner-identity invariants zero. The FP fix is **performance-neutral**: all
+16 rows are cycle-identical to the pre-fix baseline (the fix touches only the FP
+read path, which the integer benchmarks never exercise).
 
 **rv64gc-v2 beats BOOM's public floor on both headline benchmarks.** Dhrystone
 reached 4.27 by normalizing the benchmark binary to BOOM/riscv-tests methodology
 (`archive/stage4/stage4_dhrystone_binary_normalization_2026-05-29.md`); IPC was
-unchanged — the gap had been a `-fno-builtin` binary handicap, not the µarch.
+unchanged — that gap had been a `-fno-builtin` binary handicap, not the µarch.
 
 ## 2. Stage 4 performance verdict — well-tuned floor (backend)
 
@@ -47,40 +51,37 @@ prefetch) clears the +3% promotion gate. Details:
 `archive/stage4/stage4_lever_ceiling_verdict_2026-05-28.md` and
 `archive/stage4/stage4_critical_path_profile_2026-05-28.md`.
 
-## 3. RV64GC compliance — ⚠️ FP (F/D) FAIL (release blocker for a full GC claim)
+## 3. RV64GC compliance — ✅ 113/113 PASS (FP blocker fixed)
 
-`tools/run_rv64gc_compliance.py`, run `benchmark_results/rv64gc_compliance_20260529_203618`:
+`tools/run_rv64gc_compliance.py`, run `benchmark_results/rv64gc_compliance_20260530*`:
+**all 113 standard riscv-tests rows PASS (status=PASS, gate=PASS)** — RV64I, M, A,
+F, D, C, Zicsr, Zifencei, Zba, Zbb, Zbs, Zicond. Audit doc verdict: "PASS, eligible
+to claim RV64GC instruction compliance."
 
-- **98 / 113 tests pass functionally** — RV64I, M, A, C, Zicsr, Zifencei, Zba,
-  Zbb, Zbs, Zicond all pass.
-- **15 / 113 FAIL — all floating-point:**
-  - RV64**F**: `fadd`, `fcmp`, `fcvt_w`, `fdiv`, `fmadd`, `fmin`, `ldst`
-  - RV64**D**: `fadd`, `fcmp`, `fcvt_w`, `fdiv`, `fmadd`, `fmin`, `ldst`, `recoding`
-- The failures are systematic across F and D (a genuine FPU correctness gap), and
-  **pre-existing** — the 2026-05-12 audit already concluded "FAIL, not yet
-  eligible to claim full RV64GC instruction compliance."
+**The FP failure was a pipeline bug, root-caused and fixed (commit `21842ac`):**
+- ROOT CAUSE: the FP physical register file is not write-first, but the FP operand
+  read path had **no bypass network** — FP sources were read raw from `fp_prf_rdata`.
+  A speculatively-woken FP consumer issued before the producer's result landed in
+  the FP PRF and read **stale** operands; FPnew (which checks input NaN-boxing)
+  then produced qNaN. Every FP op that read an FP source register failed; `fcvt.s.w`
+  (integer source → existing integer bypass) was the only FP op that passed —
+  the discriminator that pinned the root cause. (FPnew itself was always correct;
+  it was fed stale operands.) Latent because CoreMark/Dhrystone/Linux are
+  integer-only.
+- FIX: added an FP operand bypass network (4 `bypass_network` instances: FPU
+  rs1/rs2/rs3 + FP store-data) mirroring the integer bypass, reusing the unified
+  phys-tag sources; single FP loads are NaN-boxed on the bypass path.
+- Also fixed the compliance harness to default to the fetch owner/delivery/
+  branch-recovery invariant plusargs, so the gate **evaluates** those invariants
+  (they hold zero) instead of reporting them "missing" → all rows now `gate=PASS`.
 
-**Implication:** the core is effectively RV64I**MA**C + Zicsr/Zifencei + bitmanip
-+ Zicond compliant, but the **F/D in "G" are not** — so a literal "RV64GC"
-compliance claim cannot be made until the FPU passes. CoreMark and Dhrystone are
-integer workloads and Linux boots, so this does not affect the benchmark/boot
-results — but it is a **release blocker for an RV64GC ISA claim.**
+## 4. Linux boot guard — ✅ re-verified on FP-fix RTL
 
-**Secondary (harness) issue:** all 113 compliance rows also show `gate=FAIL` with
-reason `counter_invariant:xs_..._mismatch=missing` — a gate-config artifact: the
-compliance runner does not pass the `+FETCH_OWNER_CHECK`/`+...DELIVERY...` plusargs
-that emit those owner/delivery counters, so the gate cannot evaluate them. Even
-the 98 functionally-passing tests gate-fail for this reason. The compliance gate
-should be reconfigured to not require those counters (or the runner should emit
-them); this is independent of the FP functional failures.
-
-## 4. Linux boot guard
-
-The Stage 3 Linux `BOOT OK` artifact
-(`linux_boot_results/stage3_full_mainline_dsim_post_rtl_style_20260527a`) remains
-valid: `src/rtl` is byte-identical to the boot-OK commit `ce93aea`, and the boot
-does not execute the benchmark binaries (only the Dhrystone *binary* changed in
-Stage 4). No fresh replay was run for this RC (cited as invariant-by-construction).
+Because the FP fix changed `src/rtl`, the boot was **re-run** (not cited as
+invariant). `linux_boot_results/fpfix_boot_guard_20260530`: `status=PASS`, all 8
+milestones reached (OpenSBI → kernel → `riscv_clocksource` → `ttyS0` → freeing
+init → `Run /init` → `BOOT OK`). No panic/oops. The Linux DSim image was rebuilt
+with the new RTL.
 
 ## 5. Repo cleanup performed for this RC
 
@@ -93,20 +94,20 @@ Stage 4). No fresh replay was run for this RC (cited as invariant-by-constructio
   and operational references. `doc/README.md` index rewritten.
 - `.gitignore` extended with editor/OS/compiled-lib local-cruft patterns; verified
   0 local artifacts tracked and 0 stray untracked files.
+- FP operand bypass fix (`rv64gc_core_top.sv`) + compliance-runner default
+  invariant plusargs.
 
-## 6. Deferred / open items
+## 6. Deferred / cosmetic items (none release-blocking)
 
 | Item | Severity | Note |
 |---|---|---|
-| **FPU F/D compliance** (15 tests) | **blocker** for RV64GC claim | pre-existing; needs FPU debug |
-| Compliance gate counter-config | medium | gate requires owner/delivery counters the compliance run doesn't emit |
-| Dead `MUL_LATENCY=3` in `rv64gc_pkg.sv` | cosmetic | not removed (would break RTL==`ce93aea`) |
+| Dead `MUL_LATENCY=3` in `rv64gc_pkg.sv` | cosmetic | unreferenced; leave (changing it forces a rebuild) |
 | `partial_replay_spec` geometry | cosmetic | assumes 192-ROB; archived as design note (unimplemented) |
 | CoreMark `-fno-builtin` | none | normalizing it regresses CM via I-cache alignment; keep as-is |
 
 ## Verdict
 
-**Performance/benchmark RC: ready** — 16/16 signoff PASS, both benchmarks beat
-BOOM's public floor, Linux boots. **Full-ISA RC: blocked** on the pre-existing
-RV64F/RV64D FPU compliance failures, which must be resolved before claiming
-RV64GC compliance.
+**Full-ISA release candidate: READY.** 16/16 benchmark signoff PASS (both
+benchmarks beat BOOM's public floor), **113/113 RV64GC compliance PASS (including
+RV64F/D)**, Linux `BOOT OK` re-verified on the FP-fix RTL, zero performance
+regression. No release-blocking items remain.

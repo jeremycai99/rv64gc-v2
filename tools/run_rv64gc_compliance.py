@@ -545,6 +545,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plusarg", action="append", default=[])
     args = parser.parse_args(argv)
 
+    # Compliance must emit the fetch owner/delivery/branch-recovery invariant
+    # counters so the signoff gate can EVALUATE them.  Without these plusargs the
+    # counters are absent and the gate reports "counter_invariant:...=missing" ->
+    # gate FAIL on every row, even when each test functionally PASSes.  These are
+    # correctness checks that must hold zero on any run, so always enable them
+    # (verified 113/113 status=PASS gate=PASS, 2026-05-30).
+    DEFAULT_INVARIANT_PLUSARGS = [
+        "FETCH_OWNER_CHECK", "FETCH_OWNER_STRICT",
+        "FETCH_DELIVERY_CHECK", "FETCH_DELIVERY_STRICT",
+        "BRANCH_RECOVERY_CHECK", "BRANCH_RECOVERY_STRICT",
+        "PERF_COUNTERS", "STAT_DUMP",
+    ]
+    for _pa in DEFAULT_INVARIANT_PLUSARGS:
+        if _pa not in args.plusarg:
+            args.plusarg.append(_pa)
+
     isa_dir = args.riscv_tests_isa.resolve()
     if not isa_dir.exists():
         raise FileNotFoundError(f"riscv-tests isa directory not found: {isa_dir}")

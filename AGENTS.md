@@ -46,8 +46,9 @@ normalized to BOOM/riscv-tests methodology
 | Dhrystone 100 | 4.26 DMIPS/MHz | — |
 
 rv64gc-v2 beats BOOM's public floor on **both** benchmarks. Release gates: 16-row
-signoff, RV64GC compliance, and Stage 3 Linux `BOOT OK` (RTL byte-identical to the
-boot-OK commit `ce93aea`). The historical Stage 1 status below is retained for
+signoff, full RV64GC compliance (113/113, incl. RV64F/D after the FP operand
+bypass fix `21842ac`), and Stage 3 Linux `BOOT OK` (re-verified on the FP-fix
+RTL). The historical Stage 1 status below is retained for
 provenance.
 
 ### Key recent commits
