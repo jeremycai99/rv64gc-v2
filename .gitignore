@@ -19,7 +19,6 @@ obj_iv/
 /*.pb
 /tmp_result.txt
 /*_objdump_*.txt
-/build_xsim_trace.bat
 /build/
 
 # DSim simulator artefacts
@@ -38,22 +37,9 @@ verilator_work/
 verilator_linux_work/
 verilator_linux_work*/
 
-# xsim simulator artefacts
-xsim.dir/
-xsim*.jou
-xsim*.log
-xsim*.backup.*
-xsim_*.tcl
-xelab.log
-xelab.pb
-xvlog.log
-xvlog.pb
-tb_*.wdb
-
-# cocotb + Python venv
+# cocotb + Python venv (cocotb verif flow not used — ignore the whole dir)
 venv_cocotb/
-verif/**/sim_build/
-verif/**/results.xml
+verif/
 **/__pycache__/
 *.pyc
 
@@ -75,3 +61,10 @@ traces/
 *.orig
 *.so
 *.a
+
+# Local agentic-dev guidance (kept locally for Claude Code/Codex/etc., not published)
+/AGENTS.md
+
+# Archived xsim docs (xsim simulator dropped — kept locally under doc/archive/, not published)
+doc/archive/xsim_workflow.md
+doc/archive/xsim_lessons_learned.md

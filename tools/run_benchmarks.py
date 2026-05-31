@@ -25,9 +25,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "benchmarks" / "benchmarks.json"
-DEFAULT_XSIM = Path("D:/Xilinx/Vivado/2024.1/bin/xsim.bat")
 DHRYSTONE_VAX_DHRYSTONES_PER_SEC = 1757.0
-WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _ELF_SYMBOL_CACHE: dict[Path, dict[str, int]] = {}
 
 IPC_RE = re.compile(
@@ -256,51 +254,6 @@ class RunResult:
 def repo_path(path: str | Path) -> Path:
     p = Path(path)
     return p if p.is_absolute() else REPO_ROOT / p
-
-
-def is_windows_path(path: str | Path) -> bool:
-    return bool(WINDOWS_DRIVE_RE.match(str(path)))
-
-
-def path_for_windows_cmd(path: str | Path) -> str:
-    text = str(path)
-    if os.name == "nt" or is_windows_path(text):
-        return text.replace("\\", "/")
-
-    wslpath = shutil.which("wslpath")
-    if wslpath:
-        completed = subprocess.run(
-            [wslpath, "-w", text],
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        if completed.returncode == 0:
-            return completed.stdout.strip().replace("\\", "/")
-
-    return text.replace("\\", "/")
-
-
-def windows_cmd_executable() -> str:
-    for candidate in ("cmd", "cmd.exe"):
-        found = shutil.which(candidate)
-        if found:
-            return found
-    for candidate in (
-        Path("/mnt/c/Windows/System32/cmd.exe"),
-        Path("/mnt/c/Windows/system32/cmd.exe"),
-    ):
-        if candidate.exists():
-            return str(candidate)
-    raise FileNotFoundError("Windows cmd.exe not found; cannot launch xsim.bat")
-
-
-def uses_windows_batch(args: argparse.Namespace) -> bool:
-    if getattr(args, "runner", "xsim-bat") != "xsim-bat":
-        return False
-    xsim = str(args.xsim).lower()
-    return os.name == "nt" or xsim.endswith((".bat", ".cmd"))
 
 
 def plusarg_name(plusarg: str) -> str:
@@ -1011,44 +964,13 @@ def evaluate_gate(
     return "PASS", [], f"accepted_general_mechanism:{mechanism_class}:{mechanism}"
 
 
-def build_xsim() -> None:
-    cmd_exe = windows_cmd_executable()
-    batch = path_for_windows_cmd(REPO_ROOT / "build_xsim.bat")
-    subprocess.run([cmd_exe, "/c", batch], cwd=REPO_ROOT, check=True)
-
-
-def xsim_command(
-    bench: dict[str, Any], args: argparse.Namespace, windows_paths: bool = False
-) -> str:
-    memfile = repo_path(bench["hex"])
-    memfile_arg = path_for_windows_cmd(memfile) if windows_paths else memfile.as_posix()
-    max_cycles = int(args.max_cycles if args.max_cycles is not None else bench.get("max_cycles", 100000))
-    xsim = path_for_windows_cmd(args.xsim) if windows_paths else str(Path(args.xsim))
-    xsim_line = [
-        f'call "{xsim}"',
-        args.snapshot,
-        "--runall",
-        "--testplusarg",
-        f'"MEMFILE={memfile_arg}"',
-        "--testplusarg",
-        f'"MAX_CYCLES={max_cycles}"',
-        "--testplusarg",
-        '"NOVCD"',
-    ]
-    for plusarg in effective_plusargs(args, bench):
-        xsim_line.extend(["--testplusarg", f'"{plusarg}"'])
-    return " ".join(xsim_line)
-
-
 def local_runner_command(bench: dict[str, Any], args: argparse.Namespace) -> list[str]:
     memfile = repo_path(bench["hex"])
     max_cycles = int(args.max_cycles if args.max_cycles is not None else bench.get("max_cycles", 100000))
-    if args.runner == "xsim-sh":
-        cmd = [str(REPO_ROOT / "run_xsim.sh"), memfile.as_posix(), str(max_cycles)]
-    elif args.runner == "dsim":
-        cmd = [str(REPO_ROOT / "run_dsim.sh"), memfile.as_posix(), str(max_cycles)]
+    if args.runner == "dsim":
+        cmd = [str(REPO_ROOT / "scripts" / "run_dsim.sh"), memfile.as_posix(), str(max_cycles)]
     elif args.runner == "verilator":
-        cmd = [str(REPO_ROOT / "run_verilator.sh"), memfile.as_posix(), str(max_cycles)]
+        cmd = [str(REPO_ROOT / "scripts" / "run_verilator.sh"), memfile.as_posix(), str(max_cycles)]
     else:
         raise ValueError(f"unsupported local runner: {args.runner}")
     cmd.extend(effective_plusargs(args, bench))
@@ -1106,7 +1028,7 @@ def dsim_shell_command(
             "  fi",
             "fi",
             'if [[ ! -f dsim_work/tb_image.so ]]; then',
-            '  echo "ERROR: dsim_work/tb_image.so not found. Run ./build_dsim.sh first."',
+            '  echo "ERROR: dsim_work/tb_image.so not found. Run scripts/build_dsim.sh first."',
             "  exit 1",
             "fi",
             shlex.join(raw_cmd),
@@ -1163,31 +1085,9 @@ def run_benchmark(
         if not args.dry_run:
             row_dir.mkdir(parents=True, exist_ok=True)
 
-    windows_paths = uses_windows_batch(args)
     runner_log_path: Path | None = None
     waves_path: Path | None = None
-    if args.runner == "xsim-bat":
-        command_text = xsim_command(bench, args, windows_paths)
-        if args.dry_run:
-            print(command_text)
-            return RunResult(
-                name, kind, "DRYRUN", None, None, None, None, None,
-                {}, {}, None, None, None, "DRYRUN", [], "dry_run", args.run_class, 0,
-                command_text, {}, None, None, None,
-                mechanism_class=args.mechanism_class or "default_rtl",
-            )
-        assert row_dir is not None
-        run_script = row_dir / f"run_xsim_{name}.bat"
-        run_script.write_text(
-            "@echo off\n"
-            f"cd /d {path_for_windows_cmd(REPO_ROOT) if windows_paths else REPO_ROOT}\n"
-            f"{command_text}\n",
-            encoding="utf-8",
-        )
-        cmd_exe = windows_cmd_executable()
-        run_script_arg = path_for_windows_cmd(run_script) if windows_paths else str(run_script)
-        run_cmd = [cmd_exe, "/c", run_script_arg]
-    elif args.runner == "dsim" and row_dir is not None:
+    if args.runner == "dsim" and row_dir is not None:
         run_cmd, command_text, runner_log_path, waves_path = dsim_shell_command(bench, args, row_dir)
         if args.dry_run:
             print(command_text)
@@ -1232,8 +1132,8 @@ def run_benchmark(
     runner_log_text = ""
     if runner_log_path is not None and runner_log_path.exists():
         runner_log_text = runner_log_path.read_text(errors="replace")
-    elif args.runner in ("xsim-sh", "dsim"):
-        legacy_log = REPO_ROOT / ("xsim_run.log" if args.runner == "xsim-sh" else "dsim_run.log")
+    elif args.runner == "dsim":
+        legacy_log = REPO_ROOT / "dsim_run.log"
         if legacy_log.exists():
             runner_log_path = row_dir / f"{name}.{args.runner}.log"
             shutil.copy2(legacy_log, runner_log_path)
@@ -1769,8 +1669,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true")
     parser.add_argument(
         "--runner",
-        choices=("xsim-bat", "xsim-sh", "dsim", "verilator"),
-        default="xsim-bat",
+        choices=("dsim", "verilator"),
+        default="dsim",
         help="Simulation launcher to use.",
     )
     parser.add_argument(
@@ -1891,10 +1791,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="COUNTER",
         help="Require a counter to be <= baseline.",
     )
-    parser.add_argument("--build-xsim", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--xsim", default=str(DEFAULT_XSIM))
-    parser.add_argument("--snapshot", default="tb_xsim_sim")
     parser.add_argument("--max-cycles", type=int, default=None)
     parser.add_argument("--iter-limit", type=int, default=10000000)
     parser.add_argument("--plusarg", action="append", default=[])
@@ -1941,9 +1838,6 @@ def main(argv: list[str] | None = None) -> int:
     args.run_root = resolve_run_root(args)
     if args.run_root is not None and not args.dry_run:
         args.run_root.mkdir(parents=True, exist_ok=True)
-
-    if args.build_xsim and not args.dry_run:
-        build_xsim()
 
     git_info = git_snapshot()
     write_run_manifest(args, benchmarks, git_info)

@@ -3,11 +3,11 @@
 # run_dsim.sh -- run a test/benchmark under DSim 2026 (Linux port)
 #
 # Usage:
-#   ./run_dsim.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]
+#   scripts/run_dsim.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]
 #
 # Example:
-#   ./run_dsim.sh tests/benchmarks/coremark_O2.hex 500000
-#   ./run_dsim.sh tests/hex/dhrystone.hex 10000 +PERF_PROFILE +TRACE_FETCH
+#   scripts/run_dsim.sh tests/benchmarks/coremark_O2.hex 500000
+#   scripts/run_dsim.sh tests/hex/dhrystone.hex 10000 +PERF_PROFILE +TRACE_FETCH
 #
 # Produces:
 #   dsim_run.log    -- simulation log (IPC, SVA fires, final summary)
@@ -15,7 +15,7 @@
 # ============================================================================
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 : "${DSIM_HOME:=$HOME/AltairDSim/2026}"
 
@@ -49,7 +49,7 @@ if [[ -z "${DSIM_LICENSE:-}" ]]; then
 fi
 
 if [[ ! -f dsim_work/tb_image.so ]]; then
-    echo "ERROR: dsim_work/tb_image.so not found.  Run ./build_dsim.sh first."
+    echo "ERROR: dsim_work/tb_image.so not found.  Run scripts/build_dsim.sh first."
     exit 1
 fi
 

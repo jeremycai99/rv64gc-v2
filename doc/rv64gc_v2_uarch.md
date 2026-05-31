@@ -1042,8 +1042,8 @@ Used by `tools/bubble_taxonomy.py` and `tools/headwait_deepdive.py` for per-cycl
 | `headwait_deepdive.py` | `tools/headwait_deepdive.py` | Little's-law decomposition + head-dwell analysis |
 | `clockcheck` | `../rv64gc-perf-model/tools/rtl_clockcheck.py` | Per-cycle pipeline trace divergence check vs baseline |
 | `regress_dsim.sh` | `scripts/regress_dsim.sh` | Functional regression runner; tightened STOP-OK detection requires an explicit pass event, not just a `TOHOST=` print |
-| `build_dsim.sh` | `build_dsim.sh` | Top-level DSim image build |
-| `run_dsim.sh` | `run_dsim.sh` | Single-test DSim invocation |
+| `build_dsim.sh` | `scripts/build_dsim.sh` | Top-level DSim image build |
+| `run_dsim.sh` | `scripts/run_dsim.sh` | Single-test DSim invocation |
 
 ---
 

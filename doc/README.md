@@ -15,9 +15,6 @@ under `doc/archive/`.
 
 ## Workflow / Operational References
 
-- `xsim_workflow.md` - authoritative Vivado xsim workflow.
-- `xsim_lessons_learned.md` - simulator and verification lessons.
-- `linux_env_setup_2026-04-24.md` - Linux dsim/tooling setup note.
 - `../tools/audit_goal_runs.py` - classifies `benchmark_results/` runs as goal
   pass/fail, DSE smoke-only, or legacy non-goal artifacts.
 
@@ -45,7 +42,7 @@ signoff doc summarizes the load-bearing conclusions.
 
 ## Artifact Policy
 
-- `benchmark_results/`, `xsim.dir/`, waveform files, simulator journals, and
+- `benchmark_results/`, waveform files, simulator journals, and
   generated ELF/HEX images are local artifacts and are intentionally ignored.
 - Keep raw logs only while actively debugging. Promote stable numbers, command
   lines, and log paths into docs before pruning logs.

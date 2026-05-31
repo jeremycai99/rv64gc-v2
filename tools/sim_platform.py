@@ -295,8 +295,6 @@ def runner_command(args: argparse.Namespace, manifest: Path, run_root: Path) -> 
         cmd.append("--dry-run")
     if args.waves:
         cmd.append("--waves")
-    if args.build_xsim:
-        cmd.append("--build-xsim")
     if args.no_perf_summary:
         cmd.append("--no-perf-summary")
     if args.skip_rtl_lock_check:
@@ -314,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--runner",
-        choices=("xsim-bat", "xsim-sh", "dsim"),
+        choices=("dsim", "verilator"),
         default="dsim",
     )
     parser.add_argument(
@@ -328,7 +326,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-cycles", type=int, default=None)
     parser.add_argument("--iter-limit", type=int, default=10000000)
     parser.add_argument("--waves", action="store_true")
-    parser.add_argument("--build-xsim", action="store_true")
     parser.add_argument("--no-perf-summary", action="store_true")
     parser.add_argument("--skip-rtl-lock-check", action="store_true")
     parser.add_argument("--rebuild-images", action="store_true")

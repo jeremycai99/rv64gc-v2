@@ -317,9 +317,7 @@ def run_compliance(
 ) -> int:
     if build_sim:
         if runner == "dsim":
-            completed = run([str(REPO_ROOT / "build_dsim.sh")])
-        elif runner == "xsim-sh":
-            completed = run([str(REPO_ROOT / "build_xsim.sh")])
+            completed = run([str(REPO_ROOT / "scripts" / "build_dsim.sh")])
         else:
             raise ValueError(f"unsupported runner for build: {runner}")
         if completed.returncode != 0:
@@ -529,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--riscv-tests-isa", type=Path, default=DEFAULT_RISCV_TESTS_ISA)
     parser.add_argument("--prefix", default="riscv64-unknown-elf-")
     parser.add_argument("--build-root", type=Path, default=DEFAULT_BUILD_ROOT)
-    parser.add_argument("--runner", choices=("dsim", "xsim-sh"), default="dsim")
+    parser.add_argument("--runner", choices=("dsim",), default="dsim")
     parser.add_argument("--run-id", default=datetime.now().strftime("%Y%m%d_%H%M%S"))
     parser.add_argument("--run-dir", type=Path, default=None)
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)

@@ -4,7 +4,7 @@
 /*
  * Simulation-only benchmark result block.
  *
- * The xsim testbench snoops committed stores to this range and prints
+ * The simulation testbench snoops committed stores to this range and prints
  * [BENCH_RESULT] lines. Keep the block on a line separate from tohost.
  */
 #define RV64GC_BENCH_BASE      0x80001080UL

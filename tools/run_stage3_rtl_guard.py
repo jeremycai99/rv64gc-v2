@@ -207,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--runner",
-        choices=("dsim", "verilator", "xsim-sh", "xsim-bat"),
+        choices=("dsim", "verilator"),
         default="dsim",
         help="Simulation runner passed to tools/run_benchmarks.py.",
     )
@@ -261,12 +261,10 @@ def main(argv: list[str] | None = None) -> int:
         return evaluate_results(run_dir / "results.json", args.max_regression_pct)
 
     if not args.skip_build:
-        if args.runner == "dsim":
-            build_script = "./build_dsim.sh"
-        elif args.runner == "verilator":
-            build_script = "./build_verilator.sh"
+        if args.runner == "verilator":
+            build_script = "scripts/build_verilator.sh"
         else:
-            build_script = "./build_xsim.sh"
+            build_script = "scripts/build_dsim.sh"
         run_cmd([build_script], REPO_ROOT, args.dry_run)
 
     bench_cmd = [

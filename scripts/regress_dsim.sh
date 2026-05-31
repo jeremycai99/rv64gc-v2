@@ -26,7 +26,7 @@ ROOT="$PWD"
 
 # --- Sanity ------------------------------------------------------------------
 if [[ ! -f dsim_work/tb_image.so ]]; then
-    echo "ERROR: dsim_work/tb_image.so missing — run ./build_dsim.sh first."
+    echo "ERROR: dsim_work/tb_image.so missing — run scripts/build_dsim.sh first."
     exit 1
 fi
 

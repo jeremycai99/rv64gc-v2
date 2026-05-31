@@ -10,7 +10,7 @@ does not include them. The supported flow is:
 
 The runner can report:
 
-- `ipc`: retired instructions divided by cycles from the xsim testbench.
+- `ipc`: retired instructions divided by cycles from the simulation testbench.
 - `spec_ratio_per_mhz`: `spec_ref_seconds * 1_000_000 / timed_cycles`.
 
 The second metric is intentionally named ratio-per-MHz. It is useful for

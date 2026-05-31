@@ -2,7 +2,7 @@
 # Build the benchmark simulation binary with Verilator.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 VERILATOR_BIN="${VERILATOR:-verilator}"
 WORK_DIR="${VERILATOR_BENCH_WORK_DIR:-verilator_work}"
@@ -28,11 +28,11 @@ mapfile -t SV_FILES < <(
                 }
             }
         }
-    ' build_dsim.sh
+    ' scripts/build_dsim.sh
 )
 
 if [[ ${#SV_FILES[@]} -eq 0 ]]; then
-    echo "ERROR: no SystemVerilog files found in build_dsim.sh"
+    echo "ERROR: no SystemVerilog files found in scripts/build_dsim.sh"
     exit 1
 fi
 
@@ -82,7 +82,7 @@ fi
 
 echo
 echo "Verilator benchmark build OK. Binary at $WORK_DIR/Vtb_xsim"
-echo "Run with: ./run_verilator.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]"
+echo "Run with: scripts/run_verilator.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]"
 if [[ "$TRACE" == "0" ]]; then
     echo "Waveform tracing disabled. Rebuild with VERILATOR_TRACE=1 when waveforms are required."
 fi

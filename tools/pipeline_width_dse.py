@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Summarize machine-width utilization for rv64gc-v2 and BOOM logs.
 
-rv64gc-v2 input is a DSim/XSim log containing +TRACE_PIPELINE output.  The
+rv64gc-v2 input is a DSim log containing +TRACE_PIPELINE output.  The
 script prefers pipe.v2 records when present because those include load/store
 issue lanes; it falls back to pipe.v1 for older logs.
 

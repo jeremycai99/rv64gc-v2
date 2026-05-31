@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Run the Stage 3 Linux platform simulation binary with Verilator.
+# Run the benchmark simulation binary with Verilator.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 PROJ_ROOT=$(pwd)
 
 if [[ $# -lt 1 ]]; then
@@ -11,7 +11,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 HEX=$1
-MAX_CYC=${2:-1000000}
+MAX_CYC=${2:-100000}
 if [[ $# -ge 2 ]]; then
     shift 2
 else
@@ -24,11 +24,11 @@ case "$HEX" in
     *)  HEX="$PROJ_ROOT/$HEX" ;;
 esac
 
-BIN="${VERILATOR_LINUX_BIN:-$PROJ_ROOT/verilator_linux_work/Vtb_linux}"
+BIN="${VERILATOR_BENCH_BIN:-$PROJ_ROOT/verilator_work/Vtb_xsim}"
 
 if [[ ! -x "$BIN" ]]; then
     echo "ERROR: Verilator binary $BIN not found or not executable."
-    echo "       Run ./build_verilator_linux.sh first."
+    echo "       Run scripts/build_verilator.sh first."
     exit 1
 fi
 

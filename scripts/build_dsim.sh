@@ -1,21 +1,37 @@
 #!/usr/bin/env bash
-# Build the Stage 3 Linux platform simulation image with DSim.
+# ============================================================================
+# build_dsim.sh -- DSim Studio build for rv64gc-v2 (DSim 2026), Linux port
+#
+# DSim 2026 is the authoritative signoff + SVA/productivity simulator for
+# rv64gc-v2.  build_verilator.sh provides an open-source alternative that
+# builds the same top-level testbench.
+#
+# Prereq: DSim 2026 installed locally.
+#   default DSIM_HOME=$HOME/AltairDSim/2026
+#   default DSIM_LICENSE=$HOME/metrics-ca/dsim-license.json
+# Override either env var before calling this script if installed elsewhere.
+#
+# Produces dsim_work/tb_image.so ready to run via run_dsim.sh.
+# ============================================================================
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 : "${DSIM_HOME:=$HOME/AltairDSim/2026}"
 
 if [[ ! -f "$DSIM_HOME/shell_activate.bash" ]]; then
     echo "ERROR: DSim not found at $DSIM_HOME"
+    echo "Set DSIM_HOME to the install directory (containing shell_activate.bash)."
     exit 1
 fi
 
-set +u
 # shellcheck disable=SC1091
+set +u
 source "$DSIM_HOME/shell_activate.bash" >/dev/null
 set -u
 
+# --- License discovery ------------------------------------------------------
+# Default Linux DSim Studio location after Altair One sign-in.
 if [[ -z "${DSIM_LICENSE:-}" ]]; then
     if [[ -f "$HOME/metrics-ca/dsim-license.json" ]]; then
         export DSIM_LICENSE="$HOME/metrics-ca/dsim-license.json"
@@ -23,9 +39,32 @@ if [[ -z "${DSIM_LICENSE:-}" ]]; then
         export DSIM_LICENSE="$HOME/.metrics-ca/dsim-license.json"
     fi
 fi
+if [[ -z "${DSIM_LICENSE:-}" && -z "${ALTAIR_LICENSE_PATH:-}" ]]; then
+    echo "ERROR: No DSim license configured."
+    echo "Free Individual License setup steps:"
+    echo "  1. Open VS Code, click the DSim Studio activity bar icon"
+    echo "  2. Sign in via Altair One OAuth in the browser"
+    echo "  3. The extension writes \$HOME/metrics-ca/dsim-license.json"
+    echo "Alternative: download dsim-license.json from altairone.com/Marketplace"
+    echo "  and set DSIM_LICENSE to its path."
+    exit 1
+fi
 
-rm -rf dsim_linux_work
+# DSim creates dsim_work/ as the default work dir; -genimage paths are
+# resolved relative to that work dir, so use a bare image name.
+rm -rf dsim_work
 
+# --- Compile + elaborate into a reusable image ------------------------------
+# -sv                  treat all files as SystemVerilog regardless of suffix
+# +define+SIMULATION   enables defensive ifdef resets in int_prf / icache /
+#                      dcache tag RAMs (avoids 4-state X on uninit arrays)
+# +acc+rwb             generate support for wave dump + toggle coverage
+#                      (required at compile for -waves to work at runtime)
+# -top tb_xsim         top-level testbench module
+# -genimage tb_image   write compiled code to dsim_work/tb_image
+# -l                   log file (compile messages + errors)
+# DSim 2026 can spin in bound SVA finalization on long CoreMark rows. Keep
+# procedural checker modules active, but disable SVA unless explicitly enabled.
 DSIM_SVA_ARGS=("-no-sva")
 if [[ "${DSIM_ENABLE_SVA:-0}" == "1" ]]; then
     DSIM_SVA_ARGS=()
@@ -33,10 +72,9 @@ fi
 
 dsim -sv +define+SIMULATION +acc+rwb "${DSIM_SVA_ARGS[@]}" \
      +incdir+external/cvfpu-src/src/common_cells/include \
-     -work dsim_linux_work \
-     -top tb_linux \
-     -genimage tb_linux_image \
-     -l dsim_linux_build.log \
+     -top tb_xsim \
+     -genimage tb_image \
+     -l dsim_build.log \
      src/rtl/core/include/rv64gc_pkg.sv \
      src/rtl/core/include/isa_pkg.sv \
      src/rtl/core/include/fpu_pkg.sv \
@@ -132,13 +170,11 @@ dsim -sv +define+SIMULATION +acc+rwb "${DSIM_SVA_ARGS[@]}" \
      src/rtl/core/cache/dcache.sv \
      src/rtl/core/cache/l2_cache.sv \
      src/rtl/core/csr/csr_file.sv \
-     src/rtl/platform/uart_16550.sv \
-     src/rtl/platform/clint.sv \
-     src/rtl/platform/mmio_platform.sv \
      src/rtl/sim/sim_memory.sv \
      src/rtl/core/rv64gc_core_top.sv \
-     src/tb/tb_linux.sv
+     src/tb/tb_top.sv \
+     src/tb/tb_xsim.sv
 
 echo
-echo "DSim Linux platform build OK. Image at dsim_linux_work/tb_linux_image.so"
-echo "Run with: dsim -work dsim_linux_work -image tb_linux_image +MEMFILE=<hex>"
+echo "DSim build OK.  Image at dsim_work/tb_image.so"
+echo "Run with:  scripts/run_dsim.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]"
