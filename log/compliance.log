@@ -1,0 +1,509 @@
++ /home/jeremycai/agent-workspace/rv64gc-v2/scripts/build_dsim.sh
+Copyright (C) 2017-2025 Altair Engineering Inc. All rights reserved.
+=N:[UsageMeter (2026-05-31 10:07:20 -0700)] Using /etc/ssl/certs as location of CA certificates to verify license server.
+=N:[UsageMeter (2026-05-31 10:07:21 -0700)] usage server initial connection
+=N:[License] 
+********************************************************************************
+
+[DSIM LICENSE NOTICE]
+
+The free license for DSim on-prem is scheduled to expire on September 1st.
+
+To ensure uninterrupted service after this date, please transition your
+
+environment to use Altair licensing.
+
+KEY DATES:
+
+Sept 1st: Free On-Prem licenses and DSim Cloud services discontinued.
+
+Oct 15th: All DSim Cloud data will be permanently deleted.
+
+For migration instructions and Altair licensing details, visit: altair.com/dsim
+
+********************************************************************************
+=N:[License] New lease granted.
+Analyzing...
+=N:[DisabledSvaFeature]:
+    The following SVA features are being disabled:    
+
+    external/cvfpu-src/src/common_cells/src/rr_arb_tree.sv:173:17    Assert property statement    
+
+    external/cvfpu-src/src/common_cells/src/rr_arb_tree.sv:180:21    Assume statement             
+
+    src/rtl/sim/fetch_frontend_assertions.sv:88:5                    Properties                   
+
+Elaborating...
+  Top-level modules:
+    $unit
+    tb_xsim
+  Found 118 unique specialization(s) of 88 design element(s).
+=W:[MissingTimescale]:
+    It is illegal for some design elements to have time specifications    
+    while others don't.  A complete time specification includes           
+    both a time unit and time precision.                                  
+
+        Have complete time spec    Have no/incomplete time spec        
+
+        tb_xsim                    alu                                 
+                                   bpu                                 
+                                   bpu_dynamic_profiler                
+                                   branch_recovery_contract_checker    
+                                   bru                                 
+                                   btb                                 
+                                   bypass_network                      
+                                   cf_math_pkg                         
+                                   checkpoint                          
+                                   commit                              
+                                   committed_store_buffer              
+                                   control_mvp                         
+                                   csr_file                            
+                                   dcache                              
+                                   dcache_data_ram                     
+                                   dcache_tag_ram                      
+                                   decode                              
+                                   decode_slice                        
+                                   defs_div_sqrt_mvp                   
+                                   dispatch_queue                      
+                                   div_sqrt_top_mvp                    
+                                   divider                             
+                                   dtlb                                
+                                   fetch_delivery_checker              
+                                   fetch_frontend_assertions           
+                                   fetch_frontend_profiler             
+                                   fetch_owner_checker                 
+                                   fetch_packet_buffer                 
+                                   fetch_top                           
+                                   fetch_trace_probe                   
+                                   fmv_unit                            
+                                   fp_prf                              
+                                   fpnew_cast_multi                    
+                                   fpnew_classifier                    
+                                   fpnew_divsqrt_multi                 
+                                   fpnew_fma                           
+                                   fpnew_noncomp                       
+                                   fpnew_opgroup_block                 
+                                   fpnew_opgroup_fmt_slice             
+                                   fpnew_opgroup_multifmt_slice        
+                                   fpnew_pkg                           
+                                   fpnew_rounding                      
+                                   fpnew_top                           
+                                   fpu_fpnew_wrapper                   
+                                   fpu_misc                            
+                                   fpu_pkg                             
+                                   fpu_top                             
+                                   free_list                           
+                                   ftq                                 
+                                   fusion_detector                     
+                                   ibuffer                             
+                                   icache                              
+                                   icache_data_ram                     
+                                   icache_resp_queue                   
+                                   icache_tag_ram                      
+                                   ifu                                 
+                                   ifu_duplicate_guard                 
+                                   ifu_line_fetch                      
+                                   instr_boundary                      
+                                   instr_compact                       
+                                   int_prf                             
+                                   isa_pkg                             
+                                   issue_queue                         
+                                   iteration_div_sqrt_mvp              
+                                   itlb                                
+                                   l2_cache                            
+                                   load_queue                          
+                                   lsu                                 
+                                   lzc                                 
+                                   multiplier                          
+                                   next_line_prefetch_buffer           
+                                   norm_div_sqrt_mvp                   
+                                   nrbd_nrsc_mvp                       
+                                   pred_checker                        
+                                   predecode                           
+                                   preprocess_mvp                      
+                                   ptw                                 
+                                   ras                                 
+                                   rat                                 
+                                   rename                              
+                                   rob                                 
+                                   rr_arb_tree                         
+                                   rv64gc_core_top                     
+                                   rv64gc_pkg                          
+                                   rvc_decompress                      
+                                   rvc_expander                        
+                                   sim_memory                          
+                                   store_queue                         
+                                   tage_sc_l                           
+                                   tb_top                              
+                                   uarch_pkg                           
+
+=W:[MultiBlockWrite]:
+    The following variables are written by at least one    
+    always_comb/latch/ff block, and some other block:      
+
+    regfile_copy4          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    regfile_copy1          src/rtl/core/regfile/fp_prf.sv:27:5          
+                           src/rtl/core/regfile/fp_prf.sv:37:5          
+
+    regfile_copy2          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    valid_arr              src/rtl/core/cache/dcache_tag_ram.sv:59:5    
+                           src/rtl/core/cache/dcache_tag_ram.sv:69:5    
+
+    regfile_copy2          src/rtl/core/regfile/fp_prf.sv:27:5          
+                           src/rtl/core/regfile/fp_prf.sv:37:5          
+
+    regfile_copy3          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    rename_buf             src/rtl/core/rv64gc_core_top.sv:685:5        
+                           src/rtl/core/rv64gc_core_top.sv:1361:5       
+
+    rob_uses_checkpoint    src/rtl/core/rv64gc_core_top.sv:685:5        
+                           src/rtl/core/rv64gc_core_top.sv:1361:5       
+
+    dirty_arr              src/rtl/core/cache/dcache_tag_ram.sv:59:5    
+                           src/rtl/core/cache/dcache_tag_ram.sv:69:5    
+
+    regfile_copy0          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    regfile_copy0          src/rtl/core/regfile/fp_prf.sv:27:5          
+                           src/rtl/core/regfile/fp_prf.sv:37:5          
+
+    golden_tripped_r       src/tb/tb_top.sv:261:5                       
+                           src/tb/tb_top.sv:6122:5                      
+
+    golden_seq_r           src/tb/tb_top.sv:261:5                       
+                           src/tb/tb_top.sv:6122:5                      
+
+    regfile_copy3          src/rtl/core/regfile/fp_prf.sv:27:5          
+                           src/rtl/core/regfile/fp_prf.sv:37:5          
+
+    rob_checkpoint_id      src/rtl/core/rv64gc_core_top.sv:685:5        
+                           src/rtl/core/rv64gc_core_top.sv:1361:5       
+
+    mem                    src/rtl/sim/sim_memory.sv:51:5               
+                           src/rtl/sim/sim_memory.sv:74:5               
+
+    regfile_copy5          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    regfile_copy1          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    rob_checkpoint_tail    src/rtl/core/rv64gc_core_top.sv:685:5        
+                           src/rtl/core/rv64gc_core_top.sv:1361:5       
+
+    valid_arr              src/rtl/core/cache/icache_tag_ram.sv:44:5    
+                           src/rtl/core/cache/icache_tag_ram.sv:53:5    
+
+Optimizing...
+Building models...
+PLI/VPI access: +rwb 
+Simulation time precision is 1ps.
+  [1/66] module $root: 1144 functions, 2359 basic blocks
+  [2/66] module $pkgs: 1 functions, 2 basic blocks
+  [3/66] CU scope $unit: 1 functions, 2 basic blocks
+  [4/66] module tb_xsim: 13 functions, 72 basic blocks
+  [5/66] package std: 23 functions, 64 basic blocks
+  [6/66] package defs_div_sqrt_mvp: 1 functions, 2 basic blocks
+  [7/66] package rv64gc_pkg: 1 functions, 2 basic blocks
+  [8/66] package fpu_pkg: 50 functions, 237 basic blocks
+  [9/66] package isa_pkg: 1 functions, 2 basic blocks
+  [10/66] package fpnew_pkg: 76 functions, 409 basic blocks
+  [11/66] package cf_math_pkg: 1 functions, 2 basic blocks
+  [12/66] package uarch_pkg: 50 functions, 287 basic blocks
+  [13/66] module tb_top: 560 functions, 9108 basic blocks
+  [14/66] module rv64gc_core_top#(0,0,0,0,0,0,0): 712 functions, 5980 basic blocks
+  [15/66] module sim_memory#(2097152): 9 functions, 555 basic blocks
+  [16/66] module fetch_top: 1082 functions, 5573 basic blocks
+  [17/66] module decode: 13 functions, 85 basic blocks
+  [18/66] module fusion_detector: 24 functions, 631 basic blocks
+  [19/66] module rename: 186 functions, 3365 basic blocks
+  [20/66] module rob: 46 functions, 4147 basic blocks
+  [21/66] module dispatch_queue: 22 functions, 1169 basic blocks
+  [22/66] module issue_queue#(24,2,2,1,0): 21 functions, 1061 basic blocks
+  [23/66] module issue_queue#(24,2,1,1,0): 20 functions, 967 basic blocks
+  [24/66] module issue_queue#(32,2,2,0,0): 21 functions, 1135 basic blocks
+  [25/66] module issue_queue#(32,2,1,0,0): 20 functions, 1038 basic blocks
+  [26/66] module int_prf: 17 functions, 266 basic blocks
+  [27/66] module fp_prf: 17 functions, 138 basic blocks
+  [28/66] module bypass_network: 3 functions, 30 basic blocks
+  [29/66] module alu: 32 functions, 281 basic blocks
+  [30/66] module fpu_top: 34 functions, 686 basic blocks
+  [31/66] module bru: 17 functions, 150 basic blocks
+  [32/66] module multiplier: 11 functions, 99 basic blocks
+  [33/66] module divider: 24 functions, 418 basic blocks
+  [34/66] module lsu: 638 functions, 7249 basic blocks
+  [35/66] module dcache: 199 functions, 2936 basic blocks
+  [36/66] module l2_cache: 54 functions, 1709 basic blocks
+  [37/66] module commit: 37 functions, 850 basic blocks
+  [38/66] module csr_file: 30 functions, 1656 basic blocks
+  [39/66] module itlb#(16,4): 11 functions, 181 basic blocks
+  [40/66] module dtlb#(32,5): 15 functions, 280 basic blocks
+  [41/66] module ptw: 34 functions, 301 basic blocks
+  [42/66] module ifu: 53 functions, 620 basic blocks
+  [43/66] module next_line_prefetch_buffer: 27 functions, 176 basic blocks
+  [44/66] module icache_resp_queue#(4): 14 functions, 137 basic blocks
+  [45/66] module bpu: 287 functions, 5773 basic blocks
+  [46/66] module rvc_expander: 69 functions, 702 basic blocks
+  [47/66] module fetch_frontend_profiler: 116 functions, 1965 basic blocks
+  [48/66] module decode_slice: 16 functions, 556 basic blocks
+  [49/66] module fpu_fpnew_wrapper: 20 functions, 140 basic blocks
+  [50/66] module fpnew_top#(43'h00000020383,682'h0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000155aa955aa8,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0,0): 85 functions, 549 basic blocks
+  [51/66] module fpnew_opgroup_block#(0,64,0,0,24,3,160'h0000000000000000000000000000000000000000,341,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 134 functions, 754 basic blocks
+  [52/66] module fpnew_opgroup_block#(1,64,0,0,24,3,160'h0000000000000000000000000000000000000000,682,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 99 functions, 619 basic blocks
+  [53/66] module fpnew_opgroup_block#(2,64,0,0,24,3,160'h0000000000000000000000000000000000000000,341,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 138 functions, 769 basic blocks
+  [54/66] module fpnew_opgroup_block#(3,64,0,0,24,3,160'h0000000000000000000000000000000000000000,682,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 241 functions, 1823 basic blocks
+  [55/66] module fpnew_fma#(0,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 115 functions, 976 basic blocks
+  [56/66] module fpnew_fma#(1,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 116 functions, 1471 basic blocks
+  [57/66] module fpnew_divsqrt_multi#(24,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic[4:0]): 155 functions, 1830 basic blocks
+  [58/66] module fpnew_noncomp#(0,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 44 functions, 263 basic blocks
+  [59/66] module fpnew_noncomp#(1,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 44 functions, 263 basic blocks
+  [60/66] module fpnew_classifier#(0,1): 2 functions, 30 basic blocks
+  [61/66] module fpnew_classifier#(1,1): 2 functions, 30 basic blocks
+  [62/66] module fpnew_classifier#(0,3): 4 functions, 101 basic blocks
+  [63/66] module fpnew_classifier#(1,3): 4 functions, 101 basic blocks
+  [64/66] module nrbd_nrsc_mvp: 121 functions, 1332 basic blocks
+  [65/66] module fpnew_classifier#(0,2): 3 functions, 68 basic blocks
+  [66/66] module fpnew_classifier#(1,2): 3 functions, 68 basic blocks
+Linking tb_image.so...
+  Altair DSim version: 2026.0.0 (b:R #c:127 h:14cc828913 os:rocky_8.10)
+
+DSim build OK.  Image at dsim_work/tb_image.so
+Run with:  scripts/run_dsim.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]
++ /usr/bin/python3 /home/jeremycai/agent-workspace/rv64gc-v2/tools/run_benchmarks.py --runner dsim --run-class signoff --manifest /home/jeremycai/agent-workspace/rv64gc-v2/build/rv64gc_compliance/rv64gc_compliance_manifest.json --run-dir /home/jeremycai/agent-workspace/rv64gc-v2/benchmark_results/rv64gc_compliance_20260531_100720 --iter-limit 10000000 --no-perf-summary --plusarg FETCH_OWNER_CHECK --plusarg FETCH_OWNER_STRICT --plusarg FETCH_DELIVERY_CHECK --plusarg FETCH_DELIVERY_STRICT --plusarg BRANCH_RECOVERY_CHECK --plusarg BRANCH_RECOVERY_STRICT --plusarg PERF_COUNTERS --plusarg STAT_DUMP
+=== rv64ui_p_add ===
+=== rv64ui_p_addi ===
+=== rv64ui_p_addiw ===
+=== rv64ui_p_addw ===
+=== rv64ui_p_and ===
+=== rv64ui_p_andi ===
+=== rv64ui_p_auipc ===
+=== rv64ui_p_beq ===
+=== rv64ui_p_bge ===
+=== rv64ui_p_bgeu ===
+=== rv64ui_p_blt ===
+=== rv64ui_p_bltu ===
+=== rv64ui_p_bne ===
+=== rv64ui_p_fence_i ===
+=== rv64ui_p_jal ===
+=== rv64ui_p_jalr ===
+=== rv64ui_p_lb ===
+=== rv64ui_p_lbu ===
+=== rv64ui_p_ld ===
+=== rv64ui_p_ld_st ===
+=== rv64ui_p_lh ===
+=== rv64ui_p_lhu ===
+=== rv64ui_p_lui ===
+=== rv64ui_p_lw ===
+=== rv64ui_p_lwu ===
+=== rv64ui_p_ma_data ===
+=== rv64ui_p_or ===
+=== rv64ui_p_ori ===
+=== rv64ui_p_sb ===
+=== rv64ui_p_sd ===
+=== rv64ui_p_sh ===
+=== rv64ui_p_simple ===
+=== rv64ui_p_sll ===
+=== rv64ui_p_slli ===
+=== rv64ui_p_slliw ===
+=== rv64ui_p_sllw ===
+=== rv64ui_p_slt ===
+=== rv64ui_p_slti ===
+=== rv64ui_p_sltiu ===
+=== rv64ui_p_sltu ===
+=== rv64ui_p_sra ===
+=== rv64ui_p_srai ===
+=== rv64ui_p_sraiw ===
+=== rv64ui_p_sraw ===
+=== rv64ui_p_srl ===
+=== rv64ui_p_srli ===
+=== rv64ui_p_srliw ===
+=== rv64ui_p_srlw ===
+=== rv64ui_p_st_ld ===
+=== rv64ui_p_sub ===
+=== rv64ui_p_subw ===
+=== rv64ui_p_sw ===
+=== rv64ui_p_xor ===
+=== rv64ui_p_xori ===
+=== rv64um_p_div ===
+=== rv64um_p_divu ===
+=== rv64um_p_divuw ===
+=== rv64um_p_divw ===
+=== rv64um_p_mul ===
+=== rv64um_p_mulh ===
+=== rv64um_p_mulhsu ===
+=== rv64um_p_mulhu ===
+=== rv64um_p_mulw ===
+=== rv64um_p_rem ===
+=== rv64um_p_remu ===
+=== rv64um_p_remuw ===
+=== rv64um_p_remw ===
+=== rv64ua_p_amoadd_d ===
+=== rv64ua_p_amoadd_w ===
+=== rv64ua_p_amoand_d ===
+=== rv64ua_p_amoand_w ===
+=== rv64ua_p_amomax_d ===
+=== rv64ua_p_amomax_w ===
+=== rv64ua_p_amomaxu_d ===
+=== rv64ua_p_amomaxu_w ===
+=== rv64ua_p_amomin_d ===
+=== rv64ua_p_amomin_w ===
+=== rv64ua_p_amominu_d ===
+=== rv64ua_p_amominu_w ===
+=== rv64ua_p_amoor_d ===
+=== rv64ua_p_amoor_w ===
+=== rv64ua_p_amoswap_d ===
+=== rv64ua_p_amoswap_w ===
+=== rv64ua_p_amoxor_d ===
+=== rv64ua_p_amoxor_w ===
+=== rv64ua_p_lrsc ===
+=== rv64uc_p_rvc ===
+=== rv64uf_p_fadd ===
+=== rv64uf_p_fclass ===
+=== rv64uf_p_fcmp ===
+=== rv64uf_p_fcvt ===
+=== rv64uf_p_fcvt_w ===
+=== rv64uf_p_fdiv ===
+=== rv64uf_p_fmadd ===
+=== rv64uf_p_fmin ===
+=== rv64uf_p_ldst ===
+=== rv64uf_p_move ===
+=== rv64uf_p_recoding ===
+=== rv64ud_p_fadd ===
+=== rv64ud_p_fclass ===
+=== rv64ud_p_fcmp ===
+=== rv64ud_p_fcvt ===
+=== rv64ud_p_fcvt_w ===
+=== rv64ud_p_fdiv ===
+=== rv64ud_p_fmadd ===
+=== rv64ud_p_fmin ===
+=== rv64ud_p_ldst ===
+=== rv64ud_p_move ===
+=== rv64ud_p_recoding ===
+=== rv64ud_p_structural ===
+=== rv64mi_p_csr ===
+=== rv64mi_p_mcsr ===
+=== rv64mi_p_zicntr ===
+name                 class    mech_class                 gate       status    mcycle      minstret    ipc       legacy_lb decop_act metric
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+rv64ui_p_add         signoff  default_rtl                PASS       PASS             485         516  1.063918         -         - -
+rv64ui_p_addi        signoff  default_rtl                PASS       PASS             286         291  1.017483         -         - -
+rv64ui_p_addiw       signoff  default_rtl                PASS       PASS             285         288  1.010526         -         - -
+rv64ui_p_addw        signoff  default_rtl                PASS       PASS             470         511  1.087234         -         - -
+rv64ui_p_and         signoff  default_rtl                PASS       PASS             484         591  1.221074         -         - -
+rv64ui_p_andi        signoff  default_rtl                PASS       PASS             276         262  0.949275         -         - -
+rv64ui_p_auipc       signoff  default_rtl                PASS       PASS             149         105  0.704698         -         - -
+rv64ui_p_beq         signoff  default_rtl                PASS       PASS             479         337  0.703549         -         - -
+rv64ui_p_bge         signoff  default_rtl                PASS       PASS             544         355  0.652574         -         - -
+rv64ui_p_bgeu        signoff  default_rtl                PASS       PASS             520         445  0.855769         -         - -
+rv64ui_p_blt         signoff  default_rtl                PASS       PASS             480         337  0.702083         -         - -
+rv64ui_p_bltu        signoff  default_rtl                PASS       PASS             457         423  0.925602         -         - -
+rv64ui_p_bne         signoff  default_rtl                PASS       PASS             496         337  0.679435         -         - -
+rv64ui_p_fence_i     signoff  default_rtl                PASS       PASS             389         341  0.876607         -         - -
+rv64ui_p_jal         signoff  default_rtl                PASS       PASS             147         101  0.687075         -         - -
+rv64ui_p_jalr        signoff  default_rtl                PASS       PASS             246         161  0.654472         -         - -
+rv64ui_p_lb          signoff  default_rtl                PASS       PASS             279         299  1.071685         -         - -
+rv64ui_p_lbu         signoff  default_rtl                PASS       PASS             279         299  1.071685         -         - -
+rv64ui_p_ld          signoff  default_rtl                PASS       PASS             344         481  1.398256         -         - -
+rv64ui_p_ld_st       signoff  default_rtl                PASS       PASS            1188        1461  1.229798         -         - -
+rv64ui_p_lh          signoff  default_rtl                PASS       PASS             291         315  1.082474         -         - -
+rv64ui_p_lhu         signoff  default_rtl                PASS       PASS             288         324  1.125000         -         - -
+rv64ui_p_lui         signoff  default_rtl                PASS       PASS             149         111  0.744966         -         - -
+rv64ui_p_lw          signoff  default_rtl                PASS       PASS             282         329  1.166667         -         - -
+rv64ui_p_lwu         signoff  default_rtl                PASS       PASS             280         363  1.296429         -         - -
+rv64ui_p_ma_data     signoff  default_rtl                PASS       PASS            2289        1822  0.795981         -         - -
+rv64ui_p_or          signoff  default_rtl                PASS       PASS             505         624  1.235644         -         - -
+rv64ui_p_ori         signoff  default_rtl                PASS       PASS             270         255  0.944444         -         - -
+rv64ui_p_sb          signoff  default_rtl                PASS       PASS             403         500  1.240695         -         - -
+rv64ui_p_sd          signoff  default_rtl                PASS       PASS             510         672  1.317647         -         - -
+rv64ui_p_sh          signoff  default_rtl                PASS       PASS             459         553  1.204793         -         - -
+rv64ui_p_simple      signoff  default_rtl                PASS       PASS             136          87  0.639706         -         - -
+rv64ui_p_sll         signoff  default_rtl                PASS       PASS             507         586  1.155819         -         - -
+rv64ui_p_slli        signoff  default_rtl                PASS       PASS             293         316  1.078498         -         - -
+rv64ui_p_slliw       signoff  default_rtl                PASS       PASS             300         323  1.076667         -         - -
+rv64ui_p_sllw        signoff  default_rtl                PASS       PASS             506         586  1.158103         -         - -
+rv64ui_p_slt         signoff  default_rtl                PASS       PASS             464         505  1.088362         -         - -
+rv64ui_p_slti        signoff  default_rtl                PASS       PASS             276         283  1.025362         -         - -
+rv64ui_p_sltiu       signoff  default_rtl                PASS       PASS             276         283  1.025362         -         - -
+rv64ui_p_sltu        signoff  default_rtl                PASS       PASS             476         522  1.096639         -         - -
+rv64ui_p_sra         signoff  default_rtl                PASS       PASS             496         558  1.125000         -         - -
+rv64ui_p_srai        signoff  default_rtl                PASS       PASS             287         304  1.059233         -         - -
+rv64ui_p_sraiw       signoff  default_rtl                PASS       PASS             311         350  1.125402         -         - -
+rv64ui_p_sraw        signoff  default_rtl                PASS       PASS             515         598  1.161165         -         - -
+rv64ui_p_srl         signoff  default_rtl                PASS       PASS             505         600  1.188119         -         - -
+rv64ui_p_srli        signoff  default_rtl                PASS       PASS             299         325  1.086957         -         - -
+rv64ui_p_srliw       signoff  default_rtl                PASS       PASS             299         332  1.110368         -         - -
+rv64ui_p_srlw        signoff  default_rtl                PASS       PASS             505         592  1.172277         -         - -
+rv64ui_p_st_ld       signoff  default_rtl                PASS       PASS             449         771  1.717149         -         - -
+rv64ui_p_sub         signoff  default_rtl                PASS       PASS             469         507  1.081023         -         - -
+rv64ui_p_subw        signoff  default_rtl                PASS       PASS             469         503  1.072495         -         - -
+rv64ui_p_sw          signoff  default_rtl                PASS       PASS             455         560  1.230769         -         - -
+rv64ui_p_xor         signoff  default_rtl                PASS       PASS             505         619  1.225743         -         - -
+rv64ui_p_xori        signoff  default_rtl                PASS       PASS             275         253  0.920000         -         - -
+rv64um_p_div         signoff  default_rtl                PASS       PASS             191         155  0.811518         -         - -
+rv64um_p_divu        signoff  default_rtl                PASS       PASS             188         153  0.813830         -         - -
+rv64um_p_divuw       signoff  default_rtl                PASS       PASS             177         145  0.819209         -         - -
+rv64um_p_divw        signoff  default_rtl                PASS       PASS             179         148  0.826816         -         - -
+rv64um_p_mul         signoff  default_rtl                PASS       PASS             488         506  1.036885         -         - -
+rv64um_p_mulh        signoff  default_rtl                PASS       PASS             491         514  1.046843         -         - -
+rv64um_p_mulhsu      signoff  default_rtl                PASS       PASS             490         514  1.048980         -         - -
+rv64um_p_mulhu       signoff  default_rtl                PASS       PASS             502         546  1.087649         -         - -
+rv64um_p_mulw        signoff  default_rtl                PASS       PASS             470         445  0.946809         -         - -
+rv64um_p_rem         signoff  default_rtl                PASS       PASS             185         146  0.789189         -         - -
+rv64um_p_remu        signoff  default_rtl                PASS       PASS             188         147  0.781915         -         - -
+rv64um_p_remuw       signoff  default_rtl                PASS       PASS             176         142  0.806818         -         - -
+rv64um_p_remw        signoff  default_rtl                PASS       PASS             178         148  0.831461         -         - -
+rv64ua_p_amoadd_d    signoff  default_rtl                PASS       PASS             173         115  0.664740         -         - -
+rv64ua_p_amoadd_w    signoff  default_rtl                PASS       PASS             173         112  0.647399         -         - -
+rv64ua_p_amoand_d    signoff  default_rtl                PASS       PASS             173         112  0.647399         -         - -
+rv64ua_p_amoand_w    signoff  default_rtl                PASS       PASS             173         111  0.641618         -         - -
+rv64ua_p_amomax_d    signoff  default_rtl                PASS       PASS             176         111  0.630682         -         - -
+rv64ua_p_amomax_w    signoff  default_rtl                PASS       PASS             190         125  0.657895         -         - -
+rv64ua_p_amomaxu_d   signoff  default_rtl                PASS       PASS             176         111  0.630682         -         - -
+rv64ua_p_amomaxu_w   signoff  default_rtl                PASS       PASS             190         125  0.657895         -         - -
+rv64ua_p_amomin_d    signoff  default_rtl                PASS       PASS             176         111  0.630682         -         - -
+rv64ua_p_amomin_w    signoff  default_rtl                PASS       PASS             190         125  0.657895         -         - -
+rv64ua_p_amominu_d   signoff  default_rtl                PASS       PASS             176         111  0.630682         -         - -
+rv64ua_p_amominu_w   signoff  default_rtl                PASS       PASS             190         125  0.657895         -         - -
+rv64ua_p_amoor_d     signoff  default_rtl                PASS       PASS             173         110  0.635838         -         - -
+rv64ua_p_amoor_w     signoff  default_rtl                PASS       PASS             173         110  0.635838         -         - -
+rv64ua_p_amoswap_d   signoff  default_rtl                PASS       PASS             173         112  0.647399         -         - -
+rv64ua_p_amoswap_w   signoff  default_rtl                PASS       PASS             173         111  0.641618         -         - -
+rv64ua_p_amoxor_d    signoff  default_rtl                PASS       PASS             173         113  0.653179         -         - -
+rv64ua_p_amoxor_w    signoff  default_rtl                PASS       PASS             174         115  0.660920         -         - -
+rv64ua_p_lrsc        signoff  default_rtl                PASS       PASS           12501        6289  0.503080         -         - -
+rv64uc_p_rvc         signoff  default_rtl                PASS       PASS             267         306  1.146067         -         - -
+rv64uf_p_fadd        signoff  default_rtl                PASS       PASS             224         221  0.986607         -         - -
+rv64uf_p_fclass      signoff  default_rtl                PASS       PASS             194         158  0.814433         -         - -
+rv64uf_p_fcmp        signoff  default_rtl                PASS       PASS             245         271  1.106122         -         - -
+rv64uf_p_fcvt        signoff  default_rtl                PASS       PASS             209         163  0.779904         -         - -
+rv64uf_p_fcvt_w      signoff  default_rtl                PASS       PASS             361         561  1.554017         -         - -
+rv64uf_p_fdiv        signoff  default_rtl                PASS       PASS             258         182  0.705426         -         - -
+rv64uf_p_fmadd       signoff  default_rtl                PASS       PASS             239         247  1.033473         -         - -
+rv64uf_p_fmin        signoff  default_rtl                PASS       PASS             280         325  1.160714         -         - -
+rv64uf_p_ldst        signoff  default_rtl                PASS       PASS             170         117  0.688235         -         - -
+rv64uf_p_move        signoff  default_rtl                PASS       PASS             280         266  0.950000         -         - -
+rv64uf_p_recoding    signoff  default_rtl                PASS       PASS             175         124  0.708571         -         - -
+rv64ud_p_fadd        signoff  default_rtl                PASS       PASS             227         221  0.973568         -         - -
+rv64ud_p_fclass      signoff  default_rtl                PASS       PASS             194         164  0.845361         -         - -
+rv64ud_p_fcmp        signoff  default_rtl                PASS       PASS             244         271  1.110656         -         - -
+rv64ud_p_fcvt        signoff  default_rtl                PASS       PASS             233         203  0.871245         -         - -
+rv64ud_p_fcvt_w      signoff  default_rtl                PASS       PASS             392         621  1.584184         -         - -
+rv64ud_p_fdiv        signoff  default_rtl                PASS       PASS             344         195  0.566860         -         - -
+rv64ud_p_fmadd       signoff  default_rtl                PASS       PASS             241         247  1.024896         -         - -
+rv64ud_p_fmin        signoff  default_rtl                PASS       PASS             283         325  1.148410         -         - -
+rv64ud_p_ldst        signoff  default_rtl                PASS       PASS             176         136  0.772727         -         - -
+rv64ud_p_move        signoff  default_rtl                PASS       PASS             614        1041  1.695440         -         - -
+rv64ud_p_recoding    signoff  default_rtl                PASS       PASS             188         149  0.792553         -         - -
+rv64ud_p_structural  signoff  default_rtl                PASS       PASS             402         214  0.532338         -         - -
+rv64mi_p_csr         signoff  default_rtl                PASS       PASS             405         285  0.703704         -         - -
+rv64mi_p_mcsr        signoff  default_rtl                PASS       PASS             177         110  0.621469         -         - -
+rv64mi_p_zicntr      signoff  default_rtl                PASS       PASS             181         127  0.701657         -         - -
+Audit report: /home/jeremycai/agent-workspace/rv64gc-v2/doc/rv64gc_compliance_audit_2026-05-12.md
+Results: /home/jeremycai/agent-workspace/rv64gc-v2/benchmark_results/rv64gc_compliance_20260531_100720
