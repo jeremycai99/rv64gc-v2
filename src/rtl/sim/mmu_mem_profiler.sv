@@ -112,7 +112,10 @@ bind rv64gc_core_top mmu_mem_profiler u_mmu_mem_profiler (
     .bru_flush_valid     (bru_flush.valid),
     .dtlb_lookup_valid   (u_dtlb.lookup_valid_i),
     .dtlb_hit            (u_dtlb.hit_o),
-    .dcache_resp_valid   (|u_dcache.load_resp_valid),
-    .dcache_resp_hit     (&(u_dcache.load_resp_hit | ~u_dcache.load_resp_valid))
+    // D-cache access = a load in s1 lookup; miss = a looked-up load that did not hit.
+    // (load_resp_valid is hit-only in this dcache, so it cannot express a miss.)
+    .dcache_resp_valid   (u_dcache.s1_ld0_valid || u_dcache.s1_ld1_valid),
+    .dcache_resp_hit     (!((u_dcache.s1_ld0_valid && !u_dcache.ld0_cache_hit) ||
+                            (u_dcache.s1_ld1_valid && !u_dcache.ld1_cache_hit)))
 );
 `endif
