@@ -114,7 +114,8 @@ module fetch_frontend_profiler
     input  wire                             ifu_runahead_pending_c,
     input  wire                             ifu_runahead_redirect_match_c,
     input  wire                             ifu_runahead_duplicate_alloc_blocked_c,
-    input  wire                             ifu_runahead_depth_gt1_c
+    input  wire                             ifu_runahead_depth_gt1_c,
+    input  wire                             itlb_miss_inflight
 );
 
     localparam logic [2:0] BT_COND = 3'd0;
@@ -239,6 +240,10 @@ module fetch_frontend_profiler
     integer xs_dup_no_same_owner_no_seq_cycles;
     integer xs_dup_no_same_owner_extract0_cycles;
     integer xs_dup_no_same_owner_final0_cycles;
+    longint unsigned fe_stall_total;
+    longint unsigned fe_stall_xlate;
+    longint unsigned fe_stall_icache;
+    longint unsigned fe_stall_backend;
     integer xs_dup_no_same_owner_control_cycles;
     integer xs_dup_no_same_owner_taken_cycles;
     integer xs_dup_no_same_owner_subgroup_cycles;
@@ -1201,6 +1206,10 @@ module fetch_frontend_profiler
             xs_dup_no_same_owner_no_seq_cycles <= 0;
             xs_dup_no_same_owner_extract0_cycles <= 0;
             xs_dup_no_same_owner_final0_cycles <= 0;
+            fe_stall_total   <= '0;
+            fe_stall_xlate   <= '0;
+            fe_stall_icache  <= '0;
+            fe_stall_backend <= '0;
             xs_dup_no_same_owner_control_cycles <= 0;
             xs_dup_no_same_owner_taken_cycles <= 0;
             xs_dup_no_same_owner_subgroup_cycles <= 0;
@@ -1316,6 +1325,13 @@ module fetch_frontend_profiler
                 xs_packet_buf_occ_hist[i] <= 0;
             end
         end else if (xs_catchup_probe_en) begin
+            // fe_stall cause split (priority: backend back-pressure > translation > icache supply)
+            if (fe_stall) begin
+                fe_stall_total <= fe_stall_total + 64'd1;
+                if (backend_stall)            fe_stall_backend <= fe_stall_backend + 64'd1;
+                else if (itlb_miss_inflight)  fe_stall_xlate   <= fe_stall_xlate + 64'd1;
+                else                          fe_stall_icache  <= fe_stall_icache + 64'd1;
+            end
             if (ftq_empty)
                 xs_ftq_empty_cycles <= xs_ftq_empty_cycles + 1;
             if (ftq_full)
@@ -2859,6 +2875,7 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .ifu_runahead_pending_c          (ifu_runahead_pending_c),
     .ifu_runahead_redirect_match_c   (ifu_runahead_redirect_match_c),
     .ifu_runahead_duplicate_alloc_blocked_c(ifu_runahead_duplicate_alloc_blocked_c),
-    .ifu_runahead_depth_gt1_c        (ifu_runahead_depth_gt1_c)
+    .ifu_runahead_depth_gt1_c        (ifu_runahead_depth_gt1_c),
+    .itlb_miss_inflight              (instr_translation_stall)
 );
 `endif
