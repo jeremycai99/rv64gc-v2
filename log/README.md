@@ -1,13 +1,15 @@
 # Verification logs
 
-Full output of the three release-candidate verification gates, all run on the
-cleaned harness (commit that dropped xsim + moved scripts under `scripts/`):
+Full output of the verification gates. Current contents are the **Stage 5
+instrumentation** verification (sim-only perf profilers added; core verified
+bit-identical to the RC) plus the paged-mode performance trajectory:
 
 | Log | Gate | Result |
 |---|---|---|
 | `compliance.log` | RV64GC ISA compliance (riscv-tests) | **113/113 PASS** (incl. RV64F/D) |
-| `signoff.log` | 16-row benchmark signoff (`--goal stage1`) | **16/16 PASS** — CoreMark 6.851 CM/MHz, Dhrystone 4.261–4.273 DMIPS/MHz |
+| `signoff.log` | 16-row benchmark signoff (`--goal stage1`) | **16/16 PASS** — CoreMark 6.851 CM/MHz, Dhrystone 4.261–4.273 DMIPS/MHz (cycle-identical to RC → ≤0.01% no-regression) |
 | `boot.log` | Linux boot (full profile) — UART console | **BOOT OK** — OpenSBI + Linux 6.6 to userspace, all 8 milestones |
+| `stage5_perf_profile_trajectory.log` | 277 `[PERF_PROFILE]` interval samples from the full boot | feeds `tools/paged_ipc_profile.py`; see `doc/stage5_paged_ipc_profile_2026-06-02.md` |
 
 Reproduce with:
 

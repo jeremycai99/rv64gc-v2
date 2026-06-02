@@ -1,7 +1,7 @@
 + /home/jeremycai/agent-workspace/rv64gc-v2/scripts/build_dsim.sh
 Copyright (C) 2017-2025 Altair Engineering Inc. All rights reserved.
-=N:[UsageMeter (2026-05-31 10:07:20 -0700)] Using /etc/ssl/certs as location of CA certificates to verify license server.
-=N:[UsageMeter (2026-05-31 10:07:21 -0700)] usage server initial connection
+=N:[UsageMeter (2026-06-01 21:00:51 -0700)] Using /etc/ssl/certs as location of CA certificates to verify license server.
+=N:[UsageMeter (2026-06-01 21:00:52 -0700)] usage server initial connection
 =N:[License] 
 ********************************************************************************
 
@@ -37,7 +37,7 @@ Elaborating...
   Top-level modules:
     $unit
     tb_xsim
-  Found 118 unique specialization(s) of 88 design element(s).
+  Found 119 unique specialization(s) of 89 design element(s).
 =W:[MissingTimescale]:
     It is illegal for some design elements to have time specifications    
     while others don't.  A complete time specification includes           
@@ -114,6 +114,7 @@ Elaborating...
                                    load_queue                          
                                    lsu                                 
                                    lzc                                 
+                                   mmu_mem_profiler                    
                                    multiplier                          
                                    next_line_prefetch_buffer           
                                    norm_div_sqrt_mvp                   
@@ -141,142 +142,143 @@ Elaborating...
     The following variables are written by at least one    
     always_comb/latch/ff block, and some other block:      
 
-    regfile_copy4          src/rtl/core/regfile/int_prf.sv:66:5         
-                           src/rtl/core/regfile/int_prf.sv:54:5         
-
-    regfile_copy1          src/rtl/core/regfile/fp_prf.sv:27:5          
-                           src/rtl/core/regfile/fp_prf.sv:37:5          
-
-    regfile_copy2          src/rtl/core/regfile/int_prf.sv:66:5         
-                           src/rtl/core/regfile/int_prf.sv:54:5         
-
     valid_arr              src/rtl/core/cache/dcache_tag_ram.sv:59:5    
                            src/rtl/core/cache/dcache_tag_ram.sv:69:5    
-
-    regfile_copy2          src/rtl/core/regfile/fp_prf.sv:27:5          
-                           src/rtl/core/regfile/fp_prf.sv:37:5          
-
-    regfile_copy3          src/rtl/core/regfile/int_prf.sv:66:5         
-                           src/rtl/core/regfile/int_prf.sv:54:5         
-
-    rename_buf             src/rtl/core/rv64gc_core_top.sv:685:5        
-                           src/rtl/core/rv64gc_core_top.sv:1361:5       
-
-    rob_uses_checkpoint    src/rtl/core/rv64gc_core_top.sv:685:5        
-                           src/rtl/core/rv64gc_core_top.sv:1361:5       
-
-    dirty_arr              src/rtl/core/cache/dcache_tag_ram.sv:59:5    
-                           src/rtl/core/cache/dcache_tag_ram.sv:69:5    
-
-    regfile_copy0          src/rtl/core/regfile/int_prf.sv:66:5         
-                           src/rtl/core/regfile/int_prf.sv:54:5         
-
-    regfile_copy0          src/rtl/core/regfile/fp_prf.sv:27:5          
-                           src/rtl/core/regfile/fp_prf.sv:37:5          
-
-    golden_tripped_r       src/tb/tb_top.sv:261:5                       
-                           src/tb/tb_top.sv:6122:5                      
-
-    golden_seq_r           src/tb/tb_top.sv:261:5                       
-                           src/tb/tb_top.sv:6122:5                      
 
     regfile_copy3          src/rtl/core/regfile/fp_prf.sv:27:5          
                            src/rtl/core/regfile/fp_prf.sv:37:5          
 
-    rob_checkpoint_id      src/rtl/core/rv64gc_core_top.sv:685:5        
-                           src/rtl/core/rv64gc_core_top.sv:1361:5       
+    rob_checkpoint_tail    src/rtl/core/rv64gc_core_top.sv:1361:5       
+                           src/rtl/core/rv64gc_core_top.sv:685:5        
 
-    mem                    src/rtl/sim/sim_memory.sv:51:5               
-                           src/rtl/sim/sim_memory.sv:74:5               
+    rob_uses_checkpoint    src/rtl/core/rv64gc_core_top.sv:1361:5       
+                           src/rtl/core/rv64gc_core_top.sv:685:5        
 
-    regfile_copy5          src/rtl/core/regfile/int_prf.sv:66:5         
+    golden_seq_r           src/tb/tb_top.sv:6122:5                      
+                           src/tb/tb_top.sv:261:5                       
+
+    regfile_copy2          src/rtl/core/regfile/int_prf.sv:66:5         
                            src/rtl/core/regfile/int_prf.sv:54:5         
+
+    regfile_copy4          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    rob_checkpoint_id      src/rtl/core/rv64gc_core_top.sv:1361:5       
+                           src/rtl/core/rv64gc_core_top.sv:685:5        
 
     regfile_copy1          src/rtl/core/regfile/int_prf.sv:66:5         
                            src/rtl/core/regfile/int_prf.sv:54:5         
 
-    rob_checkpoint_tail    src/rtl/core/rv64gc_core_top.sv:685:5        
-                           src/rtl/core/rv64gc_core_top.sv:1361:5       
+    regfile_copy3          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    golden_tripped_r       src/tb/tb_top.sv:6122:5                      
+                           src/tb/tb_top.sv:261:5                       
+
+    regfile_copy0          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
 
     valid_arr              src/rtl/core/cache/icache_tag_ram.sv:44:5    
                            src/rtl/core/cache/icache_tag_ram.sv:53:5    
+
+    regfile_copy2          src/rtl/core/regfile/fp_prf.sv:27:5          
+                           src/rtl/core/regfile/fp_prf.sv:37:5          
+
+    dirty_arr              src/rtl/core/cache/dcache_tag_ram.sv:59:5    
+                           src/rtl/core/cache/dcache_tag_ram.sv:69:5    
+
+    regfile_copy1          src/rtl/core/regfile/fp_prf.sv:27:5          
+                           src/rtl/core/regfile/fp_prf.sv:37:5          
+
+    mem                    src/rtl/sim/sim_memory.sv:51:5               
+                           src/rtl/sim/sim_memory.sv:74:5               
+
+    regfile_copy0          src/rtl/core/regfile/fp_prf.sv:27:5          
+                           src/rtl/core/regfile/fp_prf.sv:37:5          
+
+    regfile_copy5          src/rtl/core/regfile/int_prf.sv:66:5         
+                           src/rtl/core/regfile/int_prf.sv:54:5         
+
+    rename_buf             src/rtl/core/rv64gc_core_top.sv:1361:5       
+                           src/rtl/core/rv64gc_core_top.sv:685:5        
 
 Optimizing...
 Building models...
 PLI/VPI access: +rwb 
 Simulation time precision is 1ps.
-  [1/66] module $root: 1144 functions, 2359 basic blocks
-  [2/66] module $pkgs: 1 functions, 2 basic blocks
-  [3/66] CU scope $unit: 1 functions, 2 basic blocks
-  [4/66] module tb_xsim: 13 functions, 72 basic blocks
-  [5/66] package std: 23 functions, 64 basic blocks
-  [6/66] package defs_div_sqrt_mvp: 1 functions, 2 basic blocks
-  [7/66] package rv64gc_pkg: 1 functions, 2 basic blocks
-  [8/66] package fpu_pkg: 50 functions, 237 basic blocks
-  [9/66] package isa_pkg: 1 functions, 2 basic blocks
-  [10/66] package fpnew_pkg: 76 functions, 409 basic blocks
-  [11/66] package cf_math_pkg: 1 functions, 2 basic blocks
-  [12/66] package uarch_pkg: 50 functions, 287 basic blocks
-  [13/66] module tb_top: 560 functions, 9108 basic blocks
-  [14/66] module rv64gc_core_top#(0,0,0,0,0,0,0): 712 functions, 5980 basic blocks
-  [15/66] module sim_memory#(2097152): 9 functions, 555 basic blocks
-  [16/66] module fetch_top: 1082 functions, 5573 basic blocks
-  [17/66] module decode: 13 functions, 85 basic blocks
-  [18/66] module fusion_detector: 24 functions, 631 basic blocks
-  [19/66] module rename: 186 functions, 3365 basic blocks
-  [20/66] module rob: 46 functions, 4147 basic blocks
-  [21/66] module dispatch_queue: 22 functions, 1169 basic blocks
-  [22/66] module issue_queue#(24,2,2,1,0): 21 functions, 1061 basic blocks
-  [23/66] module issue_queue#(24,2,1,1,0): 20 functions, 967 basic blocks
-  [24/66] module issue_queue#(32,2,2,0,0): 21 functions, 1135 basic blocks
-  [25/66] module issue_queue#(32,2,1,0,0): 20 functions, 1038 basic blocks
-  [26/66] module int_prf: 17 functions, 266 basic blocks
-  [27/66] module fp_prf: 17 functions, 138 basic blocks
-  [28/66] module bypass_network: 3 functions, 30 basic blocks
-  [29/66] module alu: 32 functions, 281 basic blocks
-  [30/66] module fpu_top: 34 functions, 686 basic blocks
-  [31/66] module bru: 17 functions, 150 basic blocks
-  [32/66] module multiplier: 11 functions, 99 basic blocks
-  [33/66] module divider: 24 functions, 418 basic blocks
-  [34/66] module lsu: 638 functions, 7249 basic blocks
-  [35/66] module dcache: 199 functions, 2936 basic blocks
-  [36/66] module l2_cache: 54 functions, 1709 basic blocks
-  [37/66] module commit: 37 functions, 850 basic blocks
-  [38/66] module csr_file: 30 functions, 1656 basic blocks
-  [39/66] module itlb#(16,4): 11 functions, 181 basic blocks
-  [40/66] module dtlb#(32,5): 15 functions, 280 basic blocks
-  [41/66] module ptw: 34 functions, 301 basic blocks
-  [42/66] module ifu: 53 functions, 620 basic blocks
-  [43/66] module next_line_prefetch_buffer: 27 functions, 176 basic blocks
-  [44/66] module icache_resp_queue#(4): 14 functions, 137 basic blocks
-  [45/66] module bpu: 287 functions, 5773 basic blocks
-  [46/66] module rvc_expander: 69 functions, 702 basic blocks
-  [47/66] module fetch_frontend_profiler: 116 functions, 1965 basic blocks
-  [48/66] module decode_slice: 16 functions, 556 basic blocks
-  [49/66] module fpu_fpnew_wrapper: 20 functions, 140 basic blocks
-  [50/66] module fpnew_top#(43'h00000020383,682'h0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000155aa955aa8,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0,0): 85 functions, 549 basic blocks
-  [51/66] module fpnew_opgroup_block#(0,64,0,0,24,3,160'h0000000000000000000000000000000000000000,341,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 134 functions, 754 basic blocks
-  [52/66] module fpnew_opgroup_block#(1,64,0,0,24,3,160'h0000000000000000000000000000000000000000,682,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 99 functions, 619 basic blocks
-  [53/66] module fpnew_opgroup_block#(2,64,0,0,24,3,160'h0000000000000000000000000000000000000000,341,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 138 functions, 769 basic blocks
-  [54/66] module fpnew_opgroup_block#(3,64,0,0,24,3,160'h0000000000000000000000000000000000000000,682,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 241 functions, 1823 basic blocks
-  [55/66] module fpnew_fma#(0,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 115 functions, 976 basic blocks
-  [56/66] module fpnew_fma#(1,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 116 functions, 1471 basic blocks
-  [57/66] module fpnew_divsqrt_multi#(24,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic[4:0]): 155 functions, 1830 basic blocks
-  [58/66] module fpnew_noncomp#(0,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 44 functions, 263 basic blocks
-  [59/66] module fpnew_noncomp#(1,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 44 functions, 263 basic blocks
-  [60/66] module fpnew_classifier#(0,1): 2 functions, 30 basic blocks
-  [61/66] module fpnew_classifier#(1,1): 2 functions, 30 basic blocks
-  [62/66] module fpnew_classifier#(0,3): 4 functions, 101 basic blocks
-  [63/66] module fpnew_classifier#(1,3): 4 functions, 101 basic blocks
-  [64/66] module nrbd_nrsc_mvp: 121 functions, 1332 basic blocks
-  [65/66] module fpnew_classifier#(0,2): 3 functions, 68 basic blocks
-  [66/66] module fpnew_classifier#(1,2): 3 functions, 68 basic blocks
+  [1/67] module $root: 1144 functions, 2359 basic blocks
+  [2/67] module $pkgs: 1 functions, 2 basic blocks
+  [3/67] CU scope $unit: 1 functions, 2 basic blocks
+  [4/67] module tb_xsim: 13 functions, 72 basic blocks
+  [5/67] package std: 23 functions, 64 basic blocks
+  [6/67] package defs_div_sqrt_mvp: 1 functions, 2 basic blocks
+  [7/67] package rv64gc_pkg: 1 functions, 2 basic blocks
+  [8/67] package fpu_pkg: 50 functions, 237 basic blocks
+  [9/67] package isa_pkg: 1 functions, 2 basic blocks
+  [10/67] package fpnew_pkg: 76 functions, 409 basic blocks
+  [11/67] package cf_math_pkg: 1 functions, 2 basic blocks
+  [12/67] package uarch_pkg: 50 functions, 287 basic blocks
+  [13/67] module tb_top: 560 functions, 9108 basic blocks
+  [14/67] module rv64gc_core_top#(0,0,0,0,0,0,0): 720 functions, 6102 basic blocks
+  [15/67] module sim_memory#(2097152): 9 functions, 555 basic blocks
+  [16/67] module fetch_top: 1082 functions, 5573 basic blocks
+  [17/67] module decode: 13 functions, 85 basic blocks
+  [18/67] module fusion_detector: 24 functions, 631 basic blocks
+  [19/67] module rename: 186 functions, 3365 basic blocks
+  [20/67] module rob: 46 functions, 4147 basic blocks
+  [21/67] module dispatch_queue: 22 functions, 1169 basic blocks
+  [22/67] module issue_queue#(24,2,2,1,0): 21 functions, 1061 basic blocks
+  [23/67] module issue_queue#(24,2,1,1,0): 20 functions, 967 basic blocks
+  [24/67] module issue_queue#(32,2,2,0,0): 21 functions, 1135 basic blocks
+  [25/67] module issue_queue#(32,2,1,0,0): 20 functions, 1038 basic blocks
+  [26/67] module int_prf: 17 functions, 266 basic blocks
+  [27/67] module fp_prf: 17 functions, 138 basic blocks
+  [28/67] module bypass_network: 3 functions, 30 basic blocks
+  [29/67] module alu: 32 functions, 281 basic blocks
+  [30/67] module fpu_top: 34 functions, 686 basic blocks
+  [31/67] module bru: 17 functions, 150 basic blocks
+  [32/67] module multiplier: 11 functions, 99 basic blocks
+  [33/67] module divider: 24 functions, 418 basic blocks
+  [34/67] module lsu: 638 functions, 7249 basic blocks
+  [35/67] module dcache: 199 functions, 2936 basic blocks
+  [36/67] module l2_cache: 54 functions, 1709 basic blocks
+  [37/67] module commit: 37 functions, 850 basic blocks
+  [38/67] module csr_file: 30 functions, 1656 basic blocks
+  [39/67] module itlb#(16,4): 11 functions, 181 basic blocks
+  [40/67] module dtlb#(32,5): 15 functions, 280 basic blocks
+  [41/67] module ptw: 34 functions, 301 basic blocks
+  [42/67] module mmu_mem_profiler: 7 functions, 138 basic blocks
+  [43/67] module ifu: 53 functions, 620 basic blocks
+  [44/67] module next_line_prefetch_buffer: 27 functions, 176 basic blocks
+  [45/67] module icache_resp_queue#(4): 14 functions, 137 basic blocks
+  [46/67] module bpu: 287 functions, 5773 basic blocks
+  [47/67] module rvc_expander: 69 functions, 702 basic blocks
+  [48/67] module fetch_frontend_profiler: 116 functions, 1975 basic blocks
+  [49/67] module decode_slice: 16 functions, 556 basic blocks
+  [50/67] module fpu_fpnew_wrapper: 20 functions, 140 basic blocks
+  [51/67] module fpnew_top#(43'h00000020383,682'h0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000155aa955aa8,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0,0): 85 functions, 549 basic blocks
+  [52/67] module fpnew_opgroup_block#(0,64,0,0,24,3,160'h0000000000000000000000000000000000000000,341,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 134 functions, 754 basic blocks
+  [53/67] module fpnew_opgroup_block#(1,64,0,0,24,3,160'h0000000000000000000000000000000000000000,682,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 99 functions, 619 basic blocks
+  [54/67] module fpnew_opgroup_block#(2,64,0,0,24,3,160'h0000000000000000000000000000000000000000,341,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 138 functions, 769 basic blocks
+  [55/67] module fpnew_opgroup_block#(3,64,0,0,24,3,160'h0000000000000000000000000000000000000000,682,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},0): 241 functions, 1823 basic blocks
+  [56/67] module fpnew_fma#(0,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 115 functions, 976 basic blocks
+  [57/67] module fpnew_fma#(1,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 116 functions, 1471 basic blocks
+  [58/67] module fpnew_divsqrt_multi#(24,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic[4:0]): 155 functions, 1830 basic blocks
+  [59/67] module fpnew_noncomp#(0,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 44 functions, 263 basic blocks
+  [60/67] module fpnew_noncomp#(1,0,0,struct packed{logic[6:0]rob_idx;logic[7:0]pdst},logic): 44 functions, 263 basic blocks
+  [61/67] module fpnew_classifier#(0,1): 2 functions, 30 basic blocks
+  [62/67] module fpnew_classifier#(1,1): 2 functions, 30 basic blocks
+  [63/67] module fpnew_classifier#(0,3): 4 functions, 101 basic blocks
+  [64/67] module fpnew_classifier#(1,3): 4 functions, 101 basic blocks
+  [65/67] module nrbd_nrsc_mvp: 121 functions, 1332 basic blocks
+  [66/67] module fpnew_classifier#(0,2): 3 functions, 68 basic blocks
+  [67/67] module fpnew_classifier#(1,2): 3 functions, 68 basic blocks
 Linking tb_image.so...
   Altair DSim version: 2026.0.0 (b:R #c:127 h:14cc828913 os:rocky_8.10)
 
 DSim build OK.  Image at dsim_work/tb_image.so
 Run with:  scripts/run_dsim.sh <hex_path> [MAX_CYCLES] [extra_plusargs...]
-+ /usr/bin/python3 /home/jeremycai/agent-workspace/rv64gc-v2/tools/run_benchmarks.py --runner dsim --run-class signoff --manifest /home/jeremycai/agent-workspace/rv64gc-v2/build/rv64gc_compliance/rv64gc_compliance_manifest.json --run-dir /home/jeremycai/agent-workspace/rv64gc-v2/benchmark_results/rv64gc_compliance_20260531_100720 --iter-limit 10000000 --no-perf-summary --plusarg FETCH_OWNER_CHECK --plusarg FETCH_OWNER_STRICT --plusarg FETCH_DELIVERY_CHECK --plusarg FETCH_DELIVERY_STRICT --plusarg BRANCH_RECOVERY_CHECK --plusarg BRANCH_RECOVERY_STRICT --plusarg PERF_COUNTERS --plusarg STAT_DUMP
++ /usr/bin/python3 /home/jeremycai/agent-workspace/rv64gc-v2/tools/run_benchmarks.py --runner dsim --run-class signoff --manifest /home/jeremycai/agent-workspace/rv64gc-v2/build/rv64gc_compliance/rv64gc_compliance_manifest.json --run-dir /home/jeremycai/agent-workspace/rv64gc-v2/benchmark_results/rv64gc_compliance_20260601_210051 --iter-limit 10000000 --no-perf-summary --plusarg FETCH_OWNER_CHECK --plusarg FETCH_OWNER_STRICT --plusarg FETCH_DELIVERY_CHECK --plusarg FETCH_DELIVERY_STRICT --plusarg BRANCH_RECOVERY_CHECK --plusarg BRANCH_RECOVERY_STRICT --plusarg PERF_COUNTERS --plusarg STAT_DUMP
 === rv64ui_p_add ===
 === rv64ui_p_addi ===
 === rv64ui_p_addiw ===
@@ -506,4 +508,4 @@ rv64mi_p_csr         signoff  default_rtl                PASS       PASS        
 rv64mi_p_mcsr        signoff  default_rtl                PASS       PASS             177         110  0.621469         -         - -
 rv64mi_p_zicntr      signoff  default_rtl                PASS       PASS             181         127  0.701657         -         - -
 Audit report: /home/jeremycai/agent-workspace/rv64gc-v2/doc/rv64gc_compliance_audit_2026-05-12.md
-Results: /home/jeremycai/agent-workspace/rv64gc-v2/benchmark_results/rv64gc_compliance_20260531_100720
+Results: /home/jeremycai/agent-workspace/rv64gc-v2/benchmark_results/rv64gc_compliance_20260601_210051
