@@ -223,6 +223,7 @@ module tb_linux;
     logic [63:0] linux_trace_commit_hi;
     integer status_en;
     integer status_interval;
+    integer perf_profile_en;
     logic [63:0] mem_read_addr_r;
     logic        mem_read_pending_r;
     logic        clear_bss_post_flush_pending;
@@ -686,6 +687,7 @@ module tb_linux;
             uart_log_fd = $fopen(uart_log_path, "w");
         end
         status_en = $test$plusargs("STATUS") ? 1 : 0;
+        perf_profile_en = $test$plusargs("PERF_PROFILE") ? 1 : 0;
         if ($value$plusargs("UART_PASS_PATTERN=%s", smoke_pattern)) begin
             for (int pi = 0; pi < smoke_pattern.len(); pi++) begin
                 if (smoke_pattern.getc(pi) == 8'h5f)
@@ -3825,6 +3827,27 @@ module tb_linux;
                          mem_req_we,
                          mem_req_addr,
                          mem_resp_valid);
+                if (perf_profile_en != 0) begin
+                    $display("[PERF_PROFILE] cyc=%0d itlb_lookups=%0d itlb_misses=%0d ptw_walks_itlb=%0d ptw_walks_dtlb=%0d ptw_busy_cycles=%0d ptw_faults=%0d fe_stall_total=%0d fe_stall_xlate=%0d fe_stall_icache=%0d fe_stall_backend=%0d flush_commit=%0d flush_bru=%0d flush_satp=%0d dtlb_lookups=%0d dtlb_misses=%0d dcache_accesses=%0d dcache_misses=%0d",
+                             sim_cycle,
+                             u_core.u_mmu_mem_profiler.itlb_lookups,
+                             u_core.u_mmu_mem_profiler.itlb_misses,
+                             u_core.u_mmu_mem_profiler.ptw_walks_itlb,
+                             u_core.u_mmu_mem_profiler.ptw_walks_dtlb,
+                             u_core.u_mmu_mem_profiler.ptw_busy_cycles,
+                             u_core.u_mmu_mem_profiler.ptw_faults,
+                             u_core.u_fetch_top.u_fetch_frontend_profiler.fe_stall_total,
+                             u_core.u_fetch_top.u_fetch_frontend_profiler.fe_stall_xlate,
+                             u_core.u_fetch_top.u_fetch_frontend_profiler.fe_stall_icache,
+                             u_core.u_fetch_top.u_fetch_frontend_profiler.fe_stall_backend,
+                             u_core.u_mmu_mem_profiler.flush_commit,
+                             u_core.u_mmu_mem_profiler.flush_bru,
+                             u_core.u_mmu_mem_profiler.flush_satp,
+                             u_core.u_mmu_mem_profiler.dtlb_lookups,
+                             u_core.u_mmu_mem_profiler.dtlb_misses,
+                             u_core.u_mmu_mem_profiler.dcache_accesses,
+                             u_core.u_mmu_mem_profiler.dcache_misses);
+                end
             end
 
             if ((linux_stop_on_no_commit_en != 0) &&
