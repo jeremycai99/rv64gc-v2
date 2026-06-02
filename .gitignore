@@ -65,6 +65,9 @@ traces/
 # Local agentic-dev guidance (kept locally for Claude Code/Codex/etc., not published)
 /AGENTS.md
 
+# Superpowers working space (specs/plans — local-only; published design docs live in doc/)
+/docs/
+
 # Archived xsim docs (xsim simulator dropped — kept locally under doc/archive/, not published)
 doc/archive/xsim_workflow.md
 doc/archive/xsim_lessons_learned.md
