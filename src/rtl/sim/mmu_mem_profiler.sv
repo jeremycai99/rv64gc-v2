@@ -72,26 +72,47 @@ module mmu_mem_profiler
             dcache_accesses <= '0; dcache_misses <= '0;
         end else begin
             satp_prev <= satp_raw;
+            // set wins over clear on same-cycle start+end (conservative occupancy)
             if (ptw_walk_start)    ptw_busy_r <= 1'b1;
             else if (ptw_walk_end) ptw_busy_r <= 1'b0;
             // Family 1
-            if (itlb_lookup_valid) itlb_lookups <= itlb_lookups + 1;
-            if (itlb_lookup_valid && !itlb_hit) itlb_misses <= itlb_misses + 1;
-            if (ptw_itlb_req_fire) ptw_walks_itlb <= ptw_walks_itlb + 1;
-            if (ptw_dtlb_req_fire) ptw_walks_dtlb <= ptw_walks_dtlb + 1;
-            if (ptw_busy_r)        ptw_busy_cycles <= ptw_busy_cycles + 1;
-            if (ptw_itlb_fault || ptw_dtlb_fault) ptw_faults <= ptw_faults + 1;
+            if (itlb_lookup_valid) itlb_lookups <= itlb_lookups + 64'd1;
+            if (itlb_lookup_valid && !itlb_hit) itlb_misses <= itlb_misses + 64'd1;
+            if (ptw_itlb_req_fire) ptw_walks_itlb <= ptw_walks_itlb + 64'd1;
+            if (ptw_dtlb_req_fire) ptw_walks_dtlb <= ptw_walks_dtlb + 64'd1;
+            if (ptw_busy_r)        ptw_busy_cycles <= ptw_busy_cycles + 64'd1;
+            if (ptw_itlb_fault || ptw_dtlb_fault) ptw_faults <= ptw_faults + 64'd1;
             // Family 3
-            if (commit_flush_valid) flush_commit <= flush_commit + 1;
-            if (bru_flush_valid)    flush_bru <= flush_bru + 1;
-            if (satp_changed)       flush_satp <= flush_satp + 1;
+            if (commit_flush_valid) flush_commit <= flush_commit + 64'd1;
+            if (bru_flush_valid)    flush_bru <= flush_bru + 64'd1;
+            if (satp_changed)       flush_satp <= flush_satp + 64'd1;
             // Family 4
-            if (dtlb_lookup_valid) dtlb_lookups <= dtlb_lookups + 1;
-            if (dtlb_lookup_valid && !dtlb_hit) dtlb_misses <= dtlb_misses + 1;
-            if (dcache_resp_valid) dcache_accesses <= dcache_accesses + 1;
-            if (dcache_resp_valid && !dcache_resp_hit) dcache_misses <= dcache_misses + 1;
+            if (dtlb_lookup_valid) dtlb_lookups <= dtlb_lookups + 64'd1;
+            if (dtlb_lookup_valid && !dtlb_hit) dtlb_misses <= dtlb_misses + 64'd1;
+            if (dcache_resp_valid) dcache_accesses <= dcache_accesses + 64'd1;
+            if (dcache_resp_valid && !dcache_resp_hit) dcache_misses <= dcache_misses + 64'd1;
         end
     end
 
 endmodule
+
+bind rv64gc_core_top mmu_mem_profiler u_mmu_mem_profiler (
+    .clk                 (clk),
+    .rst_n               (rst_n),
+    .itlb_lookup_valid   (u_itlb.lookup_valid_i),
+    .itlb_hit            (u_itlb.hit_o),
+    .ptw_itlb_req_fire   (u_ptw.itlb_req_valid_i && u_ptw.itlb_req_ready_o),
+    .ptw_itlb_fill       (u_ptw.itlb_fill_valid_o),
+    .ptw_dtlb_req_fire   (u_ptw.dtlb_req_valid_i && u_ptw.dtlb_req_ready_o),
+    .ptw_dtlb_fill       (u_ptw.dtlb_fill_valid_o),
+    .ptw_itlb_fault      (u_ptw.fault_valid_o &&  u_ptw.fault_is_itlb_o),
+    .ptw_dtlb_fault      (u_ptw.fault_valid_o && !u_ptw.fault_is_itlb_o),
+    .satp_raw            (csr_satp),
+    .commit_flush_valid  (commit_flush.valid),
+    .bru_flush_valid     (bru_flush.valid),
+    .dtlb_lookup_valid   (u_dtlb.lookup_valid_i),
+    .dtlb_hit            (u_dtlb.hit_o),
+    .dcache_resp_valid   (|u_dcache.load_resp_valid),
+    .dcache_resp_hit     (&(u_dcache.load_resp_hit | ~u_dcache.load_resp_valid))
+);
 `endif
