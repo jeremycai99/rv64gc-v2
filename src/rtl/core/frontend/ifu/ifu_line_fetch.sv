@@ -121,6 +121,7 @@ module ifu_line_fetch
     ftq_entry_t   vm_req_owner_entry_r;
     logic         icache_req_valid_c;
     logic [63:0]  icache_req_addr_c;
+    logic [63:0]  icache_req_pa_c;
     logic [63:0]  icache_req_va_c;
     logic         icache_req_owner_valid_c;
     logic [FTQ_IDX_BITS-1:0] icache_req_owner_idx_c;
@@ -173,24 +174,20 @@ module ifu_line_fetch
     assign itlb_miss_valid_o   = instr_vm_lookup_c && !itlb_hit_i && !itlb_fault_i;
     assign itlb_miss_va_o      = req_addr_i;
     assign instr_translation_stall_o =
-        instr_vm_active_i && f1_valid_i && !flush_i && !vm_req_valid_r;
+        instr_vm_active_i && f1_valid_i && !flush_i && !(itlb_hit_i && !itlb_fault_i);
 
     assign icache_req_valid_c =
         req_valid_i &&
         !flush_i &&
-        (!instr_vm_active_i || vm_req_valid_r);
-    assign icache_req_addr_c = instr_vm_active_i ? vm_req_pa_r : req_addr_i;
-    assign icache_req_va_c   = instr_vm_active_i ? vm_req_va_r : req_addr_i;
-    assign icache_req_owner_valid_c =
-        instr_vm_active_i ? vm_req_owner_valid_r : req_owner_valid_i;
-    assign icache_req_owner_idx_c =
-        instr_vm_active_i ? vm_req_owner_idx_r : req_owner_idx_i;
-    assign icache_req_owner_epoch_c =
-        instr_vm_active_i ? vm_req_owner_epoch_r : req_owner_epoch_i;
-    assign icache_req_owner_alloc_tag_c =
-        instr_vm_active_i ? vm_req_owner_alloc_tag_r : req_owner_alloc_tag_i;
-    assign icache_req_owner_entry_c =
-        instr_vm_active_i ? vm_req_owner_entry_r : req_owner_entry_i;
+        (!instr_vm_active_i || (itlb_hit_i && !itlb_fault_i));
+    assign icache_req_addr_c = req_addr_i;   // VA index (VA[11:6]==PA[11:6] within page offset)
+    assign icache_req_pa_c   = instr_vm_active_i ? itlb_pa_i : req_addr_i;
+    assign icache_req_va_c   = req_addr_i;
+    assign icache_req_owner_valid_c     = req_owner_valid_i;
+    assign icache_req_owner_idx_c       = req_owner_idx_i;
+    assign icache_req_owner_epoch_c     = req_owner_epoch_i;
+    assign icache_req_owner_alloc_tag_c = req_owner_alloc_tag_i;
+    assign icache_req_owner_entry_c     = req_owner_entry_i;
 
     assign nlpb_trigger      =
         !instr_vm_active_i && ic_resp_valid_comb && ic_resp_hit_comb;
@@ -314,6 +311,7 @@ module ifu_line_fetch
         .rst_n          (rst_n),
         .req_valid      (icache_req_valid_c),
         .req_addr       (icache_req_addr_c),
+        .req_pa         (icache_req_pa_c),
         .resp_valid     (ic_resp_valid_comb),
         .resp_data      (ic_resp_data_comb),
         .resp_hit       (ic_resp_hit_comb),
