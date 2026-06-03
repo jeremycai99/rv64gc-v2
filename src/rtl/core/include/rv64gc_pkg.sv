@@ -140,10 +140,10 @@ package rv64gc_pkg;
 
     // L1 I-Cache: 32 KB, 4-way, 64B lines
     localparam int L1I_SIZE       = 32768;
-    localparam int L1I_WAYS       = 4;
-    localparam int L1I_SETS       = L1I_SIZE / (L1I_WAYS * LINE_SIZE);  // 128
-    localparam int L1I_SET_BITS   = $clog2(L1I_SETS);     // 7
-    localparam int L1I_TAG_BITS   = XLEN - L1I_SET_BITS - LINE_BITS;   // 51
+    localparam int L1I_WAYS       = 8;   // 8-way for alias-free VIPT (4KB/way = page size)
+    localparam int L1I_SETS       = L1I_SIZE / (L1I_WAYS * LINE_SIZE);  // 64
+    localparam int L1I_SET_BITS   = $clog2(L1I_SETS);     // 6  (index addr[11:6] in page offset)
+    localparam int L1I_TAG_BITS   = XLEN - L1I_SET_BITS - LINE_BITS;   // 52
 
     // L1 D-Cache: 64 KB, 4-way, 2-bank, 64B lines
     localparam int L1D_SIZE       = 65536;
