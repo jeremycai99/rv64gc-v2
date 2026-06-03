@@ -163,27 +163,12 @@ module ifu_line_fetch
     // used combinationally (itlb_pa_i) the same cycle, so no vm_req capture/serialization.
     assign instr_vm_lookup_c =
         instr_vm_active_i && f1_valid_i && !flush_i;
-
-    // Registered copy of the (combinational) ITLB result, used ONLY by
-    // instr_translation_stall_o below. This is the combinational CUT that keeps the
-    // stall out of the pre-existing fetch combinational SCC (instr_translation_stall ->
-    // fe_stall -> predecode/ibuffer packet-ready -> ... -> line_straddle_advance ->
-    // req_pc -> itlb_lookup_va -> itlb_hit). Driving the stall from the LIVE itlb_hit_i
-    // closes that ring (UNOPTFLAT / DSim IterLimit non-convergence once paging arms).
-    // The icache request, PA, and miss->PTW signals stay on the LIVE itlb_hit_i/pa_i so
-    // VIPT same-cycle issue and immediate PTW kick are preserved.
-    logic itlb_hit_r;
-    logic itlb_fault_r;
     assign itlb_lookup_valid_o = instr_vm_lookup_c;
     assign itlb_lookup_va_o    = req_addr_i;
     assign itlb_miss_valid_o   = instr_vm_lookup_c && !itlb_hit_i && !itlb_fault_i;
     assign itlb_miss_va_o      = req_addr_i;
-    // Uses the REGISTERED itlb_hit_r/itlb_fault_r (not live) to stay outside the fetch
-    // combinational SCC. f1 is frozen by fe_stall under stall, so the same VA re-presents
-    // and itlb_hit_r tracks it within one cycle: net cost is one extra stall cycle per
-    // ITLB miss->hit transition (dead at satp=0, so zero bare-metal/benchmark impact).
     assign instr_translation_stall_o =
-        instr_vm_active_i && f1_valid_i && !flush_i && !(itlb_hit_r && !itlb_fault_r);
+        instr_vm_active_i && f1_valid_i && !flush_i && !(itlb_hit_i && !itlb_fault_i);
 
     assign icache_req_valid_c =
         req_valid_i &&
@@ -363,8 +348,6 @@ module ifu_line_fetch
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
             redirect_scrub_r            <= 1'b0;
-            itlb_hit_r                  <= 1'b0;
-            itlb_fault_r                <= 1'b0;
             ic_req_addr_pipe_r          <= '0;
             ic_req_ftq_pipe_valid_r     <= 1'b0;
             ic_req_ftq_pipe_idx_r       <= '0;
@@ -388,8 +371,6 @@ module ifu_line_fetch
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
             redirect_scrub_r <= 1'b0;
-            itlb_hit_r        <= 1'b0;
-            itlb_fault_r      <= 1'b0;
             ic_req_ftq_pipe_valid_r <= 1'b0;
             line_state_valid_r <= 1'b0;
             line_state_addr_r  <= '0;
@@ -404,9 +385,6 @@ module ifu_line_fetch
             future_line_ftq_alloc_tag_r <= '0;
             future_line_ftq_entry_r     <= '0;
         end else begin
-            // Capture the live ITLB result for the stall-side combinational cut.
-            itlb_hit_r   <= itlb_hit_i;
-            itlb_fault_r <= itlb_fault_i;
             if (redirect_scrub_i)
                 redirect_scrub_r <= 1'b1;
             else if (line_resp_valid_o)
