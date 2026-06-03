@@ -335,6 +335,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Output directory. Defaults to linux_boot_results/stage3_<timestamp>.",
     )
     parser.add_argument("--max-cycles", type=int, default=50_000_000)
+    parser.add_argument(
+        "--iter-limit",
+        type=int,
+        default=10_000_000,
+        help=(
+            "DSim per-timestep delta-cycle iteration cap (-iter-limit). Default 10M "
+            "matches the compliance/regress harness. Raised above DSim's 1M default "
+            "because deeper combinational settling (e.g. the VIPT ITLB->icache index "
+            "path) can momentarily exceed 1M iterations in a single timestep without "
+            "being a combinational loop."
+        ),
+    )
     parser.add_argument("--pass-pattern", default=None)
     parser.add_argument(
         "--target-milestone",
@@ -633,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
             str(sim_work_dir),
             "-image",
             args.sim_image_name,
+            "-iter-limit",
+            str(args.iter_limit),
             f"+MEMFILE={image}",
             f"+MAX_CYCLES={args.max_cycles}",
             *raw_plusargs,
