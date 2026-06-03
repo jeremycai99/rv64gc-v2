@@ -1,5 +1,5 @@
 /* file: icache_data_ram.sv
- Description: Data RAM for 32 kB 4-way L1 I-cache (128 sets).
+ Description: Data RAM for 32 kB 8-way L1 I-cache (64 sets).
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
@@ -10,12 +10,12 @@ module icache_data_ram
     input  wire                        clk,
     // Read port
     input  wire [L1I_SET_BITS-1:0]     raddr,
-    input  wire [1:0]                  rway,
+    input  wire [$clog2(L1I_WAYS)-1:0] rway,
     output reg [LINE_SIZE*8-1:0]      rdata,
     // Write port
     input  wire                        we,
     input  wire [L1I_SET_BITS-1:0]     waddr,
-    input  wire [1:0]                  wway,
+    input  wire [$clog2(L1I_WAYS)-1:0] wway,
     input  wire [LINE_SIZE*8-1:0]      wdata
 );
 

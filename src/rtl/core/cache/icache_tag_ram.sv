@@ -1,5 +1,5 @@
 /* file: icache_tag_ram.sv
- Description: Tag RAM for 32 kB 4-way L1 I-cache (128 sets).
+ Description: Tag RAM for 32 kB 8-way L1 I-cache (64 sets).
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
@@ -16,7 +16,7 @@ module icache_tag_ram
     // Write port
     input  wire                        we,
     input  wire [L1I_SET_BITS-1:0]     waddr,
-    input  wire [1:0]                  wway,       // which way to write
+    input  wire [$clog2(L1I_WAYS)-1:0] wway,       // which way to write
     input  wire                        wvalid,
     input  wire [L1I_TAG_BITS-1:0]     wtag,
     // Invalidation

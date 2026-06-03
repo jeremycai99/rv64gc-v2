@@ -1,5 +1,5 @@
 /* file: icache.sv
- Description: 32 kB 4-way L1 I-Cache with PLRU and FENCE.I support.
+ Description: 32 kB 8-way L1 I-Cache with tree-PLRU and FENCE.I support.
  Author: Jeremy Cai
  Date: Apr. 09, 2026
  Version: 2.0
@@ -31,15 +31,17 @@ module icache
     // =========================================================================
     // Address field widths (from rv64gc_pkg)
     //   addr[5:0]               = byte offset  (LINE_BITS  = 6)
-    //   addr[12:6]              = set index    (L1I_SET_BITS = 7)
-    //   addr[63:13]             = tag          (L1I_TAG_BITS = 51)
+    //   addr[11:6]              = set index    (L1I_SET_BITS = 6)
+    //   addr[63:12]             = tag          (L1I_TAG_BITS = 52)
     // =========================================================================
     localparam int OFFSET_LO  = 0;
     localparam int OFFSET_HI  = LINE_BITS - 1;           // 5
     localparam int INDEX_LO   = LINE_BITS;                // 6
-    localparam int INDEX_HI   = LINE_BITS + L1I_SET_BITS - 1; // 12
-    localparam int TAG_LO     = LINE_BITS + L1I_SET_BITS; // 13
+    localparam int INDEX_HI   = LINE_BITS + L1I_SET_BITS - 1; // 11 (8-way: 6 set bits)
+    localparam int TAG_LO     = LINE_BITS + L1I_SET_BITS; // 12
     localparam int TAG_HI     = 63;                       // 63
+
+    localparam int WAY_BITS   = $clog2(L1I_WAYS);         // 3 for 8 ways
 
     // =========================================================================
     // Stage-1 registers (clocked from incoming request)
@@ -77,7 +79,7 @@ module icache
     // Write port driven by fill FSM
     logic                      tr_we;
     logic [L1I_SET_BITS-1:0]   tr_waddr;
-    logic [1:0]                tr_wway;
+    logic [WAY_BITS-1:0]       tr_wway;
     logic                      tr_wvalid;
     logic [L1I_TAG_BITS-1:0]   tr_wtag;
     logic                      tr_invalidate;
@@ -103,11 +105,11 @@ module icache
     // Data RAM interface
     // =========================================================================
     // On a hit the data RAM is read in parallel with tag comparison.
-    // We must read all 4 ways and mux in stage-1; alternatively, read one way
+    // We read all L1I_WAYS ways and mux in stage-1; alternatively, read one way
     // selected by the hit.  For simplicity (and because SV lint prefers it),
-    // we do a 4-way read and mux combinationally.
+    // we do an all-way read and mux combinationally.
     //
-    // We instantiate 4 single-way data RAMs.
+    // We instantiate one single-way data RAM per way (L1I_WAYS total).
     // =========================================================================
     logic [511:0] dr_rdata [0:L1I_WAYS-1];
 
@@ -120,16 +122,16 @@ module icache
         for (gw = 0; gw < L1I_WAYS; gw++) begin : gen_data_ram
             // Per-way write enable – only the victim way is written on fill
             logic dr_we_w;
-            assign dr_we_w = tr_we && (tr_wway == 2'(gw));
+            assign dr_we_w = tr_we && (tr_wway == WAY_BITS'(gw));
 
             icache_data_ram u_data_ram (
                 .clk   (clk),
                 .raddr (req_addr[INDEX_HI:INDEX_LO]),
-                .rway  (2'd0),          // dummy – we read whole way bank
+                .rway  ('0),            // dummy – we read whole way bank
                 .rdata (dr_rdata[gw]),
                 .we    (dr_we_w),
                 .waddr (tr_waddr),
-                .wway  (2'd0),          // dummy
+                .wway  ('0),            // dummy
                 .wdata (dr_wdata_mux)
             );
         end
@@ -143,17 +145,17 @@ module icache
     // =========================================================================
     logic [L1I_WAYS-1:0] way_hit;
     logic                cache_hit;
-    logic [1:0]          hit_way;
+    logic [WAY_BITS-1:0] hit_way;
 
     always_comb begin
         way_hit   = '0;
         cache_hit = 1'b0;
-        hit_way   = 2'd0;
+        hit_way   = '0;
         for (int w = 0; w < L1I_WAYS; w++) begin
             if (tr_valid_out[w] && (tr_tag_out[w] == s1_tag)) begin
                 way_hit[w] = 1'b1;
                 cache_hit  = 1'b1;
-                hit_way    = 2'(w);
+                hit_way    = WAY_BITS'(w);
             end
         end
     end
@@ -165,26 +167,47 @@ module icache
     assign hit_data = dr_rdata[hit_way];
 
     // =========================================================================
-    // PLRU state (3-bit binary tree per set)
-    //   Bit [2] = root:          0 → go left (ways 0/1), 1 → go right (ways 2/3)
-    //   Bit [1] = left subtree:  0 → way 0,              1 → way 1
-    //   Bit [0] = right subtree: 0 → way 2,              1 → way 3
+    // PLRU state: 7-bit 8-way tree-PLRU per set (L1I_WAYS-1 internal nodes).
+    //   Tree layout (node index → children):
+    //     node[0] = root  → node[1] (left) / node[2] (right)
+    //     node[1]         → node[3] (left) / node[4] (right)
+    //     node[2]         → node[5] (left) / node[6] (right)
+    //     leaves 0..7 are the 8 ways.
+    //   A node bit encodes the direction toward the VICTIM (0=left, 1=right).
+    //   plru_touch() points all nodes on an access path AWAY from the way.
     // =========================================================================
-    logic [2:0] plru_state [L1I_SETS];
+    logic [L1I_WAYS-2:0] plru_state [L1I_SETS];   // 7 bits/set: 7 internal nodes
+
+    // PLRU touch helper: return next state with all nodes on the path to the
+    // accessed way pointed away from it (toward the other subtree).
+    function automatic logic [L1I_WAYS-2:0] plru_touch
+        (input logic [L1I_WAYS-2:0] ps, input logic [WAY_BITS-1:0] acc);
+        logic [L1I_WAYS-2:0] ns;
+        logic a0, a1, a2;
+        begin
+            ns = ps;
+            a0 = acc[2]; a1 = acc[1]; a2 = acc[0];
+            ns[0] = ~a0;
+            if (a0) ns[2] = ~a1; else ns[1] = ~a1;
+            if (a0) begin if (a1) ns[6] = ~a2; else ns[5] = ~a2; end
+            else    begin if (a1) ns[4] = ~a2; else ns[3] = ~a2; end
+            plru_touch = ns;
+        end
+    endfunction
 
     // Victim way derived from PLRU state of the set being processed at s1.
-    logic [1:0] victim_way;
-    logic [2:0] plru_victim_ps;
+    // Walk root→leaf following each node's victim-direction bit.
+    logic [WAY_BITS-1:0] victim_way;
+    logic [L1I_WAYS-2:0] plru_ps;
+    logic vb0, vb1, vb2;
     always_comb begin
-        plru_victim_ps = plru_state[s1_index];
-        if (!plru_victim_ps[2]) begin
-            victim_way = plru_victim_ps[1] ? 2'd0 : 2'd1;
-        end else begin
-            victim_way = plru_victim_ps[0] ? 2'd2 : 2'd3;
-        end
+        plru_ps = plru_state[s1_index];
+        vb0 = plru_ps[0];
+        vb1 = vb0 ? plru_ps[2] : plru_ps[1];
+        vb2 = vb0 ? (plru_ps[2] ? plru_ps[6] : plru_ps[5])
+                  : (plru_ps[1] ? plru_ps[4] : plru_ps[3]);
+        victim_way = {vb0, vb1, vb2};
     end
-
-    // PLRU update helper macro: point away from accessed way (inlined below)
 
     // =========================================================================
     // Miss handling: 2-entry MSHR array (miss-under-miss support)
@@ -199,7 +222,7 @@ module icache
 
     logic                ic_mshr_valid    [0:IC_MSHR_DEPTH-1];
     logic [63:0]         ic_mshr_addr     [0:IC_MSHR_DEPTH-1];
-    logic [1:0]          ic_mshr_victim   [0:IC_MSHR_DEPTH-1];
+    logic [WAY_BITS-1:0] ic_mshr_victim   [0:IC_MSHR_DEPTH-1];
     logic                ic_mshr_req_sent [0:IC_MSHR_DEPTH-1];
     logic                ic_mshr_fill_done[0:IC_MSHR_DEPTH-1];
     logic [511:0]        ic_mshr_fill_data[0:IC_MSHR_DEPTH-1];
@@ -272,7 +295,7 @@ module icache
     logic        sc_install_valid;
     logic        sc_install_idx;
     logic [63:0] sc_install_addr;
-    logic [1:0]  sc_install_victim;
+    logic [WAY_BITS-1:0] sc_install_victim;
     always_comb begin
         sc_install_valid  = 1'b0;
         sc_install_idx    = 1'b0;
@@ -377,34 +400,22 @@ module icache
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             for (int s = 0; s < L1I_SETS; s++) begin
-                plru_state[s] <= 3'd0;
+                plru_state[s] <= '0;
             end
         end else if (invalidate_all) begin
             // No PLRU update during invalidation
         end else if (s1_valid && cache_hit) begin
-            case (hit_way)
-                2'd0: plru_state[s1_index] <= {1'b1, 1'b1, plru_state[s1_index][0]};
-                2'd1: plru_state[s1_index] <= {1'b1, 1'b0, plru_state[s1_index][0]};
-                2'd2: plru_state[s1_index] <= {1'b0, plru_state[s1_index][1], 1'b1};
-                2'd3: plru_state[s1_index] <= {1'b0, plru_state[s1_index][1], 1'b0};
-                default: ;
-            endcase
+            plru_state[s1_index] <= plru_touch(plru_state[s1_index], hit_way);
         end else if (sc_install_valid || ic_mshr_install_avail) begin
             // Update PLRU for the just-installed fill
             begin
                 logic [L1I_SET_BITS-1:0] inst_set;
-                logic [1:0] inst_way;
+                logic [WAY_BITS-1:0] inst_way;
                 inst_set = sc_install_valid ? sc_install_addr[INDEX_HI:INDEX_LO]
                                            : ic_mshr_addr[ic_mshr_install_idx][INDEX_HI:INDEX_LO];
                 inst_way = sc_install_valid ? sc_install_victim
                                            : ic_mshr_victim[ic_mshr_install_idx];
-                case (inst_way)
-                    2'd0: plru_state[inst_set] <= {1'b1, 1'b1, plru_state[inst_set][0]};
-                    2'd1: plru_state[inst_set] <= {1'b1, 1'b0, plru_state[inst_set][0]};
-                    2'd2: plru_state[inst_set] <= {1'b0, plru_state[inst_set][1], 1'b1};
-                    2'd3: plru_state[inst_set] <= {1'b0, plru_state[inst_set][1], 1'b0};
-                    default: ;
-                endcase
+                plru_state[inst_set] <= plru_touch(plru_state[inst_set], inst_way);
             end
         end
     end
