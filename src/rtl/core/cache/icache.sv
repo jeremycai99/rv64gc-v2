@@ -12,6 +12,7 @@ module icache
     // Fetch request (from fetch unit)
     input  wire         req_valid,
     input  wire [63:0]  req_addr,
+    input  wire [63:0]  req_pa,        // physical address for VIPT tag-compare + fill (== req_addr in bare mode)
     // Fetch response (to fetch unit)
     output reg         resp_valid,
     output reg [511:0] resp_data,    // full 64-byte cache line
@@ -48,14 +49,17 @@ module icache
     // =========================================================================
     logic                    s1_valid;
     logic [63:0]             s1_addr;
+    logic [63:0]             s1_pa;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             s1_valid <= 1'b0;
             s1_addr  <= '0;
+            s1_pa    <= '0;
         end else begin
             s1_valid <= req_valid;
             s1_addr  <= req_addr;
+            s1_pa    <= req_pa;
         end
     end
 
@@ -66,7 +70,7 @@ module icache
     logic [L1I_TAG_BITS-1:0] s1_tag;
 
     assign s1_index = s1_addr[INDEX_HI:INDEX_LO];
-    assign s1_tag   = s1_addr[TAG_HI:TAG_LO];
+    assign s1_tag   = s1_pa[TAG_HI:TAG_LO];   // VIPT: tag from PHYSICAL address
 
     // =========================================================================
     // Tag RAM interface
@@ -248,7 +252,7 @@ module icache
         ic_mshr_addr_match = 1'b0;
         for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
             if (ic_mshr_valid[m] &&
-                ic_mshr_addr[m][63:LINE_BITS] == s1_addr[63:LINE_BITS])
+                ic_mshr_addr[m][63:LINE_BITS] == s1_pa[63:LINE_BITS])
                 ic_mshr_addr_match = 1'b1;
         end
     end
@@ -357,7 +361,7 @@ module icache
             if (s1_valid && !cache_hit && !invalidate_all &&
                 ic_mshr_free_avail && !ic_mshr_addr_match) begin
                 ic_mshr_valid[ic_mshr_free_idx]     <= 1'b1;
-                ic_mshr_addr[ic_mshr_free_idx]      <= s1_addr;
+                ic_mshr_addr[ic_mshr_free_idx]      <= s1_pa;
                 ic_mshr_victim[ic_mshr_free_idx]    <= victim_way;
                 ic_mshr_req_sent[ic_mshr_free_idx]  <= 1'b0;
                 ic_mshr_fill_done[ic_mshr_free_idx] <= 1'b0;
@@ -442,7 +446,7 @@ module icache
         if (fill_resp_valid && s1_valid) begin
             for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
                 if (ic_mshr_valid[m] && ic_mshr_req_sent[m] &&
-                    fill_resp_addr[63:LINE_BITS] == s1_addr[63:LINE_BITS]) begin
+                    fill_resp_addr[63:LINE_BITS] == s1_pa[63:LINE_BITS]) begin
                     mshr_fwd_valid = 1'b1;
                     mshr_fwd_data  = fill_resp_data;
                 end
@@ -452,7 +456,7 @@ module icache
         if (!mshr_fwd_valid && s1_valid) begin
             for (int m = 0; m < IC_MSHR_DEPTH; m++) begin
                 if (ic_mshr_valid[m] && ic_mshr_fill_done[m] &&
-                    ic_mshr_addr[m][63:LINE_BITS] == s1_addr[63:LINE_BITS]) begin
+                    ic_mshr_addr[m][63:LINE_BITS] == s1_pa[63:LINE_BITS]) begin
                     mshr_fwd_valid = 1'b1;
                     mshr_fwd_data  = ic_mshr_fill_data[m];
                 end
