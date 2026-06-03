@@ -111,7 +111,6 @@ module ifu_line_fetch
     logic [511:0] merged_resp_data_c;
     logic         merged_resp_hit_c;
     logic         instr_vm_lookup_c;
-    logic         vm_req_valid_r;
     logic         icache_req_valid_c;
     logic [63:0]  icache_req_addr_c;
     logic [63:0]  icache_req_pa_c;
@@ -160,8 +159,10 @@ module ifu_line_fetch
     logic         line_resp_hit_c;
     logic [63:LINE_BITS] line_resp_addr_c;
 
+    // VIPT: the ITLB is looked up every cycle a paged fetch is presented; the PA is
+    // used combinationally (itlb_pa_i) the same cycle, so no vm_req capture/serialization.
     assign instr_vm_lookup_c =
-        instr_vm_active_i && f1_valid_i && !flush_i && !vm_req_valid_r;
+        instr_vm_active_i && f1_valid_i && !flush_i;
     assign itlb_lookup_valid_o = instr_vm_lookup_c;
     assign itlb_lookup_va_o    = req_addr_i;
     assign itlb_miss_valid_o   = instr_vm_lookup_c && !itlb_hit_i && !itlb_fault_i;
@@ -347,7 +348,6 @@ module ifu_line_fetch
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
             redirect_scrub_r            <= 1'b0;
-            vm_req_valid_r              <= 1'b0;
             ic_req_addr_pipe_r          <= '0;
             ic_req_ftq_pipe_valid_r     <= 1'b0;
             ic_req_ftq_pipe_idx_r       <= '0;
@@ -371,7 +371,6 @@ module ifu_line_fetch
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
             redirect_scrub_r <= 1'b0;
-            vm_req_valid_r <= 1'b0;
             ic_req_ftq_pipe_valid_r <= 1'b0;
             line_state_valid_r <= 1'b0;
             line_state_addr_r  <= '0;
@@ -395,13 +394,6 @@ module ifu_line_fetch
                 f1_valid_i && !stall_i && !instr_vm_active_i && nlpb_hit_comb;
             nlpb_resp_addr_r  <= {req_addr_i[63:LINE_BITS], {LINE_BITS{1'b0}}};
             nlpb_resp_data_r  <= nlpb_data_comb;
-            if (!instr_vm_active_i) begin
-                vm_req_valid_r <= 1'b0;
-            end else if (icache_req_valid_c) begin
-                vm_req_valid_r <= 1'b0;
-            end else if (instr_vm_lookup_c && itlb_hit_i && !itlb_fault_i) begin
-                vm_req_valid_r           <= 1'b1;
-            end
             if (icache_req_valid_c) begin
                 ic_req_addr_pipe_r <= icache_req_va_c;
                 ic_req_ftq_pipe_valid_r <= icache_req_owner_valid_c;
