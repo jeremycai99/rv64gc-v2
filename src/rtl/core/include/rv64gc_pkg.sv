@@ -138,7 +138,7 @@ package rv64gc_pkg;
     localparam int LINE_BITS      = $clog2(LINE_SIZE);     // 6
     localparam int LINE_WORDS     = LINE_SIZE / 8;         // 8 dwords per line
 
-    // L1 I-Cache: 32 KB, 4-way, 64B lines
+    // L1 I-Cache: 32 KB, 8-way, 64B lines (8-way → 4KB/way for alias-free VIPT)
     localparam int L1I_SIZE       = 32768;
     localparam int L1I_WAYS       = 8;   // 8-way for alias-free VIPT (4KB/way = page size)
     localparam int L1I_SETS       = L1I_SIZE / (L1I_WAYS * LINE_SIZE);  // 64
