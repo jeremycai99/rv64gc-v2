@@ -25,11 +25,14 @@ module ifu_line_fetch
     input  wire                          itlb_hit_i,
     input  wire [63:0]                   itlb_pa_i,
     input  wire                          itlb_fault_i,
+    input  wire                          itlb_fill_seen_i,    // PTW filled the ITLB (replay trigger)
     output reg                          itlb_lookup_valid_o,
     output reg [63:0]                   itlb_lookup_va_o,
     output reg                          itlb_miss_valid_o,
     output reg [63:0]                   itlb_miss_va_o,
     output reg                          instr_translation_stall_o,
+    output reg                          replay_req_valid_o,  // F1: refetch a translation-missed VA after fill
+    output reg [63:0]                   replay_req_pc_o,
     input  wire                          f1_valid_i,
     input  wire                          stall_i,
     input  wire                          work_valid_i,
@@ -181,6 +184,30 @@ module ifu_line_fetch
     // perf counter measures REAL misses (the VIPT discriminator: ~= itlb_misses, not lookups).
     wire f1_xlate_miss_c = f1b_valid_r && !f1b_itlb_hit_r && !f1b_itlb_fault_r;
     assign instr_translation_stall_o = f1_xlate_miss_c;
+
+    // Redirect-on-miss replay: F0 advances past a missed VA without re-fetching it, so on an
+    // F1 translation miss we hold the missed PC until the PTW fills the ITLB, then request a
+    // redirect back to it (the existing redirect+epoch path discards the wrongly-advanced
+    // fetches). The replay request is a REGISTERED pulse -> no combinational loop.
+    logic        replay_pending_r;
+    logic [63:0] replay_pc_r;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            replay_pending_r <= 1'b0;
+            replay_pc_r      <= '0;
+        end else if (flush_i) begin
+            replay_pending_r <= 1'b0;   // a real redirect/flush supersedes a pending replay
+        end else begin
+            if (f1_xlate_miss_c && !replay_pending_r) begin
+                replay_pending_r <= 1'b1;
+                replay_pc_r      <= f1b_pc_r;        // the VA that missed
+            end else if (replay_pending_r && itlb_fill_seen_i) begin
+                replay_pending_r <= 1'b0;            // fill arrived -> replay fires this cycle
+            end
+        end
+    end
+    assign replay_req_valid_o = replay_pending_r && itlb_fill_seen_i;
+    assign replay_req_pc_o    = replay_pc_r;
 
     assign icache_req_valid_c =
         req_valid_i &&

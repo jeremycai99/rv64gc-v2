@@ -242,6 +242,9 @@ module rv64gc_core_top
     logic [63:0] itlb_pa;
     logic        itlb_fault;
     logic [3:0]  itlb_fault_code;
+    logic        fetch_replay_req_valid;   // VIPT F1 miss-replay redirect request (from u_fetch_top)
+    logic [63:0] fetch_replay_req_pc;
+    logic        ptw_itlb_fill_valid;      // PTW->ITLB fill pulse; also the VIPT miss-replay trigger (used by u_fetch_top below, driven by u_ptw far later)
 
     // Prefetch L2 signals (from fetch_top NLPB to L2 prefetch port).
     // Declared here because fetch_top instantiation below uses them as
@@ -357,14 +360,18 @@ module rv64gc_core_top
         .frontend_replay_blocking(1'b0),
         .frontend_replay_start   (1'b0),
         .recovery_headroom_ok   (frontend_recovery_headroom_ok),
-        // Redirect priority: commit/BRU flush > UOP-cache stream handoff.
-        .redirect_valid         (frontend_flush_valid || uoc_handoff_valid),
+        // Redirect priority: commit/BRU flush > UOP-cache stream handoff > VIPT miss-replay.
+        .redirect_valid         (frontend_flush_valid || uoc_handoff_valid || fetch_replay_req_valid),
         .redirect_pc            (frontend_flush_valid ? frontend_flush_pc :
-                                                        uoc_handoff_pc),
+                                 uoc_handoff_valid    ? uoc_handoff_pc :
+                                                        fetch_replay_req_pc),
         .instr_vm_active        (instr_vm_active),
         .itlb_hit               (itlb_hit),
         .itlb_pa                (itlb_pa),
         .itlb_fault             (itlb_fault),
+        .itlb_fill_seen         (ptw_itlb_fill_valid),
+        .replay_req_valid       (fetch_replay_req_valid),
+        .replay_req_pc          (fetch_replay_req_pc),
         .itlb_lookup_valid      (itlb_lookup_valid),
         .itlb_lookup_va         (itlb_lookup_va),
         .itlb_miss_valid        (itlb_miss_valid),
@@ -5468,7 +5475,8 @@ module rv64gc_core_top
     logic                    ptw_dtlb_req_ready;
     logic                    ptw_itlb_req_ready;
     logic                    ptw_dtlb_fill_valid;
-    logic                    ptw_itlb_fill_valid;
+    // ptw_itlb_fill_valid declared earlier (near the itlb_* fetch signals) — it is used by
+    // the u_fetch_top instance (VIPT miss-replay trigger) which precedes the PTW instance.
     logic [35:0]             ptw_fill_vpn;
     logic [43:0]             ptw_fill_ppn;
     logic [15:0]             ptw_fill_asid;

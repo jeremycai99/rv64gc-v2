@@ -48,6 +48,9 @@ module fetch_top
     input  wire        itlb_hit,
     input  wire [63:0] itlb_pa,
     input  wire        itlb_fault,
+    input  wire        itlb_fill_seen,        // PTW filled the ITLB (VIPT miss-replay trigger)
+    output reg        replay_req_valid,       // F1: request refetch of a translation-missed VA
+    output reg [63:0] replay_req_pc,
     output reg        itlb_lookup_valid,
     output reg [63:0] itlb_lookup_va,
     output reg        itlb_miss_valid,
@@ -450,6 +453,9 @@ module fetch_top
         .itlb_hit_i             (itlb_hit),
         .itlb_pa_i              (itlb_pa),
         .itlb_fault_i           (itlb_fault),
+        .itlb_fill_seen_i       (itlb_fill_seen),
+        .replay_req_valid_o     (replay_req_valid),
+        .replay_req_pc_o        (replay_req_pc),
         .itlb_lookup_valid_o    (itlb_lookup_valid),
         .itlb_lookup_va_o       (itlb_lookup_va),
         .itlb_miss_valid_o      (itlb_miss_valid),
