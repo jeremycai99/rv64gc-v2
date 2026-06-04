@@ -167,8 +167,20 @@ module ifu_line_fetch
     assign itlb_lookup_va_o    = req_addr_i;
     assign itlb_miss_valid_o   = instr_vm_lookup_c && !itlb_hit_i && !itlb_fault_i;
     assign itlb_miss_va_o      = req_addr_i;
-    assign instr_translation_stall_o =
-        instr_vm_active_i && f1_valid_i && !flush_i && !(itlb_hit_i && !itlb_fault_i);
+
+    // F1 stage: registered snapshot of the F0 paged lookup. The translation-miss DECISION
+    // reads this registered bundle, not the live ITLB result, so it cannot feed back to the
+    // F0 same-cycle ITLB VA -> the combinational loop is broken by pipeline structure.
+    // ITLB lookup + icache index/PA below stay on the LIVE F0 signals (VIPT preserved).
+    logic        f1b_valid_r;
+    logic [63:0] f1b_pc_r;
+    logic        f1b_itlb_hit_r;
+    logic        f1b_itlb_fault_r;
+    // F1 miss: last cycle's paged lookup missed and was not a fault. Drives replay (Task 2),
+    // NOT an F0 hold. instr_translation_stall_o keeps this name so the existing fe_stall_xlate
+    // perf counter measures REAL misses (the VIPT discriminator: ~= itlb_misses, not lookups).
+    wire f1_xlate_miss_c = f1b_valid_r && !f1b_itlb_hit_r && !f1b_itlb_fault_r;
+    assign instr_translation_stall_o = f1_xlate_miss_c;
 
     assign icache_req_valid_c =
         req_valid_i &&
@@ -348,6 +360,10 @@ module ifu_line_fetch
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
             redirect_scrub_r            <= 1'b0;
+            f1b_valid_r                 <= 1'b0;
+            f1b_pc_r                    <= '0;
+            f1b_itlb_hit_r              <= 1'b0;
+            f1b_itlb_fault_r            <= 1'b0;
             ic_req_addr_pipe_r          <= '0;
             ic_req_ftq_pipe_valid_r     <= 1'b0;
             ic_req_ftq_pipe_idx_r       <= '0;
@@ -371,6 +387,7 @@ module ifu_line_fetch
             nlpb_resp_addr_r  <= '0;
             nlpb_resp_data_r  <= '0;
             redirect_scrub_r <= 1'b0;
+            f1b_valid_r       <= 1'b0;
             ic_req_ftq_pipe_valid_r <= 1'b0;
             line_state_valid_r <= 1'b0;
             line_state_addr_r  <= '0;
@@ -385,6 +402,12 @@ module ifu_line_fetch
             future_line_ftq_alloc_tag_r <= '0;
             future_line_ftq_entry_r     <= '0;
         end else begin
+            // Capture the F0 paged lookup for next-cycle F1 decision (coherent with the
+            // ic_req_*_pipe_r owner snapshot below — same cycle, same fetch).
+            f1b_valid_r      <= instr_vm_active_i && f1_valid_i && !flush_i;
+            f1b_pc_r         <= req_addr_i;
+            f1b_itlb_hit_r   <= itlb_hit_i;
+            f1b_itlb_fault_r <= itlb_fault_i;
             if (redirect_scrub_i)
                 redirect_scrub_r <= 1'b1;
             else if (line_resp_valid_o)
