@@ -431,7 +431,12 @@ module ifu_line_fetch
         end else begin
             // Capture the F0 paged lookup for next-cycle F1 decision (coherent with the
             // ic_req_*_pipe_r owner snapshot below — same cycle, same fetch).
-            f1b_valid_r      <= instr_vm_active_i && f1_valid_i && !flush_i;
+            // Gate on req_valid_i (= ic_req_valid = f1_valid_r && !fe_stall_c): only a REAL
+            // issued fetch counts. Without this, a frozen f1_pc_r under stall keeps
+            // re-presenting a not-yet-filled VA as a "miss" every stall cycle, so
+            // f1_xlate_miss_c sticks high (counter reads ~lookups, not ~misses) and a
+            // spurious replay could be armed. Registered req_valid_i -> loop stays broken.
+            f1b_valid_r      <= instr_vm_active_i && f1_valid_i && !flush_i && req_valid_i;
             f1b_pc_r         <= req_addr_i;
             f1b_itlb_hit_r   <= itlb_hit_i;
             f1b_itlb_fault_r <= itlb_fault_i;
