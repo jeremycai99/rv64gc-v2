@@ -346,10 +346,12 @@ module ifu
     assign ftq_need_alloc_c =
         required_ftq_need_alloc_c ||
         selected_req_is_runahead_c;
-    // VIPT F0/F1: translation_stall_i (now the REGISTERED F1 miss decision) no longer
-    // gates the F0 advance — F0 is feed-forward; ITLB misses are handled by F1
-    // redirect-on-miss replay. Removing it from fe_stall_c breaks the comb loop
+    // VIPT F0/F1: the translation stall no longer gates the F0 advance — F0 is
+    // feed-forward and ITLB misses are handled by F1 redirect-on-miss replay. Removing
+    // it from fe_stall_c breaks the comb loop
     // (translation_stall -> fe_stall -> req_pc -> itlb_va -> itlb_hit -> translation_stall).
+    // NOTE: the translation_stall_i input port (line 17) is now orphaned (kept for the
+    // profiler's instr_translation_stall observation); safe to retire in a follow-up.
     assign fe_stall_c = frontend_hold_i ||
                         packet_buf_full_i ||
                         icq_full_i ||
