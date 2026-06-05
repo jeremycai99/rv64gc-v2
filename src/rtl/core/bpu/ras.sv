@@ -79,4 +79,46 @@ module ras
         end
     end
 
+`ifdef SIMULATION
+    // ---- sim-only RAS recovery instrumentation (no synth effect) ----
+    // gap = net wrong-path pointer movement at restore = how deep recovery corruption can reach.
+    // Decides RAS FIX-B (gap<=1 dominant -> top-repair suffices) vs FIX-A (long tail -> full-stack
+    // restore needed). top_repair_skipped = the population the FIX-B guard-removal would help.
+    integer ras_restore_cnt;
+    integer ras_gap0, ras_gap1, ras_gap2_3, ras_gap4_7, ras_gap8p, ras_gap_max;
+    integer ras_top_applied, ras_top_skipped;
+    integer ras_wrap_cnt;   // push wrap (tos: DEPTH-1 -> 0): depth-24 overflow indicator
+    logic [4:0] ras_gap_c;
+    always_comb ras_gap_c = (tos_r >= restore_tos) ? (tos_r - restore_tos)
+                                                   : (5'(RAS_DEPTH) - (restore_tos - tos_r));
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ras_restore_cnt <= 0;
+            ras_gap0 <= 0; ras_gap1 <= 0; ras_gap2_3 <= 0; ras_gap4_7 <= 0; ras_gap8p <= 0;
+            ras_gap_max <= 0; ras_top_applied <= 0; ras_top_skipped <= 0; ras_wrap_cnt <= 0;
+        end else begin
+            if (restore_valid && !clear) begin
+                ras_restore_cnt <= ras_restore_cnt + 1;
+                if      (ras_gap_c == 5'd0) ras_gap0   <= ras_gap0 + 1;
+                else if (ras_gap_c == 5'd1) ras_gap1   <= ras_gap1 + 1;
+                else if (ras_gap_c <= 5'd3) ras_gap2_3 <= ras_gap2_3 + 1;
+                else if (ras_gap_c <= 5'd7) ras_gap4_7 <= ras_gap4_7 + 1;
+                else                        ras_gap8p  <= ras_gap8p + 1;
+                if (integer'(ras_gap_c) > ras_gap_max) ras_gap_max <= integer'(ras_gap_c);
+                if (restore_top_valid)        ras_top_applied <= ras_top_applied + 1;
+                else if (restore_tos != 5'd0) ras_top_skipped <= ras_top_skipped + 1;
+            end
+            if (!restore_valid && !clear && push_valid && (tos_r == 5'(RAS_DEPTH - 1)))
+                ras_wrap_cnt <= ras_wrap_cnt + 1;
+        end
+    end
+    final begin
+        $display("=== RAS RECOVERY SUMMARY (restores=%0d DEPTH=%0d) ===", ras_restore_cnt, RAS_DEPTH);
+        $display("  gap hist: 0=%0d 1=%0d 2-3=%0d 4-7=%0d 8+=%0d  max=%0d",
+                 ras_gap0, ras_gap1, ras_gap2_3, ras_gap4_7, ras_gap8p, ras_gap_max);
+        $display("  top-repair: applied=%0d skipped(FIX-B addressable)=%0d", ras_top_applied, ras_top_skipped);
+        $display("  push-wrap (depth-24 overflow): %0d", ras_wrap_cnt);
+    end
+`endif
+
 endmodule
