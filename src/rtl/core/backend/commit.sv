@@ -515,6 +515,8 @@ module commit
     logic   cmt_stat_en;
     integer flush_replay_cnt, flush_exception_cnt, flush_mispredict_cnt;
     integer flush_ret_cnt,    flush_interrupt_cnt;
+    // sim-only per-type mispredict split (BT_* enc @ core_top.sv:1317-1321: 0=cond 1=jal 2=jalr 3=call 4=ret)
+    integer misp_cond_cnt, misp_jal_cnt, misp_jalr_cnt, misp_ret_cnt;
     integer total_commits;
     integer total_store_commits, total_load_commits, total_branch_commits;
     initial trace_commit_en = ($test$plusargs("TRACE_COMMIT") ? 1'b1 : 1'b0);
@@ -529,6 +531,10 @@ module commit
             flush_mispredict_cnt <= 0;
             flush_ret_cnt        <= 0;
             flush_interrupt_cnt  <= 0;
+            misp_cond_cnt        <= 0;
+            misp_jal_cnt         <= 0;
+            misp_jalr_cnt        <= 0;
+            misp_ret_cnt         <= 0;
             total_commits        <= 0;
             total_store_commits  <= 0;
             total_load_commits   <= 0;
@@ -575,7 +581,15 @@ module commit
             end
             if (found_replay)     flush_replay_cnt     <= flush_replay_cnt     + 1;
             if (found_exception)  flush_exception_cnt  <= flush_exception_cnt  + 1;
-            if (found_mispredict) flush_mispredict_cnt <= flush_mispredict_cnt + 1;
+            if (found_mispredict) begin
+                flush_mispredict_cnt <= flush_mispredict_cnt + 1;
+                case (head_bpu_type[misp_slot])
+                    3'd2:      misp_jalr_cnt <= misp_jalr_cnt + 1;  // BT_JALR indirect (ITTAGE-addressable)
+                    3'd4:      misp_ret_cnt  <= misp_ret_cnt  + 1;  // BT_RET (RAS-recoverable, NOT ITTAGE)
+                    3'd1, 3'd3: misp_jal_cnt <= misp_jal_cnt  + 1;  // BT_JAL / BT_CALL direct
+                    default:   misp_cond_cnt <= misp_cond_cnt + 1;  // BT_COND conditional (TAGE)
+                endcase
+            end
             if (found_ret)        flush_ret_cnt        <= flush_ret_cnt        + 1;
             if (take_interrupt)   flush_interrupt_cnt  <= flush_interrupt_cnt  + 1;
         end
@@ -591,6 +605,10 @@ module commit
         $display("  replay (ld order):  %0d", flush_replay_cnt);
         $display("  exception:          %0d", flush_exception_cnt);
         $display("  mispredict:         %0d", flush_mispredict_cnt);
+        $display("    misp cond(TAGE):  %0d", misp_cond_cnt);
+        $display("    misp jal/call:    %0d", misp_jal_cnt);
+        $display("    misp jalr(ITTAGE):%0d", misp_jalr_cnt);
+        $display("    misp ret(RAS):    %0d", misp_ret_cnt);
         $display("  ret (mret/sret):    %0d", flush_ret_cnt);
         $display("  interrupt:          %0d", flush_interrupt_cnt);
     end

@@ -78,8 +78,8 @@ package rv64gc_pkg;
     // Power-of-2 depths: pointer arithmetic wraps correctly with simple
     // bit truncation (idx mod 2^N).  Non-power-of-2 (original 48) caused
     // pointer wrap past physical entries → SQ count overflow after flush.
-    localparam int LQ_DEPTH       = 32;
-    localparam int SQ_DEPTH       = 32;
+    localparam int LQ_DEPTH       = 32;  // baseline arm (depth-64 arm captured: backend_d64_full/)
+    localparam int SQ_DEPTH       = 32;  // baseline arm (depth-64 arm captured: backend_d64_full/)
     localparam int CSB_DEPTH      = 32;  // committed store buffer (was 24)
 
     localparam int LQ_IDX_BITS    = $clog2(LQ_DEPTH);   // 5

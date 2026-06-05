@@ -492,4 +492,43 @@ module icache
             invalidate_busy <= invalidate_all;
     end
 
+`ifdef SIMULATION
+    // ---- sim-only next-line-prefetch CEILING (no synth effect) ----
+    // Counts distinct-line S1 misses, and how many are the same-page successor of the
+    // previously-HIT line (= what a hit-triggered next-line prefetcher could have caught).
+    // s1_pa line = s1_pa[63:LINE_BITS]; in-page line index = s1_pa[11:LINE_BITS].
+    logic [63:0] ic_pf_last_line_r;     logic ic_pf_last_valid_r;
+    logic [63:0] ic_pf_prev_hit_line_r; logic ic_pf_prev_hit_valid_r;
+    integer ic_pf_miss_total, ic_pf_miss_seq;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ic_pf_last_line_r <= '0; ic_pf_last_valid_r <= 1'b0;
+            ic_pf_prev_hit_line_r <= '0; ic_pf_prev_hit_valid_r <= 1'b0;
+            ic_pf_miss_total <= 0; ic_pf_miss_seq <= 0;
+        end else if (s1_valid) begin
+            // only act when a NEW distinct line reaches S1
+            if (!ic_pf_last_valid_r ||
+                (s1_pa[63:LINE_BITS] != ic_pf_last_line_r[63:LINE_BITS])) begin
+                if (!cache_hit) begin
+                    ic_pf_miss_total <= ic_pf_miss_total + 1;
+                    if (ic_pf_prev_hit_valid_r &&
+                        (s1_pa[63:LINE_BITS] == ic_pf_prev_hit_line_r[63:LINE_BITS] + 1'b1) &&
+                        (ic_pf_prev_hit_line_r[INDEX_HI:LINE_BITS] != '1)) // prev hit not last line in page
+                        ic_pf_miss_seq <= ic_pf_miss_seq + 1;
+                end else begin
+                    ic_pf_prev_hit_line_r  <= s1_pa;
+                    ic_pf_prev_hit_valid_r <= 1'b1;
+                end
+                ic_pf_last_line_r  <= s1_pa;
+                ic_pf_last_valid_r <= 1'b1;
+            end
+        end
+    end
+    final begin
+        $display("=== ICACHE NEXT-LINE PREFETCH CEILING ===");
+        $display("  distinct-line misses:        %0d", ic_pf_miss_total);
+        $display("  ...same-page succ of last hit: %0d  (next-line-prefetch coverable)", ic_pf_miss_seq);
+    end
+`endif
+
 endmodule
