@@ -806,6 +806,42 @@ module store_queue
         end
     end
 
+`ifdef SIMULATION
+    // ---- sim-only SQ occupancy instrumentation (no synthesizable effect) ----
+    integer sq_occ_cyc;
+    integer sq_occ_max;
+    longint sq_occ_sum;
+    integer sq_b0, sq_b1, sq_b2, sq_b3, sq_b4;   // 0-7 / 8-15 / 16-23 / 24-(DEPTH-1) / ==DEPTH
+    integer sq_cyc_gate;                          // cycles `full` asserted (gates rename)
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sq_occ_cyc <= 0; sq_occ_max <= 0; sq_occ_sum <= 0;
+            sq_b0 <= 0; sq_b1 <= 0; sq_b2 <= 0; sq_b3 <= 0; sq_b4 <= 0;
+            sq_cyc_gate <= 0;
+        end else begin
+            sq_occ_cyc <= sq_occ_cyc + 1;
+            sq_occ_sum <= sq_occ_sum + integer'(count_r);
+            if (integer'(count_r) > sq_occ_max) sq_occ_max <= integer'(count_r);
+            if      (integer'(count_r) >= SQ_DEPTH) sq_b4 <= sq_b4 + 1;
+            else if (integer'(count_r) >= 24)       sq_b3 <= sq_b3 + 1;
+            else if (integer'(count_r) >= 16)       sq_b2 <= sq_b2 + 1;
+            else if (integer'(count_r) >= 8)        sq_b1 <= sq_b1 + 1;
+            else                                    sq_b0 <= sq_b0 + 1;
+            if (full) sq_cyc_gate <= sq_cyc_gate + 1;
+        end
+    end
+    final begin
+        $display("=== SQ OCCUPANCY SUMMARY (cyc=%0d DEPTH=%0d gate>=%0d) ===",
+                 sq_occ_cyc, SQ_DEPTH, SQ_DEPTH - PIPE_WIDTH + 1);
+        $display("  max=%0d  cyc_at_gate(full)=%0d", sq_occ_max, sq_cyc_gate);
+        if (sq_occ_cyc > 0)
+            $display("  avg=%0d.%02d", sq_occ_sum / sq_occ_cyc,
+                     ((sq_occ_sum * 100) / sq_occ_cyc) % 100);
+        $display("  hist 0-7=%0d 8-15=%0d 16-23=%0d 24-%0d=%0d ==%0d:%0d",
+                 sq_b0, sq_b1, sq_b2, SQ_DEPTH-1, sq_b3, SQ_DEPTH, sq_b4);
+    end
+`endif
+
 endmodule
 
 `endif

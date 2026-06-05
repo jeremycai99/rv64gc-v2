@@ -3683,6 +3683,29 @@ module lsu
     end
 `endif
 
+`ifdef SIMULATION
+    // ---- sim-only load1_tlb_wait over-suppression instrumentation ----
+    // load1_tlb_wait holds the 2nd load port under VM; quantify how often it does so
+    // while the single DTLB port was NOT used by load0 or a store (i.e. over-suppression).
+    integer l1tw_cyc;            // cycles load1_tlb_wait asserted
+    integer l1tw_port_free_cyc;  // ... while DTLB port free (no load0/store using it)
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            l1tw_cyc <= 0;
+            l1tw_port_free_cyc <= 0;
+        end else if (load1_tlb_wait) begin
+            l1tw_cyc <= l1tw_cyc + 1;
+            if (!dtlb_lookup_sel_load0 && !dtlb_lookup_sel_store)
+                l1tw_port_free_cyc <= l1tw_port_free_cyc + 1;
+        end
+    end
+    final begin
+        $display("=== LOAD1 TLB-WAIT SUPPRESSION SUMMARY ===");
+        $display("  load1_tlb_wait cycles:           %0d", l1tw_cyc);
+        $display("  ... while DTLB port FREE (over):  %0d", l1tw_port_free_cyc);
+    end
+`endif
+
 endmodule
 
 `endif

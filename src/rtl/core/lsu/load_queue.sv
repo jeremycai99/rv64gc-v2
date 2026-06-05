@@ -425,6 +425,43 @@ module load_queue
         end
     end
 
+`ifdef SIMULATION
+    // ---- sim-only LQ occupancy instrumentation (no synthesizable effect) ----
+    // count_r is the live occupancy; `full` is the rename-gating threshold.
+    integer lq_occ_cyc;
+    integer lq_occ_max;
+    longint lq_occ_sum;
+    integer lq_b0, lq_b1, lq_b2, lq_b3, lq_b4;   // 0-7 / 8-15 / 16-23 / 24-(DEPTH-1) / ==DEPTH
+    integer lq_cyc_gate;                          // cycles `full` asserted (gates rename)
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            lq_occ_cyc <= 0; lq_occ_max <= 0; lq_occ_sum <= 0;
+            lq_b0 <= 0; lq_b1 <= 0; lq_b2 <= 0; lq_b3 <= 0; lq_b4 <= 0;
+            lq_cyc_gate <= 0;
+        end else begin
+            lq_occ_cyc <= lq_occ_cyc + 1;
+            lq_occ_sum <= lq_occ_sum + integer'(count_r);
+            if (integer'(count_r) > lq_occ_max) lq_occ_max <= integer'(count_r);
+            if      (integer'(count_r) >= LQ_DEPTH) lq_b4 <= lq_b4 + 1;
+            else if (integer'(count_r) >= 24)       lq_b3 <= lq_b3 + 1;
+            else if (integer'(count_r) >= 16)       lq_b2 <= lq_b2 + 1;
+            else if (integer'(count_r) >= 8)        lq_b1 <= lq_b1 + 1;
+            else                                    lq_b0 <= lq_b0 + 1;
+            if (full) lq_cyc_gate <= lq_cyc_gate + 1;
+        end
+    end
+    final begin
+        $display("=== LQ OCCUPANCY SUMMARY (cyc=%0d DEPTH=%0d gate>=%0d) ===",
+                 lq_occ_cyc, LQ_DEPTH, LQ_DEPTH - PIPE_WIDTH + 1);
+        $display("  max=%0d  cyc_at_gate(full)=%0d", lq_occ_max, lq_cyc_gate);
+        if (lq_occ_cyc > 0)
+            $display("  avg=%0d.%02d", lq_occ_sum / lq_occ_cyc,
+                     ((lq_occ_sum * 100) / lq_occ_cyc) % 100);
+        $display("  hist 0-7=%0d 8-15=%0d 16-23=%0d 24-%0d=%0d ==%0d:%0d",
+                 lq_b0, lq_b1, lq_b2, LQ_DEPTH-1, lq_b3, LQ_DEPTH, lq_b4);
+    end
+`endif
+
 endmodule
 
 `endif
