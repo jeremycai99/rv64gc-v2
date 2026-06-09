@@ -77,3 +77,6 @@ verilator_*/
 
 # Session scratch logs
 logs/
+
+# Vendored CoreMark-PRO upstream source
+tests/coremark-pro/external/
