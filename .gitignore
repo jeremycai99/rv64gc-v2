@@ -71,3 +71,9 @@ traces/
 # Archived xsim docs (xsim simulator dropped — kept locally under doc/archive/, not published)
 doc/archive/xsim_workflow.md
 doc/archive/xsim_lessons_learned.md
+
+# All Verilator scratch builds (DSim is the signoff target; these are regenerable)
+verilator_*/
+
+# Session scratch logs
+logs/
