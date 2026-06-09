@@ -153,6 +153,10 @@ package rv64gc_pkg;
     localparam int L1D_SET_BITS   = $clog2(L1D_SETS);     // 8
     localparam int L1D_TAG_BITS   = XLEN - L1D_SET_BITS - LINE_BITS;   // 50
     localparam int L1D_MSHR_DEPTH = 16;
+    // No-write-allocate (write-validate full-line store-misses): skip the read-
+    // for-ownership fill for compulsory streaming full-line writes; install the
+    // store-defined line clean + write-through. Gated; 1'b0 = baseline (write-allocate).
+    localparam logic NO_WRITE_ALLOCATE_ENABLE = 1'b0;
 
     // L2 Cache: 2 MB, 8-way, 64B lines, 32 MSHRs, 8-cycle hit
     localparam int L2_SIZE        = 2097152;
