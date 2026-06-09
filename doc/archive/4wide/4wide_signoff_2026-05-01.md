@@ -25,7 +25,7 @@ at `cd54cf1`, real numbers below).
 >
 > **Sign-off measurements (real, post-fix):**
 >
-> | Workload | CM/MHz or DMIPS/MHz | MegaBoom 4-wide floor | Gap |
+> | Workload | CM/MHz or DMIPS/MHz | Reference Core A (large config) 4-wide floor | Gap |
 > |---|---:|---:|---:|
 > | cm iter1 | 5.01 CM/MHz | 6.2 | −19.2% |
 > | cm iter10 | 5.37 CM/MHz | 6.2 | −13.3% |
@@ -50,10 +50,10 @@ at `cd54cf1`, real numbers below).
 
 | Tier | Required | Measured | Pass? |
 |---|---:|---:|---|
-| Floor — MegaBoom 4-wide | CM/MHz ≥ 6.2 | 5.01 (iter1), 5.37 (iter10) | ❌ −19% / −13% |
-| Floor — MegaBoom 4-wide | DMIPS/MHz ≥ 4.00 | 2.42 (100 iters) | ❌ −39.5% |
-| Stretch — Cortex-A72 | CM/MHz ≥ 8.24 | 5.01 / 5.37 | ❌ −39% / −35% |
-| Stretch — Cortex-A72 | DMIPS/MHz ≥ 4.72 | 2.42 | ❌ −48.7% |
+| Floor — Reference Core A (large config) 4-wide | CM/MHz ≥ 6.2 | 5.01 (iter1), 5.37 (iter10) | ❌ −19% / −13% |
+| Floor — Reference Core A (large config) 4-wide | DMIPS/MHz ≥ 4.00 | 2.42 (100 iters) | ❌ −39.5% |
+| Stretch — a commercial 3-wide OoO core | CM/MHz ≥ 8.24 | 5.01 / 5.37 | ❌ −39% / −35% |
+| Stretch — a commercial 3-wide OoO core | DMIPS/MHz ≥ 4.72 | 2.42 | ❌ −48.7% |
 
 **Functional regression:** 21/21 PASS (8 rv64ui_* + 10 bench_* + dhry +
 cm iter1 + cm iter10), all proper `tohost=1` under tightened STOP-OK
@@ -134,14 +134,14 @@ The gap is essentially all RTL-side. Composition:
   6-wide hit 3.04, 4-wide hits 2.42). Driven primarily by the
   procedure-call hot-path's load-at-head behavior — top 2 PCs
   `0x80002002`, `0x80002022` account for 71% of all load head-wait.
-- **Design gap to MegaBoom: ~23%** — even our 6-wide at 3.04 was short
-  of MegaBoom's 3.93 DMIPS/MHz (the "4.00" is a round-up; canonical
-  source SonicBOOM paper, Zhao et al., CARRV 2020) on the same
-  `riscv-tests` dhrystone convention. MegaBoom's advantages are
+- **Design gap to Reference Core A (large config): ~23%** — even our 6-wide at 3.04 was short
+  of Reference Core A (large config)'s 3.93 DMIPS/MHz (the "4.00" is a round-up; canonical
+  source Reference Core A paper, Zhao et al., CARRV 2020) on the same
+  `riscv-tests` dhrystone convention. Reference Core A (large config)'s advantages are
   architectural: SFB (short-forward-branch fold-into-predication),
   better BTB/uBTB, TAGE-L loop predictor.
 - **Binary contribution: 1–3%** (negligible). Both rv64gc-v2 (`-O2
-  -march=rv64gc_zba_zbb_zbs_zicond -mabi=lp64d`) and BOOM/Chipyard
+  -march=rv64gc_zba_zbb_zbs_zicond -mabi=lp64d`) and Reference Core A / its build framework
   (`-O2 -ffast-math -DPREALLOCATE=1` + `#pragma no-inline` driver)
   are convention-equivalent. Bitmanip/Zicond have near-zero impact
   on dhrystone. The 2.42 → 4.00 gap is **>95% RTL-side**.
@@ -158,22 +158,22 @@ narrowing was diagnosed and fixed.
 **Follow-up RTL candidates** (each its own brainstorm + plan cycle),
 ranked by predicted IPC win × ease × confidence:
 
-1. **Short-Forward-Branch (SFB) fold-into-predication.** SonicBOOM
+1. **Short-Forward-Branch (SFB) fold-into-predication.** Reference Core A
    paper credits this with up to 1.7× IPC on branch-dense sequences.
    Predicted: 5–15% on dhry, 3–8% on cm. Touches decode + rename +
    ALU predicate handling. Invasive but bounded.
 2. **TAGE-L loop predictor verification.** Confirm rv64gc-v2's loop
-   predictor matches MegaBoom's TAGE-L (with loop-length tracking).
+   predictor matches Reference Core A (large config)'s TAGE-L (with loop-length tracking).
    Predicted: 2–5% on cm.
 3. **uBTB / next-line predictor sizing.** Compare entry counts vs
-   MegaBoom; easy parameter tweaks if undersized. Predicted: 1–3%.
+   Reference Core A (large config); easy parameter tweaks if undersized. Predicted: 1–3%.
 4. **Flush-recovery latency narrowing.** ~5% cm if reducible.
 5. **Speculative wakeup at issue (more aggressive).** Risk: spec failure
    recovery cost.
 
-**Explicitly OUT of follow-up consideration** (per BOOM research):
+**Explicitly OUT of follow-up consideration** (per Reference Core A research):
 - Dcache hit latency 2→1: structural (VIPT + way-prediction), NOT
-  minimal; rv64gc-v2 already faster than BOOM here (BOOM 4-cycle
+  minimal; rv64gc-v2 already faster than Reference Core A here (Reference Core A 4-cycle
   load-to-use vs ours ~3-cycle).
 - dhry compiler/binary investigation: 1–3% contribution, won't move
   the needle.

@@ -2,7 +2,7 @@
 
 Replacement of the gen-1 loop buffer (`loop_buffer.sv`, 64 µops, capture/
 arm/replay/abort lifecycle) with a gen-2 PC-indexed µop cache, modeled
-after Intel DSB / AMD Zen op cache / ARM Mop cache. Goal: close the
+after commercial op-cache designs (DSB / op-cache / Mop-cache families). Goal: close the
 remaining IPC gap to sign-off (CoreMark ≥ 2.5, Dhrystone ≥ 3.2) and
 retire the LB-class structural-bug surface (CDB→bypass→AGU comb-loop
 family).
@@ -87,9 +87,9 @@ TL;DR Phase 1a is `uop_cache_tag_ram.sv` + `uop_cache_data_ram.sv`
   § 4.10: 38–57% capture-abort rate, lifecycle complexity that has
   produced two comb-loop bugs already (Verilator convergence-limit
   history; the iter=10 IterLimit at cyc 316,161).
-- Industry has standardized on PC-indexed µop caches (Intel DSB since
-  Sandy Bridge, AMD Zen op-cache, ARM Cortex-A77+ Mop cache, Apple M
-  series). The gen-1 LB approach is deprecated.
+- Industry has standardized on PC-indexed µop caches (commercial op-caches
+  across multiple high-performance core families). The gen-1 LB approach is
+  deprecated.
 - Sub-agent gap analysis shows mispredict overhead ~28% of CoreMark
   cycles and frontend bubble ~25% of Dhrystone cycles — both addressed
   by µop cache + later TAGE V3 + F1 prefetch.
@@ -117,7 +117,7 @@ In scope:
 - Phase 5 (a) TAGE V3 + (b) F1 prefetch buffer (after µop cache lands)
 
 Not in scope:
-- Per-PC variable-width indexing (Intel DSB style) — fetch-group
+- Per-PC variable-width indexing (a commercial op-cache (DSB) style) — fetch-group
   granularity for v1; revisit later if hit-rate analysis warrants.
 - Multi-port BPU update (`btb.sv` + `tage_sc_l.sv` extension) — large
   separate project, not coupled to µop cache.
@@ -157,10 +157,10 @@ Net latency win on hit: 1 cycle (skip the F2 decode+fusion stage).
 
 | Parameter | Value | Source |
 |---|---:|---|
-| Sets (`UOC_SETS`) | 32 | Intel DSB Sandy Bridge baseline |
+| Sets (`UOC_SETS`) | 32 | a commercial op-cache baseline |
 | Ways (`UOC_WAYS`) | 8 | same |
 | µops per entry (`UOC_PER_ENTRY`) | 6 | matches `PIPE_WIDTH` |
-| Total µop capacity | 1,536 µops | Sandy Bridge precedent |
+| Total µop capacity | 1,536 µops | a commercial high-performance core precedent |
 | Tag width | `64 - $clog2(UOC_SETS) - $clog2(FETCH_GROUP_BYTES)` ≈ 54 bits | tag = upper PC bits |
 | Index width | 5 bits | `$clog2(UOC_SETS)` |
 | Replacement state | 7 bits per set (binary tree pseudo-LRU) | proven |
@@ -433,4 +433,4 @@ Once µop cache lands and Phase 3 LB removal is authorized:
 - `src/rtl/core/loop_buffer.sv` — what gets retired
 - `src/rtl/core/include/uarch_pkg.sv` — package edits
 - `src/rtl/core/rv64gc_core_top.sv:402-416` — current rename input mux
-- Industry references: Intel Sandy Bridge DSB papers, AMD Zen op-cache slides, ARM Cortex-A78 Mop cache docs
+- Industry references: commercial op-cache (DSB) papers, commercial op-cache slides, and commercial Mop-cache design docs

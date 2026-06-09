@@ -7,26 +7,26 @@
 ## Hypothesis under test
 
 rv64gc-v2's BPU storage (BTB / TAGE / RAS / NLP) may be undersized vs
-MegaBoom v4. If yes, bump and measure with +/-0.5% IPC tolerance. If
+Reference Core A (large config). If yes, bump and measure with +/-0.5% IPC tolerance. If
 no, REFUTE-on-investigation, no RTL change.
 
 ## Investigation findings
 
-| Component                 | rv64gc-v2 (current)              | BOOM v4 (Mega defaults)             | Verdict                      |
+| Component                 | rv64gc-v2 (current)              | Reference Core A (Mega defaults)             | Verdict                      |
 |---------------------------|----------------------------------|-------------------------------------|------------------------------|
 | BTB total entries         | 2048 (256 sets x 8 ways)         | 256 (128 sets x 2 ways)             | rv64gc 8x larger             |
 | BTB ways                  | 8                                | 2                                   | rv64gc 4x                    |
 | TAGE tagged tables        | 4                                | 6                                   | rv64gc has fewer (-2)        |
-| TAGE entries / table      | 256 (uniform)                    | 128 / 128 / 256 / 256 / 128 / 128   | rv64gc >= BOOM per-table     |
+| TAGE entries / table      | 256 (uniform)                    | 128 / 128 / 256 / 256 / 128 / 128   | rv64gc >= Reference Core A per-table     |
 | TAGE total tagged storage | 1024                             | 1024                                | equal                        |
-| TAGE history lengths      | 8, 16, 32, 64                    | 2, 4, 8, 16, 32, 64                 | BOOM adds 2,4 short-history  |
+| TAGE history lengths      | 8, 16, 32, 64                    | 2, 4, 8, 16, 32, 64                 | Reference Core A adds 2,4 short-history  |
 | TAGE tag bits             | 12                               | 7-9                                 | rv64gc larger tags           |
 | TAGE base / bimodal       | 4096-entry bimodal base          | (BIM separate)                      | comparable / larger          |
-| Statistical Corrector     | 1024 entries                     | not in default TAGE-L BPD           | rv64gc has, BOOM lacks       |
+| Statistical Corrector     | 1024 entries                     | not in default TAGE-L BPD           | rv64gc has, Reference Core A lacks       |
 | Loop predictor entries    | 64                               | 64 (16 sets x 4 ways)               | equal                        |
 | RAS depth                 | 24                               | 32                                  | rv64gc smaller (-8)          |
-| Micro-BTB (separate)      | none (single BTB stage)          | 256-entry FA uBTB                   | BOOM has, rv64gc lacks       |
-| NLP / line buffer         | 4 entries (next-line prefetch)   | (NLP role filled by uBTB in BOOM)   | not directly comparable      |
+| Micro-BTB (separate)      | none (single BTB stage)          | 256-entry FA uBTB                   | Reference Core A has, rv64gc lacks       |
+| NLP / line buffer         | 4 entries (next-line prefetch)   | (NLP role filled by uBTB in Reference Core A)   | not directly comparable      |
 
 ## Source citations
 
@@ -40,7 +40,7 @@ no, REFUTE-on-investigation, no RTL change.
 - `src/rtl/core/fetch/next_line_prefetch_buffer.sv:45`: `NUM_ENTRIES = 4`
 - `src/rtl/core/fetch/ras.sv:27-28`: `RAS_DEPTH` from pkg, 64-bit stack
 
-### BOOM v4 (riscv-boom master)
+### Reference Core A (riscv-Reference Core A master)
 - `src/main/scala/v4/ifu/bpd/btb.scala`:
   > `case class BoomBTBParams(nSets: Int = 128, nWays: Int = 2, offsetSz: Int = 13, extendedNSets: Int = 128, useFlops: Boolean = false)`
 - `src/main/scala/v4/ifu/bpd/tage.scala`:
@@ -60,13 +60,13 @@ no, REFUTE-on-investigation, no RTL change.
 
 ## Decision rationale
 
-Three components could be flagged as potentially "smaller than BOOM":
+Three components could be flagged as potentially "smaller than Reference Core A":
 
-1. **TAGE 4 tables vs BOOM 6 tables.** BOOM adds two extra short-history
+1. **TAGE 4 tables vs Reference Core A 6 tables.** Reference Core A adds two extra short-history
    tables (2-bit and 4-bit GHR). rv64gc-v2 covers histories 8/16/32/64,
-   matches BOOM per-table size, has *larger* tags (12 vs 7-9), *larger*
+   matches Reference Core A per-table size, has *larger* tags (12 vs 7-9), *larger*
    bimodal base (4096 vs separate BIM), and *adds* a 1024-entry
-   Statistical Corrector that BOOM-default lacks. Adding two TAGE tables
+   Statistical Corrector that Reference Core A-default lacks. Adding two TAGE tables
    is a structural change (extends per-table arrays, GHR_LENGTHS,
    fold-tables, allocate-on-miss logic, and update path everywhere
    `TAGE_NUM_TABLES` is iterated) -- not a minimal sizing knob.
@@ -80,14 +80,14 @@ Three components could be flagged as potentially "smaller than BOOM":
    not worth a build+regression cycle.**
 
 3. **uBTB absent.** rv64gc-v2 has no separate fast 1-cycle micro-BTB
-   structure; the 2048-entry main BTB serves both roles. BOOM uses a
+   structure; the 2048-entry main BTB serves both roles. Reference Core A uses a
    256-entry FA uBTB for first-cycle redirect. Adding one is a *new
    module*, not a sizing bump -- out of scope for this cycle.
 
-All other components in rv64gc-v2 meet or exceed BOOM v4 reference
+All other components in rv64gc-v2 meet or exceed Reference Core A reference
 values (BTB 8x larger, TAGE per-table equal-or-greater with longer tags,
-Loop predictor equal, NLP independent concept, SC adds capacity BOOM
-lacks). The "undersized vs BOOM" hypothesis is **REFUTED on
+Loop predictor equal, NLP independent concept, SC adds capacity Reference Core A
+lacks). The "undersized vs Reference Core A" hypothesis is **REFUTED on
 investigation**. No RTL change applies. Baseline (cm 1.665, dhry 2.027)
 is unchanged.
 
@@ -100,9 +100,9 @@ narrowing).
 
 ## Sources
 
-- BOOM v4 BTB:    https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/btb.scala
-- BOOM v4 TAGE:   https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/tage.scala
-- BOOM v4 uBTB:   https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/ubtb.scala
-- BOOM v4 Loop:   https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/loop.scala
-- BOOM v4 Params: https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/common/parameters.scala
-- BOOM v4 Config: https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/common/config-mixins.scala
+- Reference Core A BTB:    https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/btb.scala
+- Reference Core A TAGE:   https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/tage.scala
+- Reference Core A uBTB:   https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/ubtb.scala
+- Reference Core A Loop:   https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/loop.scala
+- Reference Core A Params: https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/common/parameters.scala
+- Reference Core A Config: https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/common/config-mixins.scala

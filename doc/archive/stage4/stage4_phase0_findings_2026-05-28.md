@@ -143,7 +143,7 @@ design point:
   risk (narrow, not a general 0-cycle wakeup). Ceiling = the collapsible chain
   fraction.
 - **Load-use latency (dcache 2→1 hit) for the DS ~19% + CM ~14% load-head-stall**
-  — structural, multi-month; rv64gc-v2 is already faster load-to-use than BOOM,
+  — structural, multi-month; rv64gc-v2 is already faster load-to-use than Reference Core A,
   so low ROI.
 
 Recommended next step: a cheap **lever-ceiling probe** (measure ALU-producer
@@ -159,4 +159,4 @@ weeks to any structural/speculative build.
   ~4.4% and IPC already 2.65–2.81. Realistic non-structural headroom is **smaller
   than the % gap implies** — closing to 4.0 likely needs the structural dcache
   2→1 path, which prior analysis (memory) flagged as multi-month and notes
-  rv64gc-v2 is already faster load-to-use than BOOM.
+  rv64gc-v2 is already faster load-to-use than Reference Core A.

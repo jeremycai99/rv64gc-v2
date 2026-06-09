@@ -1,23 +1,23 @@
-# Stage 1 MegaBOOM Benchmark Comparison, 2026-05-06
+# Stage 1 Reference Core A (large config) Benchmark Comparison, 2026-05-06
 
 ## Verdict
 
 The earlier full table exposed a methodology error. Do not use those historical
-rows as evidence that rv64gc-v2 beats MegaBOOM.
+rows as evidence that rv64gc-v2 beats Reference Core A (large config).
 
 The issue was the counter window:
 
 - rv64gc-v2 reports the benchmark's internal timed window from
   `rv64gc_bench_begin()` to `rv64gc_bench_end()`.
-- The old BOOM `BOOM_PIPE_STATS` hook started when any dispatched PC was
+- The old Reference Core A `BOOM_PIPE_STATS` hook started when any dispatched PC was
   `>= 0x80000000`, which is `_start`, and stopped on the final `tohost` store.
 
-Therefore BOOM is counting CRT startup, `.bss` clearing, pre-benchmark setup,
+Therefore Reference Core A is counting CRT startup, `.bss` clearing, pre-benchmark setup,
 benchmark-result writes, and exit code that rv64gc-v2 excludes from its timed
 score. That is not apples-to-apples. The apparent 1.5-1.9x rv64gc-v2 advantage
 is an artifact of comparing different regions.
 
-Current status: the BOOM harness has been calibrated to the rv64gc-v2 benchmark
+Current status: the Reference Core A harness has been calibrated to the rv64gc-v2 benchmark
 MMIO window. It now snoops the `0x80001080..0x80001140` benchmark-result block,
 starts on `control=1`, stops on `control=2`, and emits rv64gc-v2-shaped
 `[BENCH_RESULT]` `cycles/instret` fields. The short smoke rows below prove the
@@ -25,21 +25,21 @@ new path is functional. They do not replace a full shared-row rerun.
 
 Correct Stage 1 policy:
 
-1. Score comparison: only shared MegaBOOM rows with the same benchmark images.
+1. Score comparison: only shared Reference Core A (large config) rows with the same benchmark images.
 2. Counter window: both cores must measure the same benchmark window, ideally
    by snooping the benchmark-result block or by using equivalent start/stop PCs.
 3. Coverage guardrail: run the broad rv64gc-v2 suite now to catch overfitting,
-   but do not treat those rows as MegaBOOM score rows until they have a common
+   but do not treat those rows as Reference Core A (large config) score rows until they have a common
    ELF/ABI path on both cores.
 
 Working interpretation after calibration smoke: rv64gc-v2 is not proven ahead
-of MegaBOOM. The calibrated Dhrystone 100 and CoreMark 1 samples still show a
-roughly 8-10% cycle gap against MegaBOOM, so Stage 1 still needs the frontend
+of Reference Core A (large config). The calibrated Dhrystone 100 and CoreMark 1 samples still show a
+roughly 8-10% cycle gap against Reference Core A (large config), so Stage 1 still needs the frontend
 ownership/IBuffer direction rather than benchmark-targeted tuning.
 
 ## Methodology
 
-MegaBOOM:
+Reference Core A (large config):
 
 - Simulator:
   `/home/jeremycai/agent-workspace/chipyard/sims/verilator/simulator-chipyard.harness-MegaBoomV4Config`
@@ -83,22 +83,22 @@ Primary artifacts:
 - `benchmark_results/megaboom_full_compare_20260506/rv64gc_broad`
 - `benchmark_results/megaboom_full_compare_20260506/rv64gc_broad_retry`
 
-Toolchain note: the local MegaBOOM simulator was rebuilt from existing generated
+Toolchain note: the local Reference Core A (large config) simulator was rebuilt from existing generated
 collateral with `EXTRA_SIM_PREPROC_DEFINES=+define+BOOM_PIPE_STATS` and
-`RISCV=/home/jeremycai/opt/riscv`. A normal clean Chipyard rebuild still needs
-`firtool` on `PATH`; without it, Chipyard elaboration stops before the
+`RISCV=/home/jeremycai/opt/riscv`. A normal clean the reference-core build framework rebuild still needs
+`firtool` on `PATH`; without it, the reference-core build framework elaboration stops before the
 firtool/split-Verilog step.
 
 ## Calibrated Smoke Rows
 
-These rows use the new BOOM benchmark-result MMIO window. They are smoke rows,
+These rows use the new Reference Core A benchmark-result MMIO window. They are smoke rows,
 not the final Stage 1 score table, because the full shared set still needs to be
 rerun through this exact hook.
 
-| Workload | BOOM calibrated cycles | BOOM calibrated retired | rv64gc-v2 timed cycles | rv64gc-v2 timed IPC | Current read |
+| Workload | Reference Core A calibrated cycles | Reference Core A calibrated retired | rv64gc-v2 timed cycles | rv64gc-v2 timed IPC | Current read |
 |---|---:|---:|---:|---:|---|
-| Dhrystone 100 | 23,814 | 48,433 | 26,394 | 1.835 | BOOM faster by 9.8% cycles. |
-| CoreMark 1 | 192,249 | 318,378 | 207,870 | 1.532 | BOOM faster by 7.5% cycles. |
+| Dhrystone 100 | 23,814 | 48,433 | 26,394 | 1.835 | Reference Core A faster by 9.8% cycles. |
+| CoreMark 1 | 192,249 | 318,378 | 207,870 | 1.532 | Reference Core A faster by 7.5% cycles. |
 
 Smoke evidence:
 
@@ -114,17 +114,17 @@ Smoke evidence:
 ## Non-Scoreable Shared Rows
 
 These rows use the same benchmark images, but they do not use the same counter
-window. Keep them only as proof that the BOOM simulator runs the images and that
-the old BOOM pipeline hook could emit diagnostic counters.
+window. Keep them only as proof that the Reference Core A simulator runs the images and that
+the old Reference Core A pipeline hook could emit diagnostic counters.
 
-| Workload | BOOM `_start->tohost` cycles | BOOM diagnostic IPC | rv64gc-v2 timed cycles | rv64gc-v2 timed IPC | Why not scoreable |
+| Workload | Reference Core A `_start->tohost` cycles | Reference Core A diagnostic IPC | rv64gc-v2 timed cycles | rv64gc-v2 timed IPC | Why not scoreable |
 |---|---:|---:|---:|---:|---|
-| Dhrystone 100 | 50,103 | 1.959 | 26,394 | 1.835 | BOOM includes startup/setup/exit; rv64gc-v2 excludes it. |
-| Dhrystone 300 | 119,411 | 2.519 | 76,738 | 1.951 | BOOM includes startup/setup/exit; rv64gc-v2 excludes it. |
-| CoreMark 1 | 404,149 | 1.644 | 207,870 | 1.532 | BOOM includes startup/setup/exit; rv64gc-v2 excludes it. |
-| CoreMark 10 | 3,671,645 | 1.742 | 2,034,653 | 1.565 | BOOM includes startup/setup/exit; rv64gc-v2 excludes it. |
+| Dhrystone 100 | 50,103 | 1.959 | 26,394 | 1.835 | Reference Core A includes startup/setup/exit; rv64gc-v2 excludes it. |
+| Dhrystone 300 | 119,411 | 2.519 | 76,738 | 1.951 | Reference Core A includes startup/setup/exit; rv64gc-v2 excludes it. |
+| CoreMark 1 | 404,149 | 1.644 | 207,870 | 1.532 | Reference Core A includes startup/setup/exit; rv64gc-v2 excludes it. |
+| CoreMark 10 | 3,671,645 | 1.742 | 2,034,653 | 1.565 | Reference Core A includes startup/setup/exit; rv64gc-v2 excludes it. |
 
-## MegaBOOM Pipeline Notes
+## Reference Core A (large config) Pipeline Notes
 
 | Workload | Retired | Fetch backpressure | Decode stalls | Dispatch stalls | LDQ full | Branch kill |
 |---|---:|---:|---:|---:|---:|---:|
@@ -134,8 +134,8 @@ the old BOOM pipeline hook could emit diagnostic counters.
 | CoreMark 10 | 6,394,839 | 1,763,031 | 1,369,964 | 1,074,414 | 325,608 | 61,514 |
 
 Do not compare these historical cycle counts against rv64gc-v2 timed cycles.
-Also do not compare BOOM retired counts directly against rv64gc-v2 `minstret`;
-the BOOM hook reports its commit-count proxy while rv64gc-v2 reports
+Also do not compare Reference Core A retired counts directly against rv64gc-v2 `minstret`;
+the Reference Core A hook reports its commit-count proxy while rv64gc-v2 reports
 architectural instructions.
 
 ## rv64gc-v2 Pipeline Notes
@@ -151,7 +151,7 @@ decoded-op replay activity at zero.
 | CoreMark 10 | 41.5% | 19.9% | 725,222 | 783,583 | 1 |
 
 These rv64gc-v2 counters remain valid for local bottleneck analysis. They do
-not prove a MegaBOOM win. `xs_ftq_occ_max=1` and high duplicate/no-emit counters
+not prove a Reference Core A (large config) win. `xs_ftq_occ_max=1` and high duplicate/no-emit counters
 still show the next architectural improvement direction: the frontend is not
 running ahead, so the BPU/FTQ/IBuffer ownership refactor remains the right
 performance path, not a testbench-targeted patch.
@@ -190,11 +190,11 @@ Effective status after cap fix: **43/43 PASS**.
 
 For Stage 1, do not defer the current broad suite. Run it as an anti-overfit
 guardrail before accepting frontend changes. Defer only the larger external
-benchmark ports - XiangShan Nexus-AM frontend tests, XiangShan microbench,
-Chipyard/riscv-tests benchmark suite, downscaled STREAM, and SPEC/Linux-style
+benchmark ports - Reference Core B Nexus-AM frontend tests, Reference Core B microbench,
+the reference-core build framework/riscv-tests benchmark suite, downscaled STREAM, and SPEC/Linux-style
 workloads - until the simulator platform has a common source/ELF ABI path.
 
-For the MegaBOOM baseline, the benchmark-window hook is now in place. The next
+For the Reference Core A (large config) baseline, the benchmark-window hook is now in place. The next
 required step is a full rerun of the shared Dhrystone/CoreMark rows through this
 calibrated hook, then use those data to drive the Stage 1 frontend refactor:
 split FTQ ownership pointers, add an owner-aware IBuffer, and keep `tohost`
@@ -227,9 +227,9 @@ The closure path is:
    replacement for duplicate suppression and the old loop-buffer direction.
 6. Enable BPU-owned F1 runahead only when FTQ allocation and IBuffer capacity
    are both available.
-7. Rerun the calibrated BOOM shared rows and the rv64gc-v2 signoff manifest.
+7. Rerun the calibrated Reference Core A shared rows and the rv64gc-v2 signoff manifest.
 
-Stage 1 closes only when rv64gc-v2 beats the calibrated MegaBOOM shared rows and
+Stage 1 closes only when rv64gc-v2 beats the calibrated Reference Core A (large config) shared rows and
 the local signoff rows pass endpoint identity, golden PC where available,
 owner-counter invariants, broad coverage, and declared frontend counter
 movement versus baseline.

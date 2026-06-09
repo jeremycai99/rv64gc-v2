@@ -129,7 +129,7 @@ The depth profile recalibrates Branch B:
   `alloc2ifu` path stays at zero in all T2 rows.
 - The live opportunity sits after IFU consumption: `ifu2wb` and especially
   `ifu2commit` show sustained depth while packet delivery still bubbles.
-- Therefore B1 should not start by adding a XiangShan-style `pfPtr`. Before
+- Therefore B1 should not start by adding a Reference Core B-style `pfPtr`. Before
   any behavior change, the next question is why post-IFU live owners do not
   produce legal decode packets.
 
@@ -520,7 +520,7 @@ Exit criteria:
 Purpose:
 
 - Reduce overfitting to Dhrystone and CoreMark while still using them as anchor
-  rows for continuity with the MegaBOOM comparison.
+  rows for continuity with the Reference Core A (large config) comparison.
 
 Execution rules:
 
@@ -810,7 +810,7 @@ Run T3 only after T2 passes:
 
 - Full `tests/benchmarks/stage1_signoff.json`.
 - Same strict plusargs and bottleneck profile.
-- Compare against locked baseline and calibrated MegaBOOM methodology only
+- Compare against locked baseline and calibrated Reference Core A (large config) methodology only
   after the full row set is clean.
 
 Step 6 exit:
@@ -1381,7 +1381,7 @@ Promotion gate:
 | T1 strict smoke | Dhrystone 100, CoreMark 1 | Fast correctness and first counter check. | strict fetch owner/delivery, branch recovery strict, `+PERF_PROFILE +PERF_COUNTERS +STAT_DUMP +BOTTLENECK_PROFILE` | May keep debugging. Not scoreable. |
 | T2 focused six-row | Dhrystone 100, CoreMark 1, CoreMark 10, branch dense, backend ALU chain, branch hotspot | Catch anchor, heavy, branch, backend, and hotspot regressions. | Same as T1 | Candidate can proceed to full coverage only if endpoint-clean and regression-free. |
 | T3 full 16-row | Full `stage1_signoff.json` | Broad signoff guard. | Same as T1 plus `--goal stage1` | Required before promotion. |
-| T4 competitor rescore | Calibrated MegaBOOM rows and stretch-target reporting | Re-score after a promoted structural mechanism. | Same methodology as baseline comparison docs | Reporting only after T3 passes. |
+| T4 competitor rescore | Calibrated Reference Core A (large config) rows and stretch-target reporting | Re-score after a promoted structural mechanism. | Same methodology as baseline comparison docs | Reporting only after T3 passes. |
 
 Example T1 command shape:
 

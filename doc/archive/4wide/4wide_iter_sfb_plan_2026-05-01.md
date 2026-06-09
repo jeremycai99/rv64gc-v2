@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Investigate whether Short-Forward-Branch (SFB) fold-into-predication, the SonicBOOM-cited technique credited with up to 1.7× IPC on branch-dense sequences, is applicable to rv64gc-v2's cm + dhry workloads. If applicable in meaningful volume: implement minimal predication infrastructure. If not: REFUTE-on-investigation, no RTL change.
+**Goal:** Investigate whether Short-Forward-Branch (SFB) fold-into-predication, the Reference Core A-cited technique credited with up to 1.7× IPC on branch-dense sequences, is applicable to rv64gc-v2's cm + dhry workloads. If applicable in meaningful volume: implement minimal predication infrastructure. If not: REFUTE-on-investigation, no RTL change.
 
 **Architecture:** Investigation-first. Cycle A (uBTB sizing) and Cycle C (BRU early-redirect) both REFUTED, indicating the design is structurally well-tuned. Cycle B's RTL effort is large (decode + rename + ALU predicate + ROB tracking; estimated 2-4 days), so the gating investigation must produce a confident PROCEED signal before committing to RTL effort.
 
@@ -10,7 +10,7 @@
 
 **Companion docs:**
 - `doc/4wide_gap_closure_sequence_2026-05-01.md` — sequence design (this is Cycle B)
-- `doc/4wide_iter_uBTB_results.md` — Cycle A REFUTE (BPU bigger than BOOM)
+- `doc/4wide_iter_uBTB_results.md` — Cycle A REFUTE (BPU bigger than Reference Core A)
 - `doc/4wide_iter_flush_recovery_results.md` — Cycle C REFUTE (early-redirect net-negative)
 - `doc/4wide_perf_gap_results_2026-05-01.md` — gap analysis findings
 
@@ -404,7 +404,7 @@ sign-off.
 
 | Cycle | Verdict | Δ to baseline |
 |---|---|---|
-| A — uBTB sizing | REFUTE-on-investigation (BPU > BOOM) | 0 |
+| A — uBTB sizing | REFUTE-on-investigation (BPU > Reference Core A) | 0 |
 | C — BRU early-redirect | REFUTE-on-measurement (mechanism net-negative) | 0 |
 | B — SFB | REFUTE-on-investigation (insufficient eligible patterns) | 0 |
 
@@ -419,7 +419,7 @@ PARTIAL-FLOOR sign-off (`doc/4wide_signoff_2026-05-01.md`) stands as final.
 
 The 3-cycle gap-closure sequence ran the data-driven methodology to its
 conclusion. All three cycles produced data-grounded REFUTEs:
-- A: design is well-equipped (BPU > BOOM)
+- A: design is well-equipped (BPU > Reference Core A)
 - C: mechanism that "should" help is net-negative
 - B: workload doesn't have enough SFB-eligible patterns
 
@@ -446,7 +446,7 @@ Investigation found SFB-eligible mispredict cycles below threshold for
 both dhry (<X%>) and cm (<Y%>). RTL effort (~250 lines, 2-4 days) not
 justified by predicted gain.
 
-Combined with Cycle A (BPU > BOOM, REFUTE) and Cycle C (early-redirect
+Combined with Cycle A (BPU > Reference Core A, REFUTE) and Cycle C (early-redirect
 net-negative, REFUTE), all 3 selected gap-closure candidates produced
 data-grounded REFUTEs. The design is structurally well-tuned; remaining
 gap is intrinsic per prior gap analysis.

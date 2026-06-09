@@ -129,10 +129,10 @@ Dhrystone:
 
 ## Reference Trace Status
 
-NaxRiscv and RSD are useful for trace format and mechanism inspection, but are
+Reference Core D and Reference Core E are useful for trace format and mechanism inspection, but are
 not yet apples-to-apples benchmark comparisons.
 
-NaxRiscv smoke trace:
+Reference Core D smoke trace:
 
 - Artifact:
   `../naxriscv/src/test/cpp/naxriscv/output/pipeline-add/trace.gem5o3`
@@ -146,7 +146,7 @@ NaxRiscv smoke trace:
 - Average dispatch-to-issue: 6.26 cycles
 - Average complete-to-retire: 5.56 cycles
 
-RSD smoke trace:
+Reference Core E smoke trace:
 
 - Artifacts:
   `../rsd/Processor/Src/Kanata.log`,
@@ -158,7 +158,7 @@ RSD smoke trace:
 - Committed ops: 4518
 - IPC: 0.966417
 
-XiangShan status remains RTL elaboration only:
+Reference Core B status remains RTL elaboration only:
 
 - Artifacts:
   `../xiangshan/build/rtl/XSTop.sv`,
@@ -169,7 +169,7 @@ XiangShan status remains RTL elaboration only:
 
 The confirmed direction is:
 
-1. Keep BOOM as the quantitative floor, but require the same trace fields before
+1. Keep Reference Core A as the quantitative floor, but require the same trace fields before
    comparing design choices.
 2. Do not widen first.
 3. Prioritize mechanisms that reduce head completion stalls and dynamic uop

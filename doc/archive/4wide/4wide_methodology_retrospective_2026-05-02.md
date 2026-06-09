@@ -10,7 +10,7 @@
 
 ### Phase 1 — cm Functional Bug Diagnosis + Fix (cd54cf1)
 
-Post-merge sign-off measurements showed cm at 6.05 CM/MHz (within 2.4% of MegaBoom floor 6.2). But the cm.hex was actually executing 11× the expected instructions and writing magic HTIF tohost values. Three findings:
+Post-merge sign-off measurements showed cm at 6.05 CM/MHz (within 2.4% of Reference Core A (large config) floor 6.2). But the cm.hex was actually executing 11× the expected instructions and writing magic HTIF tohost values. Three findings:
 
 1. **Trace-diff bisection** localized the regression to commit d566919 (Stage 2 of the refactor).
 2. **Two surgical fix attempts** (latched IQ wakeup; registered bypass[3]) BOTH made cm worse — wrong root cause.
@@ -28,7 +28,7 @@ Built a 4-phase methodology (`doc/4wide_perf_gap_analysis_2026-05-01.md`):
 - Phase C: hypothesis enumeration with predicted counter signatures
 - Phase D: microbench probes + iterative RTL changes with predict-before-change discipline
 
-**Original methodology dropped 6-wide cross-comparison** based on user observation that sign-off is external (MegaBoom, not 6-wide). Bubble counters are intrinsically meaningful in 4-wide alone.
+**Original methodology dropped 6-wide cross-comparison** based on user observation that sign-off is external (Reference Core A (large config), not 6-wide). Bubble counters are intrinsically meaningful in 4-wide alone.
 
 **Phase A added 2 instrumentation commits** (766f8d7, 4a78605):
 - ROB other-class sub-decomposition (mul/div/csr/bru/unknown)
@@ -52,8 +52,8 @@ Built a 4-phase methodology (`doc/4wide_perf_gap_analysis_2026-05-01.md`):
 Per user-selected sequence (low-risk → medium → high), tested 3 follow-up RTL hypotheses:
 
 **Cycle A — uBTB sizing** (REFUTE-on-investigation):
-- Investigation found rv64gc-v2 BTB = 2048×8 entries; BOOM v4 Mega = 256×2 entries (8× larger)
-- TAGE-SC-L with Statistical Corrector that BOOM-default lacks; larger TAGE tags
+- Investigation found rv64gc-v2 BTB = 2048×8 entries; Reference Core A (large config) = 256×2 entries (8× larger)
+- TAGE-SC-L with Statistical Corrector that Reference Core A-default lacks; larger TAGE tags
 - No undersize to bump → REFUTE without RTL change → saved hours of wasted build/measure cycles
 
 **Cycle C — BRU early-redirect enable** (REFUTE-on-measurement):
@@ -70,13 +70,13 @@ Per user-selected sequence (low-risk → medium → high), tested 3 follow-up RT
 
 **Methodology lesson #4:** Invest in **investigation phase before RTL** when prior cycles' priors suggest REFUTE is likely. The 3-cycle sequence saved >1 week of speculative RTL work.
 
-### Phase 4 — Architectural Audit (BOOM v4 ↔ rv64gc-v2)
+### Phase 4 — Architectural Audit (Reference Core A ↔ rv64gc-v2)
 
 User pushback ("we should at least have comparable performance, not over 5% gap") triggered a systematic architectural diff via deep-research subagent (commit 028e071, `doc/4wide_arch_diff_2026-05-02.md`).
 
 Key findings:
-- rv64gc-v2 is FASTER on dcache load-to-use (~3 cyc vs BOOM 4-5 cyc)
-- rv64gc-v2 frontend is SHALLOWER (3-5 fewer stages than BOOM)
+- rv64gc-v2 is FASTER on dcache load-to-use (~3 cyc vs Reference Core A 4-5 cyc)
+- rv64gc-v2 frontend is SHALLOWER (3-5 fewer stages than Reference Core A)
 - L1D 2× bigger, 2× more MSHRs
 - BPU bigger with SC
 
@@ -132,7 +132,7 @@ Recommended: Variant B (item 4 — bypass slot) and Variant A (items 1+2+3+5 —
 
 2. **REFUTE-on-investigation as a first-class outcome.** Cycles A and B saved ~1 week of speculative RTL work by gating on data before committing to the build.
 
-3. **Subagent dispatch for research-heavy investigation.** The Load1 bypass diagnosis, the SFB eligibility analysis, and the BOOM architectural audit all benefited from focused subagent context isolation.
+3. **Subagent dispatch for research-heavy investigation.** The Load1 bypass diagnosis, the SFB eligibility analysis, and the Reference Core A architectural audit all benefited from focused subagent context isolation.
 
 4. **The ±0.5% IPC absolute tolerance for small-delta predictions.** The relative 30%-rule produces uselessly tight bands for predicted <3% wins. The absolute rule made Cycles E and F's REFUTE verdicts unambiguous.
 
@@ -148,11 +148,11 @@ Recommended: Variant B (item 4 — bypass slot) and Variant A (items 1+2+3+5 —
 
 ### What would unlock further progress
 
-1. **A calibrated perf model** (e.g., gem5 or custom) anchored to rv64gc-v2's RTL. Would let us predict IPC of structural changes BEFORE building. The `../rv64gc-perf-model/` work paused on a toolchain dead-end; resuming it (perhaps with insights from BOOM's Chipyard flow) would be the highest-value next investment.
+1. **A calibrated perf model** (e.g., gem5 or custom) anchored to rv64gc-v2's RTL. Would let us predict IPC of structural changes BEFORE building. The `../rv64gc-perf-model/` work paused on a toolchain dead-end; resuming it (perhaps with insights from Reference Core A's the reference-core build framework flow) would be the highest-value next investment.
 
-2. **A different workload set.** All of cm/dhry/coremark are well-studied benchmarks where MegaBoom has been heavily tuned. A workload that exercises rv64gc-v2's structural advantages (bigger L1D, more MSHRs, shallower frontend) might show competitive or winning IPC.
+2. **A different workload set.** All of cm/dhry/coremark are well-studied benchmarks where Reference Core A (large config) has been heavily tuned. A workload that exercises rv64gc-v2's structural advantages (bigger L1D, more MSHRs, shallower frontend) might show competitive or winning IPC.
 
-3. **A frequency push.** rv64gc-v2's IPC is the binding constraint for CM/MHz, but IF rv64gc-v2 could clock faster than BOOM's typical synthesis target, the absolute MHz throughput advantage could close the per-cycle gap. ASIC sign-off (`doc/asic_signoff_workplan.md`) is in scope for that exploration.
+3. **A frequency push.** rv64gc-v2's IPC is the binding constraint for CM/MHz, but IF rv64gc-v2 could clock faster than Reference Core A's typical synthesis target, the absolute MHz throughput advantage could close the per-cycle gap. ASIC sign-off (`doc/asic_signoff_workplan.md`) is in scope for that exploration.
 
 ---
 
@@ -165,13 +165,13 @@ Recommended: Variant B (item 4 — bypass slot) and Variant A (items 1+2+3+5 —
 **RTL state:** Identical to cd54cf1 (Load1 bypass fix). All gap-closure RTL reverted per discipline.
 
 **Final measurements:**
-| Workload | IPC | Metric | vs MegaBoom floor |
+| Workload | IPC | Metric | vs Reference Core A (large config) floor |
 |---|---:|---|---:|
 | dhrystone | 2.027 | 2.42 DMIPS/MHz | 4.00 → −39.5% |
 | cm iter1 | 1.665 | 5.01 CM/MHz | 6.2 → −19.2% |
 | cm iter10 | 1.719 | 5.37 CM/MHz | 6.2 → −13.3% |
 
-The remaining gap is structurally explained by the architectural audit (BOOM has features rv64gc-v2 lacks: TAGE-L loop predictor advantages, dual-load issue arbitration nuances, etc.) but is not closable via parameter tuning, mechanism enabling, or feature addition without major architectural change.
+The remaining gap is structurally explained by the architectural audit (Reference Core A has features rv64gc-v2 lacks: TAGE-L loop predictor advantages, dual-load issue arbitration nuances, etc.) but is not closable via parameter tuning, mechanism enabling, or feature addition without major architectural change.
 
 ---
 
@@ -187,7 +187,7 @@ The remaining gap is structurally explained by the architectural audit (BOOM has
 - `doc/4wide_bottleneck_ranking_2026-05-01.md` — Phase B ranking
 - `doc/4wide_hypothesis_table_2026-05-01.md` — Phase C hypotheses
 - `doc/4wide_microbench_probes_2026-05-01.md` — Phase D probes
-- `doc/4wide_perf_gap_results_2026-05-01.md` — final analysis (corrected per BOOM research)
+- `doc/4wide_perf_gap_results_2026-05-01.md` — final analysis (corrected per Reference Core A research)
 
 **3-cycle gap-closure sequence:**
 - `doc/4wide_gap_closure_sequence_2026-05-01.md` — sequence design
@@ -196,7 +196,7 @@ The remaining gap is structurally explained by the architectural audit (BOOM has
 - `doc/4wide_iter_sfb_{plan,investigation,results}_2026-05-01.md` — Cycle B
 
 **Architectural audit + audit-driven cycles:**
-- `doc/4wide_arch_diff_2026-05-02.md` — BOOM v4 ↔ rv64gc-v2 audit
+- `doc/4wide_arch_diff_2026-05-02.md` — Reference Core A ↔ rv64gc-v2 audit
 - `doc/4wide_iter_alu3_bypass_{prediction,results}.md` — Cycle E
 - `doc/4wide_iter_iq_reorg_{prediction,results}.md` — Cycle F
 
@@ -208,4 +208,4 @@ The remaining gap is structurally explained by the architectural audit (BOOM has
 - `doc/4wide_methodology_retrospective_2026-05-02.md` — durable record + lessons learned
 
 **External resources cloned during session:**
-- `/home/jeremycai/agent-workspace/riscv-boom/` — BOOM v4 source for architectural reference (shallow clone)
+- `/home/jeremycai/agent-workspace/riscv-boom/` — Reference Core A source for architectural reference (shallow clone)

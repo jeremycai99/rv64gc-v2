@@ -16,7 +16,7 @@ Across both workloads:
 - HEAD_WAIT_BACKLOG: 74-88% — dominant by far
 - All other categories combined: 4-16% (frontend / dispatch / flush / other)
 
-This means the IPC ceiling is set by **producer-completion latency on the critical-path uops**, not by any of the structural parameters we've been investigating. **The remaining gap to MegaBoom is fundamentally about per-uop completion latency on dependency chains, not about queue sizes, IQ structure, or BPU storage.**
+This means the IPC ceiling is set by **producer-completion latency on the critical-path uops**, not by any of the structural parameters we've been investigating. **The remaining gap to Reference Core A (large config) is fundamentally about per-uop completion latency on dependency chains, not about queue sizes, IQ structure, or BPU storage.**
 
 ---
 
@@ -154,7 +154,7 @@ The 5 prior cycles (A, C, B, E, F) all REFUTED. The bubble taxonomy explains why
 
 | Cycle | Hypothesis (what it tried to fix) | Bubble category targeted | Result |
 |---|---|---|---|
-| A — uBTB sizing | BPU mispredicts → flush cycles | FLUSH (2.18% of cm) | REFUTE: BPU was bigger than BOOM |
+| A — uBTB sizing | BPU mispredicts → flush cycles | FLUSH (2.18% of cm) | REFUTE: BPU was bigger than Reference Core A |
 | C — BRU early-redirect | Reduce flush penalty | FLUSH | REFUTE: actually increased mispredicts |
 | B — SFB | Eliminate predictable branches | FLUSH | REFUTE: <1% SFB-eligible patterns |
 | E — ALU3 bypass | Reduce operand-wait stalls | (HEAD_WAIT_BACKLOG indirect) | REFUTE: 0% impact (CDB[3] rarely used) |
@@ -170,17 +170,17 @@ The 5 prior cycles (A, C, B, E, F) all REFUTED. The bubble taxonomy explains why
 
 ## What WOULD close the gap (theoretical)
 
-To reduce HEAD_WAIT_BACKLOG from 74% to (say) 50%, the average commit per cycle would need to rise from ~1.66 to (very roughly) ~2.5. That's a 50% IPC improvement on cm — would close most of the gap to MegaBoom.
+To reduce HEAD_WAIT_BACKLOG from 74% to (say) 50%, the average commit per cycle would need to rise from ~1.66 to (very roughly) ~2.5. That's a 50% IPC improvement on cm — would close most of the gap to Reference Core A (large config).
 
 Mechanisms that COULD achieve this (each is a major architectural change):
 
-1. **Reduce dcache hit latency** (already discussed; we're FASTER than BOOM here at ~3 cyc, dropping to 1 cyc would require VIPT + way prediction — structural)
+1. **Reduce dcache hit latency** (already discussed; we're FASTER than Reference Core A here at ~3 cyc, dropping to 1 cyc would require VIPT + way prediction — structural)
 
 2. **Wider commit window with relaxed in-order constraint** — allow non-head ready uops to commit out of order, with checkpoint-based recovery on exception. This is a major architectural change with significant verification cost.
 
 3. **Pre-completion of long-latency ops** — speculatively start MUL/DIV at decode (vs at issue), saving 1-2 cycles. Would require predication infrastructure for incorrect speculation.
 
-4. **Smaller pipeline depth** — fewer cycles between issue and writeback. We're already at the aggressive end (3-cycle load-to-use vs BOOM 4-5). Going lower requires merging stages and timing closure rework.
+4. **Smaller pipeline depth** — fewer cycles between issue and writeback. We're already at the aggressive end (3-cycle load-to-use vs Reference Core A 4-5). Going lower requires merging stages and timing closure rework.
 
 None of these are parameter tweaks. All require multi-month engineering investments with no guarantee of success.
 
@@ -192,10 +192,10 @@ Per the bubble taxonomy + prior REFUTEs, the following are confirmed NOT to be t
 
 - ❌ Frontend bandwidth (cm: only 11% FRONTEND_LIMITED, dhry: 4%)
 - ❌ Dispatch / structural capacity (cm: 2.4%, dhry: 0.6% DISPATCH_BLOCKED; all `*_full_cyc` essentially zero)
-- ❌ BPU prediction accuracy (cm: 2.2% FLUSH; we're already better-equipped than BOOM)
+- ❌ BPU prediction accuracy (cm: 2.2% FLUSH; we're already better-equipped than Reference Core A)
 - ❌ Issue queue depth or partitioning (REFUTED Cycle F: more parallelism in IQ reorg actually HURT)
 - ❌ ALU bypass coverage (REFUTED Cycle E: ALU3/DIV/CSR bypass had 0% impact)
-- ❌ uBTB / NLP sizing (REFUTED Cycle A: we're bigger than BOOM)
+- ❌ uBTB / NLP sizing (REFUTED Cycle A: we're bigger than Reference Core A)
 
 These are settled. Future work should not re-investigate them.
 
@@ -208,9 +208,9 @@ These are settled. Future work should not re-investigate them.
 - Why all 5 prior gap-closure RTL attempts failed (none targeted the actual bottleneck)
 - What WOULD work (major architectural changes, not parameter tunes)
 
-**The PARTIAL-FLOOR sign-off (`doc/4wide_signoff_2026-05-01.md`) is correct and final** for this RTL design point. The gap to MegaBoom is structural and would require either:
+**The PARTIAL-FLOOR sign-off (`doc/4wide_signoff_2026-05-01.md`) is correct and final** for this RTL design point. The gap to Reference Core A (large config) is structural and would require either:
 - Major architectural redesign (out of scope)
-- A different workload set (cm/dhry are MegaBoom-tuned; not our home turf)
+- A different workload set (cm/dhry are Reference Core A (large config)-tuned; not our home turf)
 - A frequency push (ASIC sign-off track)
 
 **This bubble taxonomy is the missing analytical bridge** between the prior bucket-attribution analysis and the cumulative REFUTE evidence. It transforms the conclusion from "we tried things and they didn't work" into "the data tells us why nothing in our parameter space CAN work — the gap requires architectural change of a kind not in scope."

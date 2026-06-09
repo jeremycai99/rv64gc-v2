@@ -2,26 +2,26 @@
 
 ## Verdict
 
-Stage 1 is still open. The original 2026-05-06 local BOOM run completed the
+Stage 1 is still open. The original 2026-05-06 local Reference Core A run completed the
 same benchmark images, but it used a different counter window from rv64gc-v2.
 That first table remains invalid and must not be used as signoff evidence.
 
-- BOOM: `_start` through final `tohost` store.
+- Reference Core A: `_start` through final `tohost` store.
 - rv64gc-v2: internal benchmark timed window from `rv64gc_bench_begin()` to
   `rv64gc_bench_end()`.
 
-The BOOM harness has since been calibrated to the same benchmark-result MMIO
+The Reference Core A harness has since been calibrated to the same benchmark-result MMIO
 window used by rv64gc-v2. The calibrated smoke rows show rv64gc-v2 is still
-behind MegaBOOM on the shared rows that have been rerun through that hook:
+behind Reference Core A (large config) on the shared rows that have been rerun through that hook:
 
-| Workload | MegaBOOM calibrated | rv64gc-v2 timed | Gap |
+| Workload | Reference Core A (large config) calibrated | rv64gc-v2 timed | Gap |
 |---|---:|---:|---:|
 | Dhrystone 100 | 23,814 cycles | 26,394 cycles | rv64gc-v2 +9.8% cycles |
 | CoreMark 1 | 192,249 cycles | 207,775 cycles | rv64gc-v2 +7.5% cycles |
 
 The full shared Dhrystone/CoreMark set still needs to be rerun through the
-calibrated BOOM hook before Stage 1 can be scored. The current evidence does
-not support a claim that rv64gc-v2 beats MegaBOOM.
+calibrated Reference Core A hook before Stage 1 can be scored. The current evidence does
+not support a claim that rv64gc-v2 beats Reference Core A (large config).
 
 Stage 2 remains open: the aggressive targets are 7.5 CM/MHz and
 4.0 DMIPS/MHz.
@@ -205,12 +205,12 @@ packet_buf+ROB so only 5.7% propagates to commit.
 
 ## Architectural finding: frontend-proactive is the answer
 
-User push-back rejected the dcache-latency framing. BOOM and XiangShan
+User push-back rejected the dcache-latency framing. Reference Core A and Reference Core B
 operate at the same load-to-use class (3-4 cycle hit) yet achieve higher
 IPC. The differentiator is frontend supply rate, specifically how F1
 advances.
 
-Inspecting BOOM v4 `src/main/scala/v4/ifu/frontend.scala` (lines 347-571):
+Inspecting Reference Core A `src/main/scala/v4/ifu/frontend.scala` (lines 347-571):
 
 ```scala
 val s0_valid = WireInit(false.B)
@@ -225,7 +225,7 @@ when (s2_valid && f3_ready) {
 val f3 = Module(new Queue(new FetchBundle, 1, pipe=true, flow=false))
 ```
 
-BOOM's s0 advances **proactively** based on BPD prediction every cycle.
+Reference Core A's s0 advances **proactively** based on BPD prediction every cycle.
 The f3 queue absorbs rate mismatch with backpressure to s0.
 
 Our equivalent: F1 advances **reactively** from `f2_seq_next_pc` (case
@@ -236,12 +236,12 @@ when F2 emits. This is the lockstep that limits frontend supply to
 The "BACKEND_STALL=11.3%" is partially intrinsic but is also a symptom
 of low frontend supply: with fewer parallel chains in flight, each
 chain's latency manifests as ROB head stall instead of overlapping.
-BOOM hides the same load latency behind more parallelism.
+Reference Core A hides the same load latency behind more parallelism.
 
-## XiangShan-aligned ownership breakdown, 2026-05-06
+## Reference Core B-aligned ownership breakdown, 2026-05-06
 
-The next performance work should follow XiangShan's frontend ownership split
-rather than continue local `fetch_top.sv` steering. XiangShan separates the
+The next performance work should follow Reference Core B's frontend ownership split
+rather than continue local `fetch_top.sv` steering. Reference Core B separates the
 frontend into:
 
 - BPU: prediction producer plus redirect/train/commit consumer.
@@ -320,7 +320,7 @@ The next session should use this order:
    FTQ occupancy move in the expected direction while endpoint identity and
    owner-invariant counters remain clean.
 
-Do not add an active XiangShan-style `pfPtr` yet. Prefetch can help later, but
+Do not add an active Reference Core B-style `pfPtr` yet. Prefetch can help later, but
 the current bottleneck is demand ownership: BPU allocation, IFU request issue,
 IFU writeback, and IBuffer delivery are still not independently tracked.
 
@@ -847,7 +847,7 @@ benchmark-specific behavior.
 ## Next frontend optimization direction (capacity-owned runahead first)
 
 The next behavior-changing implementation should not be another local
-PC-steering patch in `fetch_top.sv`. It should use the XiangShan-style
+PC-steering patch in `fetch_top.sv`. It should use the Reference Core B-style
 ownership split that is now explicit: FTQ owns predicted blocks, IFU owns line
 access/validation, and IBuffer owns decode-facing packet delivery. The retired
 same-line handoff, same-FTQ tail carry, sequential-lookahead, and weak-bias
@@ -1019,12 +1019,12 @@ path, moved the frontend-supply counters.
 
 This refactor is behavior-neutral structural cleanup first. Do not claim a
 performance improvement from these slices. The goal is to make the RTL map to a
-recognizable XiangShan-like frontend organization before the next performance
+recognizable Reference Core B-like frontend organization before the next performance
 inspection.
 
 Target integration:
 
-| Target file | XiangShan analogue | Current ownership in `fetch_top.sv` | First interface shape |
+| Target file | Reference Core B analogue | Current ownership in `fetch_top.sv` | First interface shape |
 |---|---|---|---|
 | `frontend/top/fetch_top.sv` | `FrontendInlinedImp` | Current `fetch_top.sv` top-level ports and pure wiring around FTQ/BPU/IFU/ICache/IBuffer. | Direct frontend integration top instantiated by `rv64gc_core_top.sv`; no legacy compatibility wrapper remains. |
 | `bpu/bpu.sv` | `Bpu` | Current slice owns the BTB, TAGE-SC-L, and RAS leaf instances plus lookup/update/restore wiring, speculative GHR routing, request-time FTQ prediction assembly, auxiliary prediction observation, and registered F1 to F2 prediction metadata. The predictor leaves live in `src/rtl/core/bpu/`, not `src/rtl/core/fetch/`. | `lookup_pc`, `aux_lookup_pc`, commit/update/restore inputs, raw BTB/TAGE/RAS prediction outputs, RAS snapshot, `ghr_out`, speculative update request, assembled `ftq_entry_t` request metadata, and registered F2 BTB/TAGE/GHR snapshot outputs. |
@@ -1039,7 +1039,7 @@ Target integration:
 | `instr_compact.sv` | `InstrCompact` | Packet construction around lines 2421-2519. | Inputs: slots, final count, prediction decision, FTQ/IFU metadata, RAS/GHR snapshots. Output: `FetchToIBuffer` packet valid plus `fetch_packet_t`. |
 | `frontend/ibuffer/ibuffer.sv`, current leaf `frontend/ibuffer/fetch_packet_buffer.sv` | `IBuffer` | Existing `fetch_packet_buffer.sv` instance and decode-facing output around lines 832-855 and 2521-2562. | Rename or wrap `fetch_packet_buffer.sv`; keep `fetch_packet_t` valid/ready/deq owner-match interface. |
 
-Interface naming should converge toward XiangShan's direction names without a
+Interface naming should converge toward Reference Core B's direction names without a
 large package rewrite in the first slices:
 
 | Direction | Initial SystemVerilog carrier |
@@ -1197,14 +1197,14 @@ python3 tools/run_benchmarks.py --runner dsim --goal stage1 --run-class signoff 
 | `tools/sim_platform.py` + `tests/sim_platform/stage1_broad.json` | working tree 2026-05-05 | Broad coverage preparation layer; keeps ABI/image handling in the harness |
 
 The harness should stay a guardrail. The core should not gain benchmark-specific
-side logic for pass/fail, `tohost`, CoreMark, Dhrystone, XiangShan AM, or BOOM
+side logic for pass/fail, `tohost`, CoreMark, Dhrystone, Reference Core B AM, or Reference Core A
 HTIF compatibility. Those belong in `tb_top.sv` and the simulator platform
 runner.
 
 ## Stage 2 (out of scope for Stage 1)
 
 Targets: 7.5 CM/MHz, 4.0 DMIPS/MHz. Mechanisms:
-- BOOM-style loop predictor for genuine loop-boundary branches (e.g.,
+- Reference Core A-style loop predictor for genuine loop-boundary branches (e.g.,
   dhrystone strcpy at `0x8000200e`). NOT a loop buffer — BPU-side
   prediction structure that records trip counts.
 - ICache prefetch by FTQ entry.
@@ -1215,7 +1215,7 @@ Targets: 7.5 CM/MHz, 4.0 DMIPS/MHz. Mechanisms:
 ## Coverage expansion
 
 The current score rows are still Dhrystone/CoreMark, but the next frontend RTL
-slice should also pass a broader anti-overfit smoke matrix. The XiangShan
+slice should also pass a broader anti-overfit smoke matrix. The Reference Core B
 benchmark survey and recommended port list are in
 `doc/benchmark_coverage_expansion_2026-05-05.md`.
 
@@ -1233,16 +1233,16 @@ anti-overfit coverage. Defer only new external benchmark ports until the
 simulator platform has a common source/ELF ABI path.
 
 Near-term priority:
-- Port XiangShan `nexus-am/tests/frontendtest` first because it directly
+- Port Reference Core B `nexus-am/tests/frontendtest` first because it directly
   stresses BPU/BTB/RAS/IFU behavior.
-- Port XiangShan `apps/microbench` second for broader branch, pointer, sort,
+- Port Reference Core B `apps/microbench` second for broader branch, pointer, sort,
   compression, hash, graph, and recursion coverage.
-- Keep XiangShan prebuilt `.bin` files as references only until they are rebuilt
+- Keep Reference Core B prebuilt `.bin` files as references only until they are rebuilt
   with rv64gc-v2 `tohost` and benchmark-result MMIO.
 - Refactor the simulator/test platform toward a multi-ABI endpoint:
-  rv64gc fixed-address `tohost` for current score rows, BOOM/Spike/HTIF-style
-  ELF-symbol `tohost/fromhost` for riscv-tests and Chipyard-compatible workloads,
-  and a Nexus-AM source-port shim for XiangShan apps. This belongs in the
+  rv64gc fixed-address `tohost` for current score rows, Reference Core A/Spike/HTIF-style
+  ELF-symbol `tohost/fromhost` for riscv-tests and the reference-core build framework-compatible workloads,
+  and a Nexus-AM source-port shim for Reference Core B apps. This belongs in the
   harness, not in the core frontend.
 
 ## What NOT to do (locked-in lessons)
@@ -1256,7 +1256,7 @@ Near-term priority:
 - No backend widening (rename/commit > 4) — backend not constrained per
   counter data.
 - No dcache hit latency reduction (2-cycle hit / 3-cycle load-to-use is
-  already faster than BOOM; not the differentiator).
+  already faster than Reference Core A; not the differentiator).
 
 ## Pointer to history
 

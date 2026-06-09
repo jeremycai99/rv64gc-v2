@@ -7,7 +7,7 @@
 
 ## Hypothesis
 
-Per the BOOM v4 ↔ rv64gc-v2 architectural audit (`doc/4wide_arch_diff_2026-05-02.md`),
+Per the Reference Core A ↔ rv64gc-v2 architectural audit (`doc/4wide_arch_diff_2026-05-02.md`),
 the rv64gc-v2 bypass network covers slots [0..4]:
 - [0..2] CDB[0..2] (ALU0/BRU, ALU1/BRU1, ALU2/MUL) — registered, 1-cycle delayed
 - [3..4] load_wb[0..1] (Load0, Load1) — combinational, 0-cycle (added cd54cf1)

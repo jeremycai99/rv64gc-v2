@@ -18,7 +18,7 @@
 > have different param tables, different module structures, and
 > different bottlenecks; their cycle counts on the same workload do not
 > share a meaningful axis. The 4-wide refactor will be evaluated against
-> external 4-wide references (MegaBoom CM/MHz ≥ 6.2, Cortex-A72 ≥ 8.24)
+> external 4-wide references (Reference Core A (large config) CM/MHz ≥ 6.2, a commercial 3-wide OoO core ≥ 8.24)
 > — NOT against the numbers in this document.
 >
 > **No future implementation should reference the data or the design
@@ -43,8 +43,8 @@
 
 | Tier | CM/MHz | DMIPS/MHz | Source |
 |---|---:|---:|---|
-| Baseline must-match | ≥ 6.2 | ≥ 4.00 | MegaBoom (4-wide) |
-| **Sign-off must-beat** | **≥ 8.24** | **≥ 4.72** | ARM Cortex-A72 (3-wide OoO) |
+| Baseline must-match | ≥ 6.2 | ≥ 4.00 | Reference Core A (large config) (4-wide) |
+| **Sign-off must-beat** | **≥ 8.24** | **≥ 4.72** | a commercial 3-wide OoO core (3-wide OoO) |
 
 These are external benchmarks; the targets remain the bar the 4-wide
 refactor must clear at sign-off.
@@ -119,5 +119,5 @@ on the captured-at machine.
    regression must pass before proceeding.
 4. **Sign-off is against external 4-wide references, not this doc.**
    The 4-wide design will be measured on its own terms; the bar is
-   MegaBoom CM/MHz ≥ 6.2 (floor) and Cortex-A72 ≥ 8.24 (stretch).
+   Reference Core A (large config) CM/MHz ≥ 6.2 (floor) and a commercial 3-wide OoO core ≥ 8.24 (stretch).
    This 6-wide doc plays no role in that decision.

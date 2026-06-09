@@ -81,7 +81,7 @@ Cycle F Variant A measured:
   cm iter10  : 1.679  Δ = −2.33%   REFUTE
   dhrystone  : 2.027  Δ =  0.00%   in-band
 
-Conclusion: BOOM-style 2 ALU + 1 UNQ split underperforms vs the existing
+Conclusion: Reference Core A-style 2 ALU + 1 UNQ split underperforms vs the existing
 3×24 ALU+slow-op shared-port organization for coremark.  RTL reverted.
 ```
 

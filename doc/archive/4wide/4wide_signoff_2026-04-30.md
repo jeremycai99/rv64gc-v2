@@ -8,7 +8,7 @@
 
 > ## ⚠ Sign-off VERDICT: PARTIAL — CM/MHz close, DMIPS/MHz substantially short
 >
-> The 5-stage RTL refactor (Rename+ROB → Dispatch+IQ → LSU → Caches → Frontend+TB) landed cleanly with all functional and clockcheck gates green. **The design as configured does NOT meet the MegaBoom 4-wide floor on either CM/MHz (−2.4%) or DMIPS/MHz (−39.5%).** The CM/MHz miss is small enough to plausibly close with targeted optimisation; the DMIPS/MHz miss is large and points at a dhrystone-specific bottleneck (most likely procedure-call / branch resolution paths the pure narrowing didn't touch).
+> The 5-stage RTL refactor (Rename+ROB → Dispatch+IQ → LSU → Caches → Frontend+TB) landed cleanly with all functional and clockcheck gates green. **The design as configured does NOT meet the Reference Core A (large config) 4-wide floor on either CM/MHz (−2.4%) or DMIPS/MHz (−39.5%).** The CM/MHz miss is small enough to plausibly close with targeted optimisation; the DMIPS/MHz miss is large and points at a dhrystone-specific bottleneck (most likely procedure-call / branch resolution paths the pure narrowing didn't touch).
 >
 > Per `doc/4wide_refactor_checklist.md` Halt-and-Re-evaluate Rule and Sign-off Gate: floor missed = halt-and-re-evaluate; the 4-wide refactor itself is correct, but the design as configured does not meet the bar.
 
@@ -18,10 +18,10 @@
 
 | Tier | Required | Measured | Pass? |
 |---|---:|---:|---|
-| Floor — MegaBoom 4-wide | CM/MHz ≥ 6.2 | **6.05** (10 iters / 1,653,640 cyc) | ❌ −2.4% |
-| Floor — MegaBoom 4-wide | DMIPS/MHz ≥ 4.00 | **2.42** (100 iters / 23,514 cyc / 1757) | ❌ −39.5% |
-| Stretch — ARM Cortex-A72 | CM/MHz ≥ 8.24 | 6.05 | ❌ −26.6% |
-| Stretch — ARM Cortex-A72 | DMIPS/MHz ≥ 4.72 | 2.42 | ❌ −48.7% |
+| Floor — Reference Core A (large config) 4-wide | CM/MHz ≥ 6.2 | **6.05** (10 iters / 1,653,640 cyc) | ❌ −2.4% |
+| Floor — Reference Core A (large config) 4-wide | DMIPS/MHz ≥ 4.00 | **2.42** (100 iters / 23,514 cyc / 1757) | ❌ −39.5% |
+| Stretch — a commercial 3-wide OoO core | CM/MHz ≥ 8.24 | 6.05 | ❌ −26.6% |
+| Stretch — a commercial 3-wide OoO core | DMIPS/MHz ≥ 4.72 | 2.42 | ❌ −48.7% |
 
 **Functional regression:** 18/18 PASS (8 rv64ui_* + 10 bench_*).
 **Clockcheck microbenches:** 3/3 PASS, 0 diverging cycles (allowlist applied for intentional refactor effects).
@@ -95,7 +95,7 @@ The plan's "no new optimisations during refactor" rule was relaxed once with exp
 
 `coremark.hex` (mtime Apr 24, predates this refactor) completes by writing `0x7fff5b5b7fff5252` to tohost — looks like an HTIF syscall protocol response, not a clean exit value. No `[BENCH_RESULT]` lines emitted. The Stage 2 implementer's `scripts/regress_dsim.sh` accepts any `TOHOST=...` write as STOP-OK, masking this. Pre-flight measurement (predates this refactor too) showed cm.hex writing `tohost=1` PASS, so the binary changed between pre-flight and Stage 2 by some external process. **Functional correctness of CoreMark is not being verified end-to-end.** Recommended follow-up: rebuild cm.hex from source, ensure clean exit value; OR change cm.hex to a riscv-perf-tests version that emits proper PASS.
 
-### 2. dhrystone DMIPS/MHz substantially short of MegaBoom floor
+### 2. dhrystone DMIPS/MHz substantially short of Reference Core A (large config) floor
 
 DMIPS/MHz = 2.42 vs floor 4.00 (−39.5%). cm/MHz dropped −2.4%; dhry dropped −20%. The differential suggests dhrystone has procedure-call / branch-resolution bottlenecks not captured by Stage 2's load_wb sideband fix (which was load-IPC focused). Possible investigation directions:
 - Checkpoint allocation / restoration on dhry's procedure-heavy hotpath

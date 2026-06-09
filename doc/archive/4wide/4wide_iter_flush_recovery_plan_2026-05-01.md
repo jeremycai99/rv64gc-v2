@@ -377,7 +377,7 @@ Create `doc/4wide_iter_flush_recovery_results.md`:
 
 Functional 21/21 PASS. Clockcheck: <PASS / N diverging cycles documented in allowlist>.
 
-## Updated gap to MegaBoom floor
+## Updated gap to Reference Core A (large config) floor
 
 | Workload | New CM/MHz or DMIPS | Floor | Updated gap |
 |---|---:|---:|---:|

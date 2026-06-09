@@ -10,7 +10,7 @@ as byte-identical to `ce93aea`; that held until the FP fix landed on 2026-05-30.
 | Gate | Result |
 |---|---|
 | 16-row benchmark signoff | ✅ **16 / 16 PASS**, 0 cycle regression |
-| Performance vs BOOM public floor | ✅ **CoreMark 6.85 > 6.2**, **Dhrystone 4.27 > 3.93** |
+| Performance vs Reference Core A public floor | ✅ **CoreMark 6.85 > 6.2**, **Dhrystone 4.27 > 3.93** |
 | RV64GC ISA compliance | ✅ **113 / 113 PASS** (status + gate) — full RV64GC, incl. F/D |
 | Linux `BOOT OK` | ✅ re-verified on the FP-fix RTL (all 8 milestones) |
 
@@ -24,7 +24,7 @@ strict fetch-owner/delivery/branch-recovery checks, golden-PC, counter
 invariants). Run: `benchmark_results/fpfix_signoff_20260530` (post-FP-fix;
 cycle-identical to the pre-fix `rc_signoff_20260529`).
 
-| Row | timed cycles | IPC | Score | vs BOOM |
+| Row | timed cycles | IPC | Score | vs Reference Core A |
 |---|---:|---:|---:|---|
 | CoreMark iter10 | 1,468,239 | 2.18 | **6.851 CM/MHz** | > 6.2 ✅ |
 | CoreMark iter1 | 159,083 | 2.09 | **6.649 CM/MHz** | — |
@@ -36,8 +36,8 @@ clean, owner-identity invariants zero. The FP fix is **performance-neutral**: al
 16 rows are cycle-identical to the pre-fix baseline (the fix touches only the FP
 read path, which the integer benchmarks never exercise).
 
-**rv64gc-v2 beats BOOM's public floor on both headline benchmarks.** Dhrystone
-reached 4.27 by normalizing the benchmark binary to BOOM/riscv-tests methodology
+**rv64gc-v2 beats Reference Core A's public floor on both headline benchmarks.** Dhrystone
+reached 4.27 by normalizing the benchmark binary to Reference Core A/riscv-tests methodology
 (`archive/stage4/stage4_dhrystone_binary_normalization_2026-05-29.md`); IPC was
 unchanged — that gap had been a `-fno-builtin` binary handicap, not the µarch.
 
@@ -108,6 +108,6 @@ with the new RTL.
 ## Verdict
 
 **Full-ISA release candidate: READY.** 16/16 benchmark signoff PASS (both
-benchmarks beat BOOM's public floor), **113/113 RV64GC compliance PASS (including
+benchmarks beat Reference Core A's public floor), **113/113 RV64GC compliance PASS (including
 RV64F/D)**, Linux `BOOT OK` re-verified on the FP-fix RTL, zero performance
 regression. No release-blocking items remain.

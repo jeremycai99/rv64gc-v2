@@ -6,13 +6,13 @@
 
 ## Hypothesis
 
-Per the BOOM v4 ↔ rv64gc-v2 architectural audit, the 4 remaining (post Cycle E) structural
+Per the Reference Core A ↔ rv64gc-v2 architectural audit, the 4 remaining (post Cycle E) structural
 INT IQ differences contributing to the cm gap are:
 
-1. **IQ depth fragmentation:** rv64gc-v2 splits across 3×24-entry IQs (72 total); BOOM has unified 40-entry IQ_ALU + separate IQ_UNQ
+1. **IQ depth fragmentation:** rv64gc-v2 splits across 3×24-entry IQs (72 total); Reference Core A has unified 40-entry IQ_ALU + separate IQ_UNQ
 2. **MUL co-located with ALU2** on shared issue port (u_iq1, NUM_SELECT=1)
 3. **DIV/CSR co-located with ALU3** on shared issue port (u_iq2, NUM_SELECT=1)
-4. **22% fewer total INT IQ entries** (72 vs 92 in BOOM Mega)
+4. **22% fewer total INT IQ entries** (72 vs 92 in Reference Core A (large config))
 
 Variant A addresses all four by:
 - Restructuring 3×24 → 2 ALU IQs (32 each) + 1 UNQ IQ (16 entries) = **80 total** (+11% vs current)

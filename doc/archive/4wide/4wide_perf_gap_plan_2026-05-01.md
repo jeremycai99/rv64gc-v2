@@ -4,7 +4,7 @@
 
 **Goal:** Close the rv64gc-v2 4-wide CM/MHz gap (5.01/5.37 vs 6.2 floor; −13%/−19%) and DMIPS/MHz gap (2.42 vs 4.00 floor; −39.5%) through purely data-driven RTL changes, with each change gated by a falsifiable predicted-IPC delta committed before measurement.
 
-**Architecture:** 4 phases (A: instrumentation top-up + counter capture; B: bubble bucket attribution from absolute 4-wide percentages; C: hypothesis enumeration with predicted counter signatures; D: microbench probes + iterative RTL changes). Sign-off is external (MegaBoom/A72), not 6-wide-relative — the design doc `doc/4wide_perf_gap_analysis_2026-05-01.md` explains why.
+**Architecture:** 4 phases (A: instrumentation top-up + counter capture; B: bubble bucket attribution from absolute 4-wide percentages; C: hypothesis enumeration with predicted counter signatures; D: microbench probes + iterative RTL changes). Sign-off is external (Reference Core A (large config)/A72), not 6-wide-relative — the design doc `doc/4wide_perf_gap_analysis_2026-05-01.md` explains why.
 
 **Tech Stack:** SystemVerilog + DSim 2026 (build_dsim.sh) + clockcheck (`python3 ../rv64gc-perf-model/tools/rtl_clockcheck.py`). All work on `master` (currently `68ddf57`).
 
@@ -796,8 +796,8 @@ Final measurements: cm iter1=X.XX CM/MHz, cm iter10=X.XX, dhry=X.XX DMIPS/MHz."
 3. **`export LD_LIBRARY_PATH=`** (empty) before any `bash build_dsim.sh` / `bash run_dsim.sh` / `bash scripts/regress_dsim.sh` to work around `shell_activate.bash`'s `set -u`.
 4. **LSU iter=10 misalign-hold patch in `src/rtl/core/lsu/lsu.sv` is NEVER modified.** Sign-off-class IPC win for cm iter=10. If a Task 11 iteration touches lsu.sv, explicitly verify the misalign-hold logic is not affected.
 5. **Pre-existing housekeeping (~30 files)** — `.gitignore`, `Makefile`, `build_dsim.bat`, deleted `*.log` files — must NOT be committed. Use `git add <specific-files>`, never `git add -A`.
-6. **Sign-off floor:** CM/MHz ≥ 6.2, DMIPS/MHz ≥ 4.00 (MegaBoom 4-wide).
-7. **Stretch:** CM/MHz ≥ 8.24, DMIPS/MHz ≥ 4.72 (Cortex-A72). Desired-not-blocking.
+6. **Sign-off floor:** CM/MHz ≥ 6.2, DMIPS/MHz ≥ 4.00 (Reference Core A (large config) 4-wide).
+7. **Stretch:** CM/MHz ≥ 8.24, DMIPS/MHz ≥ 4.72 (a commercial 3-wide OoO core). Desired-not-blocking.
 8. **Each Task 11 RTL change gets its own commit** with predicted IPC delta in commit message. No bundling.
 9. **No CDB widening as a bandage.** If a hypothesis points at CDB bandwidth, the RTL change must be a targeted narrowing-preserving fix (e.g., smarter arbitration, additional bypass slot) NOT `CDB_WIDTH=6`. The 4-wide design must remain 4-wide on writeback.
 10. **No reactivation of `../rv64gc-perf-model/`** — paused on toolchain dead-end. Only `rtl_clockcheck.py` is in active use.

@@ -14,8 +14,8 @@
 
 The completed 4-phase gap analysis (Phases A–D) refuted most candidate
 hypotheses or classified them as intrinsic. The remaining actionable
-follow-up RTL candidates were sourced from the SonicBOOM paper
-(Zhao et al., CARRV 2020) and BOOM v4 source. From those, the user
+follow-up RTL candidates were sourced from the Reference Core A paper
+(Zhao et al., CARRV 2020) and Reference Core A source. From those, the user
 selected three for sequenced execution, ordered low-risk first:
 
 1. Cycle A — uBTB / NLP sizing (calibration; smallest blast radius)
@@ -29,7 +29,7 @@ verification and more-aggressive spec wakeup — are NOT in this sequence.
 
 | Cycle | Hypothesis | Files touched | Predicted IPC win | Risk |
 |---|---|---|---|---|
-| A | uBTB / NLP undersized vs MegaBoom | `rv64gc_pkg.sv` + 1–2 BPU files | cm +1–3%, dhry +1–3% | Low |
+| A | uBTB / NLP undersized vs Reference Core A (large config) | `rv64gc_pkg.sv` + 1–2 BPU files | cm +1–3%, dhry +1–3% | Low |
 | C | Flush-recovery latency reducible from 5–7 cyc → 3–4 cyc | core_top flush pipe + BPU/fetch redirect path | cm +3–5%, dhry +0–1% | Medium |
 | B | SFB fold-into-predication absent in our design | decode + rename + ALU predicate + ROB tracking | dhry +5–15%, cm +3–8% | High |
 
@@ -40,7 +40,7 @@ incorporate updated baseline numbers.
 ## Per-cycle execution shape (applies to all 3)
 
 1. **Investigation step** (read-only): characterize current state vs the
-   reference (BOOM source / SonicBOOM paper) to confirm the hypothesis
+   reference (Reference Core A source / Reference Core A paper) to confirm the hypothesis
    has signal. If current state already matches the reference, the
    hypothesis is REFUTED-no-change — document and proceed to next cycle.
 2. **Predict step:** write the predicted IPC delta on cm + dhry to a
@@ -76,7 +76,7 @@ For predicted ≥3% IPC win, the original 30%-rule applies.
 ## Cycle A scope (the immediate next plan)
 
 **Hypothesis:** rv64gc-v2's uBTB and/or next-line predictor are undersized
-relative to BOOM, contributing to the BPU-recovery cycles even on the
+relative to Reference Core A, contributing to the BPU-recovery cycles even on the
 healthy-BPU dhry workload.
 
 **Investigation steps (in the Cycle A plan):**
@@ -84,9 +84,9 @@ healthy-BPU dhry workload.
   parameter declarations
 - Inspect the BPU module(s) under `src/rtl/core/fetch/` or `bpu/` for
   the actual storage instantiations and any cascade dependencies
-- Look up BOOM v4 uBTB and NLP sizes from
+- Look up Reference Core A uBTB and NLP sizes from
   `src/main/scala/v4/ifu/btb.scala` and related
-- Compare; if our values < BOOM's, bump them; if equal-or-larger, REFUTE
+- Compare; if our values < Reference Core A's, bump them; if equal-or-larger, REFUTE
 
 **Files likely touched if change applies:**
 - `src/rtl/core/include/rv64gc_pkg.sv` (parameter values)
@@ -108,8 +108,8 @@ Sequence terminates when either:
 ## Out of scope (do NOT pursue)
 
 - Cycles outside the 3 selected (TAGE-L, spec wakeup tightening) — held for a future sequence
-- Dcache hit latency reduction (per BOOM research correction — already faster than BOOM)
-- Dhry compiler/binary investigation (per BOOM research correction — ≤3% contribution)
+- Dcache hit latency reduction (per Reference Core A research correction — already faster than Reference Core A)
+- Dhry compiler/binary investigation (per Reference Core A research correction — ≤3% contribution)
 - Reverting any narrowing decision (CDB widen, IQ depth, etc.)
 - Re-investigating any of the refuted hypotheses (H1, H5, H6 from the prior gap analysis)
 - Modifying `src/rtl/core/lsu/lsu.sv` misalign-hold patch (sign-off-class win, frozen)

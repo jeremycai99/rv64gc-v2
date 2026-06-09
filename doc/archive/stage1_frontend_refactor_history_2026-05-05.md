@@ -1,12 +1,12 @@
-# Stage 1 XiangShan-Style Frontend Refactor Plan, 2026-05-05
+# Stage 1 Reference Core B-Style Frontend Refactor Plan, 2026-05-05
 
 ## Verdict
 
-Stage 1 is open and not signed off. XiangShan should now be treated as the
+Stage 1 is open and not signed off. Reference Core B should now be treated as the
 primary high-performance RISC-V frontend reference, but the reusable target is
 its frontend contract: prediction blocks, FTQ ownership, IFU/ICache request
 lifetime, predecode validation, IBuffer delivery, and data-driven frontend
-topdown counters. We should not copy XiangShan wholesale, widen the core just
+topdown counters. We should not copy Reference Core B wholesale, widen the core just
 to resemble it, or revive a benchmark-shaped loop buffer.
 
 Current checkpoint, rebuilt and rerun on 2026-05-05 after removing the legacy
@@ -18,7 +18,7 @@ loop buffer from the active pipeline accounting:
 | Signoff command | `python3 tools/run_benchmarks.py --runner dsim --run-class signoff --manifest tests/benchmarks/stage1_signoff.json --plusarg PERF_PROFILE --plusarg PERF_COUNTERS --plusarg STAT_DUMP --mechanism-name loop_buffer_removed_pipeline_accounting --run-id 20260505_loop_buffer_removed_accounting` |
 | Dhrystone 300 | PASS, 76,738 timed cycles, 77,268 `mcycle`, 2.225046 DMIPS/MHz, checksum `24`, `flags=0`, legacy loop buffer active `0`, standalone decoded-op replay active `0` |
 | CoreMark iter10 | PASS, 2,034,653 timed cycles, 2,045,171 `mcycle`, 4.914843 CM/MHz, checksum `64687`, `flags=0`, legacy loop buffer active `0`, standalone decoded-op replay active `0` |
-| Stage 1 performance verdict | Not signed off. Dhrystone is still +5,955 cycles slower than the old clean loop-buffer row (`70,783`) and +17,040 cycles slower than MegaBOOM (`59,698`). CoreMark is still +184,613 cycles slower than the old clean loop-buffer row (`1,850,040`) and +198,838 cycles slower than MegaBOOM (`1,835,815`). |
+| Stage 1 performance verdict | Not signed off. Dhrystone is still +5,955 cycles slower than the old clean loop-buffer row (`70,783`) and +17,040 cycles slower than Reference Core A (large config) (`59,698`). CoreMark is still +184,613 cycles slower than the old clean loop-buffer row (`1,850,040`) and +198,838 cycles slower than Reference Core A (large config) (`1,835,815`). |
 
 ## External Feedback Audit, 2026-05-05
 
@@ -135,11 +135,11 @@ are faster but change endpoint identity remain rejected.
 
 The best archived valid candidate after loop-buffer removal is an opt-in
 bounded sequential lookahead slice. It is still only a diagnostic
-XiangShan-style anchor: the frontend can request the next sequential line after
+Reference Core B-style anchor: the frontend can request the next sequential line after
 a delivered packet under strict FTQ/backpressure gating. This is a real
 Dhrystone win and a large CoreMark improvement versus the safe no-handoff row,
 but it is still not Stage 1 signoff because CoreMark remains slower than both
-MegaBOOM and the previous clean loop-buffer baseline. After the later rejected
+Reference Core A (large config) and the previous clean loop-buffer baseline. After the later rejected
 tail-carry and loop-tail DSEs were reverted, the current rebuilt source is
 conservative again. The Dhrystone `+ENABLE_XS_SEQ_LOOKAHEAD` sanity row is
 77,929 timed cycles, not the 68,934-cycle archived anchor. The current
@@ -188,7 +188,7 @@ prediction-block stream plus delivery/writeback/commit pointers, not by simply
 holding the current FIFO head. After reverting, the restored safe default again
 passes Dhrystone 300 at 78,827 cycles and CoreMark iter10 at 2,135,092 cycles
 with `flags=0`; this is still +32.04% and +16.30% slower than the corrected
-MegaBOOM rows, respectively.
+Reference Core A (large config) rows, respectively.
 
 The latest Stage 1 retry is also not a signoff. Disabling the weak-confidence
 backward-conditional static bias exposed a real CoreMark control problem: the
@@ -218,10 +218,10 @@ valid at 70,127 timed cycles, checksum `24`, but checked-in CoreMark iter10 ends
 invalid at 2,026,973 cycles with `flags=1` and checksum `58624`; that row is
 rejected.
 
-| Workload | MegaBOOM timed | Old clean loop-buffer row | Current endpoint-clean source | Verdict |
+| Workload | Reference Core A (large config) timed | Old clean loop-buffer row | Current endpoint-clean source | Verdict |
 |---|---:|---:|---:|---|
-| Dhrystone 300 | 59,698 | 70,783 | 76,738 PASS | Blocking: endpoint-clean and loop-buffer-free, but still slower than both old loop buffer and MegaBOOM. |
-| CoreMark iter10 checked-in | 1,835,815 | 1,850,040 | 2,034,653 PASS | Blocking: endpoint-clean and loop-buffer-free, but still +184,613 cycles slower than old loop buffer and +198,838 cycles slower than MegaBOOM. |
+| Dhrystone 300 | 59,698 | 70,783 | 76,738 PASS | Blocking: endpoint-clean and loop-buffer-free, but still slower than both old loop buffer and Reference Core A (large config). |
+| CoreMark iter10 checked-in | 1,835,815 | 1,850,040 | 2,034,653 PASS | Blocking: endpoint-clean and loop-buffer-free, but still +184,613 cycles slower than old loop buffer and +198,838 cycles slower than Reference Core A (large config). |
 
 This does not beat the previous clean loop-buffer design. The result is
 accepted only as a clean Stage 1 evidence anchor, not as Stage 1 signoff. A faster
@@ -254,9 +254,9 @@ around the current loop buffer. That row remains useful DSE evidence, but it is
 not an accepted architecture. Stage 1 now includes replacing or subsuming the
 loop buffer with a general frontend delivery mechanism.
 
-Late May 5 recalibration: the plan is now explicitly "scaled XiangShan
+Late May 5 recalibration: the plan is now explicitly "scaled Reference Core B
 frontend" rather than "find a local packet handoff that recovers the loop
-buffer." The local XiangShan/Kunminghu source shows a BPU, FTQ, ICache, IFU,
+buffer." The local Reference Core B/Kunminghu source shows a BPU, FTQ, ICache, IFU,
 and IBuffer wired as separate units; its FTQ has separate BPU, prefetch, IFU,
 IFU-writeback, and commit ownership pointers; and the default parameters expose
 `FtqSize=64`, `BpRunAheadDistance=8`, and a 48-entry IBuffer. That is the
@@ -265,7 +265,7 @@ rejected because CoreMark failed with `flags=1`. The bounded sequential
 lookahead DSE is cleaner and useful, but it is still only a small slice of the
 needed BPU/FTQ/IFU/IBuffer contract.
 
-Refactor target after the XiangShan recalibration: use a XiangShan-style
+Refactor target after the Reference Core B recalibration: use a Reference Core B-style
 decoupled frontend backbone as the Stage 1 architecture anchor. That means
 fetch-block identity first, then BPU runahead, FTQ-owned metadata, IFU/ICache
 fetch by FTQ entry, predecode/control validation, and IBuffer elasticity before
@@ -274,14 +274,14 @@ later layer, but it is no longer the first primitive to force into the design.
 
 The immediate RTL pivot is concrete: stop optimizing the old tightly coupled
 request/packet path as if a local PC-steering patch can become a modern
-frontend. XiangShan's useful pattern is that an FTQ entry, not just a PC, owns
+frontend. Reference Core B's useful pattern is that an FTQ entry, not just a PC, owns
 the predicted block through BPU prediction, IFU fetch, predecode writeback,
 delivery, redirect, commit, and training. The latest trace tightens this
 diagnosis: after the replay-guard repair, the Dhrystone hot loop still shows a
 body packet, then a same-FTQ duplicate bubble, then the branch packet, then the
 target body packet. Bounded sequential lookahead removes part of that cost, but
 the CoreMark counters still show many same-line duplicate/no-emit cycles and a
-large control-recovery tax. Stage 1 therefore needs a scaled XiangShan-style
+large control-recovery tax. Stage 1 therefore needs a scaled Reference Core B-style
 BPU/FTQ/IFU/IBuffer contract, not another special-case loop replay path.
 
 Stage 1 pass condition:
@@ -290,7 +290,7 @@ Stage 1 pass condition:
    mechanism, not a loop-specific replay path or benchmark plusarg cocktail:
    Dhrystone 300 must beat `70,783` timed cycles and CoreMark iter10 must beat
    `1,850,040` timed cycles with loop-buffer activity zero.
-2. Beat the corrected MegaBOOM timed rows on Dhrystone 300 and CoreMark iter10,
+2. Beat the corrected Reference Core A (large config) timed rows on Dhrystone 300 and CoreMark iter10,
    with endpoint accounting unchanged and `flags=0`.
 3. Keep total-cycle accounting close enough that any post-benchmark overhead is
    explained by measurement structure, not hidden performance loss.
@@ -310,7 +310,7 @@ Stage 1 pass condition:
    IBuffer mechanism and re-run on fixed images with endpoint identity intact.
 
 Stage 2 remains the later stretch target of 7.5 CM/MHz and 4.0 DMIPS/MHz. It
-should not start until Stage 1 closes the MegaBOOM baseline gap.
+should not start until Stage 1 closes the Reference Core A (large config) baseline gap.
 
 ## Harness Updates 2026-05-05
 
@@ -404,7 +404,7 @@ The post-FTQ-split baseline (`pre_alpha_baseline`, all 3 signoff rows PASS)
 has `xs_ftq_occ_max=1` and `xs_packet_buf_occ_max=1` as **structural
 properties** of the BPU/F1/F2 lockstep, not tunable parameters. Closing the
 Stage 1 gap requires architectural decoupling of the predict path from the
-emit path, equivalent to XiangShan's `BpRunAheadDistance` mechanism.
+emit path, equivalent to Reference Core B's `BpRunAheadDistance` mechanism.
 
 ### Architectural findings the plan must respect
 
@@ -648,11 +648,11 @@ throttle. Reverted; tree at 8b30714 + α' (no further RTL changes).
 ### Architectural redirect (2026-05-05 final): frontend-proactive is the answer
 
 User pushback rejected the "dcache hit latency reduction" framing as a
-solution path. Rationale: BOOM/XiangShan operate at 3-4-cycle load-to-use
+solution path. Rationale: Reference Core A / Reference Core B operate at 3-4-cycle load-to-use
 (same class as rv64gc-v2's 3-cycle) yet achieve higher IPC. So load
 latency isn't the differentiator.
 
-What IS the differentiator, per inspection of BOOM v4
+What IS the differentiator, per inspection of Reference Core A
 `src/main/scala/v4/ifu/frontend.scala`:
 
 ```scala
@@ -667,7 +667,7 @@ when (s2_valid && f3_ready) {
 }
 ```
 
-BOOM's frontend pipeline has **s0 advance proactively based on BPD
+Reference Core A's frontend pipeline has **s0 advance proactively based on BPD
 prediction every cycle** (not waiting for s2's outcome). s1 captures
 TLB+icache request, s2 captures icache response. The f3 queue
 (`Module(new Queue(new FetchBundle, 1, pipe=true, flow=false))`)
@@ -680,13 +680,13 @@ This is the lockstep that limits frontend supply to ~58.5% of cycles.
 The "BACKEND_STALL" measured at 11.3% is partially intrinsic but is
 ALSO a symptom of low frontend supply: fewer parallel dependency
 chains in flight means each chain's latency manifests as ROB head
-stall instead of being overlapped. With BOOM-style frontend supply
+stall instead of being overlapped. With Reference Core A-style frontend supply
 (close to 1 packet per cycle), more chains overlap and the load
 latency hides.
 
 ### Why Stage 1 closure has been blocked
 
-The architectural fix IS clear and matches BOOM:
+The architectural fix IS clear and matches Reference Core A:
 
 1. F1 advances per its own F1-stage BTB prediction each cycle
    (proactive, not waiting for F2 emit)
@@ -700,7 +700,7 @@ retreat was justified per single-session safety budget, but the user is
 correct that the cumulative session count without progress is the
 larger cost.
 
-### Next-session focused plan (BOOM-grounded)
+### Next-session focused plan (Reference Core A-grounded)
 
 Single concrete change: modify fetch_unit.sv's `next_pc` priority chain
 to make F1 runahead the default advance, with F2-emit case 4 as the
@@ -801,7 +801,7 @@ The dominant cm10 backend stall is intrinsic data-dependency latency on
 loads (3-cycle hit, fundamental to memory hierarchy) and the chains that
 consume them. AGENTS.md memory is explicit: "Dcache hit latency 2->1 is
 NOT minimal change; structural (VIPT + way-prediction); rv64gc-v2 at
-2-cycle hit / 3-cycle load-to-use is ALREADY FASTER THAN BOOM."
+2-cycle hit / 3-cycle load-to-use is ALREADY FASTER THAN Reference Core A."
 
 LSU speculative wakeup is already wired (lsu_spec_wakeup_valid/tag
 through all 5 IQ instantiations in rv64gc_core_top.sv). 1-cycle FUs
@@ -848,7 +848,7 @@ BACKEND_STALL cycles with [HEADSTALL] events:
 
 | uop_type | Cycles | % of BS | RTL fix candidate |
 |---|---:|---:|---|
-| branch | 115,710 | 50.1% | Loop predictor (BOOM-style) or TAGE training fix |
+| branch | 115,710 | 50.1% | Loop predictor (Reference Core A-style) or TAGE training fix |
 | load | 65,282 | 28.3% | Mostly intrinsic (3-cycle load-to-use); spec wakeup already in place |
 | alu_or_mul_div | 39,796 | 17.2% | Operand-chain stall; bypass coverage tuning |
 | store | 10,183 | 4.4% | SQ drain rate; minor |
@@ -860,7 +860,7 @@ BACKEND_STALL cycles with [HEADSTALL] events:
 The 9 hottest branch PCs are all in `core_state_transition` (a byte
 parser with deterministic state-machine pattern) plus `crc16` /
 `crcu32` body branches. TAGE-SC-L should handle these but evidently
-mispredicts. BOOM v4's `LoopBranchPredictor` records observed trip
+mispredicts. Reference Core A's `LoopBranchPredictor` records observed trip
 counts per loop and flips at the boundary.
 
 - Mechanism class: `bpu_loop_exit_prediction`
@@ -880,7 +880,7 @@ dependents already lands; the gap is the load-to-use latency itself
 
 - (a) Per-PC dcache prefetch: when this PC fetches, issue a prefetch
   for `*[result+offset]` to warm the next iteration's line.
-- (b) Pointer-chase predictor: BOOM-style PC-indexed predictor that
+- (b) Pointer-chase predictor: Reference Core A-style PC-indexed predictor that
   prefetches the address THIS load is likely to produce.
 
 - Mechanism class: `frontend_prefetch_fdip` (extension to dcache side)
@@ -920,7 +920,7 @@ Combined: ~165-200k cycle reduction. **Stage 1 close achievable.**
 
 **The recommended order is (1) loop predictor + (3) bypass widening +
 (2) per-PC prefetch.** Loop predictor has highest leverage (50% of BS
-cycles) and is the best-understood mechanism (BOOM source available).
+cycles) and is the best-understood mechanism (Reference Core A source available).
 
 Each must be a separate RTL session with proper harness gating:
 predict counter movement → implement → verify with bubble_attribution
@@ -1123,7 +1123,7 @@ and which were only tempting shortcuts:
 |---|---:|---:|---|---|
 | Previous clean loop-buffer baseline | 70,783 | 1,850,040 | `flags=0`, PASS | Historical performance bar only. Rejected as architecture because it depends on the discarded loop buffer. |
 | Safe no-handoff, loop buffer removed | 78,827 | 2,135,092 | `flags=0`, PASS | Clean but too slow. |
-| Current loop-predictor PC-hash, exit-only override | 76,738 | 2,034,653 | `flags=0`, PASS, loop buffer active `0` | Current endpoint-clean source after rebuild/recheck. Useful Dhrystone alias repair, but still slower than old loop buffer and MegaBOOM on both signoff workloads. |
+| Current loop-predictor PC-hash, exit-only override | 76,738 | 2,034,653 | `flags=0`, PASS, loop buffer active `0` | Current endpoint-clean source after rebuild/recheck. Useful Dhrystone alias repair, but still slower than old loop buffer and Reference Core A (large config) on both signoff workloads. |
 | Same-FTQ tail delivery | 69,832 | 2,087,049 | `flags=0`, PASS | Keep as XS-FE1 anchor. It proves same-owner delivery continuity is useful, but CoreMark still misses signoff. |
 | XS bounded sequential lookahead | 68,934 | 1,970,838 | `flags=0`, PASS | Best valid loop-buffer-free row so far. It proves bounded next-line runahead helps, but CoreMark is still +120,798 cycles versus the previous clean loop-buffer row. |
 | Request-time FTQ predictor spec update | 77,673 | 2,182,234 | `flags=0`, PASS | Rejected and reverted. Moving speculative predictor update to FTQ allocation was valid but worsened both benchmarks; CoreMark duplicate/no-emit rose to 556,026 and redirect recovery to 71,013. |
@@ -1399,7 +1399,7 @@ benchmark_results/20260505_xs_stage1_anchor/coremark_iter10_after_dup_catchup_cl
 
 ## Previous Clean Loop-Buffer Baseline
 
-| Workload | MegaBOOM | Clean rv64gc-v2 | Delta | Verdict |
+| Workload | Reference Core A (large config) | Clean rv64gc-v2 | Delta | Verdict |
 |---|---:|---:|---:|---|
 | Dhrystone 300 timed window | 59,698 cycles | 70,783 cycles | +11,085 (+18.57%) | Blocking Stage 1 gap. |
 | Dhrystone 300 total run | 59,698 cycles | 71,287 cycles | +11,589 (+19.41%) | Blocking Stage 1 gap. |
@@ -1408,7 +1408,7 @@ benchmark_results/20260505_xs_stage1_anchor/coremark_iter10_after_dup_catchup_cl
 
 Score equivalents at 1 MHz:
 
-| Workload | MegaBOOM score | Clean rv64gc-v2 timed score | Clean rv64gc-v2 total-cycle score |
+| Workload | Reference Core A (large config) score | Clean rv64gc-v2 timed score | Clean rv64gc-v2 total-cycle score |
 |---|---:|---:|---:|
 | Dhrystone 300 | 2.860 DMIPS/MHz | 2.412 DMIPS/MHz | 2.395 DMIPS/MHz |
 | CoreMark iter10 | 5.447 CM/MHz | 5.405 CM/MHz | 5.375 CM/MHz |
@@ -1526,7 +1526,7 @@ Counter movement:
 | committed mispredicts | 326 | 326 | The repair removes frontend bubbles but does not fix loop-exit prediction. |
 
 Interpretation: this is exactly why the Stage 1 refactor should be
-XiangShan-style FTQ/IFU/IBuffer first. Packet ownership, redirect lifetime, and
+Reference Core B-style FTQ/IFU/IBuffer first. Packet ownership, redirect lifetime, and
 valid-block delivery are architectural contracts. The remaining Dhrystone gap
 is now more specific than "PC identity is too coarse." A focused trace with
 `+FETCH_PACKET_BYPASS2` shows the hot `strcpy` loop alternating between an
@@ -1540,7 +1540,7 @@ baseline until the benchmark image and endpoint accounting are rechecked.
 
 ## May 5 Follow-Up DSE: Rejected Shortcuts
 
-The follow-up rows were used to calibrate the XiangShan-style plan. They show
+The follow-up rows were used to calibrate the Reference Core B-style plan. They show
 that the gap is not closed by a local packet bypass, one predictor update tweak,
 early backend redirect, or standalone UOC replay.
 
@@ -1563,7 +1563,7 @@ single bypass or a stale decoded replay cache.
 
 ## May 5 Same-Line FTQ Handoff DSE: Rejected
 
-The bounded same-line FTQ handoff was tested as a small XiangShan-style
+The bounded same-line FTQ handoff was tested as a small Reference Core B-style
 ownership slice: when a full packet leaves a same-cacheline sequential tail
 whose first instruction is a predicted-taken backward conditional branch, the
 frontend allocates a second FTQ owner and carries the current I-cache line for
@@ -1580,7 +1580,7 @@ This result recalibrates the plan in two ways:
 1. The Dhrystone gain confirms that the remaining Stage 1 opportunity is in
    FTQ-owned delivery continuity, not in widening decode.
 2. The CoreMark failure confirms that a local same-line shortcut is not enough.
-   We need the full XiangShan-style contract: bounded BPU runahead, explicit
+   We need the full Reference Core B-style contract: bounded BPU runahead, explicit
    FTQ producer/consumer phases, IFU predecode writeback, PredChecker-style
    repair, and IBuffer delivery. The same-line handoff is now disabled by
    default and can only be used as opt-in DSE with
@@ -1593,8 +1593,8 @@ a small PC-indexed cache bolted onto rename. It is a frontend delivery source
 with explicit source switching, branch-prediction ownership, fetch-block or
 trace metadata, validation, and recovery rules.
 
-May 4 recalibration: XiangShan is the primary high-performance RISC-V reference
-for Stage 1. Public XiangShan materials describe it as a high-performance
+May 4 recalibration: Reference Core B is the primary high-performance RISC-V reference
+for Stage 1. Public Reference Core B materials describe it as a high-performance
 open-source RISC-V project, with the official site calling it the world's
 top-performing open-source processor core. Its current Kunminghu documentation
 lists a 32-byte-per-cycle fetch unit, 6-wide decode/rename, 8-wide commit,
@@ -1606,21 +1606,21 @@ Local RV core audit:
 
 | Reference | Has a decoded-op cache? | Useful structures found | Stage 1 verdict |
 |---|---|---|---|
-| XiangShan (`../xiangshan`) | No obvious UOP-cache RTL in this snapshot. | FTQ with BPU runahead limits, ICache/IFU requests by FTQ entry, IBuffer delivery, IFU predecode, `PredChecker`, IFU writeback redirect, detailed frontend topdown counters. | Primary Stage 1 reference. Build an analogous BPU/FTQ/IFU/IBuffer/control-validation backbone, scaled to our 4-wide core. Do not copy implementation or widen just to match XiangShan. |
-| BOOM/MegaBOOM (`../riscv-boom`, `../chipyard/generators/boom`) | No decoded-op cache. | FTQ entry stores fetch PC plus branch prediction snapshot; FetchBuffer converts fetch bundles into `MicroOp`s; loop predictor learns loop trip counts and flips prediction at exit. | Strong baseline reference. Borrow FTQ metadata lifetime and loop predictor placement. Loop-exit prediction belongs in BPU/FTQ, not hidden inside a replay cache. |
-| NaxRiscv (`../naxriscv`) | No decoded-op cache found. | Fetch aligner carries branch prediction metadata and has prediction sanity correction; BranchContextPlugin stores branch context separately through allocation/commit/reschedule. | Useful lower-complexity reference for separating branch context from instruction/decode storage and correcting bad prediction slicing. |
-| RSD (`../rsd`) | No decoded-op cache. | 2-fetch frontend, predecode/decode, conventional branch predictors, micro-op scheduler terminology. | Not a Stage 1 architecture reference for UOP cache. Useful only as contrast/instrumentation style. |
+| Reference Core B (`../xiangshan`) | No obvious UOP-cache RTL in this snapshot. | FTQ with BPU runahead limits, ICache/IFU requests by FTQ entry, IBuffer delivery, IFU predecode, `PredChecker`, IFU writeback redirect, detailed frontend topdown counters. | Primary Stage 1 reference. Build an analogous BPU/FTQ/IFU/IBuffer/control-validation backbone, scaled to our 4-wide core. Do not copy implementation or widen just to match Reference Core B. |
+| Reference Core A (large config) (`../riscv-boom`, `../chipyard/generators/boom`) | No decoded-op cache. | FTQ entry stores fetch PC plus branch prediction snapshot; FetchBuffer converts fetch bundles into `MicroOp`s; loop predictor learns loop trip counts and flips prediction at exit. | Strong baseline reference. Borrow FTQ metadata lifetime and loop predictor placement. Loop-exit prediction belongs in BPU/FTQ, not hidden inside a replay cache. |
+| Reference Core D (`../naxriscv`) | No decoded-op cache found. | Fetch aligner carries branch prediction metadata and has prediction sanity correction; BranchContextPlugin stores branch context separately through allocation/commit/reschedule. | Useful lower-complexity reference for separating branch context from instruction/decode storage and correcting bad prediction slicing. |
+| Reference Core E (`../rsd`) | No decoded-op cache. | 2-fetch frontend, predecode/decode, conventional branch predictors, micro-op scheduler terminology. | Not a Stage 1 architecture reference for UOP cache. Useful only as contrast/instrumentation style. |
 | rv64gc perf model (`../rv64gc-perf-model`) | Config knobs exist, but no implemented uop-cache model file was found. | Loop-buffer activity model and frontend stall taxonomy. | Use only for what-if modeling after the RTL contract is defined. It is not an external architecture reference. |
 
 Industry/public reference audit:
 
 | Reference | Evidence | Stage 1 implication |
 |---|---|---|
-| XiangShan official docs/site/tutorials | Official docs describe Kunminghu as the third-generation XiangShan microarchitecture for server and high-performance embedded scenarios; the official site calls XiangShan the world's top-performing open-source processor core; ISCA 2025 tutorial slides report Kunminghu SPEC CPU 2006 evaluation methodology and list frontend upgrades around FDIP/ICache. | Treat XiangShan as the primary RISC-V architecture reference. The reusable idea is not a UOP cache; it is the decoupled frontend and data-driven frontend topdown methodology. |
-| Arm Neoverse N2 TRM and optimization guide | Public Arm docs list a macro-operation cache in the L1 instruction memory system and describe instructions decoded into internal macro-ops. For this repo, we normalize that class of structure to "UOP cache." Local `../arm/Neoverse-N2_uArch_Diagram.svg` also shows BPU/FAQ feeding a decoded-op cache. | Strong conceptual target: decoded-op delivery is real industry practice, but it sits inside a broader decoupled frontend. The cache must shorten/hide decode on hot streams, not own branch truth. |
-| Arm Cortex-A76 local diagram | Local `../arm/Cortex-A76_uArch_Diagram.svg` shows decoupled BPU/FAQ/fetch queue, decoded-op generation, and a tight-loop buffer. | Useful warning: strong frontend performance comes from decoupled prediction and queueing as much as width. A loop buffer can exist, but should be a frontend-source optimization, not a benchmark-specific special path. |
-| Intel Decoded ICache / DSB and LSD | Intel's optimization manual describes a Decoded ICache with higher micro-op bandwidth and decode-power savings, but also warns about penalties when switching frequently between decoded-cache and legacy decode. The same manual describes LSD micro-op replay for small loops. | We need explicit `UOP cache -> decode` and `decode -> UOP cache` source-switch counters, hit/miss exposure counters, and loop-stream behavior that preserves branch-exit correctness. |
-| AMD Zen OpCache | AMD public material says Zen 2 increased OpCache capacity to 4K. AMD uProf IBS docs describe instruction fetch as checking the op-cache before I-cache/L2 and recording frontend sample data. | Treat op-cache as a first-class frontend source and build counters around source, misses, delivered ops, and wrong-path waste. |
+| Reference Core B official docs/site/tutorials | Official docs describe Kunminghu as the third-generation Reference Core B microarchitecture for server and high-performance embedded scenarios; the official site calls Reference Core B the world's top-performing open-source processor core; ISCA 2025 tutorial slides report Kunminghu SPEC CPU 2006 evaluation methodology and list frontend upgrades around FDIP/ICache. | Treat Reference Core B as the primary RISC-V architecture reference. The reusable idea is not a UOP cache; it is the decoupled frontend and data-driven frontend topdown methodology. |
+| a commercial wide OoO core TRM and optimization guide | Public vendor docs list a macro-operation cache in the L1 instruction memory system and describe instructions decoded into internal macro-ops. For this repo, we normalize that class of structure to "UOP cache." Local `../arm/Neoverse-N2_uArch_Diagram.svg` also shows BPU/FAQ feeding a decoded-op cache. | Strong conceptual target: decoded-op delivery is real industry practice, but it sits inside a broader decoupled frontend. The cache must shorten/hide decode on hot streams, not own branch truth. |
+| a commercial OoO core local diagram | Local `../arm/Cortex-A76_uArch_Diagram.svg` shows decoupled BPU/FAQ/fetch queue, decoded-op generation, and a tight-loop buffer. | Useful warning: strong frontend performance comes from decoupled prediction and queueing as much as width. A loop buffer can exist, but should be a frontend-source optimization, not a benchmark-specific special path. |
+| a commercial decoded-instruction cache / DSB and LSD | a commercial-core optimization manual describes a Decoded ICache with higher micro-op bandwidth and decode-power savings, but also warns about penalties when switching frequently between decoded-cache and legacy decode. The same manual describes LSD micro-op replay for small loops. | We need explicit `UOP cache -> decode` and `decode -> UOP cache` source-switch counters, hit/miss exposure counters, and loop-stream behavior that preserves branch-exit correctness. |
+| a commercial high-performance core OpCache | commercial-vendor public material says a commercial high-performance core increased OpCache capacity to 4K. commercial-core profiling docs describe instruction fetch as checking the op-cache before I-cache/L2 and recording frontend sample data. | Treat op-cache as a first-class frontend source and build counters around source, misses, delivered ops, and wrong-path waste. |
 
 Primary source anchors checked:
 
@@ -1657,7 +1657,7 @@ https://www.amd.com/en/technologies/zen-core.html
 
 Key design rules inferred from the audit:
 
-1. Stage 1 should first build the XiangShan-like decoupled frontend backbone:
+1. Stage 1 should first build the Reference Core B-like decoupled frontend backbone:
    BPU runahead, FTQ-owned fetch-block metadata, IFU/ICache fetch by FTQ entry,
    predecode/control validation, and IBuffer delivery into decode.
 2. The UOP cache, if added, must never be authoritative for dynamic branch direction,
@@ -1674,25 +1674,25 @@ Key design rules inferred from the audit:
 7. Source switching is part of the design. Frequent oscillation between legacy
    fetch/decode and UOP-cache replay can erase the benefit and must be counted.
 8. Loop-exit recovery should be handled by a loop predictor or BPU-side metadata
-   feeding FTQ prediction, using BOOM-style trip-count confidence as the first
+   feeding FTQ prediction, using Reference Core A-style trip-count confidence as the first
    reference. It should not be replayed as stale cached `bp_taken`.
 9. A high hit rate is not success. The rejected row had a 92% UOC hit rate but
    much worse cycles because it increased wrong-path/control-flow work.
 
-## XiangShan-Calibrated Refactor Plan
+## Reference Core B-Calibrated Refactor Plan
 
 This replaces the previous UOP-cache-first sequence. The near-term goal is not
-to copy XiangShan RTL or widen rv64gc-v2 to XiangShan width. The goal is to
+to copy Reference Core B RTL or widen rv64gc-v2 to Reference Core B width. The goal is to
 make our 4-wide frontend use the same class of contract: a predicted
 fetch-block stream with explicit ownership, validation, training, prefetch, and
 delivery stages before any decoded-op cache participates.
 
-May 5 recalibration: XiangShan is the primary Stage 1 architecture reference
+May 5 recalibration: Reference Core B is the primary Stage 1 architecture reference
 because it is the strongest open high-performance RISC-V design available to
-inspect. The official XiangShan site calls it the world's top-performing
+inspect. The official Reference Core B site calls it the world's top-performing
 open-source processor core, and the GitHub project describes it as an
 open-source high-performance RISC-V processor. The useful takeaway is not
-"copy XiangShan" and not "make rv64gc-v2 6-wide." The useful takeaway is the
+"copy Reference Core B" and not "make rv64gc-v2 6-wide." The useful takeaway is the
 decoupled frontend contract:
 
 1. BPU predicts in blocks and can run ahead.
@@ -1710,13 +1710,13 @@ decoupled frontend contract:
    FTQ fullness, IFU/ICache readiness, IBuffer delivery, predecode repair,
    backend redirect, decode backpressure, or source switching.
 
-Local XiangShan source confirms the partitioning: `Frontend.scala` wires
+Local Reference Core B source confirms the partitioning: `Frontend.scala` wires
 `Bpu`, `Ftq`, `ICache`, `Ifu`, and `IBuffer` as separate modules; `Ftq.scala`
 has separate `bpuPtr`, `pfPtr`, `ifuPtr`, `ifuWbPtr`, and `commitPtr`-style
 ownership; `FtqParameters.scala` defaults to `FtqSize=64` and
 `BpRunAheadDistance=8`; `IBuffer` defaults to 48 entries with banked read/write
 and bypass; and `PredChecker.scala` classifies direct, indirect, return,
-not-CFI, invalid-taken, and target faults. Public XiangShan FTQ documentation
+not-CFI, invalid-taken, and target faults. Public Reference Core B FTQ documentation
 also describes the FTQ as storing BPU fetch targets, sending requests to IFU,
 writing back predecode metadata, retaining BPU metadata for commit-time
 training, supporting redirect recovery, and using BPU runahead entries for
@@ -1725,18 +1725,18 @@ their width or code.
 
 Reference width calibration:
 
-| Item | XiangShan/Kunminghu reference | rv64gc-v2 current RTL | Stage 1 target |
+| Item | Reference Core B/Kunminghu reference | rv64gc-v2 current RTL | Stage 1 target |
 |---|---|---|---|
 | Fetch block / IFU bandwidth | Public docs: up to 32 B/cycle; local default parameter allows larger fetch blocks with multiple fetch ports. | 16 B/cycle logical fetch window, one live request path. | Keep 4-wide decode, but make fetch-block ownership decoupled enough that IFU/ICache can run ahead of decode stalls. |
 | Decode / rename / commit | Public docs: 6 decode, 6 rename, 8 commit. | 4 decode, 4 rename, 4 commit. | Do not widen for Stage 1. First remove frontend bubbles and wrong-path recovery waste. |
 | FTQ ownership | Separate BPU, prefetch, IFU, IFU writeback, and commit pointers; BPU runahead is explicitly bounded. | Simple FIFO allocated on actual request; head/pop tied tightly to packet emission. The replay-guard repair proves ownership lifetime is currently too local. | Split producer/consumer ownership so BPU can form a predicted block stream before IFU/decode consume it. |
 | Control validation | IFU predecode plus `PredChecker` redirects before backend surprise where possible. | Predecode metadata exists, but many corrections still surface through backend flush accounting. | Add PredChecker-like classification: invalid-taken, missing direct/indirect/return prediction, target mismatch, CFI mask repair. |
 | Delivery elasticity | IBuffer absorbs IFU/decode rate mismatch and can bypass when empty. | 8-entry fetch-packet FIFO; the repaired Dhrystone row still has 26,956 `packet_empty_f2_data` cycles. | Harden packet FIFO into an IBuffer-equivalent interface with explicit stall-source counters. |
-| Loop behavior | Prediction remains BPU/FTQ-owned; no local evidence of a XiangShan UOP cache in this snapshot. | Old loop buffer delivered hot loops but is discarded; standalone UOC replay is unsafe. | Move useful loop-exit behavior into BPU/FTQ prediction, then add decoded delivery only behind FTQ validation if needed. |
+| Loop behavior | Prediction remains BPU/FTQ-owned; no local evidence of a Reference Core B UOP cache in this snapshot. | Old loop buffer delivered hot loops but is discarded; standalone UOC replay is unsafe. | Move useful loop-exit behavior into BPU/FTQ prediction, then add decoded delivery only behind FTQ validation if needed. |
 
-XiangShan-scaled RTL shape for rv64gc-v2:
+Reference Core B-scaled RTL shape for rv64gc-v2:
 
-| XiangShan idea | rv64gc-v2 implementation shape | Non-negotiable invariant |
+| Reference Core B idea | rv64gc-v2 implementation shape | Non-negotiable invariant |
 |---|---|---|
 | Prediction block as the frontend unit | Add an explicit fetch-block record around the current FTQ entry: start PC, line PC, fallthrough/next PC, predicted CFI offset/type/target, prediction snapshot, predecode writeback fields, delivered mask, and completion state. | A packet can never outlive or pop a prediction block by local PC heuristics alone. |
 | Separate BPU and IFU pointers | Split the current FTQ head/allocation behavior into at least allocation, IFU request, IFU writeback/delivery, and commit/training phases. Start with runahead depth 4, then sweep to 8 only with counters. | Runahead must be bounded by FTQ free entries and IBuffer consumption, so the rejected F2 lookahead cannot fill the FTQ while no real work is delivered. |
@@ -1750,14 +1750,14 @@ XiangShan-scaled RTL shape for rv64gc-v2:
 Immediate Stage 1 ladder after this recalibration:
 
 1. **XS-FE0: counters and endpoint audit.** Complete for the safe no-seq baseline. Keep these counters in every future DSE row: they prove the current limiter is FTQ-empty/packet-empty/duplicate last-emitted-PC churn with max FTQ occupancy of only 2 and max packet-buffer occupancy of only 1, not capacity pressure or backend backpressure.
-2. **XS-FE1: same-FTQ tail delivery.** Replace the rejected same-line new-entry handoff with a conservative same-owner tail carry. This is the smallest RTL slice that directly tests XiangShan-style block ownership against the observed Dhrystone body/branch bubble.
+2. **XS-FE1: same-FTQ tail delivery.** Replace the rejected same-line new-entry handoff with a conservative same-owner tail carry. This is the smallest RTL slice that directly tests Reference Core B-style block ownership against the observed Dhrystone body/branch bubble.
 3. **XS-FE2: FTQ pointer split.** Separate allocation, IFU request, delivery/writeback, and commit/training lifetime so BPU runahead is real and bounded.
 4. **XS-FE3: IBuffer-equivalent delivery.** Extend the packet FIFO into an owner-aware instruction buffer with decode accept tracking and last-in-block completion.
 5. **XS-FE4: PredChecker writeback.** Add frontend repair and FTQ writeback for predecode-discoverable prediction errors.
 6. **XS-FE5: BPU/FTQ loop-exit predictor.** Rebuild the loop-buffer benefit as predictor state feeding FTQ, then rerun Dhrystone and CoreMark.
 7. **XS-FE6: FDIP and decoded-op cache hooks.** Only after XS-FE1 through XS-FE5 are clean, add ICache prefetch from the FTQ stream and allow decoded-op cache hits behind FTQ validation.
 
-This ladder is intentionally narrower than XiangShan's full Kunminghu frontend.
+This ladder is intentionally narrower than Reference Core B's full Kunminghu frontend.
 It borrows the ownership contract and measurement discipline, not the 6-wide
 backend, vector machinery, or exact Chisel implementation.
 
@@ -1767,14 +1767,14 @@ Recalibrated implementation steps:
 |---|---|---|---|
 | 0 | Evidence and endpoint audit | Add counters before the next structural DSE: BPU runahead distance, FTQ full, FTQ empty/no predicted block, IFU request wait, ICache response wait, packet/IBuffer empty, packet/IBuffer full, duplicate-suppressed reason split, decode backpressure, predecode redirect, backend redirect, and source-switch bubbles. Also audit the repaired CoreMark checksum/instret drift before treating that row as a clean baseline. | Every DSE row names the limiter before and after the change. No unlabeled "several percent" result is accepted, and CoreMark endpoint identity is either explained or fixed. |
 | 1A | Current-frontend ownership repair and invariants | Keep the replay-guard repair and default packet-empty bypass, but keep rejected PC-steering shortcuts and the same-line handoff disabled by default. Make current packet/FTQ ownership auditable before the larger rewrite. Duplicate suppression, replay guards, allocation gating, packet bypass, redirect invalidation, and BPU update metadata must all expose the FTQ owner and reason for blocking. This is a stabilization step, not the final performance mechanism. | The safe default returns to a clean no-handoff baseline rather than the failed lookahead timeout or the `flags=1` handoff row. Dhrystone/CoreMark remain `flags=0` with loop-buffer activity zero, and every remaining frontend-empty cycle is classifiable. |
-| 1B | FTQ-owned prediction-block stream | Refactor the request/packet FIFO into a predicted fetch-block queue modeled on XiangShan's ownership split. FTQ owns start PC, next/fallthrough PC, predicted CFI offset/type, target, BPU metadata, predecode writeback metadata, redirect/resolve state, and commit/training lifetime. Start with scaled runahead depth 4, then sweep 8 only if counters show IFU starvation. The runahead limit must account for both FTQ occupancy and IBuffer/packet consumption so the F2 lookahead failure cannot recur. | Dhrystone/CoreMark show lower packet-empty and redirect-recovery bubbles without endpoint drift. Runahead/full histograms prove BPU and IFU are decoupled rather than locked to one request, while FTQ-full stalls do not replace the old duplicate bubbles. |
+| 1B | FTQ-owned prediction-block stream | Refactor the request/packet FIFO into a predicted fetch-block queue modeled on Reference Core B's ownership split. FTQ owns start PC, next/fallthrough PC, predicted CFI offset/type, target, BPU metadata, predecode writeback metadata, redirect/resolve state, and commit/training lifetime. Start with scaled runahead depth 4, then sweep 8 only if counters show IFU starvation. The runahead limit must account for both FTQ occupancy and IBuffer/packet consumption so the F2 lookahead failure cannot recur. | Dhrystone/CoreMark show lower packet-empty and redirect-recovery bubbles without endpoint drift. Runahead/full histograms prove BPU and IFU are decoupled rather than locked to one request, while FTQ-full stalls do not replace the old duplicate bubbles. |
 | 2 | IBuffer-equivalent delivery | Replace the one-cycle packet contract with a real elastic IBuffer interface: banked or FIFO storage, decode accept tracking, empty bypass, buffered dequeue under decode stalls, FTQ-owner completion, and flush/replay correctness. This is mandatory Stage 1 work because the trace shows the current path loses a cycle between body and branch packets even after ownership repair. | `packet_empty_f2_data` and frontend-empty cycles fall materially versus the 79,145-cycle Dhrystone row without increasing committed mispredicts; CoreMark packet-empty falls toward the clean loop-buffer row. |
-| 3 | IFU plus PredChecker repair path | Consume FTQ entries in IFU, align/decompress/predecode them, write predecode metadata back to FTQ, and generate frontend redirects for invalid taken bits, missed JAL/JALR/RET/direct branches, not-CFI-taken cases, and direct target mismatches. This is the XiangShan-style control-validation point; backend flushes should not be the first place routine frontend prediction mistakes are discovered. | Top mispredict list loses stale frontend-control patterns; predecode redirects are counted separately from backend mispredicts. |
-| 4 | BPU/FTQ loop-exit predictor | Move the useful prediction part of the discarded loop buffer into BPU/FTQ: trip count, current iteration count, confidence, speculative update, squash recovery, and normal branch training. BOOM's loop predictor is the first implementation reference, but the state must be trained and consumed through the normal prediction-block path. | Dhrystone `0x8000200e` loop-exit mispredict count falls without benchmark PCs or stale replay of cached branch outcomes. CoreMark committed mispredicts move back toward the clean row of 35,070 rather than the repaired row of 46,402. |
-| 5 | FTQ-driven FDIP / ICache lookahead | Use the FTQ stream to prefetch or pre-validate upcoming I-cache lines, following XiangShan's FDIP direction. A full WayLookup is optional for our current cache, but the prefetch/runahead contract is not. | Fewer IFU/ICache starvation cycles on Dhrystone/CoreMark and probe workloads; no CoreMark endpoint regression. |
+| 3 | IFU plus PredChecker repair path | Consume FTQ entries in IFU, align/decompress/predecode them, write predecode metadata back to FTQ, and generate frontend redirects for invalid taken bits, missed JAL/JALR/RET/direct branches, not-CFI-taken cases, and direct target mismatches. This is the Reference Core B-style control-validation point; backend flushes should not be the first place routine frontend prediction mistakes are discovered. | Top mispredict list loses stale frontend-control patterns; predecode redirects are counted separately from backend mispredicts. |
+| 4 | BPU/FTQ loop-exit predictor | Move the useful prediction part of the discarded loop buffer into BPU/FTQ: trip count, current iteration count, confidence, speculative update, squash recovery, and normal branch training. Reference Core A's loop predictor is the first implementation reference, but the state must be trained and consumed through the normal prediction-block path. | Dhrystone `0x8000200e` loop-exit mispredict count falls without benchmark PCs or stale replay of cached branch outcomes. CoreMark committed mispredicts move back toward the clean row of 35,070 rather than the repaired row of 46,402. |
+| 5 | FTQ-driven FDIP / ICache lookahead | Use the FTQ stream to prefetch or pre-validate upcoming I-cache lines, following Reference Core B's FDIP direction. A full WayLookup is optional for our current cache, but the prefetch/runahead contract is not. | Fewer IFU/ICache starvation cycles on Dhrystone/CoreMark and probe workloads; no CoreMark endpoint regression. |
 | 6 | Width and effective-work analysis | After the frontend contract and counters exist, measure fetch, decode, rename, dispatch, issue, and commit separately. Only then decide whether fetch block size, branch slots, issue resources, or backend width need attention. | Width changes are justified by measured utilization, not by comparing decode width names. |
-| 7 | FTQ-attached decoded-op cache hook | Only after Steps 1A-5 are stable, allow an FTQ-approved block to bypass decode using cached decoded uops. It is a delivery accelerator behind the XiangShan-style backbone, not the backbone itself. | Hit rate correlates with lower frontend-empty/decode work and does not increase wrong-path flushes. |
-| 8 | Multi-block trace/stream cache | Only after fetch-block cache and loop predictor are correct, allow traces crossing taken branches. | Consider only if the XiangShan-style fetch-block stream cannot close Stage 1 with clean correctness. |
+| 7 | FTQ-attached decoded-op cache hook | Only after Steps 1A-5 are stable, allow an FTQ-approved block to bypass decode using cached decoded uops. It is a delivery accelerator behind the Reference Core B-style backbone, not the backbone itself. | Hit rate correlates with lower frontend-empty/decode work and does not increase wrong-path flushes. |
+| 8 | Multi-block trace/stream cache | Only after fetch-block cache and loop predictor are correct, allow traces crossing taken branches. | Consider only if the Reference Core B-style fetch-block stream cannot close Stage 1 with clean correctness. |
 
 Stage 1 execution plan:
 
@@ -1791,7 +1791,7 @@ Stage 1 execution plan:
 3. Complete Step 1A as an ownership/instrumentation cleanup, not as the main
    performance patch. The output should be a stable baseline with classified
    frontend stalls and no hidden loop-buffer/UOC participation.
-4. Implement Step 1B and Step 2 as the first real XiangShan-style structural
+4. Implement Step 1B and Step 2 as the first real Reference Core B-style structural
    slice: bounded BPU prediction-block runahead, FTQ-owned fetch requests,
    IFU writeback of predecode metadata, and IBuffer-equivalent delivery. These
    two steps should be designed together because the trace shows either one
@@ -1806,7 +1806,7 @@ Stage 1 execution plan:
    FTQ-approved fetch block and dynamic branch truth remains owned by BPU/FTQ.
 
 Stage 1 verdict after recalibration: replace the loop buffer with a
-XiangShan-style decoupled frontend first. The first accepted structural unit is
+Reference Core B-style decoupled frontend first. The first accepted structural unit is
 not a uop cache; it is a correct FTQ-owned fetch-block identity. The current
 standalone PC-indexed replay cache remains rejected. A decoded-op cache can
 still be added later, but only as an FTQ-attached accelerator after the
@@ -1817,24 +1817,24 @@ predictor are correct.
 
 | Candidate | Role | Stage 1 verdict |
 |---|---|---|
-| XiangShan-style FTQ + IFU/ICache + IBuffer frontend stream | Primary loop-buffer replacement. Decouples prediction, I-cache, predecode, and decode so frontend bubbles can be measured and removed. | Steps 1B-3 after Step 1A stabilization. New Stage 1 anchor. Scale it to our 4-wide machine; do not widen solely to match XiangShan. |
-| BPU-side loop-exit predictor | Restores the useful part of the removed loop buffer by predicting hot loop exits before replay/fetch reaches the wrong path. | Step 4. Use BOOM-style trip-count confidence as the first implementation reference, but train/consume it through FTQ. |
-| Decoded uop cache / op-cache behind FTQ | Optional accelerator once the XiangShan-style frontend contract is correct. Delivers already decoded work from FTQ-approved fetch blocks. | Step 7 for Stage 1 only if Steps 1A-5 do not close the gap. Prior `+UOC_ENABLE` rows are rejected as standalone replay; do not continue tuning them. |
-| Stronger fetch packet buffer / IBuffer elasticity | Frontend continuity improvement required by the XiangShan-style plan. Helps separate fetch delivery gaps from decode/rename stalls. | Step 2. Mandatory Stage 1 work; prior bypass-only DSE shows a one-cycle shortcut is not a substitute for a real queue. |
+| Reference Core B-style FTQ + IFU/ICache + IBuffer frontend stream | Primary loop-buffer replacement. Decouples prediction, I-cache, predecode, and decode so frontend bubbles can be measured and removed. | Steps 1B-3 after Step 1A stabilization. New Stage 1 anchor. Scale it to our 4-wide machine; do not widen solely to match Reference Core B. |
+| BPU-side loop-exit predictor | Restores the useful part of the removed loop buffer by predicting hot loop exits before replay/fetch reaches the wrong path. | Step 4. Use Reference Core A-style trip-count confidence as the first implementation reference, but train/consume it through FTQ. |
+| Decoded uop cache / op-cache behind FTQ | Optional accelerator once the Reference Core B-style frontend contract is correct. Delivers already decoded work from FTQ-approved fetch blocks. | Step 7 for Stage 1 only if Steps 1A-5 do not close the gap. Prior `+UOC_ENABLE` rows are rejected as standalone replay; do not continue tuning them. |
+| Stronger fetch packet buffer / IBuffer elasticity | Frontend continuity improvement required by the Reference Core B-style plan. Helps separate fetch delivery gaps from decode/rename stalls. | Step 2. Mandatory Stage 1 work; prior bypass-only DSE shows a one-cycle shortcut is not a substitute for a real queue. |
 | L0/predecoded I-cache | Keeps instruction bytes plus predecode metadata close to decode. Lower complexity than a full uop cache, but less direct reuse of decoded work. | Step 5/7 option. Consider if full uop cache risk is too high. |
 | Trace cache | Can capture taken-control-flow paths and eliminate repeated fetch/decode on hot traces. | Step 8. Powerful but higher validation and recovery complexity; not first Stage 1 choice. |
 | LSD-style loop stream detector | Streams tight loops with very low frontend power. | Not primary. Too close to replacing one loop-specific structure with another unless it is naturally backed by the uop/op-cache path. |
 
-## ARM Reference Notes
+## Vendor Reference Notes
 
-Two local ARM diagrams were checked from `../arm`:
+Two local vendor diagrams were checked from `../arm`:
 
 | Diagram | Relevant frontend points | Stage 1 implication |
 |---|---|---|
 | `../arm/Cortex-A76_uArch_Diagram.svg` | Decoupled branch prediction runs ahead of fetch, fills a fetch address queue, uses hierarchical BTB, 16 B/cycle fetch, fetch queue, 4-wide decode/rename, 8-uop dispatch/issue/retire, and a tight-loop buffer. | Do not compare only decode width. The reusable idea is decoupled prediction plus fetch queueing; the loop buffer is only one part of a broader frontend delivery system. |
 | `../arm/Neoverse-N2_uArch_Diagram.svg` | Decoupled BPU fills a FAQ, predicted blocks stream into a decoded-op cache, loop buffer is UOP-cache fed, decode/rename are 5-wide, dispatch/retire are 8-uop, and issue capacity is over-provisioned. | Strong support for Stage 1 replacing/subsuming our loop buffer with decoded-op delivery. A standalone LB is not the right signoff target. |
 
-The ARM diagrams reinforce the MegaBOOM lesson: "4-wide" or "5-wide" alone is
+The vendor diagrams reinforce the Reference Core A (large config) lesson: "4-wide" or "5-wide" alone is
 not a sufficient comparison. The measured analysis must track effective work per
 frontend slot and separate fetch, decode, rename, dispatch, issue, and commit
 bandwidth.
@@ -1861,7 +1861,7 @@ does not participate in default performance.
 
 ## Evidence
 
-MegaBOOM fixed baselines:
+Reference Core A (large config) fixed baselines:
 
 | Workload | Artifact | Cycles | Retired |
 |---|---|---:|---:|
@@ -1914,7 +1914,7 @@ accepted clean core results.
 | `LB_EXIT_*_LEAD1` rows | Best local row reached 58,432 Dhrystone cycles | Rejected. The lead special cases were removed before this cleanup. |
 | `LB_WRAP_BACKEDGE` shortcut | Around 53,335 Dhrystone cycles | Invalid because retired-count behavior changed. |
 | UOC rows | Timeout, endpoint divergence, or Dhrystone 103,308-cycle regression | Rejected for performance comparison; standalone replay is now explicit unsafe research only. |
-| May 5 shortcut rows | Packet bypass only -0.34%, TAGE update PC no-op, early redirect no-op, no-loop-spec worse, standalone UOC unsafe/worse | Rejected. These rows recalibrate Stage 1 toward a real XiangShan-style frontend contract rather than local tuning. |
+| May 5 shortcut rows | Packet bypass only -0.34%, TAGE update PC no-op, early redirect no-op, no-loop-spec worse, standalone UOC unsafe/worse | Rejected. These rows recalibrate Stage 1 toward a real Reference Core B-style frontend contract rather than local tuning. |
 | May 5 replay-guard ownership repair | Dhrystone improves from 92,948 to 79,145 cycles; CoreMark improves from 2,272,228 to 2,179,696 cycles but checksum/instret drift appears | Accepted as partial ownership evidence only. It does not close Stage 1 and the CoreMark row needs endpoint audit. |
 | May 5 same-line FTQ handoff | Dhrystone reaches 69,826 cycles, but CoreMark reaches `flags=1` with checksum drift | Rejected as a standalone shortcut. It proves opportunity in FTQ delivery continuity but not correctness. |
 | May 5 guarded single-packet loop-tail same-line lookahead | Dhrystone reaches 66,221 cycles, but CoreMark reaches `flags=1`, checksum `29775`, and 2,078,791 timed cycles | Rejected and reverted. It proves the loop-tail bubble is valuable but still unsafe without FTQ/IBuffer-owned control validation. |
@@ -1960,7 +1960,7 @@ Minimum acceptance loop:
    `redirect_recovery`, frontend average/zero, and commit average/zero.
 3. State the fetch/decode/rename/dispatch/issue/commit counter expected to move.
 4. Run Dhrystone 300 and CoreMark iter10 with `flags=0`.
-5. Verify retired instruction counts against the fixed MegaBOOM rows.
+5. Verify retired instruction counts against the fixed Reference Core A (large config) rows.
 6. Verify CoreMark endpoint identity. `flags=0` is necessary but not sufficient
    for iter10 comparison; the final checksum must remain `64687` for the
    current apples-to-apples heavy image.
@@ -1997,7 +1997,7 @@ is the intended row.
 4. Confirm the performance claim uses benchmark timed cycles, not total shell
    runtime or stale stdout snippets. The accepted row must beat both the old
    clean loop-buffer baseline (`70,783` Dhrystone 300 and `1,850,040`
-   CoreMark iter10 timed cycles) and the corrected MegaBOOM rows (`59,698`
+   CoreMark iter10 timed cycles) and the corrected Reference Core A (large config) rows (`59,698`
    Dhrystone 300 and `1,835,815` CoreMark iter10 timed cycles).
 5. Confirm the mechanism is general RTL. The final row must not depend on
    benchmark-PC constants, stale images, `--run-class dse`, debug traces, or a
@@ -2055,7 +2055,7 @@ Immediate next step:
    owner/reason counters. Do not treat Step 1A as the main performance fix; the
    trace and XS-FE0 counters say the remaining bubble needs a structural stream
    and queue.
-4. Implement Steps 1B and 2 together as the first scaled XiangShan-style
+4. Implement Steps 1B and 2 together as the first scaled Reference Core B-style
    structural slice. The goal is a bounded prediction-block stream carried
    through BPU prediction, FTQ allocation, IFU/ICache fetch, IFU
    writeback/validation, IBuffer delivery, backend redirect, commit, and BPU

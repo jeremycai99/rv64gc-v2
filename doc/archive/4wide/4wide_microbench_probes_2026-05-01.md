@@ -103,7 +103,7 @@ The 0.7 IPC gap from theoretical 4.0 comes from:
 
 The dhry sign-off bar is **harder than expected**: DMIPS/MHz 4.00 = `100*1e6 / (cycles*1757)` ⇒ cycles ≤ 14,225 for 100 iters of dhrystone. Current is 23,514 cycles. To halve cycles: IPC must rise to ~2.5 of 47k inst, AND total inst must drop (compiler-side, out of scope here). The gap of −39.5% is partly **structural to the binary**, not just IPC.
 
-(For comparison: 6-wide pre-pivot at IPC 2.597 only achieved 3.04 DMIPS/MHz on the same binary — also short of the floor 4.00. The MegaBoom 4.00 floor reflects a different binary or compiler.)
+(For comparison: 6-wide pre-pivot at IPC 2.597 only achieved 3.04 DMIPS/MHz on the same binary — also short of the floor 4.00. The Reference Core A (large config) 4.00 floor reflects a different binary or compiler.)
 
 This finding should temper expectations for closing the dhry gap to floor purely via 4-wide RTL changes.
 

@@ -105,7 +105,7 @@ Current default RTL:
   backpressure point.
 - There is no FTQ-level prefetch pointer yet. The existing
   `next_line_prefetch_buffer.sv` is a local line buffer and should not be treated
-  as XiangShan-style `pfPtr` ownership.
+  as Reference Core B-style `pfPtr` ownership.
 - `icache_resp_queue.sv` is a line-response FIFO, not an architectural owner.
   The IFU accepts a queue head only when its explicit response-line address
   matches the current IFU work cursor line. Responses with invalid or stale FTQ
@@ -163,7 +163,7 @@ Current default RTL:
   predicted-control PC or starts exactly at it; it must not advance to a PC
   that would make the predicted control a passenger behind earlier
   instructions.
-  The next XiangShan-style split is to make this cursor-to-FTQ handoff more
+  The next Reference Core B-style split is to make this cursor-to-FTQ handoff more
   complete under explicit owner/completion rules.
 - `frontend/ifu/ifu_duplicate_guard.sv` contains the legacy same-packet
   duplicate and replay suppression state. It is kept as a behavior-preserving
@@ -233,7 +233,7 @@ Current boundary:
 | Simulation endpoint detection | `tb_top.sv` | Harness observes ordinary LSU store traffic to configurable `TOHOST_ADDR`. |
 | Workload image/ABI adaptation | `tools/sim_platform.py` | Prepares broad coverage manifests, adds per-row `SIM_ABI`, and derives `TOHOST_ADDR` from ELF symbols when available. |
 
-This mirrors the BOOM/Chipyard separation: the harness may understand HTIF,
+This mirrors the Reference Core A / its build framework separation: the harness may understand HTIF,
 ELF symbols, and test exits, but the core itself should only expose normal
 architectural interfaces plus implementation counters needed for validation.
 
@@ -579,7 +579,7 @@ These are the structural constraint points that any optimization needs to be awa
 - **Architectural role:** not currently the authoritative frontend backbone. A
   decoded-op cache can only be enabled behind the same owner, redirect, fill,
   invalidation, and branch/exit prediction contract as normal fetch delivery.
-- **Comparison:** modeled after Intel DSB, AMD Zen op-cache, and Arm macro-op caches; this repo uses the single local name "UOP cache" / `UOC`
+- **Comparison:** modeled after a commercial op-cache (DSB), a commercial op-cache, and commercial macro-op caches; this repo uses the single local name "UOP cache" / `UOC`
 - **Inactive replay path:** standalone UOC replay plusargs are simulation
   experiments only. The default core architecture keeps decoded-op replay
   inactive unless it is integrated through FTQ-owned delivery.

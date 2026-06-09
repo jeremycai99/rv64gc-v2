@@ -12,7 +12,7 @@
 > ## What this doc IS and IS NOT
 >
 > **IS:** A 4-wide-absolute, data-driven methodology for closing the CM/MHz and DMIPS/MHz
-> gaps versus the MegaBoom 4-wide sign-off floor. Bubbles and stalls are measured directly
+> gaps versus the Reference Core A (large config) 4-wide sign-off floor. Bubbles and stalls are measured directly
 > on the 4-wide machine; no 6-wide reference is required because sign-off is external.
 >
 > **IS NOT:** An implementation plan, a commitment to specific RTL edits, or a replacement
@@ -31,7 +31,7 @@ by restoring `bypass[4]` for Load1 and bumping `NUM_BYPASS_SRCS` 4 → 5. After 
 the previously-reported sign-off numbers were exposed as inflated by an 11× BPU
 mistraining cascade. Real measurements on `cd54cf1`:
 
-| Workload | Cycles | Instret | IPC | Metric | MegaBoom floor | Gap |
+| Workload | Cycles | Instret | IPC | Metric | Reference Core A (large config) floor | Gap |
 |---|---:|---:|---:|---|---:|---:|
 | dhrystone (100 iter) | 23,514 | 47,670 | 2.027 | **2.42 DMIPS/MHz** | 4.00 | **−39.5%** |
 | coremark iter1 | 199,452 | 332,110 | 1.665 | **5.01 CM/MHz** | 6.2 | **−19.2%** |
@@ -48,10 +48,10 @@ a separate post-fix correction pass — out of scope for this analysis methodolo
 
 ### 2.1 Why 4-wide-absolute, not 6-wide-diff
 
-Sign-off is external (MegaBoom 4-wide floor, Cortex-A72 stretch). `doc/baseline_6wide_obsolete_2026-04-30.md`
+Sign-off is external (Reference Core A (large config) 4-wide floor, a commercial 3-wide OoO core stretch). `doc/baseline_6wide_obsolete_2026-04-30.md`
 explicitly rejects cross-width cycle comparison for sign-off purposes. To close the gap
 we need to **eliminate bubbles in 4-wide**, not match a different machine's behavior. In
-fact, 4-wide must *beat* 6-wide IPC on cm to clear the MegaBoom floor (need IPC ≈ 2.06;
+fact, 4-wide must *beat* 6-wide IPC on cm to clear the Reference Core A (large config) floor (need IPC ≈ 2.06;
 6-wide had 1.81), so 6-wide-matching is not even sufficient.
 
 Bubble/stall counters are intrinsically meaningful in 4-wide alone:
@@ -312,7 +312,7 @@ change proposals (in writing-plans output).
 1. **No RTL changes (other than Phase A.2 instrumentation) before Phase D.** The Load1
    bypass fix worked because we waited for trace data; same discipline applies. The
    reflexive-revert reflex (3a/3b/3c) is the failure mode this methodology prevents.
-2. **No 6-wide rebuild for sign-off comparison.** Sign-off is external (MegaBoom/A72).
+2. **No 6-wide rebuild for sign-off comparison.** Sign-off is external (Reference Core A (large config)/commercial 3-wide OoO stretch).
    `doc/baseline_6wide_obsolete_2026-04-30.md` already records why cross-width comparison
    is rejected.
 3. **No single-workload optimization.** Every Phase D proposal must show neutral-or-better
@@ -333,8 +333,8 @@ change proposals (in writing-plans output).
 
 | Tier | CM/MHz | DMIPS/MHz | Source |
 |---|---:|---:|---:|---|
-| Floor — must match | ≥ 6.2 | ≥ 4.00 | MegaBoom (4-wide OoO) |
-| Stretch — must beat | ≥ 8.24 | ≥ 4.72 | ARM Cortex-A72 (3-wide OoO) |
+| Floor — must match | ≥ 6.2 | ≥ 4.00 | Reference Core A (large config) (4-wide OoO) |
+| Stretch — must beat | ≥ 8.24 | ≥ 4.72 | a commercial 3-wide OoO core (3-wide OoO) |
 
 After Phase D iterations, sign-off requires **both** workloads at floor, **and**
 functional 21/21 + clockcheck 3/3 still PASS, **and** the post-change measurement is

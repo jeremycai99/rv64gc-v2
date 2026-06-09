@@ -25,7 +25,7 @@ Baseline artifact: `benchmark_results/stage4_profiled_baseline_20260528a`
 (current-tree DSim, full 16-row signoff manifest, strict invariant checks,
 `+PERF_PROFILE +PERF_COUNTERS +STAT_DUMP +BOTTLENECK_PROFILE`).
 
-| Row | Timed cycles | Metric | Stretch | Gap to stretch | vs BOOM floor |
+| Row | Timed cycles | Metric | Stretch | Gap to stretch | vs Reference Core A floor |
 |---|---:|---:|---:|---:|---|
 | Dhrystone 100 | 18,068 | 3.150 DMIPS/MHz | 4.0 | ~27% | — |
 | Dhrystone 300 | 53,047 | 3.219 DMIPS/MHz | 4.0 | ~24% | 3.22 < ~3.93 (behind) |

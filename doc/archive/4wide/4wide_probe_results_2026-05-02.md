@@ -153,7 +153,7 @@ The user's intuition would benefit from a per-cycle "consumer wakes but waits N 
 - 4,343 mispredicts × ~7 cyc avg recovery = ~30k cycles = 14.7% of cm
 - Top mispredict PC: `0x8000235a` (`bge s0, s5` in `core_list_mergesort`) at 100% mispredict — data-dependent, intrinsic
 - TAGE structural limit on data-dependent branches confirmed via `probe_bpu_data_dep_branch.S` (29.4% mispredict on true-random)
-- BPU storage already BIGGER than BOOM (Cycle A REFUTED uBTB sizing); not a tuning issue
+- BPU storage already BIGGER than Reference Core A (Cycle A REFUTED uBTB sizing); not a tuning issue
 
 ### #4 Other — Two specific candidates surfaced
 
@@ -195,5 +195,5 @@ The bubble taxonomy + Little's-law decomposition were correct but missed the FRO
 
 - `doc/4wide_pipeline_bubble_taxonomy_2026-05-02.md` — gross bubble category split
 - `doc/4wide_headwait_deepdive_2026-05-02.md` — HEAD_WAIT_BACKLOG decomposition
-- `doc/4wide_arch_diff_2026-05-02.md` — BOOM v4 audit
+- `doc/4wide_arch_diff_2026-05-02.md` — Reference Core A audit
 - `doc/rv64gc_v2_uarch.md` — current µarch spec (after rewrite)

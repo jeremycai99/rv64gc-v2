@@ -1,16 +1,16 @@
-# Dhrystone Binary Normalization — beating BOOM (root cause + fix)
+# Dhrystone Binary Normalization — beating Reference Core A (root cause + fix)
 
 Date: May 29, 2026
-Status: ADOPTED. The Dhrystone build is normalized to BOOM/riscv-tests methodology;
+Status: ADOPTED. The Dhrystone build is normalized to Reference Core A/riscv-tests methodology;
 the DS signoff rows are re-baselined. Companion to
 `doc/stage4_lever_ceiling_verdict_2026-05-28.md` (which closed the *backend IPC*
 campaign at a well-tuned floor). This doc resolves the **Dhrystone DMIPS/MHz gap to
-BOOM** — which turned out to be the binary, not the microarchitecture.
+Reference Core A** — which turned out to be the binary, not the microarchitecture.
 
 ## The question
 
-Dhrystone scored 3.22 DMIPS/MHz vs BOOM's published 3.93 (−18%), while CoreMark
-already beat BOOM (6.85 vs 6.2). Why was Dhrystone behind?
+Dhrystone scored 3.22 DMIPS/MHz vs Reference Core A's published 3.93 (−18%), while CoreMark
+already beat Reference Core A (6.85 vs 6.2). Why was Dhrystone behind?
 
 ## Root cause: a non-standard `-fno-builtin` self-handicap
 
@@ -25,16 +25,16 @@ dominant head-stall PC was `0x80002002` — the `lbu` inside `strcpy` — at **6
 all DS300 head-stall**. ~90% of the 501 instr/iteration were in those byte loops.
 The core ran the byte code efficiently; it was the **wrong code**.
 
-## BOOM's methodology (confirmed)
+## Reference Core A's methodology (confirmed)
 
-The riscv-tests/chipyard Dhrystone (source of SonicBOOM's published 3.93) compiles
+The riscv-tests/the reference-core build framework Dhrystone (source of Reference Core A's published 3.93) compiles
 with `chipyard/toolchains/riscv-tools/riscv-tests/benchmarks/Makefile`:
 ```
 -O2 -ffast-math -fno-common -fno-builtin-printf -fno-tree-loop-distribute-patterns -march=rv64gcv
 ```
 Only `-fno-builtin-printf` (string/mem builtins **ON**), and **no `-ffreestanding`**.
-So BOOM's constant-string `strcpy` and struct copies were inlined/word-wide. Our
-full `-fno-builtin` + `-ffreestanding` was a non-standard handicap BOOM never had.
+So Reference Core A's constant-string `strcpy` and struct copies were inlined/word-wide. Our
+full `-fno-builtin` + `-ffreestanding` was a non-standard handicap Reference Core A never had.
 The comparison is therefore confirmed apples-to-apples once normalized.
 
 ## The fix and result (no RTL)
@@ -47,16 +47,16 @@ loads/stores. `string_bare.c` is retained for the residual runtime calls.
 | Build (DS300, 300 iters) | cyc/iter | instr/iter | IPC | DMIPS/MHz |
 |---|--:|--:|--:|--:|
 | old (`-fno-builtin`, byte) | 178.5 | 501 | 2.84 | 3.22 |
-| **normalized `-O2` (BOOM-matched)** | **134.5** | 352 | 2.62 | **4.27** |
-| BOOM published | 144.8 | — | — | 3.93 |
+| **normalized `-O2` (Reference Core A-matched)** | **134.5** | 352 | 2.62 | **4.27** |
+| Reference Core A published | 144.8 | — | — | 3.93 |
 | (aggressive `-O3 -flto`, not apples-to-apples) | 120.3 | 341 | 2.83 | 4.73 |
 
-**At BOOM's own `-O2` methodology, rv64gc-v2 scores 4.27 (DS300) / 4.26 (DS100)
-DMIPS/MHz — ~9% above BOOM's 3.93.** The 4-wide core beats 6-wide MegaBOOM on
+**At Reference Core A's own `-O2` methodology, rv64gc-v2 scores 4.27 (DS300) / 4.26 (DS100)
+DMIPS/MHz — ~9% above Reference Core A's 3.93.** The 4-wide core beats 6-wide Reference Core A (large config) on
 Dhrystone. IPC is essentially unchanged (2.8→2.6); the win is entirely fewer
 instructions/cycles for identical work (checksum 24, PASS, both rows).
 
-The official build is `-O2`-matched (apples-to-apples with BOOM, not `-flto`).
+The official build is `-O2`-matched (apples-to-apples with Reference Core A, not `-flto`).
 
 ## Adoption (re-baselined goal contract)
 
@@ -73,8 +73,8 @@ The official build is `-O2`-matched (apples-to-apples with BOOM, not `-flto`).
 ## Follow-ups
 
 - **CoreMark uses the same `-fno-builtin`** (`tests/coremark/build_coremark.sh`).
-  CoreMark is compute-bound (it already beats BOOM), so the gain is likely small,
+  CoreMark is compute-bound (it already beats Reference Core A), so the gain is likely small,
   but normalizing it too would make the suite's methodology consistent — open item.
 - The backend-IPC floor verdict (`stage4_lever_ceiling_verdict`) is unaffected:
-  this was a binary fix, IPC unchanged. rv64gc-v2 now exceeds BOOM's public floor
+  this was a binary fix, IPC unchanged. rv64gc-v2 now exceeds Reference Core A's public floor
   on **both** CoreMark (6.85 > 6.2) and Dhrystone (4.27 > 3.93).

@@ -5,8 +5,8 @@
 > All checklist items marked `[X]`.  All 5 RTL stages + sign-off task SO.1-SO.4 executed and merged to master at commit `aca1f33`.
 >
 > **Sign-off result:** PARTIAL — see `doc/4wide_signoff_2026-04-30.md`.
-> - CM/MHz = 6.05 vs MegaBoom floor 6.2 (−2.4% miss).
-> - DMIPS/MHz = 2.42 vs MegaBoom floor 4.00 (−39.5% miss).
+> - CM/MHz = 6.05 vs Reference Core A (large config) floor 6.2 (−2.4% miss).
+> - DMIPS/MHz = 2.42 vs Reference Core A (large config) floor 4.00 (−39.5% miss).
 >
 > **NEW CRITICAL FINDING (Concern 1, 2026-04-30):** `cm.hex` behaves DIFFERENTLY between 6-wide pre-pivot RTL and the merged 4-wide RTL on the *same* binary:
 > - 6-wide @ `4f28619` rebuilt fresh: `PASS at cycle 183181 (tohost=1)`, instret 332,108.
@@ -40,8 +40,8 @@
 
 | Tier | CM/MHz | DMIPS/MHz | Source |
 |---|---:|---:|---|
-| Floor — must match | ≥ 6.2 | ≥ 4.00 | MegaBoom (4-wide) |
-| Stretch — should beat | ≥ 8.24 | ≥ 4.72 | ARM Cortex-A72 (3-wide OoO) |
+| Floor — must match | ≥ 6.2 | ≥ 4.00 | Reference Core A (large config) (4-wide) |
+| Stretch — should beat | ≥ 8.24 | ≥ 4.72 | a commercial 3-wide OoO core (3-wide OoO) |
 
 **These are external benchmarks, not internal predictions.** Sign-off is dsim/xsim measurement on the refactored 4-wide RTL. The retired 6-wide's numbers are not part of any sign-off comparison.
 
@@ -54,10 +54,10 @@
 3. **Do NOT modify ALU implementations** — independent of width.
 4. **Do NOT modify BPU (TAGE, BTB, RAS)** — independent of dispatch width.
 5. **Do NOT reference any data, calibration delta, or per-mechanism decision from `../rv64gc-perf-model/`.** That repo's calibration data is paused on a structural dead-end and is record-only. The textbook 4-wide param table in this checklist comes from `doc/4wide_pivot_plan_2026-04-25.md` directly.
-6. **Do NOT use the 6-wide baseline (`doc/baseline_6wide_obsolete_2026-04-30.md`) as a forward comparison target.** Cross-width cycle deltas are not meaningful; sign-off is against MegaBoom + A72 only.
+6. **Do NOT use the 6-wide baseline (`doc/baseline_6wide_obsolete_2026-04-30.md`) as a forward comparison target.** Cross-width cycle deltas are not meaningful; sign-off is against Reference Core A (large config) + A72 only.
 7. **Do NOT touch the ~30 pre-existing uncommitted housekeeping files** (.gitignore, Makefile, build_dsim.bat, deleted *.log files). That cleanup is separate work.
 8. **Do NOT skip a stage's gate.** The whole methodology is "build + clockcheck + regress before continuing." Compounding edits across un-validated stages is exactly the failure mode the staging is designed to prevent.
-9. **Do NOT add new optimisations during the refactor.** Pure narrowing pass first; opts can be considered later, after the 4-wide baseline measures against MegaBoom. **Exception:** an architectural change is allowed if it is a *fix required to keep regression alive* — e.g., Stage 2's `load_wb` sideband was necessary because CDB shrink (6→4) removed the slots loads had been using for definitive wakeup, causing cache-miss ROB deadlock. Document any such exception in the commit message + here in the plan.
+9. **Do NOT add new optimisations during the refactor.** Pure narrowing pass first; opts can be considered later, after the 4-wide baseline measures against Reference Core A (large config). **Exception:** an architectural change is allowed if it is a *fix required to keep regression alive* — e.g., Stage 2's `load_wb` sideband was necessary because CDB shrink (6→4) removed the slots loads had been using for definitive wakeup, causing cache-miss ROB deadlock. Document any such exception in the commit message + here in the plan.
 
 ---
 
@@ -757,7 +757,7 @@ For each:
 - [X] **Step 4: Mid-refactor CM/MHz trajectory check (per the Halt rule)**
 
   Compute current cm-iter1 CM/MHz from the bench log (`1e6 / cycles`).
-  - If CM/MHz ≥ 4.34 (i.e., within 30% of MegaBoom's 6.2 floor): continue to Stage 5.
+  - If CM/MHz ≥ 4.34 (i.e., within 30% of Reference Core A (large config)'s 6.2 floor): continue to Stage 5.
   - If CM/MHz < 4.34: **STOP** — the refactor is unlikely to clear sign-off. Convene a review per the Halt-and-Re-evaluate rule.
 
 ### Task 4.5: Stage 4 commit
@@ -912,7 +912,7 @@ For each:
 
 3. Any benchmark TIMEOUTs / IterLimit aborts where it previously reached STOP. The 4-wide is allowed to be slower (more cycles), but it MUST still finish; a TIMEOUT signals deadlock or wraparound bug.
 
-4. **Mid-refactor CM/MHz trajectory check** (after Stage 4): run `bash scripts/regress_dsim.sh --bench` and compute current cm-iter1 CM/MHz. If the partially-refactored RTL is already > 30% below MegaBoom's 6.2 CM/MHz floor (i.e., < 4.34 CM/MHz), it is unlikely Stage 5 alone closes the gap. Stop, review, decide whether to (a) carry on knowing sign-off may fail, or (b) revisit param choices before continuing. **Do not silently compound RTL surgery on a config that won't sign off.**
+4. **Mid-refactor CM/MHz trajectory check** (after Stage 4): run `bash scripts/regress_dsim.sh --bench` and compute current cm-iter1 CM/MHz. If the partially-refactored RTL is already > 30% below Reference Core A (large config)'s 6.2 CM/MHz floor (i.e., < 4.34 CM/MHz), it is unlikely Stage 5 alone closes the gap. Stop, review, decide whether to (a) carry on knowing sign-off may fail, or (b) revisit param choices before continuing. **Do not silently compound RTL surgery on a config that won't sign off.**
 
 5. Any commit-time hook fails. Investigate the underlying cause; do not bypass.
 
@@ -966,10 +966,10 @@ After all 5 stages land cleanly:
 
   | Tier | Required | Measured | Pass? |
   |---|---:|---:|---|
-  | Floor (MegaBoom) | CM/MHz ≥ 6.2 | _______ | _______ |
-  | Floor (MegaBoom) | DMIPS/MHz ≥ 4.00 | _______ | _______ |
-  | Stretch (A72) | CM/MHz ≥ 8.24 | _______ | _______ |
-  | Stretch (A72) | DMIPS/MHz ≥ 4.72 | _______ | _______ |
+  | Floor (Reference Core A (large config)) | CM/MHz ≥ 6.2 | _______ | _______ |
+  | Floor (Reference Core A (large config)) | DMIPS/MHz ≥ 4.00 | _______ | _______ |
+  | Stretch (commercial 3-wide OoO) | CM/MHz ≥ 8.24 | _______ | _______ |
+  | Stretch (commercial 3-wide OoO) | DMIPS/MHz ≥ 4.72 | _______ | _______ |
 
   Sign-off success = floor met. Stretch met = strong. Floor missed = halt-and-re-evaluate (see rule above); the 4-wide refactor itself is correct, but the design as configured does not meet the bar.
 

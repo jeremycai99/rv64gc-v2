@@ -10,7 +10,7 @@ commit/training.
 
 ## Architecture Guardrails
 
-The current optimization line must stay on the XiangShan/BOOM-style ownership
+The current optimization line must stay on the Reference Core B/Reference Core A-style ownership
 path:
 
 `BPU prediction -> FTQ owner -> IFU work item -> owner-aware IBuffer -> decode`.
@@ -49,7 +49,7 @@ Aggressive multi-stage signoff targets:
 | DMIPS/MHz | 4.0 |
 
 These targets are not a frontend-only promise. The frontend slice must first
-close the measured MegaBOOM gap without endpoint drift. If frontend-only work
+close the measured Reference Core A (large config) gap without endpoint drift. If frontend-only work
 does not reach the Gate C ceiling below, open a second-domain DSE from
 counters, not intuition.
 
@@ -85,9 +85,9 @@ Current gap to the Stage 2 stretch targets:
 | CoreMark/MHz | 6.705406 | 7.5 | +11.9% | 10.6% |
 | DMIPS/MHz | 3.193357 | 4.0 | +25.3% | 20.2% |
 
-Current calibrated MegaBOOM comparison on shared smoke rows:
+Current calibrated Reference Core A (large config) comparison on shared smoke rows:
 
-| Workload | MegaBOOM calibrated | rv64gc-v2 current | Current gap |
+| Workload | Reference Core A (large config) calibrated | rv64gc-v2 current | Current gap |
 |---|---:|---:|---:|
 | Dhrystone 100 | 23,814 cycles | 18,577 cycles | rv64gc-v2 22.0% faster |
 | CoreMark 1 | 192,249 cycles | 163,013 cycles | rv64gc-v2 15.2% faster |
@@ -107,7 +107,7 @@ Interpretation:
   `169,049 -> 164,550` cycles. Dhrystone 100 is unchanged, while the longer
   Dhrystone 300 anchor improves to `54,926` cycles and
   `3.132659` DMIPS/MHz.
-- The new row beats the calibrated MegaBOOM smoke baseline on the shared
+- The new row beats the calibrated Reference Core A (large config) smoke baseline on the shared
   Dhrystone 100 and CoreMark 1 timing windows.
 - The weak-TAGE gated local alternation filter is the latest accepted BPU
   arbitration step. It is intentionally narrow: local alternation can override
@@ -471,7 +471,7 @@ Bug-isolation progress, 2026-05-07:
 
 ## Architecture State
 
-rv64gc-v2 is aligned in direction with the XiangShan/BOOM-style frontend split,
+rv64gc-v2 is aligned in direction with the Reference Core B/Reference Core A-style frontend split,
 but it is not yet deep enough.
 
 | Role | Current state | Remaining gap |
@@ -862,7 +862,7 @@ Direct non-head partial recovery exposes the missing contract: partial
 checkpoint restore currently clears all checkpoint slots. That is acceptable
 when the recovering branch is at the head because there are no older unresolved
 branch checkpoints to preserve. It is not acceptable for general non-head
-branch recovery. A real XiangShan/BOOM-style recovery path needs selective
+branch recovery. A real Reference Core B/Reference Core A-style recovery path needs selective
 checkpoint invalidation, preserving checkpoints older than the recovered branch
 and squashing only the branch plus younger state. Do not retry non-head partial
 recovery until that checkpoint ownership rule exists.
@@ -1418,7 +1418,7 @@ Next high-leverage architectural directions:
 | Direction | Why it is still credible | Required proof before promotion |
 |---|---|---|
 | Branch recovery and checkpoint contract | CoreMark 10 still has `redirect_recovery=29,575`; the branch hotspot has high redirect and commit-zero pressure. A correct non-head recovery contract can remove useful-work loss across branchy code instead of shifting local ALU timing. | Backend checkpoint, RAT, free-list, ROB, writeback, LSU, and frontend-owner recovery invariants stay zero on strict rows; branch hotspot improves without Dhrystone/CoreMark regression. |
-| True FTQ/IBuffer runahead | The frontend still reports `packet_empty_f2_data`, duplicate/no-emit, and frontend-zero buckets. XiangShan-style split ownership can let prediction and fetch run ahead without duplicate suppression. | Split FTQ allocation, IFU, commit, and optional prefetch ownership; owner-aware IBuffer absorbs F2 hold; delivery scoreboard proves each PC reaches decode exactly once. |
+| True FTQ/IBuffer runahead | The frontend still reports `packet_empty_f2_data`, duplicate/no-emit, and frontend-zero buckets. Reference Core B-style split ownership can let prediction and fetch run ahead without duplicate suppression. | Split FTQ allocation, IFU, commit, and optional prefetch ownership; owner-aware IBuffer absorbs F2 hold; delivery scoreboard proves each PC reaches decode exactly once. |
 | Broader scheduler/wakeup/select redesign | ALU dependency counters show true producer-chain depth, but local IQ0 chaining is too small. A real redesign should address producer blocking, wakeup fanout, select fairness, and cluster steering across integer IQs. | Multi-row reduction in `xs_bottleneck_dep_wait_on_alu`, producer-blocked counts, and IQ not-ready pressure with no branch/control regression and at least 3-5 percent broad upside. |
 | Memory and load-use pipeline | Current Stage 2 work has mostly targeted frontend and integer ALU chains. A broader workload set will expose load-use, forwarding, retry, D-cache conflict, and store-backlog limits. | Full bottleneck run shows LSU or load-use counters dominate multiple rows; any load speculation or forwarding change includes replay correctness and no stale wakeup side effects. |
 
@@ -1469,7 +1469,7 @@ Detailed DSE execution plan:
 | 37 | Attribute ALU-chain op patterns before RTL. | Done by `dse_alu_chain_shape_profile_*`: CoreMark 10 shows boolean/W-op ALU chains dominate the blocked-producer wait path, while move candidates are a small subset. |
 | 38 | Audit local IQ0 short-ALU chaining. | Done: full simple-ALU, idle-slot-only, and typed variants are rejected due regressions. Boolean/shift-only is DSE-only evidence and has been reverted from default RTL by `57bfa58`. |
 | 39 | Select the next high-leverage structural direction from bottleneck evidence. | Candidate must have a plausible 3-5 percent broad upside, no unexplained benchmark regression, and a structural mechanism rather than scalar tuning. |
-| 40 | Re-score against MegaBOOM and stretch targets only after the structural slice passes broad evidence. | Gate E passes on broad coverage. |
+| 40 | Re-score against Reference Core A (large config) and stretch targets only after the structural slice passes broad evidence. | Gate E passes on broad coverage. |
 
 ## Explicit Non-Goals
 
@@ -1478,7 +1478,7 @@ Detailed DSE execution plan:
 - No standalone same-line, same-FTQ-tail, or sequential lookahead shortcut.
 - No duplicate suppression as the final correctness mechanism.
 - No widening decode, rename, or commit in this frontend slice.
-- No active XiangShan-style `pfPtr` until demand ownership is working.
+- No active Reference Core B-style `pfPtr` until demand ownership is working.
 - No raw load-speculation plusarg promotion without LSU dependency prediction
   and replay evidence.
 - No local IQ0/short-ALU scalar tuning as the next promoted direction unless
@@ -1489,7 +1489,7 @@ Detailed DSE execution plan:
 The successor plus predicted-control-window plus backward-next-owner path,
 weak-TAGE local arbitration, and loop-exit speculative-count bypass chooser
 should be pursued. They are strict-clean on the scoreable smoke, CoreMark 10,
-and broad Stage 1 DSE rows, they beat the calibrated MegaBOOM smoke rows, and
+and broad Stage 1 DSE rows, they beat the calibrated Reference Core A (large config) smoke rows, and
 they cut the dominant CoreMark 10 frontend-empty and branch-miss buckets while
 lifting CoreMark 10 to 6.71 CM/MHz. The latest accepted row still has material
 residual pressure: CoreMark 10 reports `packet_empty_f2_data=60,845`,

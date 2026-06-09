@@ -1,16 +1,15 @@
-# BOOM v4 ↔ rv64gc-v2 Architectural Equivalence Audit — 2026-05-02
+# Reference Core A ↔ rv64gc-v2 Architectural Equivalence Audit — 2026-05-02
 
 **Repo:** rv64gc-v2 (master @ edf2cf9)
-**BOOM source:** `riscv-boom/src/main/scala/v4/`
+**Reference Core A source:** `riscv-boom/src/main/scala/v4/`
 **rv64gc-v2 source:** `rv64gc-v2/src/rtl/core/`
-**Reference config:** BOOM MegaBoom (`WithNMegaBooms`, `config-mixins.scala:246-296`).
+**Reference config:** Reference Core A (large config) (`WithNMegaBooms`, `config-mixins.scala:246-296`).
 
 ---
 
 ## 1. Executive summary
 
-After enumerating every module-to-module structural difference between BOOM v4
-MegaBoom and rv64gc-v2 master (post-4-wide refactor), the residual 11–17% gap
+After enumerating every module-to-module structural difference between Reference Core A (large config) and rv64gc-v2 master (post-4-wide refactor), the residual 11–17% gap
 on cm and 39% gap on dhry is **not** explained by storage size, frontend depth,
 or ALU back-to-back wake latency. Those are at parity (rv64gc-v2 is actually
 shallower in the frontend by ~1 stage and faster on the load-to-use path by 2
@@ -19,12 +18,12 @@ cycles).
 Two structural differences DO predict measurable IPC loss in rv64gc-v2:
 
 1. **No imm/PC operand renaming** — every immediate read goes through the
-   12R6W PRF (or is muxed at issue time). BOOM v4 has dedicated `immregfile`
+   12R6W PRF (or is muxed at issue time). Reference Core A has dedicated `immregfile`
    (`ImmRenameStage`), which removes immediate operands from the int PRF
    read-port pressure. rv64gc-v2 has 4 ALU lanes wired to a single 12-port PRF
    with no slack; under high IPC the IRF is the implicit critical resource.
 
-2. **No fused MEM (AGEN+DGEN) issue lane the way BOOM has it** — BOOM's
+2. **No fused MEM (AGEN+DGEN) issue lane the way Reference Core A has it** — Reference Core A's
    MemExeUnit issues address-gen into the same lane as data-gen and supports
    `enableFastLoadUse=true` (load-to-use=4) plus a separate `IQ_UNQ`
    (mul/div/CSR/i2f) that does NOT contend with ALU lanes. rv64gc-v2 puts MUL
@@ -38,8 +37,8 @@ contribution on dhry. The remainder of the cm gap (≈5–8%) and the bulk of
 the dhry gap (~30%) are concentrated in a single signature shared by the
 "unknown plain-ALU producer wait" bucket (23% of cm cycles) and the
 "load-wait" bucket (27% of dhry head-stall cycles): **rv64gc-v2's IQ holds
-operand-stall longer than BOOM's because BOOM has more total INT IQ slots
-covering the same window** (92 vs 72) AND BOOM's ALU lanes can issue 4-wide
+operand-stall longer than Reference Core A's because Reference Core A has more total INT IQ slots
+covering the same window** (92 vs 72) AND Reference Core A's ALU lanes can issue 4-wide
 out of a single 40-entry IQ, giving deeper out-of-order coverage of the
 dependency window than rv64gc-v2's split 24+24+24 organization.
 
@@ -51,7 +50,7 @@ dependency window than rv64gc-v2's split 24+24+24 organization.
   and the depth fragmentation.
 
 A secondary, lower-risk change — adding an immediate physical register file
-(à la BOOM's `immregfile`) — is sketched in §7 but is a much larger
+(à la Reference Core A's `immregfile`) — is sketched in §7 but is a much larger
 refactor (~1k LOC, ~2 weeks) and is NOT recommended as the next step.
 
 ---
@@ -65,9 +64,9 @@ codebases are cited at file:line. Differences are classified:
 
 - **Structural parity** — same depth/width, no IPC delta predicted.
 - **rv64gc-v2 win** — rv64gc-v2 is more aggressive; gap source is elsewhere.
-- **rv64gc-v2 loss** — BOOM is more aggressive; predicted IPC delta listed.
+- **rv64gc-v2 loss** — Reference Core A is more aggressive; predicted IPC delta listed.
 
-The analysis uses concrete BOOM-MegaBoom params from
+The analysis uses concrete Reference Core A-Reference Core A (large config) params from
 `riscv-boom/src/main/scala/v4/common/config-mixins.scala:246-296` and
 rv64gc-v2 params from `rv64gc-v2/src/rtl/core/include/rv64gc_pkg.sv`.
 
@@ -75,7 +74,7 @@ rv64gc-v2 params from `rv64gc-v2/src/rtl/core/include/rv64gc_pkg.sv`.
 
 ## 3. Phase 1 — Frontend & Backend pipeline depth
 
-### 3.1 BOOM v4 frontend stages (from `frontend.scala` + comment in `core.scala:12-27`)
+### 3.1 Reference Core A frontend stages (from `frontend.scala` + comment in `core.scala:12-27`)
 
 ```
 F0 (s0) — NextPC select wires           — combinational
@@ -127,7 +126,7 @@ in steady-state could be 3 stages; in worst case 5).
 
 ### 3.3 Frontend depth comparison
 
-| Path | BOOM v4 | rv64gc-v2 | Delta |
+| Path | Reference Core A | rv64gc-v2 | Delta |
 |---|---:|---:|---:|
 | Fetch+IFU stages | 5 (F0-F4) | 2 (F1, F2) | rv64gc-v2 −3 |
 | FetchBuffer / FPB | 1 | 1 (bypassable) | rv64gc-v2 −0/−1 |
@@ -138,17 +137,17 @@ in steady-state could be 3 stages; in worst case 5).
 | **F0/F1 → IQ tail (worst-case)** | **~8** | **~5** | **rv64gc-v2 −3** |
 | **F0/F1 → IQ tail (steady-state)** | **~8** | **~3** | **rv64gc-v2 −5** |
 
-**Verdict (Phase 1):** rv64gc-v2 frontend is *shallower* than BOOM v4. This is
+**Verdict (Phase 1):** rv64gc-v2 frontend is *shallower* than Reference Core A. This is
 a **rv64gc-v2 win**, not a gap source. The mispredict-recovery penalty on
 rv64gc-v2 is approximately 5 cycles (frontend refill) + 1 cycle (rename) vs
-BOOM's 8+1, so on the same mispredict rate rv64gc-v2 should pay LESS.
+Reference Core A's 8+1, so on the same mispredict rate rv64gc-v2 should pay LESS.
 
 The earlier BRU early-redirect cycle (Cycle C) was REFUTED for the same
 reason — the refill is already short.
 
 ### 3.4 Backend pipeline (issue → execute → wb)
 
-BOOM ALU:
+Reference Core A ALU:
 ```
 ISS  — issue grant + fast_wakeup fires (execution-unit.scala:504-511)
 ARB  — arb_uop register, IRF read req (execution-unit.scala:92, 121-127)
@@ -174,19 +173,19 @@ single-pair latency.
 
 A subtle trade-off: rv64gc-v2 puts ISS+PRF read+ALU+CDB drive in ONE clock
 period — the longest path includes the IQ select, 12-port PRF read
-(combinational), 5-source bypass mux, ALU op, and CDB drive. BOOM splits
+(combinational), 5-source bypass mux, ALU op, and CDB drive. Reference Core A splits
 this across 4 clocks (ISS, ARB, RRD, EXE) so each individual cycle has more
 slack at the cost of pipeline depth. From a *cycle count* perspective,
-rv64gc-v2 wins. From an *Fmax / timing closure* perspective, BOOM wins. We
+rv64gc-v2 wins. From an *Fmax / timing closure* perspective, Reference Core A wins. We
 care about cycles here.
 
 ### 3.5 Memory pipeline depth (LSU)
 
-BOOM (from `lsu.scala`, comment line 295-298 + `core.scala:378`):
+Reference Core A (from `lsu.scala`, comment line 295-298 + `core.scala:378`):
 ```
 ISS → ARB → RRD → EXE (agen) → MEM (dcache req T+1) → S2 (dcache resp T+2) → WB
 ```
-- Load-to-use = 4 cycles when `enableFastLoadUse=true` (MegaBoom)
+- Load-to-use = 4 cycles when `enableFastLoadUse=true` (Reference Core A (large config))
 - Load-to-use = 5 cycles otherwise
 
 rv64gc-v2 (from `lsu.sv:213-218` + `dcache.sv:177-275`):
@@ -202,7 +201,7 @@ This is a **rv64gc-v2 win**, not a gap source.
 
 ### 3.6 Pipeline-depth conclusion
 
-rv64gc-v2 is shallower than BOOM on every pipeline path measured:
+rv64gc-v2 is shallower than Reference Core A on every pipeline path measured:
 - Frontend: −3 to −5 register stages (depending on FPB/DQ bypass hit)
 - Backend ALU: −3 register stages (no ARB/RRD/EXE staging)
 - Memory: −2 cycles load-to-use
@@ -216,7 +215,7 @@ strictly faster.
 
 ### 4.1 IQ structure
 
-| Param | BOOM v4 MegaBoom | rv64gc-v2 |
+| Param | Reference Core A (large config) | rv64gc-v2 |
 |---|---|---|
 | IQ_MEM | 32 entries, issue=3, dispatch=4 | iq_load 32 + iq_store(STA) 32 + iq_store_data(STD) 32 |
 | IQ_UNQ (mul/div/CSR/I2F) | 20 entries, issue=1 | (folded into IQ1+IQ2 below) |
@@ -228,25 +227,25 @@ strictly faster.
 | **Total INT issue width** | 3 (mem) + 1 (unq) + 4 (alu) = 8 | 4 (alu) + 2 (load) + 1 (sta) + 1 (std) = 8 |
 
 File evidence:
-- `config-mixins.scala:259-263` — MegaBoom IQ params
+- `config-mixins.scala:259-263` — Reference Core A (large config) IQ params
 - `rv64gc_pkg.sv:58-63` — rv64gc-v2 IQ depths
 - `rv64gc_core_top.sv:1757-1965` — IQ instantiations
-- `issue-units/issue-unit-age-ordered.scala` — BOOM age-ordered (collapsing) IQ
+- `issue-units/issue-unit-age-ordered.scala` — Reference Core A age-ordered (collapsing) IQ
 - `issue/issue_queue.sv:309-348` — rv64gc-v2 oldest-eligible select
 
 ### 4.2 Critical observation: IQ depth fragmentation
 
-BOOM v4 has a SINGLE 40-entry IQ_ALU shared across ALL 4 ALU lanes. Any
+Reference Core A has a SINGLE 40-entry IQ_ALU shared across ALL 4 ALU lanes. Any
 ALU-eligible uop in the 40-entry window can issue to any of the 4 lanes
 (subject to column-issue if `enableColumnALUIssue=true` — DISABLED in
-default MegaBoom).
+default Reference Core A (large config)).
 
 rv64gc-v2 splits ALU/MUL/DIV/CSR across THREE separate 24-entry IQs (IQ0,
 IQ1, IQ2), each statically dispatched at rename based on fu_type. The
 window an instruction can hide in is **at most 24 entries** for ALU2/ALU3
-lanes (which are pinned to IQ1/IQ2), vs **40 entries** in BOOM.
+lanes (which are pinned to IQ1/IQ2), vs **40 entries** in Reference Core A.
 
-Consequence: when a long dependency chain at one ALU lane stalls, BOOM has
+Consequence: when a long dependency chain at one ALU lane stalls, Reference Core A has
 40 entries to find another ready producer. rv64gc-v2 has only 24. This
 predicts longer issue-stall periods on dependency-heavy code.
 
@@ -257,7 +256,7 @@ is smaller.
 
 ### 4.3 MUL/DIV co-locating with ALU
 
-In BOOM, MUL+DIV+CSR+I2F sit in `IQ_UNQ` with issue width=1. They share NO
+In Reference Core A, MUL+DIV+CSR+I2F sit in `IQ_UNQ` with issue width=1. They share NO
 issue port with ALU. An IMUL in flight does NOT block any ALU lane.
 
 In rv64gc-v2, MUL is on IQ1 sharing port 0 with ALU2; DIV+CSR on IQ2 sharing
@@ -275,8 +274,8 @@ ports are IQ1/IQ2.
 
 ### 4.4 Bypass network
 
-BOOM:
-- `int_bypasses` Vec(coreWidth + lsuWidth, ...) = `Vec(6, ...)` for MegaBoom
+Reference Core A:
+- `int_bypasses` Vec(coreWidth + lsuWidth, ...) = `Vec(6, ...)` for Reference Core A (large config)
   (4 ALU + 2 load) (`core.scala:180`)
 - 4 ALU bypass sources are RegNext-free (combinational from alu_resp)
 - 2 load bypass sources are RegNext'd (1-cycle delay)
@@ -285,10 +284,10 @@ rv64gc-v2 (`rv64gc_pkg.sv:91-99`):
 - `NUM_BYPASS_SRCS = 5` (3 CDB-registered + 2 load_wb combinational)
 - 12 bypass mux instances, one per PRF read port (`rv64gc_core_top.sv:2073-2090`)
 
-| Aspect | BOOM | rv64gc-v2 | Verdict |
+| Aspect | Reference Core A | rv64gc-v2 | Verdict |
 |---|---|---|---|
 | Total bypass sources | 6 (4 ALU + 2 load) | 5 (3 ALU + 2 load) | rv64gc-v2 is THINNER (1 ALU bypass missing) |
-| ALU bypass timing | 0-cycle (combinational) | The 3 are CDB-registered + 2 load combinational | rv64gc-v2 ALU bypass is 1 cycle DELAYED relative to BOOM |
+| ALU bypass timing | 0-cycle (combinational) | The 3 are CDB-registered + 2 load combinational | rv64gc-v2 ALU bypass is 1 cycle DELAYED relative to Reference Core A |
 | Bypass mux fan-in per operand | 6 | 5 | parity-ish |
 
 Wait — re-reading `rv64gc_core_top.sv:108-111`: bypass sources are 5 = `ALU0/BRU + ALU1/BRU1 + ALU2/MUL + Load0 + Load1`. The fourth ALU lane (ALU3/DIV/CSR) is NOT bypassed. Consumers of ALU3 results must wait for the registered CDB → preg_ready_table update → next-cycle issue.
@@ -311,7 +310,7 @@ These predict ~5–8% of the cm gap.
 
 ### 5.1 ROB depth & commit width
 
-| Param | BOOM v4 MegaBoom | rv64gc-v2 |
+| Param | Reference Core A (large config) | rv64gc-v2 |
 |---|---|---|
 | ROB depth | 128 (`config-mixins.scala:258`) | 128 (`rv64gc_pkg.sv:40`) |
 | Commit width | 4 (= decodeWidth) | 4 (= COMMIT_WIDTH) |
@@ -328,7 +327,7 @@ isn't ready). The ROB is being correctly filled; the issue is upstream.
 
 ### 5.3 WB-to-commit bypass
 
-- **BOOM:** `wb_resps` are `RegNext`'d into the ROB writeback ports
+- **Reference Core A:** `wb_resps` are `RegNext`'d into the ROB writeback ports
   (`core.scala:879, 951, 972`). The cycle of head-ready latency = 1 cycle
   from execute completion.
 - **rv64gc-v2:** `wb_valid` to ROB also uses `cdb_valid_r` (registered, 1
@@ -337,7 +336,7 @@ isn't ready). The ROB is being correctly filled; the issue is upstream.
   let me verify in code below).
 
 <!-- evidence -->
-<!-- rob.sv:62-69 - load_wb_valid_r is registered; same as BOOM -->
+<!-- rob.sv:62-69 - load_wb_valid_r is registered; same as Reference Core A -->
 
 The two designs are structurally equivalent on commit.
 
@@ -349,7 +348,7 @@ The two designs are structurally equivalent on commit.
 
 ### 6.1 LQ/SQ/MSHR config
 
-| Param | BOOM v4 MegaBoom | rv64gc-v2 |
+| Param | Reference Core A (large config) | rv64gc-v2 |
 |---|---|---|
 | LQ entries | 32 (`config-mixins.scala:271`) | 32 (`rv64gc_pkg.sv:78`) |
 | SQ entries | 32 | 32 |
@@ -357,24 +356,24 @@ The two designs are structurally equivalent on commit.
 | MSHR | nMSHRs=8 (`config-mixins.scala:283`) | L1D_MSHR_DEPTH=16 (`rv64gc_pkg.sv:152`) |
 | L1D | 64 sets × 8 ways × 64B = **32 KB**, 8 MSHRs | 256 sets × 4 ways × 64B = **64 KB**, 16 MSHRs |
 | L1D banks | 4 (`config-mixins.scala:278`) | 2 (`rv64gc_pkg.sv:148`) |
-| Committed Store Buffer | None (BOOM keeps stores in SQ until cache fire) | CSB depth=32 (`rv64gc_pkg.sv:80`) |
+| Committed Store Buffer | None (Reference Core A keeps stores in SQ until cache fire) | CSB depth=32 (`rv64gc_pkg.sv:80`) |
 | Speculative load wakeup | `enableFastLoadUse=true`: 1-cycle pre-WB wakeup at AGEN (`lsu.scala:1017-1025`) | spec_wk fires at dcache req issue, 1-cycle pre-CDB (`lsu.sv:1116-1119`) |
 | Store-to-load forwarding | Yes (`enableLoadToStoreForwarding=true`) | Yes (3 paths: same-cycle STA/STD, SQ CAM, CSB CAM) |
 
 ### 6.2 Load-to-use latency
 
-- **BOOM MegaBoom:** 4 cycles (per `core.scala:378`)
+- **Reference Core A (large config):** 4 cycles (per `core.scala:378`)
 - **rv64gc-v2:** 2-3 cycles (per CLAUDE.md observation, confirmed by
   `lsu.sv:213-218`)
 
 ### 6.3 LSU verdict
 
-rv64gc-v2 LSU is structurally MORE aggressive than BOOM:
+rv64gc-v2 LSU is structurally MORE aggressive than Reference Core A:
 - Bigger L1D (64KB vs 32KB)
 - More MSHRs (16 vs 8)
 - Faster load-to-use (2-3 vs 4)
 - Extra committed-store-buffer for forwarding hits past SQ drain
-- More forwarding paths (3 same-cycle/SQ/CSB vs BOOM's SQ-only)
+- More forwarding paths (3 same-cycle/SQ/CSB vs Reference Core A's SQ-only)
 
 **Verdict (Phase 4):** LSU is a **rv64gc-v2 win**, not a gap source. The
 27% dhry head-stall on load is NOT the LSU's fault (loads are 1 cycle p99);
@@ -387,7 +386,7 @@ quickly the consumer can pick up the load result.
 
 ### 7.1 Rename rate
 
-| Param | BOOM v4 MegaBoom | rv64gc-v2 |
+| Param | Reference Core A (large config) | rv64gc-v2 |
 |---|---|---|
 | Rename width | 4 (= decodeWidth) | 4 (= RENAME_WIDTH) |
 | Rename pipeline depth | 2 stages (Ren1 + Ren2) | 1 stage (combinational outputs) |
@@ -397,7 +396,7 @@ quickly the consumer can pick up the load result.
 
 ### 7.2 Physical register file size
 
-| Param | BOOM v4 MegaBoom | rv64gc-v2 |
+| Param | Reference Core A (large config) | rv64gc-v2 |
 |---|---|---|
 | Int PRF | 144 (`config-mixins.scala:265`) | 160 (`rv64gc_pkg.sv:33`) |
 | Int free list | 144 - 32 = 112 | 160 - 32 = 128 |
@@ -407,7 +406,7 @@ quickly the consumer can pick up the load result.
 
 ### 7.3 The "imm PRF" gap (key finding)
 
-BOOM has a separate `ImmRenameStage` (`rename-stage.scala:414-460`) and
+Reference Core A has a separate `ImmRenameStage` (`rename-stage.scala:414-460`) and
 `immregfile` (32 entries, `core.scala:151-157`). Every immediate is
 allocated an `pimm` slot at rename, and `immregfile` is read at RRD time
 into `exe_imm_data` (`execution-unit.scala:170-173`).
@@ -424,7 +423,7 @@ imm-mux is combinational), but it has two indirect costs:
    ~4.6 Kb of state). Wider IQ entries → harder to scale IQ depth → IQ
    fragmentation problem above.
 2. The 64-bit imm field is replicated in every IQ entry rather than being
-   stored once in a 32-entry imm-PRF. BOOM uses `numImmReaders = aluWidth +
+   stored once in a 32-entry imm-PRF. Reference Core A uses `numImmReaders = aluWidth +
    memWidth + 1 = 8` imm-PRF read ports — much cheaper than carrying
    64-bit imm in every IQ slot.
 
@@ -443,14 +442,14 @@ already accounted for in any baseline measurement). Imm-PRF absence is an
 
 ### 8.1 Master table
 
-| # | Module | rv64gc-v2 | BOOM v4 MegaBoom | Direction | Predicted Δ IPC | Magnitude estimate (cycles) |
+| # | Module | rv64gc-v2 | Reference Core A (large config) | Direction | Predicted Δ IPC | Magnitude estimate (cycles) |
 |---|---|---|---|---|---|---|
 | 1 | Frontend register stages | 2 (F1+F2) + FPB | 5 (F0-F4) + FB | rv64gc-v2 WIN | +0 (steady-state, already saturating fetch) | n/a |
 | 2 | Frontend mispredict refill | ~5–6 cycles | ~8–9 cycles | rv64gc-v2 WIN | +1–2% on cm at 2.2% mispredict rate | (already measured: cm refill not the issue) |
 | 3 | ALU back-to-back ISS-to-ISS | 1 cycle | 1 cycle | parity | 0 | 0 |
 | 4 | Load-to-use latency | 2–3 cycles | 4 cycles | rv64gc-v2 WIN | +2–3% | (already measured) |
 | 5 | INT PRF size | 160 | 144 | rv64gc-v2 WIN (more renaming room) | +0–1% | n/a |
-| 6 | Branch checkpoints | 64 | 20 | rv64gc-v2 WIN | +0% (BOOM saturates rarely) | n/a |
+| 6 | Branch checkpoints | 64 | 20 | rv64gc-v2 WIN | +0% (Reference Core A saturates rarely) | n/a |
 | 7 | Total INT IQ entries | 72 (3×24) | 92 (32+20+40) | **rv64gc-v2 LOSS** | **−1 to −2%** on cm (deeper window helps cover ROB-head-wait) | ≈10-20k cycles on cm iter1 |
 | 8 | INT IQ depth fragmentation | 3 partitions, max 24/lane | 1 partition of 40 for ALU | **rv64gc-v2 LOSS** | **−3 to −5%** on cm (large window for OoO ALU) | ≈30-50k cycles on cm iter1 |
 | 9 | MUL on ALU2 lane | YES (shared CDB[2]) | NO (separate IQ_UNQ) | **rv64gc-v2 LOSS** | **−1 to −2%** on cm; head_not_ready_mul=3.4% + issue_arb=5.7% partly here | ≈10-20k cycles on cm iter1 |
@@ -462,14 +461,14 @@ already accounted for in any baseline measurement). Imm-PRF absence is an
 | 15 | Speculative load wakeup | Combinational, 1 cycle pre-CDB | Combinational, 1 cycle pre-WB | parity | 0 | 0 |
 | 16 | LSU L1D + MSHRs | 64KB/16MSHRs | 32KB/8MSHRs | rv64gc-v2 WIN | small (cm/dhry hit rate similar) | n/a |
 | 17 | Store-to-load forwarding | 3 paths (same-cycle STA/STD, SQ, CSB) | 1 path (SQ) | rv64gc-v2 WIN | +0–1% | small |
-| 18 | LSU AGen pipelined | enableAgenStage=false in MegaBoom | combinational AGen | parity | 0 | 0 |
+| 18 | LSU AGen pipelined | enableAgenStage=false in Reference Core A (large config) | combinational AGen | parity | 0 | 0 |
 | 19 | ROB depth & commit width | 128 / 4 | 128 / 4 | parity | 0 | 0 |
-| 20 | Wakeup-broadcast width | 6 ports (4 CDB + 2 load_wb) | 7 ports (4 ALU + 2 load + 1 ll_arb) | BOOM has +1 (ll_arb covers mul/div/csr/i2f) | small | small |
+| 20 | Wakeup-broadcast width | 6 ports (4 CDB + 2 load_wb) | 7 ports (4 ALU + 2 load + 1 ll_arb) | Reference Core A has +1 (ll_arb covers mul/div/csr/i2f) | small | small |
 | 21 | Branch predictor (BTB / TAGE / SC) | TAGE-L: 4096 base + 6 tagged tables × 128 entries | TAGE: 4096 base + 4 tagged × 256, 12-bit tags + SC + loop pred. BTB: 2048×8 vs ~512 | rv64gc-v2 WIN on storage (already measured) | already accounted | n/a |
-| 22 | RAS depth | 32 | 24 | BOOM marginal +1 | 0 | 0 |
-| 23 | Banked write to PRF (column ALU) | optional (off in MegaBoom) | No | parity | 0 | 0 |
+| 22 | RAS depth | 32 | 24 | Reference Core A marginal +1 | 0 | 0 |
+| 23 | Banked write to PRF (column ALU) | optional (off in Reference Core A (large config)) | No | parity | 0 | 0 |
 | 24 | Issue arbitration policy | age-collapsing (oldest-first) | oldest-eligible per-port | parity | 0 | 0 |
-| 25 | Compacting dispatch (re-pack on partial issue) | optional (off in MegaBoom default for IQ_UNQ) | No (slot-stall via holding-register in rename) | small | small | small |
+| 25 | Compacting dispatch (re-pack on partial issue) | optional (off in Reference Core A (large config) default for IQ_UNQ) | No (slot-stall via holding-register in rename) | small | small | small |
 
 ### 8.2 Sum-of-impacts vs measured gap
 
@@ -492,7 +491,7 @@ that aren't structural.
 **The dhry gap is the LARGEST anomaly.** None of the catalogued differences
 predict a 35% loss on dhry. The dhry head-stall is dominated by
 load-wait (27% of cycles, 72% of head-stall) — but rv64gc-v2 has FASTER
-loads and FATTER L1D than BOOM. The predicted ratio should be the OTHER
+loads and FATTER L1D than Reference Core A. The predicted ratio should be the OTHER
 direction.
 
 ### 8.3 The dhry anomaly — what's left to characterize
@@ -500,18 +499,18 @@ direction.
 The unexplained 35% on dhry is concentrated in load-wait at the ROB head.
 Possible structural sources NOT yet enumerated:
 
-1. **MUL/IMUL latency profile differs.** rv64gc-v2 MUL_LATENCY=3 vs BOOM
+1. **MUL/IMUL latency profile differs.** rv64gc-v2 MUL_LATENCY=3 vs Reference Core A
    imulLatency=3. Same. (Confirmed.)
 2. **Load result -> consumer chain.** A load at ROB head means the consumer
    couldn't issue. If the consumer is a MUL on IQ1 (shared with ALU2), and
    ALU2 is busy with another op, the MUL waits → load waits at head. dhry's
    tight `proc_3` strncpy / strncmp loops may exhibit exactly this.
 3. **Compiler binary differences.** The user's CLAUDE.md says "≤3% binary
-   contribution" — but for dhry specifically, BOOM reports DMIPS using
+   contribution" — but for dhry specifically, Reference Core A reports DMIPS using
    their own toolchain. If their toolchain unrolls the dhry hot loop more
    aggressively, that could explain ~10-20% IPC variance.
 4. **Cycles-to-recovery on dhry's small flush count (128 over 23k cycles =
-   0.5% mispredict).** BOOM's lrscCycles=80 vs rv64gc-v2's flush+restart
+   0.5% mispredict).** Reference Core A's lrscCycles=80 vs rv64gc-v2's flush+restart
    penalty. Probably small.
 5. **SQ-CSB write-back contention.** dhry has many small stores; if the
    committed-store-buffer fills, store retire stalls and the SQ backs up.
@@ -522,7 +521,7 @@ The most promising hypothesis for the dhry gap is **toolchain/binary
 difference** combined with the load → MUL → ALU dependency chain on
 shared lanes (#9 from the table). The architectural-only contribution is
 likely closer to 5-10%, with the rest being workload-specific binary
-optimization (loop unrolling, register coloring) that BOOM's compiler
+optimization (loop unrolling, register coloring) that Reference Core A's compiler
 flags handle differently.
 
 ---
@@ -539,7 +538,7 @@ IPC delta (~5-7% on cm).
 
 **Variant A (small refactor, 2-3 days, ~250 LOC):**
 - Reorganize: 2× ALU IQs of 32 entries (sel=2 each) + 1× UNQ IQ of 16 entries (sel=1, holds MUL+DIV+CSR).
-- Total: 2×32 + 16 = 80 INT IQ entries (close to BOOM's 92).
+- Total: 2×32 + 16 = 80 INT IQ entries (close to Reference Core A's 92).
 - ALU0/1 issue from IQ_ALU_A (32 entries, sel=2). ALU2/3 issue from IQ_ALU_B (32 entries, sel=2).
 - MUL/DIV/CSR issue from IQ_UNQ (16 entries, sel=1) — never blocks ALU.
 - Files to touch: `rv64gc_core_top.sv` (IQ instantiation, dispatch routing,
@@ -551,7 +550,7 @@ IPC delta (~5-7% on cm).
   topology unchanged. PRF read-port assignments need re-mapping.
 
 **Variant B (larger refactor, 1 week, ~500 LOC):**
-- Reorganize to BOOM's exact partitioning: 1× IQ_ALU 40 entries, sel=4. 1×
+- Reorganize to Reference Core A's exact partitioning: 1× IQ_ALU 40 entries, sel=4. 1×
   IQ_UNQ 20 entries, sel=1.
 - Adds a 4-from-40 oldest-eligible select tree (more complex than the
   current 2-from-24).
@@ -586,22 +585,22 @@ warm-up.
 
 ### 9.3 NOT recommended for next iteration
 
-- **Add immediate PRF (BOOM-style ImmRenameStage):** Big refactor (~1 kLOC,
+- **Add immediate PRF (Reference Core A-style ImmRenameStage):** Big refactor (~1 kLOC,
   ~2 weeks). Predicted IPC delta is small (it's an *enabler* of IQ depth
   scaling, not a direct win). Defer until after Variant A confirms IQ
   fragmentation is the actual cause.
 - **Increase CDB_WIDTH from 4 back to 6:** Already explored in 4-wide
   pivot history; CM bug bisected to this area. Keep CDB_WIDTH=4 +
   load_wb sideband as-is.
-- **Banked PRF / column ALU issue:** BOOM has the *option* but disables it
-  in MegaBoom. Likely not worth complexity for our IPC budget.
+- **Banked PRF / column ALU issue:** Reference Core A has the *option* but disables it
+  in Reference Core A (large config). Likely not worth complexity for our IPC budget.
 
 ---
 
 ## 10. Conclusion
 
 The audit identified **5 structural differences** between rv64gc-v2 and
-BOOM v4 MegaBoom that predict measurable IPC loss in rv64gc-v2:
+Reference Core A (large config) that predict measurable IPC loss in rv64gc-v2:
 
 1. INT IQ depth fragmentation (3×24 vs 1×40+1×20) — **−3 to −5%**
 2. MUL co-located with ALU2 — **−1 to −2%**
@@ -617,7 +616,7 @@ likely sources of the residual.
 
 Pipeline depth, ROB depth, LSU latency, and BPU storage are all NOT gap
 sources; in those categories rv64gc-v2 is at parity or strictly faster than
-BOOM.
+Reference Core A.
 
 The top recommended next RTL change (Variant A above) addresses items 1, 2,
 4, 5 in a single ~250-LOC, 2-3 day effort with a predicted +3-5% IPC delta
@@ -626,6 +625,6 @@ to ALU3) addresses item 3 with a separate +1-2% on cm.
 
 Combined, these two changes are predicted to close ~half the cm gap and a
 small portion of the dhry gap. The remaining dhry gap likely requires
-either (a) a binary-level investigation comparing BOOM's dhry build flags
+either (a) a binary-level investigation comparing Reference Core A's dhry build flags
 to ours, or (b) a runtime LSU/MUL chain trace on dhry's hot loops to
 identify a specific RTL micro-bottleneck.

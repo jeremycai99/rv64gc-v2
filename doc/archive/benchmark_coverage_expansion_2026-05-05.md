@@ -1,16 +1,16 @@
-# Benchmark Coverage Expansion From XiangShan References, 2026-05-05
+# Benchmark Coverage Expansion From Reference Core B References, 2026-05-05
 
 ## Verdict
 
-Use XiangShan's benchmark landscape to broaden coverage, but do not use the
-prebuilt XiangShan `.bin` files as scoreable signoff images yet.
+Use Reference Core B's benchmark landscape to broaden coverage, but do not use the
+prebuilt Reference Core B `.bin` files as scoreable signoff images yet.
 
 The right near-term path is source-level porting into the rv64gc-v2 bare-metal
 harness:
 
-1. Add XiangShan `frontendtest` microbenchmarks first, because they directly
+1. Add Reference Core B `frontendtest` microbenchmarks first, because they directly
    stress the BPU/FTQ ownership refactor.
-2. Add XiangShan `microbench` algorithm kernels next, because they broaden
+2. Add Reference Core B `microbench` algorithm kernels next, because they broaden
    integer, branch, pointer, compression, sort, hash, and graph behavior.
 3. Add downscaled memory/STREAM-style rows after that, because they expose LSU,
    cache, and prefetch behavior without becoming the Stage 1 optimization target.
@@ -46,21 +46,21 @@ coverage status is 43/43 PASS. A follow-up run through the normal manifest path
 with no command-line cap override also passed at `mcycle=169620`.
 
 This run covers 5 Dhrystone/CoreMark replicas, 15 micro/probe rows, 8 ISA smoke
-rows, and 15 C/control smoke rows. These rows are guardrails, not the MegaBOOM
-score target. MegaBOOM methodology details are in
+rows, and 15 C/control smoke rows. These rows are guardrails, not the Reference Core A (large config)
+score target. Reference Core A (large config) methodology details are in
 `doc/stage1_megaboom_benchmark_comparison_2026-05-06.md`.
 
 ## Sources Inspected
 
-- Local XiangShan checkout: `/home/jeremycai/agent-workspace/xiangshan`,
+- Local Reference Core B checkout: `/home/jeremycai/agent-workspace/xiangshan`,
   commit `4bfb226`.
-- XiangShan ready-to-run README:
+- Reference Core B ready-to-run README:
   `/home/jeremycai/agent-workspace/xiangshan/ready-to-run/README.md`.
-- XiangShan CI workload selector:
+- Reference Core B CI workload selector:
   `/home/jeremycai/agent-workspace/xiangshan/scripts/xiangshan.py`.
-- Upstream OpenXiangShan `nexus-am` source tree, shallow inspection at commit
+- Upstream Reference Core B project `nexus-am` source tree, shallow inspection at commit
   `b2470bd`.
-- Local Chipyard/MegaBOOM harness:
+- Local reference-core build framework/Reference Core A (large config) harness:
   `/home/jeremycai/agent-workspace/chipyard/generators/chipyard`,
   `/home/jeremycai/agent-workspace/chipyard/generators/testchipip`, and
   `/home/jeremycai/agent-workspace/chipyard/sims/verilator`.
@@ -69,32 +69,32 @@ score target. MegaBOOM methodology details are in
 
 | Constraint | Current rv64gc-v2 state | Impact |
 |---|---|---|
-| Image format | `$readmemh` byte-per-line hex loaded at `0x80000000` | Raw XiangShan `.bin` can be converted with `scripts/elf2hex.py --binary`, but endpoint handling still differs. |
+| Image format | `$readmemh` byte-per-line hex loaded at `0x80000000` | Raw Reference Core B `.bin` can be converted with `scripts/elf2hex.py --binary`, but endpoint handling still differs. |
 | Memory model | 2 MB byte-addressed sim memory | Small bare-metal apps fit; STREAM/SPEC/Linux/checkpoints do not fit without scaling or memory-model changes. |
-| Pass/fail | Harness observes an ordinary committed store to configurable `TOHOST_ADDR` defaulting to `0x80001000`; core RTL no longer exposes fixed `tohost` ports | XiangShan AM images use `_halt()` custom trap and UART/RTC MMIO, so they are not scoreable without a compatibility shim. |
+| Pass/fail | Harness observes an ordinary committed store to configurable `TOHOST_ADDR` defaulting to `0x80001000`; core RTL no longer exposes fixed `tohost` ports | Reference Core B AM images use `_halt()` custom trap and UART/RTC MMIO, so they are not scoreable without a compatibility shim. |
 | Perf result block | Stores to `0x80001080` produce `[BENCH_RESULT]` | Source ports should call our bench-result API to make cycles/instret/checksum machine-checkable. |
 | ISA target | `rv64gc_zba_zbb_zbs_zicond`; no RVV/H/Zfh/Zcb/Zacas/crypto | Scalar RV64GC and selected bitmanip rows are usable; vector, hypervisor, half-float, Zcb, Zacas, and crypto rows are excluded. |
 | Runtime | Bare-metal M-mode, no OS/proxy/checkpoint restore | Linux, SPEC checkpoints, syscall-heavy, and device-heavy workloads are deferred. |
 
-## XiangShan Ready-To-Run Binaries
+## Reference Core B Ready-To-Run Binaries
 
-| Binary | XiangShan description | Can run on rv64gc-v2 now? | Verdict |
+| Binary | Reference Core B description | Can run on rv64gc-v2 now? | Verdict |
 |---|---|---|---|
 | `microbench.bin` | Bare-metal `nexus-am/apps/microbench` | Loadable after raw-bin-to-hex conversion, but not scoreable | Rebuild from source with rv64gc-v2 CRT/bench MMIO. |
-| `coremark-2-iteration.bin` | Bare-metal 2-iteration `nexus-am/apps/coremark` | Loadable after conversion, but uses XiangShan AM exit convention | Do not replace our CoreMark image; use only as a source/reference variant. |
-| `copy_and_run.bin` | Loader that copies CoreMark from flash | Needs XiangShan flash/runtime assumptions | Not useful for current harness. |
+| `coremark-2-iteration.bin` | Bare-metal 2-iteration `nexus-am/apps/coremark` | Loadable after conversion, but uses Reference Core B AM exit convention | Do not replace our CoreMark image; use only as a source/reference variant. |
+| `copy_and_run.bin` | Loader that copies CoreMark from flash | Needs Reference Core B flash/runtime assumptions | Not useful for current harness. |
 | `flash_recursion_test.bin` | Flash recursion test | Flash/runtime-specific | Exclude. |
 | `linux.bin` | OpenSBI + Linux boot smoke | Needs OS boot path, devices, larger memory | Exclude until a Linux-capable SoC/harness exists. |
 
 The prebuilt images start at `0x80000000` and small images fit the current
 memory model, but they do not write our `tohost` or benchmark-result block.
 The portable direction is to rebuild source, not to tune the testbench around
-XiangShan's AM ABI.
+Reference Core B's AM ABI.
 
-## BOOM/Chipyard Test ABI Reference
+## Reference Core A / its build framework Test ABI Reference
 
-MegaBOOM in the local Chipyard tree does not use a core-internal benchmark
-escape either. It uses the Chipyard TestHarness around the core:
+Reference Core A (large config) in the local reference-core build framework tree does not use a core-internal benchmark
+escape either. It uses the reference-core build framework TestHarness around the core:
 
 - `MegaBoomV4Config` inherits `AbstractConfig`, which adds `WithSimTSIOverSerialTL`.
 - `WithSimTSIOverSerialTL` instantiates `SimTSI`, `SerialRAM`, and a TSI/HTIF
@@ -104,11 +104,11 @@ escape either. It uses the Chipyard TestHarness around the core:
 - The Verilator run target passes the ELF as `BINARY`, with optional
   `+loadmem=<elf>` support. FESVR/HTIF discovers `tohost/fromhost` from the ELF
   instead of requiring one hard-coded address.
-- Chipyard still carries riscv-tests/arch-test environments with
+- the reference-core build framework still carries riscv-tests/arch-test environments with
   `.tohost/.fromhost` symbols. That is the standard Spike/HTIF ecosystem path.
 
-The BOOM lesson is therefore different from XiangShan's: adopt a more general
-test platform ABI, not BOOM-specific core logic. For compatibility with BOOM
+The Reference Core A lesson is therefore different from Reference Core B's: adopt a more general
+test platform ABI, not Reference Core A-specific core logic. For compatibility with Reference Core A
 and riscv-tests, rv64gc-v2 should move from a fixed-address-only `tohost` flow
 toward symbol-driven ELF loading plus standard `tohost/fromhost` handling in
 the simulator harness.
@@ -122,18 +122,18 @@ live in the simulator/test platform and support multiple software ABIs:
    - fixed `tohost` at `0x80001000`;
    - benchmark result block at `0x80001080`;
    - current CoreMark/Dhrystone score flow.
-2. BOOM/Chipyard-compatible ABI:
+2. Reference Core A / its build framework-compatible ABI:
    - load ELF segments directly, not only byte-per-line hex;
    - discover `tohost` and `fromhost` symbols from the ELF when present;
    - accept standard riscv-tests/HTIF pass/fail encodings;
    - keep optional `+loadmem=<elf>` behavior for faster initialization.
-3. XiangShan/Nexus-AM source-port ABI:
+3. Reference Core B/Nexus-AM source-port ABI:
    - rebuild Nexus-AM apps against an rv64gc-v2 platform shim;
    - provide `_halt(code)` as a store to the harness endpoint;
    - provide `uptime`, UART stubs, and bounded heap locally;
    - use the same bench-result block for scoreable rows.
 
-Do not make XiangShan's prebuilt `_halt()` custom instruction part of the core
+Do not make Reference Core B's prebuilt `_halt()` custom instruction part of the core
 ISA. Supporting that exact instruction can be a simulation-only debug adapter
 later, but it should not gate Stage 1 coverage because it would make the
 benchmark image compatibility problem look like a core architecture feature.
@@ -159,25 +159,25 @@ Initial platform files:
 
 ## Candidate Matrix
 
-| Suite | XiangShan source | Coverage value | rv64gc-v2 feasibility | Verdict |
+| Suite | Reference Core B source | Coverage value | rv64gc-v2 feasibility | Verdict |
 |---|---|---|---|---|
 | Frontend microbench | `nexus-am/tests/frontendtest` | Direct BPU, BTB, RAS, IFU width, fetch fragmentation, branch density, and prediction pattern stress | Source is mostly small C loops; port to our CRT and bench MMIO | Highest priority. Add as Stage 1 smoke coverage. |
 | Conditional branch patterns | `frontendtest/cond_br_test` | Always/never taken, alternating, 2-bit, 3-bit, prime, nested, switching, rare, early-exit patterns | Pure scalar C; very suitable for BPU ownership validation | Highest priority. |
 | Branch target patterns | `frontendtest/br_target_test` | Calls, returns, indirect branches, jumps | Pure scalar C; useful for RAS/BTB/target ownership | Highest priority. |
 | MicroBench algorithms | `nexus-am/apps/microbench` | qsort, queen, bf, fib, sieve, 15pz, dinic, lzip, ssort, md5 | Needs AM `uptime`, heap, printf, and `_halt` replaced; algorithms are portable | High priority after frontend microbench. |
 | CPUTest scalar programs | `nexus-am/tests/cputest/tests` | Small compiler-generated scalar correctness and control-flow coverage | Very easy to port; not a performance benchmark | Add as fast correctness smoke suite. |
-| CoreMark variant | `nexus-am/apps/coremark` | Cross-check image/build diversity | We already have a controlled CoreMark; direct XiangShan image is not scoreable | Optional source comparison only. |
+| CoreMark variant | `nexus-am/apps/coremark` | Cross-check image/build diversity | We already have a controlled CoreMark; direct Reference Core B image is not scoreable | Optional source comparison only. |
 | Dhrystone variant | `nexus-am/apps/dhrystone` | Cross-check image/build diversity | We already have a controlled Dhrystone | Optional source comparison only. |
 | STREAM | `nexus-am/apps/stream` | Sequential memory bandwidth, copy/scale/add/triad loops | Default arrays exceed current memory; can run only with downscaled arrays | Add later as LSU/cache coverage, labelled non-standard STREAM. |
-| Mem latency/bandwidth tests | `nexus-am/apps/mem_test/*` | Cache-line, same-set, and memory access behavior | Current constants use addresses beyond 2 MB and XiangShan cache assumptions | Port after memory sizing/address parameters are cleaned up. |
-| RISC-V tests | XiangShan CI `riscv-tests`; local Chipyard riscv-tests also available | ISA and simple scalar benchmark coverage | Scalar `rv64ui/um/ua/uf/ud/uc` are feasible if rebuilt for our tohost; privileged/S-mode rows need care | Add scalar subset as correctness, not perf signoff. |
-| RISC-V benchmark suite | Local Chipyard `riscv-tests/benchmarks` | mm, qsort, towers, memcpy, median, multiply, rsort, spmv, vvadd | Scalar single-thread subset can be rebuilt for our harness; vector and mt rows excluded | Good second-wave perf diversity. |
+| Mem latency/bandwidth tests | `nexus-am/apps/mem_test/*` | Cache-line, same-set, and memory access behavior | Current constants use addresses beyond 2 MB and Reference Core B cache assumptions | Port after memory sizing/address parameters are cleaned up. |
+| RISC-V tests | Reference Core B CI `riscv-tests`; local reference-core build framework riscv-tests also available | ISA and simple scalar benchmark coverage | Scalar `rv64ui/um/ua/uf/ud/uc` are feasible if rebuilt for our tohost; privileged/S-mode rows need care | Add scalar subset as correctness, not perf signoff. |
+| RISC-V benchmark suite | Local reference-core build framework `riscv-tests/benchmarks` | mm, qsort, towers, memcpy, median, multiply, rsort, spmv, vvadd | Scalar single-thread subset can be rebuilt for our harness; vector and mt rows excluded | Good second-wave perf diversity. |
 | TSVC | `nexus-am/apps/tsvc` | Loop/vectorization-oriented kernels | Default `MARCH` enables RVV/crypto/extra bitmanip; scalar override may be possible | Defer; use only scalarized build if it compiles cleanly. |
-| Maprobe/cache probes | `nexus-am/apps/maprobe`, cacheop tests | Cache replacement/latency/bandwidth diagnostics | Uses XiangShan cache hierarchy/device assumptions | Defer until cache-specific harness support. |
+| Maprobe/cache probes | `nexus-am/apps/maprobe`, cacheop tests | Cache replacement/latency/bandwidth diagnostics | Uses Reference Core B cache hierarchy/device assumptions | Defer until cache-specific harness support. |
 | F16/BF16/vector tests | `nexus-am/tests/bf16`, RVV CI lists | FP/vector extension stress | Requires unsupported ISA extensions | Exclude for current core. |
-| H-extension, Svinval, Svnapot, PMP/ASID/system tests | XiangShan misc/rvh CI lists | Privileged architecture coverage | Requires S/H-mode, MMU, interrupt/device behavior beyond current perf harness | Exclude from Stage 1. |
-| Zcb/Zacas/crypto/IOPMP tests | XiangShan misc CI lists | Extension/device coverage | Unsupported or out of current SoC scope | Exclude. |
-| Linux/SPEC checkpoints | XiangShan CI workload/checkpoint lists | Real workload coverage | Needs OS, devices, checkpoint restore, much larger memory | Long-term only. |
+| H-extension, Svinval, Svnapot, PMP/ASID/system tests | Reference Core B misc/rvh CI lists | Privileged architecture coverage | Requires S/H-mode, MMU, interrupt/device behavior beyond current perf harness | Exclude from Stage 1. |
+| Zcb/Zacas/crypto/IOPMP tests | Reference Core B misc CI lists | Extension/device coverage | Unsupported or out of current SoC scope | Exclude. |
+| Linux/SPEC checkpoints | Reference Core B CI workload/checkpoint lists | Real workload coverage | Needs OS, devices, checkpoint restore, much larger memory | Long-term only. |
 
 ## Recommended Stage 1 Coverage Expansion
 
@@ -241,11 +241,11 @@ coverage only after endpoint, hash, and golden PC generation are stable.
    - current: convert ELF/raw binary to byte-per-line hex via
      `scripts/elf2hex.py` and parse `tohost`/`fromhost` symbols when present;
    - next: add true PT_LOAD segment loading into the simulator memory model so
-     Chipyard-style ELF loading does not need an intermediate hex image;
+     the reference-core build framework-style ELF loading does not need an intermediate hex image;
    - keep byte-per-line hex as a compatibility fallback.
 3. Split pass/fail handling into selectable simulator ABIs:
    - current: `SIM_ABI=rv64gc-fixed-tohost`, configurable `TOHOST_ADDR`;
-   - next: `htif` for BOOM/Spike/riscv-tests-compatible symbol-driven
+   - next: `htif` for Reference Core A/Spike/riscv-tests-compatible symbol-driven
      `tohost`;
    - next: `xs-am-port` for source-rebuilt Nexus-AM `_halt()` mapped to
      rv64gc/htif endpoint stores.
@@ -269,7 +269,7 @@ coverage only after endpoint, hash, and golden PC generation are stable.
 
 ## Non-Goals
 
-- Do not implement XiangShan's custom AM `_halt()` trap just to make prebuilt
+- Do not implement Reference Core B's custom AM `_halt()` trap just to make prebuilt
   images pass. That would optimize the testbench ABI rather than core behavior.
 - Do not add vector/H-extension/Zcb/Zacas/crypto rows to the current core's
   performance matrix.

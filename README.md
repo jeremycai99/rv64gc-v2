@@ -4,8 +4,9 @@
 implementing **RV64GC + Zba/Zbb/Zbs/Zicond**. It is a 4-wide superscalar
 out-of-order machine with speculative wakeup, checkpoint-based recovery, a
 TAGE-SC-L branch predictor, and an FPnew floating-point unit. It passes the
-RV64GC ISA test suite, boots mainline Linux, and exceeds BOOM's published
-single-thread benchmark floor on both CoreMark and Dhrystone.
+RV64GC ISA test suite, boots mainline Linux, and exceeds a reference
+application-class OoO core's published single-thread benchmark floor on both
+CoreMark and Dhrystone.
 
 ## Status
 
@@ -13,12 +14,12 @@ single-thread benchmark floor on both CoreMark and Dhrystone.
 |---|---|
 | ISA | `rv64imafdc_zba_zbb_zbs_zicond_zicsr_zifencei` |
 | RV64GC compliance | **113 / 113** riscv-tests pass (incl. RV64F/D) |
-| CoreMark | **6.85 CoreMark/MHz** (BOOM public floor ≈ 6.2) |
-| Dhrystone | **4.27 DMIPS/MHz** (BOOM public floor ≈ 3.93) |
+| CoreMark | **6.85 CoreMark/MHz** (reference OoO core public floor ≈ 6.2) |
+| Dhrystone | **4.27 DMIPS/MHz** (reference OoO core public floor ≈ 3.93) |
 | Linux | boots OpenSBI + Linux 6.6 to userspace (`BOOT OK`) |
 | Primary sim | DSim 2026 (authoritative); Verilator (open-source) |
 
-Benchmarks are compiled to the standard riscv-tests/BOOM methodology and measured
+Benchmarks are compiled to the standard riscv-tests methodology and measured
 on the cycle-accurate RTL. See `doc/release_candidate_signoff_2026-05-29.md` for
 the signoff detail and `doc/rv64gc_v2_uarch.md` for the full microarchitecture
 specification.

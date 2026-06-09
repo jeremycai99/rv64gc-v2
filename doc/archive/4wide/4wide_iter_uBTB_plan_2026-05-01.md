@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Auto-mode standing rule: subagent-driven-development is invoked automatically after this plan completes.
 
-**Goal:** Validate the data-driven gap-closure methodology pipeline on a low-blast-radius RTL change by checking whether rv64gc-v2's BTB / NLP / branch-prediction storage sizes are undersized vs MegaBoom v4. If undersized: bump and measure with predicted ±0.5% IPC tolerance. If match-or-exceed BOOM: REFUTE-no-change and document.
+**Goal:** Validate the data-driven gap-closure methodology pipeline on a low-blast-radius RTL change by checking whether rv64gc-v2's BTB / NLP / branch-prediction storage sizes are undersized vs Reference Core A (large config). If undersized: bump and measure with predicted ±0.5% IPC tolerance. If match-or-exceed Reference Core A: REFUTE-no-change and document.
 
-**Architecture:** 5-step cycle (investigate → predict → change → validate → commit-or-revert). Likely outcome based on pre-recon: REFUTE-no-change, since `BTB_ENTRIES=2048` already exceeds typical BOOM v4 BTB size. Plan handles both branches cleanly.
+**Architecture:** 5-step cycle (investigate → predict → change → validate → commit-or-revert). Likely outcome based on pre-recon: REFUTE-no-change, since `BTB_ENTRIES=2048` already exceeds typical Reference Core A BTB size. Plan handles both branches cleanly.
 
 **Tech Stack:** SystemVerilog + DSim 2026 + python3 clockcheck (`../rv64gc-perf-model/tools/rtl_clockcheck.py`).
 
@@ -26,7 +26,7 @@ Current rv64gc-v2 BPU storage:
 | RAS | (size TBD by Task 1) | `src/rtl/core/fetch/ras.sv` exists |
 | Next-line prefetch buffer | 4 entries | `src/rtl/core/fetch/next_line_prefetch_buffer.sv:45` (`NUM_ENTRIES=4`) |
 
-The BTB at 2048 entries is large — BOOM v4 typical is ~256-512 BTB entries. The NLP at 4 entries is small but it's a prefetch buffer (warm-cache helper), NOT the primary prediction path. The primary predictor is TAGE-SC-L + BTB + RAS, which appears well-equipped.
+The BTB at 2048 entries is large — Reference Core A typical is ~256-512 BTB entries. The NLP at 4 entries is small but it's a prefetch buffer (warm-cache helper), NOT the primary prediction path. The primary predictor is TAGE-SC-L + BTB + RAS, which appears well-equipped.
 
 This pre-recon suggests REFUTE-no-change is the likely outcome. Plan handles this cleanly without wasted RTL build cycles.
 
@@ -86,7 +86,7 @@ This buffer feeds Task 2 comparison.
 
 ---
 
-## Task 2: Look up BOOM v4 reference values
+## Task 2: Look up Reference Core A reference values
 
 **Files (web-fetched):**
 - https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/btb.scala
@@ -94,25 +94,25 @@ This buffer feeds Task 2 comparison.
 - https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/common/config-mixins.scala (search for `MegaBoomConfig`, `LargeBoomConfig`, BTB params)
 - https://docs.boom-core.org/en/latest/sections/branch-prediction/index.html
 
-- [ ] **Step 1: WebFetch the BOOM BTB source**
+- [ ] **Step 1: WebFetch the Reference Core A BTB source**
 
 Use the WebFetch tool on `https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/btb.scala` with prompt `"What are the BTB nSets, nWays, total entry count, tag bits, and any related parameters? Quote the relevant Scala code."`
 
-Record BOOM's BTB nSets, nWays, total entries.
+Record Reference Core A's BTB nSets, nWays, total entries.
 
-- [ ] **Step 2: WebFetch the BOOM MegaBoom config**
+- [ ] **Step 2: WebFetch the Reference Core A (large config) config**
 
 Use WebFetch on `https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/common/config-mixins.scala` with prompt `"What BTB parameters and BPD (branch predictor) parameters does the WithNMegaBooms or MegaBoomConfig set? Quote the bpdMaxMetaLength, BTB nSets, nWays, ghistLength, tage table sizes if visible."`
 
-Record MegaBoom's tuned BTB + BPD values.
+Record Reference Core A (large config)'s tuned BTB + BPD values.
 
-- [ ] **Step 3: WebFetch the BOOM TAGE source**
+- [ ] **Step 3: WebFetch the Reference Core A TAGE source**
 
 Use WebFetch on `https://github.com/riscv-boom/riscv-boom/blob/master/src/main/scala/v4/ifu/bpd/tage.scala` with prompt `"What are the TAGE table sizes (nEntries per table), history lengths per table, tag bits per table, and number of tables in the default BoomTAGE? Quote the case class defaults."`
 
-Record BOOM's TAGE configuration.
+Record Reference Core A's TAGE configuration.
 
-- [ ] **Step 4: WebFetch the BOOM docs**
+- [ ] **Step 4: WebFetch the Reference Core A docs**
 
 Use WebFetch on `https://docs.boom-core.org/en/latest/sections/branch-prediction/index.html` with prompt `"What is BOOM's branch prediction structure? Are there micro-BTB, RAS, loop predictor, statistical corrector? What sizes does the doc cite?"`
 
@@ -121,7 +121,7 @@ Record any explicit RAS depth, NLP/uBTB info from the docs.
 - [ ] **Step 5: Build comparison table in scratch buffer**
 
 ```
-                  rv64gc-v2 (current)        BOOM v4 (Mega)        Verdict
+                  rv64gc-v2 (current)        Reference Core A (Mega)        Verdict
 BTB entries       <Task1 value>              <Task2 value>         <larger/smaller/equal>
 BTB ways          <>                         <>                    <>
 TAGE tables       <>                         <>                    <>
@@ -148,9 +148,9 @@ For EACH component in the Task 2 comparison table:
 - [ ] **Step 2: Aggregate decision**
 
 If at least ONE component is a CANDIDATE: proceed to Task 4 (predict + change).
-If ALL components are REFUTED (≥ BOOM): the cycle's hypothesis is REFUTED-no-change — skip to Task 8 (document + proceed to Cycle C).
+If ALL components are REFUTED (≥ Reference Core A): the cycle's hypothesis is REFUTED-no-change — skip to Task 8 (document + proceed to Cycle C).
 
-**Important:** "Within ~10% of BOOM size" still counts as ≥ BOOM (no change). Only meaningfully-undersized components (e.g., rv64gc-v2 has 32 BTB entries when BOOM has 256) qualify as CANDIDATES. Use engineering judgment: if a small bump (≤2× current) doesn't materially change the design, the cycle has nothing to test.
+**Important:** "Within ~10% of Reference Core A size" still counts as ≥ Reference Core A (no change). Only meaningfully-undersized components (e.g., rv64gc-v2 has 32 BTB entries when Reference Core A has 256) qualify as CANDIDATES. Use engineering judgment: if a small bump (≤2× current) doesn't materially change the design, the cycle has nothing to test.
 
 - [ ] **Step 3: Branch the plan**
 
@@ -185,7 +185,7 @@ Create `doc/4wide_iter_uBTB_prediction.md` with:
 ## Hypothesis
 
 rv64gc-v2's <component(s)> at <current size(s)> is/are undersized vs
-MegaBoom v4 at <BOOM size(s)>. Bumping to <new size(s)> should reduce
+Reference Core A (large config) at <Reference Core A size(s)>. Bumping to <new size(s)> should reduce
 BPU-induced flush cycles and produce a small IPC win on cm and dhry.
 
 ## Predicted RTL change
@@ -259,7 +259,7 @@ Example (illustrative — actual values from Task 1+2):
 ```systemverilog
 // BEFORE
 localparam int BTB_ENTRIES    = 2048;
-// AFTER (only if Task 2 found BOOM has more)
+// AFTER (only if Task 2 found Reference Core A has more)
 localparam int BTB_ENTRIES    = 4096;
 ```
 
@@ -396,7 +396,7 @@ Create `doc/4wide_iter_uBTB_results.md`:
 
 Functional 21/21 PASS. Clockcheck 3/3 PASS, 0 diverging.
 
-## Updated gap to MegaBoom floor
+## Updated gap to Reference Core A (large config) floor
 
 | Workload | New CM/MHz or DMIPS | Floor | Updated gap |
 |---|---:|---:|---:|
@@ -417,7 +417,7 @@ git add src/rtl/core/include/rv64gc_pkg.sv <any-cascade-files> doc/4wide_iter_uB
 git -c user.email="jeremycai@local" -c user.name="Jeremy Cai" commit -q -m \
   "perf-iter A: uBTB sizing — measured Δ <X%> cm / <Y%> dhry (in-band)
 
-Hypothesis: <component> undersized vs MegaBoom v4
+Hypothesis: <component> undersized vs Reference Core A (large config)
 Predicted: cm +<P%> (1.665 → <Pred>), dhry +<P%> (2.027 → <Pred>)
 Measured:  cm +<X%> (1.665 → <Meas>), dhry +<Y%> (2.027 → <Meas>)
 In-band:   YES (±0.5% IPC absolute tolerance for predicted <3% win)
@@ -486,7 +486,7 @@ See doc/4wide_iter_uBTB_results.md for refute reasoning.
 Cycle A complete. Next: Cycle C with unchanged baseline."
 ```
 
-### 8c — Branch REFUTE-no-change (Task 3 said all components ≥ BOOM)
+### 8c — Branch REFUTE-no-change (Task 3 said all components ≥ Reference Core A)
 
 - [ ] **Step 1: Write REFUTE-on-investigation results doc**
 
@@ -500,7 +500,7 @@ Create `doc/4wide_iter_uBTB_results.md`:
 
 ## Investigation findings
 
-| Component | rv64gc-v2 | BOOM v4 (Mega) | Verdict |
+| Component | rv64gc-v2 | Reference Core A (Mega) | Verdict |
 |---|---|---|---|
 | BTB entries | <X> | <Y> | <≥ / <> |
 | BTB ways | <X> | <Y> | ... |
@@ -509,8 +509,8 @@ Create `doc/4wide_iter_uBTB_results.md`:
 | RAS depth | <X> | <Y> | ... |
 | NLP entries | <X> | <Y> | ... |
 
-All rv64gc-v2 sizes meet or exceed BOOM v4 reference values. No bump
-applies; the "undersized vs BOOM" hypothesis is REFUTED on investigation.
+All rv64gc-v2 sizes meet or exceed Reference Core A reference values. No bump
+applies; the "undersized vs Reference Core A" hypothesis is REFUTED on investigation.
 
 ## Implication
 
@@ -530,7 +530,7 @@ git -c user.email="jeremycai@local" -c user.name="Jeremy Cai" commit -q -m \
   "perf-iter A: uBTB sizing REFUTED-on-investigation (no RTL change)
 
 Investigation found rv64gc-v2's BTB/TAGE/RAS/NLP storage all meet or
-exceed BOOM v4 reference sizes. No 'undersize' to bump. RTL untouched;
+exceed Reference Core A reference sizes. No 'undersize' to bump. RTL untouched;
 baseline unchanged.
 
 See doc/4wide_iter_uBTB_results.md for the side-by-side comparison.
@@ -559,7 +559,7 @@ Cycle A complete (REFUTE-on-investigation). Next: Cycle C."
 
 - [x] Spec coverage: each phase of the 5-step cycle has at least one task; each branch (PROCEED / REFUTE-no-change / REVERT) has a documented exit
 - [x] Placeholder scan: no TBD/TODO/"add error handling"/"similar to Task N"
-- [x] Type consistency: parameter names match between Task 1 (catalog), Task 2 (BOOM lookup), Task 4 (prediction note), Task 5 (RTL change), Task 8 (commit message)
+- [x] Type consistency: parameter names match between Task 1 (catalog), Task 2 (Reference Core A lookup), Task 4 (prediction note), Task 5 (RTL change), Task 8 (commit message)
 - [x] REFUTE-on-investigation branch (8c) is explicit and actionable, not buried
 - [x] Tolerance is consistently ±0.5% IPC absolute (small-delta rule), NOT relative 30%
 - [x] Prediction-before-change order is explicit (Task 4 before Task 5)

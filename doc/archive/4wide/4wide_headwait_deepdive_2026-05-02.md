@@ -143,7 +143,7 @@ depends on iteration N-1's load result.**
 | Bottleneck source | % of cm cycles | Cause | Fixable? |
 |---|---:|---|---|
 | Productive (PEAK + dwell-1 partial) | ~65% | Pipeline executing | — |
-| Load-at-head latency (dwell-2) | **16.4%** | Each load occupies head for 1 cycle waiting for wb | Only by reducing dcache hit latency (structural; we're already faster than BOOM) |
+| Load-at-head latency (dwell-2) | **16.4%** | Each load occupies head for 1 cycle waiting for wb | Only by reducing dcache hit latency (structural; we're already faster than Reference Core A) |
 | Mispredict recovery (dwell 6-10) | **14.7%** | 4,343 mispredicts × ~7 cyc each | Only by reducing pipeline depth (rejected by user; pipelining doesn't help here because flush DRAINS the pipe) OR reducing mispredict rate (TAGE limits per H3) |
 | MUL/multi-cycle at head (dwell-3) | 2.6% | MUL is 3-cyc FU; sits at head for 2 cycles | Only by reducing MUL latency (1-cyc multipliers are exotic, large area) |
 | Other partial commits | ~1% | Long-tail (cache misses, DIV) | Workload-specific |
@@ -160,7 +160,7 @@ If we could (impossibly) eliminate all three structural waits:
 - Save 33.7% of cm cycles
 - New mcycle = 199,452 × (1 − 0.337) = 132,243
 - **Theoretical IPC = 332,110 / 132,243 = 2.51**
-- **Theoretical CM/MHz = 7.55** — well above MegaBoom 6.2 floor
+- **Theoretical CM/MHz = 7.55** — well above Reference Core A (large config) 6.2 floor
 
 So there IS room theoretically. But each elimination requires:
 - **Load-WB at head**: dcache latency 2→1 (VIPT + way-prediction; structural rework)
@@ -173,7 +173,7 @@ So there IS room theoretically. But each elimination requires:
 
 | Cycle | Targeted | Bubble category targeted | Was it the right target? |
 |---|---|---|---|
-| A — uBTB sizing | BPU mispredicts | Mispredict recovery (14.7% of cm) | Yes, but BPU was already bigger than BOOM so no IPC headroom |
+| A — uBTB sizing | BPU mispredicts | Mispredict recovery (14.7% of cm) | Yes, but BPU was already bigger than Reference Core A so no IPC headroom |
 | C — BRU early-redirect | Mispredict recovery | Mispredict recovery (14.7%) | Yes, but mechanism caused MORE mispredicts (+7.1%) |
 | B — SFB | Mispredict recovery | Mispredict recovery (14.7%) | Yes, but only 0.92% of cm cycles SFB-eligible |
 | E — ALU3 bypass | Operand-stall (symptom) | Other partial (~50%) | No — bypass coverage isn't the bottleneck; load-WB is |
@@ -191,9 +191,9 @@ because the BPU is already well-tuned. Cycles E/F targeted symptoms instead of r
 - ❌ **Relaxed in-order commit** (user rejected — breaks renaming/exception model)
 - ❌ **Smaller pipeline depth** (user rejected — pipelining means depth doesn't affect steady-state)
 - ❌ **Pre-completion of MUL/DIV** (user rejected — speculative execute = unknown territory)
-- ❌ **Dcache hit 2→1 cycle** (per BOOM research — we're already faster than BOOM; would need VIPT + way-prediction = structural rework)
+- ❌ **Dcache hit 2→1 cycle** (per Reference Core A research — we're already faster than Reference Core A; would need VIPT + way-prediction = structural rework)
 - ❌ **Wider commit / more bypass / larger IQ** (Cycles E, F refuted)
-- ❌ **BPU storage growth** (Cycle A refuted — already bigger than BOOM)
+- ❌ **BPU storage growth** (Cycle A refuted — already bigger than Reference Core A)
 - ❌ **Early-redirect** (Cycle C refuted — increased mispredicts)
 
 ### Remaining angles worth ONE more careful look
@@ -232,7 +232,7 @@ design point. All require structural change of a kind not in scope for this 4-wi
 
 The dhry gap (2.42 vs 4.00 floor = 39.5%) is dominated by similar load-at-head patterns
 in `proc_3` strncpy/strncmp loops, plus the workload's intrinsic IPC ceiling on a 4-wide
-machine (per the SonicBOOM paper, MegaBoom only achieves 3.93 DMIPS — even MegaBoom hits
+machine (per the Reference Core A paper, Reference Core A (large config) only achieves 3.93 DMIPS — even Reference Core A (large config) hits
 a similar wall).
 
 ---
@@ -241,7 +241,7 @@ a similar wall).
 
 **The bubble decomposition definitively shows that the rv64gc-v2 4-wide design is not
 parameter-bound.** All knobs that we COULD turn either:
-- Have already been turned (BPU bigger than BOOM, dcache faster than BOOM, etc.)
+- Have already been turned (BPU bigger than Reference Core A, dcache faster than Reference Core A, etc.)
 - Were tested and refuted (Cycles A, C, B, E, F)
 - Require structural change beyond this design point (dcache redesign, relaxed commit, etc.)
 

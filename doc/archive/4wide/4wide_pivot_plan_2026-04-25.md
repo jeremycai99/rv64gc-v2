@@ -3,7 +3,7 @@
 ## Decision
 
 Narrow rv64gc-v2 from **6-wide → 4-wide**, in place. User-approved 2026-04-25
-after measurement showed 6-wide v2 (5.83 CM/MHz) loses to 4-wide MegaBoom
+after measurement showed 6-wide v2 (5.83 CM/MHz) loses to 4-wide Reference Core A (large config)
 (~6.2 CM/MHz). Per-slot efficiency: 0.97 vs 1.55 — width is wasted by
 front-end starvation, not consumed by issue/execute.
 
@@ -11,11 +11,11 @@ front-end starvation, not consumed by issue/execute.
 
 | Tier | CM/MHz | DMIPS/MHz | Comparison |
 |---|---:|---:|---|
-| Baseline must-match | ≥ 6.2 | ≥ 4.00 | MegaBoom (4-wide) |
-| **Sign-off (must beat)** | **≥ 8.24** | **≥ 4.72** | ARM Cortex-A72 (3-wide OoO) |
+| Baseline must-match | ≥ 6.2 | ≥ 4.00 | Reference Core A (large config) (4-wide) |
+| **Sign-off (must beat)** | **≥ 8.24** | **≥ 4.72** | a commercial 3-wide OoO core (3-wide OoO) |
 
 Old IPC targets (CM ≥ 2.5, DS ≥ 3.2) **superseded**. Sign-off authority is
-dsim/xsim measurement (same class as BOOM's Verilator → directly comparable).
+dsim/xsim measurement (same class as Reference Core A's Verilator → directly comparable).
 
 ## Methodology (industry-style model stack)
 
@@ -124,7 +124,7 @@ core/fetch/uop_cache_data_ram.sv
 | Functional 18/18 PASS lost during transition | Branch first (`git checkout -b 4wide-pivot`); keep 6-wide RTL stable on main |
 | Performance worse than model prediction | Calibrate counters first; if gap >20%, identify the missing bottleneck model before continuing |
 | Clockcheck diverges unexpectedly | Stop at the first divergence; either fix RTL or add an explicit expected-delta rule for intentional resource changes |
-| Phase 1 finds no 4-wide candidate beating MegaBoom baseline | Halt before RTL touch; revisit frontend, BPU, uop-cache, or decoupled F2 options in the model |
+| Phase 1 finds no 4-wide candidate beating Reference Core A (large config) baseline | Halt before RTL touch; revisit frontend, BPU, uop-cache, or decoupled F2 options in the model |
 
 ## Done criteria
 
@@ -133,7 +133,7 @@ core/fetch/uop_cache_data_ram.sv
 - [ ] Phase 1: 18/18 functional regression PASS at 4-wide
 - [ ] Phase 1: dhrystone, coremark iter=1, coremark iter=10 all PASS at STOP
 - [ ] Phase 2: clockcheck microbenches pass or all divergences are documented expected deltas
-- [ ] Phase 3: dsim/xsim CM/MHz ≥ 6.2 + DMIPS/MHz ≥ 4.0 (MegaBoom baseline)
-- [ ] Phase 3: dsim/xsim CM/MHz ≥ 8.24 + DMIPS/MHz ≥ 4.72 (A72 sign-off) **OR** documented gap-closing follow-up plan
+- [ ] Phase 3: dsim/xsim CM/MHz ≥ 6.2 + DMIPS/MHz ≥ 4.0 (Reference Core A (large config) baseline)
+- [ ] Phase 3: dsim/xsim CM/MHz ≥ 8.24 + DMIPS/MHz ≥ 4.72 (commercial 3-wide OoO stretch sign-off) **OR** documented gap-closing follow-up plan
 - [ ] CLAUDE.md updated with new sign-off targets + 4-wide rationale
 - [ ] `doc/rv64gc_v2_uarch.md` updated to 4-wide spec

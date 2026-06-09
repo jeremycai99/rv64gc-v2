@@ -35,7 +35,7 @@ For a predicted gain <1% IPC on both workloads we care about, the engineering co
 
 | Cycle | Verdict | Why | Δ to baseline |
 |---|---|---|---|
-| A — uBTB sizing | REFUTE-on-investigation | rv64gc-v2 BPU is BIGGER than BOOM (8x BTB, has Statistical Corrector, larger TAGE tags). No undersize to bump. | 0 |
+| A — uBTB sizing | REFUTE-on-investigation | rv64gc-v2 BPU is BIGGER than Reference Core A (8x BTB, has Statistical Corrector, larger TAGE tags). No undersize to bump. | 0 |
 | C — BRU early-redirect | REFUTE-on-measurement | Mechanism fired correctly (4652 early redirects on cm) but net-NEGATIVE (cm IPC -2.05%): early speculation past unresolved mispredicts multiplied wrong-path work (mispredict count +7.1%). | 0 |
 | B — SFB | REFUTE-on-investigation | Insufficient SFB-eligible mispredict patterns: dhry 0.05% predicted, cm 0.92% predicted, both below thresholds. | 0 |
 
@@ -50,7 +50,7 @@ PARTIAL-FLOOR sign-off (`doc/4wide_signoff_2026-05-01.md`) stands as final.
 
 The 3-cycle gap-closure sequence ran the data-driven methodology to its conclusion. All three cycles produced data-grounded REFUTEs:
 
-- **A:** design is well-equipped (BPU > BOOM)
+- **A:** design is well-equipped (BPU > Reference Core A)
 - **C:** mechanism that "should" help is net-negative (counter-intuitive but measured)
 - **B:** workload doesn't have enough SFB-eligible patterns
 

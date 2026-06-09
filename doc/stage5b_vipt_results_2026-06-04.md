@@ -18,7 +18,7 @@ fetch lands the paged-mode IPC win with zero benchmark regression.
 
 The original Stage 5 goal — "good at the normal (paged) workload, not just benchmarks" —
 is met: paged fetch now runs at ~the bare-metal rate, and the benchmark wins are untouched
-(both still beat BOOM's 6.2 / 3.93 floor).
+(both still beat Reference Core A's 6.2 / 3.93 floor).
 
 ## What was built
 

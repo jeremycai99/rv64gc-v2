@@ -70,7 +70,7 @@ mispredict — they wait at the ROB head for a serial load-fed compare chain
 | **Value prediction** (ALU chain) | <1% IPC CM, ~0% DS | no | 3–6 wk; fights registered-CDB timing; recovery needs selective-replay | **DROP** — addressable pool 3.5%, and CRC/matrix/state values are unpredictable (pseudo-random / data-dependent / load-fed) |
 | **Narrow 2-deep / chained ALU** | 0.5–2% CM (best case), ~0% DS | no | weeks; ALU datapath + decode/IQ 3rd-operand port; front-end fusion-detect timing | **lean DROP** — CRC (the clean target) <1% of cycles; biggest exposed bucket (state branches) is load-fed, not an ALU RAW chain |
 | **L1D prefetcher** (misses) | <0.17% (abs), ~0% real | no | 2–4 wk | **DROP** — L1D miss rate 0.008–0.04%; the misses are pointer-chase first-touches a stride/next-line engine cannot predict |
-| **dcache 2→1 hit** (load-use) | 1–4% per workload | no | multi-month, structural, high timing risk | **lean DROP** — attacks the right term but load completion is already 1 cycle with delay-0 consumer wakeup (91% CM / 93% DS); the residual is consumer execute + registered-CDB wakeup + commit, which faster dcache does not touch. rv64gc-v2 is already faster load-to-use than BOOM (2-cyc vs 3-cyc). |
+| **dcache 2→1 hit** (load-use) | 1–4% per workload | no | multi-month, structural, high timing risk | **lean DROP** — attacks the right term but load completion is already 1 cycle with delay-0 consumer wakeup (91% CM / 93% DS); the residual is consumer execute + registered-CDB wakeup + commit, which faster dcache does not touch. rv64gc-v2 is already faster load-to-use than Reference Core A (2-cyc vs 3-cyc). |
 
 Supporting evidence (verified): L1D load-miss counts DS100=1, DS300=4, CM1=23,
 CM10=47 (baseline `dsim.log` "D-cache load miss allocation summary"); LSU
@@ -101,8 +101,8 @@ running at 1 cycle/link — intrinsic to the algorithm's data dependence; (b) th
 deliberate +1-cycle registered-CDB consumer wakeup (`rv64gc_core_top.sv:145-151`,
 the fix that breaks the select→ALU→wakeup→re-select loop); and (c) MUL latency.
 None is a parameter tweak; all gate-clearing attacks are multi-month structural
-rework past an already-better-than-BOOM design point (CM 6.85 > ~6.2; DS load-to-
-use faster than BOOM). This re-confirms — now rigorously and at a +30% higher
+rework past an already-better-than-Reference Core A design point (CM 6.85 > ~6.2; DS load-to-
+use faster than Reference Core A). This re-confirms — now rigorously and at a +30% higher
 performance level — the 2026-05-01 PARTIAL-FLOOR conclusion.
 
 ## Caveat — RESOLVED
@@ -130,10 +130,10 @@ Any further IPC at this design point requires one of:
 - **Relax the +3% gate** for a marginal (~1–2%) structural win (narrow chained
   ALU on the CM ALU residual) — explicit policy change.
 - **Multi-month structural** work (dcache 2→1 hit, pointer/address prediction for
-  the list pointer-chase) — past an already-better-than-BOOM design point.
+  the list pointer-chase) — past an already-better-than-Reference Core A design point.
 - **A different optimization axis** — Fmax/timing closure, area/power efficiency,
   or a broader/representative workload suite (the 2 benchmarks here are
   near-floor; target workloads may expose different headroom).
 
 Stage 4 (IPC-on-current-benchmarks) is closed at the well-tuned floor:
-**CoreMark 6.85 CM/MHz (> BOOM ~6.2), Dhrystone 3.22 DMIPS/MHz.**
+**CoreMark 6.85 CM/MHz (> Reference Core A ~6.2), Dhrystone 3.22 DMIPS/MHz.**
