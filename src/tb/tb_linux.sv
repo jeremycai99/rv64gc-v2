@@ -142,6 +142,22 @@ module tb_linux;
     logic [63:0] last_commit_pc;
     logic [63:0] last_commit_cycle;
     integer last_commit_count;
+    // Wedge-dump (sim-only, +WEDGE_DUMP): when commit stalls for a long window,
+    // dump the LSU atomic-serialization state so we can see which amo_serial_block
+    // term is stuck (the root of the LR/AMO-at-head boot deadlock).
+    logic        wedge_dump_en;
+    logic        wedge_dumped;
+    logic [63:0] wedge_prev_minstret;
+    logic [63:0] wedge_last_change_cyc;
+    integer      wedge_dump_thresh;
+    initial begin
+        wedge_dump_en = $test$plusargs("WEDGE_DUMP");
+        wedge_dumped  = 1'b0;
+        wedge_prev_minstret = 64'd0;
+        wedge_last_change_cyc = 64'd0;
+        wedge_dump_thresh = 300000;
+        void'($value$plusargs("WEDGE_DUMP_THRESH=%d", wedge_dump_thresh));
+    end
     localparam int LINUX_TRACE_RING_DEPTH = 32;
     integer linux_commit_ring_wr;
     integer linux_commit_ring_count;
@@ -260,6 +276,8 @@ module tb_linux;
     logic [63:0]             linux_owner_hist_flags [0:LOAD_OWNER_HIST_DEPTH-1];
     integer                  linux_owner_hist_load_pc_en;
     logic [63:0]             linux_owner_hist_load_pc;
+    integer                  linux_hist_dump_pos;
+    integer                  linux_hist_dump_idx;
     integer                  linux_owner_hist_pa_line_en;
     logic [63:0]             linux_owner_hist_pa_line;
     wire                     linux_trace_cycle_on;
@@ -1221,6 +1239,38 @@ module tb_linux;
                     u_core.u_lsu.u_load_queue.queue[
                         u_core.u_lsu.p1_fwd_hold_lq_idx_r].addr,
                     64'd0);
+            end
+        end
+    end
+
+    // ---- Wedge detector + LSU atomic-serialization dump -------------------
+    always_ff @(posedge clk) begin
+        if (rst_n && wedge_dump_en && !wedge_dumped) begin
+            if (perf_minstret != wedge_prev_minstret) begin
+                wedge_prev_minstret   <= perf_minstret;
+                wedge_last_change_cyc <= sim_cycle;
+            end else if ((sim_cycle - wedge_last_change_cyc) >= wedge_dump_thresh
+                         && sim_cycle > wedge_dump_thresh) begin
+                wedge_dumped <= 1'b1;
+                $display("[WEDGE] cyc=%0d minstret=%0d stalled_for=%0d priv=%0d satp=%016h rob_head=%0d rob_tail=%0d rob_free=%0d last_commit_pc=%016h",
+                         sim_cycle, perf_minstret, sim_cycle - wedge_last_change_cyc,
+                         u_core.csr_priv_mode, u_core.csr_satp,
+                         u_core.rob_head_idx, u_core.rob_tail_idx, u_core.rob_free_count,
+                         last_commit_pc);
+                $display("[WEDGE-SERIAL] amo_serial_block=%b | amo_busy=%b csb_deq=%b lmb_any=%b p0_dch=%b p1_dch=%b liv_r=%b liv_rr=%b p0_retry=%b p1_retry=%b p0_mretry=%b p1_mretry=%b fwd_hold=%b p1_fwd_hold=%b",
+                         u_core.u_lsu.amo_serial_block,
+                         u_core.u_lsu.amo_busy, u_core.u_lsu.csb_deq_valid,
+                         u_core.u_lsu.lmb_any_valid,
+                         u_core.u_lsu.p0_dcache_hold_valid_r, u_core.u_lsu.p1_dcache_hold_valid_r,
+                         u_core.u_lsu.load_issue_valid_r, u_core.u_lsu.load_issue_valid_rr,
+                         u_core.u_lsu.p0_retry_valid_r, u_core.u_lsu.p1_retry_valid_r,
+                         u_core.u_lsu.p0_miss_retry_req, u_core.u_lsu.p1_miss_retry_req,
+                         u_core.u_lsu.fwd_hold_valid_r, u_core.u_lsu.p1_fwd_hold_valid_r);
+                $display("[WEDGE-AMO] amo_wait_load_r=%b amo_store_valid_r=%b amo_wb_valid_r=%b amo_forward_block=%b load_issue_suppress=%b%b",
+                         u_core.u_lsu.amo_wait_load_r, u_core.u_lsu.amo_store_valid_r,
+                         u_core.u_lsu.amo_wb_valid_r, u_core.u_lsu.amo_forward_block,
+                         u_core.u_lsu.load_issue_suppress[1], u_core.u_lsu.load_issue_suppress[0]);
+                $finish;
             end
         end
     end
@@ -3931,6 +3981,67 @@ module tb_linux;
                           u_core.rob_head_is_ecall |
                           u_core.rob_head_is_wfi));
                 linux_dump_stall_debug();
+                if (linux_owner_hist_en != 0) begin
+                    $display("[LINUX_OWNER_HIST_ALL] count=%0d wr=%0d",
+                             linux_owner_hist_count, linux_owner_hist_wr);
+                    for (linux_hist_dump_pos = 0;
+                         linux_hist_dump_pos < linux_owner_hist_count;
+                         linux_hist_dump_pos = linux_hist_dump_pos + 1) begin
+                        linux_hist_dump_idx =
+                            (linux_owner_hist_wr + LOAD_OWNER_HIST_DEPTH -
+                             linux_owner_hist_count + linux_hist_dump_pos) %
+                            LOAD_OWNER_HIST_DEPTH;
+                        $display("[LINUX_OWNER_HIST_EV] cyc=%0d ev=%0d p%0d pc=%016h rob=%0d lq=%0d addr=%016h flags=%016h",
+                                 linux_owner_hist_cycle[linux_hist_dump_idx],
+                                 linux_owner_hist_event[linux_hist_dump_idx],
+                                 linux_owner_hist_port[linux_hist_dump_idx],
+                                 linux_owner_hist_pc[linux_hist_dump_idx],
+                                 linux_owner_hist_rob[linux_hist_dump_idx],
+                                 linux_owner_hist_lq[linux_hist_dump_idx],
+                                 linux_owner_hist_addr[linux_hist_dump_idx],
+                                 linux_owner_hist_flags[linux_hist_dump_idx]);
+                    end
+                end
+                $display("[LINUX_IQLOAD_DUMP] cand_v=%b supp_raw=%b vm_supp=%b fence_supp=%b",
+                         u_core.iq_load_issue_candidate_valid,
+                         u_core.lsu_load_issue_suppress_raw,
+                         u_core.vm_serial_load_issue_suppress,
+                         u_core.mem_fence_load_issue_suppress);
+                $display("[LINUX_DISPATCH_DUMP] iqld_occ=%0d iqst_occ=%0d iqstd_occ=%0d ld_cred=%0d st_cred=%0d dq_full=%0b dq_deq=%0d iq0occ=%0d iq1occ=%0d iq2occ=%0d iq0f=%0b iq1f=%0b iq2f=%0b",
+                         u_core.iq_load_occ, u_core.iq_store_occ, u_core.iq_std_occ,
+                         u_core.dq_load_iq_credit, u_core.dq_store_iq_credit,
+                         u_core.dq_full, u_core.dq_deq_count,
+                         u_core.iq0_occ, u_core.iq1_occ, u_core.iq2_occ,
+                         u_core.iq0_full, u_core.iq1_full, u_core.iq2_full);
+                for (linux_hist_dump_pos = 0; linux_hist_dump_pos < 32;
+                     linux_hist_dump_pos = linux_hist_dump_pos + 1) begin
+                    if (u_core.u_iq_load.entry_valid[linux_hist_dump_pos]) begin
+                        $display("[LINUX_IQLOAD_EV] e=%0d rob=%0d s1r=%0b s2r=%0b s3r=%0b rs1p=%0d rs2p=%0d tbl1=%0b tbl2=%0b",
+                                 linux_hist_dump_pos,
+                                 u_core.u_iq_load.rob_idx_r[linux_hist_dump_pos],
+                                 u_core.u_iq_load.src1_ready[linux_hist_dump_pos],
+                                 u_core.u_iq_load.src2_ready[linux_hist_dump_pos],
+                                 u_core.u_iq_load.src3_ready[linux_hist_dump_pos],
+                                 u_core.u_iq_load.rs1_phys_r[linux_hist_dump_pos],
+                                 u_core.u_iq_load.rs2_phys_r[linux_hist_dump_pos],
+                                 u_core.preg_ready_table[u_core.u_iq_load.rs1_phys_r[linux_hist_dump_pos]],
+                                 u_core.preg_ready_table[u_core.u_iq_load.rs2_phys_r[linux_hist_dump_pos]]);
+                    end
+                end
+                for (linux_hist_dump_pos = 0; linux_hist_dump_pos < 32;
+                     linux_hist_dump_pos = linux_hist_dump_pos + 1) begin
+                    if (u_core.u_iq0.entry_valid[linux_hist_dump_pos]) begin
+                        $display("[LINUX_IQ0_EV] e=%0d rob=%0d s1r=%0b s2r=%0b rs1p=%0d rs2p=%0d tbl1=%0b tbl2=%0b",
+                                 linux_hist_dump_pos,
+                                 u_core.u_iq0.rob_idx_r[linux_hist_dump_pos],
+                                 u_core.u_iq0.src1_ready[linux_hist_dump_pos],
+                                 u_core.u_iq0.src2_ready[linux_hist_dump_pos],
+                                 u_core.u_iq0.rs1_phys_r[linux_hist_dump_pos],
+                                 u_core.u_iq0.rs2_phys_r[linux_hist_dump_pos],
+                                 u_core.preg_ready_table[u_core.u_iq0.rs1_phys_r[linux_hist_dump_pos]],
+                                 u_core.preg_ready_table[u_core.u_iq0.rs2_phys_r[linux_hist_dump_pos]]);
+                    end
+                end
                 $display("IPC: mcycle=%0d minstret=%0d IPC=%f",
                          perf_mcycle, perf_minstret,
                          $itor(perf_minstret) / $itor(perf_mcycle));

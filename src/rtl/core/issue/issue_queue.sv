@@ -15,7 +15,13 @@ module issue_queue
     // When non-zero, entries whose fu_type matches PORT0_ONLY_FU are
     // excluded from port 1 selection (they can only issue on port 0).
     // Set to a fu_type_e value (e.g., 3'd1 for FU_BRU) or 0 to disable.
-    parameter int PORT0_ONLY_FU = 0
+    parameter int PORT0_ONLY_FU = 0,
+    // Enables the per-cycle preg_ready_table re-snoop for resident entries
+    // (BRU early-redirect deadlock-#3 fix).  Tied ON only when early-redirect
+    // is enabled at the top level; default 0 keeps the wakeup path byte-
+    // identical to baseline (the re-snoop reads the comb-forwarded ready table
+    // and would otherwise wake resident consumers ~1 cycle early).
+    parameter logic EARLY_REDIRECT_WAKEUP = 1'b0
 )(
     input  wire clk,
     input  wire rst_n,
@@ -332,6 +338,39 @@ module issue_queue
                     next_src3_spec[e]  = 1'b0;
                     spec_cancel_rs3[e] = 1'b1;
                 end
+
+                // -- Per-cycle preg_ready_table re-snoop for resident entries
+                //    (BRU early-redirect deadlock-#3 fix) --
+                // Under a PARTIAL flush a surviving consumer can enqueue on the
+                // same cycle its producer's CDB broadcast is gated out, latching
+                // with src*_ready=0 while the producer's value is in fact ready
+                // (preg_ready_table[rs]=1).  The wakeup CAM above only fires on a
+                // LIVE CDB broadcast, so such an entry has NO recovery path and
+                // strands the ROB head forever.  Re-check the authoritative busy
+                // table every cycle: preg_ready_table[p]=1 means p's value is
+                // available, so waking is always architecturally correct.
+                //   - Skip sources already woken (src*_ready) or hit by CDB this
+                //     cycle (redundant), and any source being spec-cancelled this
+                //     cycle (cancel must win -- placed AFTER the cancel block).
+                //   - INERT when early-redirect OFF: with no partial-flush CDB
+                //     suppression the registered CDB-hit sets src*_ready the same
+                //     cycle preg_ready_table becomes visible, so the !rs*_cdb_hit
+                //     guard blocks this path (verified: the normal wakeup wins).
+                if (EARLY_REDIRECT_WAKEUP &&
+                    !src1_ready[e] && !rs1_cdb_hit[e] && !spec_cancel_rs1[e] &&
+                    preg_ready_table[rs1_phys_r[e]]) begin
+                    next_src1_ready[e] = 1'b1;
+                end
+                if (EARLY_REDIRECT_WAKEUP &&
+                    !src2_ready[e] && !rs2_cdb_hit[e] && !spec_cancel_rs2[e] &&
+                    preg_ready_table[rs2_phys_r[e]]) begin
+                    next_src2_ready[e] = 1'b1;
+                end
+                if (EARLY_REDIRECT_WAKEUP &&
+                    !src3_ready[e] && !rs3_cdb_hit[e] && !spec_cancel_rs3[e] &&
+                    preg_ready_table[rs3_phys_r[e]]) begin
+                    next_src3_ready[e] = 1'b1;
+                end
             end
         end
     end
@@ -616,7 +655,15 @@ module issue_queue
         for (int e = 0; e < DEPTH; e++) begin
             flush_survives[e] = entry_valid[e] && !flush_remove[e];
             for (int p = 0; p < NUM_SELECT; p++) begin
-                if (sel_found[p] && (e[IDX_BITS-1:0] == sel_idx[p]))
+                // Match the entry_valid clear (issue path): a SELECTED entry
+                // only leaves the queue when its issue is NOT suppressed.  On a
+                // partial-flush cycle the LSU suppresses load issue, so a
+                // selected-but-suppressed survivor stays valid; excluding it
+                // here (without the !issue_suppress guard) drifts count_r down
+                // by 1 each time, eventually underflowing -> phantom-full IQ ->
+                // zero dispatch credit -> dispatch deadlock.
+                if (sel_found[p] && !issue_suppress[p] &&
+                    (e[IDX_BITS-1:0] == sel_idx[p]))
                     flush_survives[e] = 1'b0;
             end
             if (flush_survives[e])

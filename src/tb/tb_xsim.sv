@@ -84,8 +84,43 @@ module tb_xsim;
             max_cycles = 100000;
     end
 
+    // Memory-dependence profiler (+MEMDEP_PROFILE): sizes the store-set /
+    // load-disambiguation-speculation lever.  Counts how often a load is blocked
+    // by an older store's ordering wait (sq_order_wait_block), specifically the
+    // unknown-store-address case (sq_fwd_wait_addr_unknown = the speculation
+    // opportunity, since load_issue_spec_past_addr_unknown is hardwired 0), and
+    // how much that OVERLAPS the HEAD_WAIT wall (head valid but not ready).
+    logic        md_en;
+    logic [63:0] md_total, md_headwait, md_sqblock, md_addrunk, md_sqblock_hw, md_addrunk_hw;
+    initial begin
+        md_en = $test$plusargs("MEMDEP_PROFILE");
+        md_total=0; md_headwait=0; md_sqblock=0; md_addrunk=0; md_sqblock_hw=0; md_addrunk_hw=0;
+    end
+    task automatic print_memdep;
+        if (md_en && md_total != 0) begin
+            $display("[MEMDEP] total=%0d headwait=%0d sqblock=%0d addrunk=%0d sqblock&hw=%0d addrunk&hw=%0d",
+                     md_total, md_headwait, md_sqblock, md_addrunk, md_sqblock_hw, md_addrunk_hw);
+            $display("[MEMDEP] %%of-total: headwait=%.2f sqblock=%.2f addrunk=%.2f sqblock&hw=%.2f addrunk&hw=%.2f",
+                     100.0*md_headwait/md_total, 100.0*md_sqblock/md_total, 100.0*md_addrunk/md_total,
+                     100.0*md_sqblock_hw/md_total, 100.0*md_addrunk_hw/md_total);
+        end
+    endtask
+
     always @(posedge clk) begin
         sim_cycle <= sim_cycle + 1;
+
+        if (rst_n && md_en) begin
+            md_total <= md_total + 1;
+            if (u_tb.u_core.backend_admission_head_block) md_headwait <= md_headwait + 1;
+            if (u_tb.u_core.u_lsu.p0_sq_order_wait_block ||
+                u_tb.u_core.u_lsu.p1_sq_order_wait_block) md_sqblock <= md_sqblock + 1;
+            if (u_tb.u_core.u_lsu.sq_fwd_wait_addr_unknown) md_addrunk <= md_addrunk + 1;
+            if ((u_tb.u_core.u_lsu.p0_sq_order_wait_block ||
+                 u_tb.u_core.u_lsu.p1_sq_order_wait_block) &&
+                u_tb.u_core.backend_admission_head_block) md_sqblock_hw <= md_sqblock_hw + 1;
+            if (u_tb.u_core.u_lsu.sq_fwd_wait_addr_unknown &&
+                u_tb.u_core.backend_admission_head_block) md_addrunk_hw <= md_addrunk_hw + 1;
+        end
 
         // Periodic progress
         if (sim_cycle > 0 && (sim_cycle % 10000) == 0) begin
@@ -105,6 +140,7 @@ module tb_xsim;
             $display("IPC: mcycle=%0d minstret=%0d IPC=%f",
                      perf_mcycle, perf_minstret,
                      $itor(perf_minstret) / $itor(perf_mcycle));
+            print_memdep;
             $finish;
         end
 
@@ -114,6 +150,7 @@ module tb_xsim;
             $display("IPC: mcycle=%0d minstret=%0d IPC=%f",
                      perf_mcycle, perf_minstret,
                      $itor(perf_minstret) / $itor(perf_mcycle));
+            print_memdep;
             $finish;
         end
     end

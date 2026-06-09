@@ -880,8 +880,27 @@ module lsu
     // is no longer part of the functional LQ address-fill path.
     logic p0_exec_fire;
     logic p1_exec_fire;
-    assign p0_exec_fire = load_issue_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid;
-    assign p1_exec_fire = p1_eff_valid       & ~p1_eff_misalign        & ~flush_in.valid;
+    // A partial flush under BRU early-redirect must NOT drop a SURVIVING
+    // (older-than-flush) load's address fill.  The kill term keeps wrong-path
+    // younger issues (and every issue under a full flush) out, but lets a
+    // surviving issue write addr_valid this cycle (the LQ partial-flush exec
+    // fill path handles a kept entry).  Under early-redirect OFF, flush_in is
+    // always a full_flush, so the survivor disjunct is 0 and this reduces to
+    // the original `~flush_in.valid`.
+    logic p0_issue_flush_kill;
+    logic p1_issue_flush_kill;
+    assign p0_issue_flush_kill =
+        flush_in.valid &&
+        (flush_in.full_flush ||
+         (lsu_rob_age_from_head(load_issue_data[0].rob_idx) >=
+          lsu_rob_age_from_head(flush_in.rob_idx)));
+    assign p1_issue_flush_kill =
+        flush_in.valid &&
+        (flush_in.full_flush ||
+         (lsu_rob_age_from_head(p1_eff_data.rob_idx) >=
+          lsu_rob_age_from_head(flush_in.rob_idx)));
+    assign p0_exec_fire = load_issue_valid[0] & ~load_addr_misaligned[0] & ~p0_issue_flush_kill;
+    assign p1_exec_fire = p1_eff_valid       & ~p1_eff_misalign        & ~p1_issue_flush_kill;
     assign lq_p1_hold_valid_r = (lq_p1_hold_count_r != '0);
     assign lq_p1_hold_full    = (lq_p1_hold_count_r == LQ_P1_HOLD_DEPTH);
     assign lq_p1_issue_block  = 1'b0;
@@ -1010,6 +1029,32 @@ module lsu
                     load_issue_data_rr[i]  <= '0;
                     load_eff_addr_rr[i]    <= '0;
                 end
+            end
+            // SURVIVOR NEW-ISSUE CAPTURE.  Under BRU early-redirect a partial
+            // flush can coincide with a SURVIVING (older-than-flush) load
+            // issuing this cycle.  That load executes this cycle (p0/p1_exec_fire
+            // are now survivor-gated), so it must also be registered into the _r
+            // stage exactly as the else-branch would, otherwise the N+1 D-cache
+            // response is never tracked (no LMB alloc, no miss detect, no retry)
+            // and the load stalls at the ROB head forever.  These overriding
+            // non-blocking assignments win over the age-kill above for the same
+            // _r[i] when a survivor issues.  Inert when early-redirect is OFF:
+            // flush_in is always a full_flush then, so p0/p1_issue_flush_kill==1
+            // and these reduce to no-ops (the kill branch above still clears _r).
+            if (load_issue_valid[0] & ~load_addr_misaligned[0] & ~p0_issue_flush_kill) begin
+                load_issue_valid_r[0] <= 1'b1;
+                load_issue_data_r[0]  <= load_issue_data[0];
+                load_eff_addr_r[0]    <= load_mem_addr[0];
+                load_nocache_r[0]     <= load_cross_line[0] |
+                                         load_addr_misaligned[0] | load_addr_mmio[0] |
+                                         load_issue_data[0].is_amo |
+                                         p0_fwd_hit | p0_partial_fwd_wait;
+            end
+            if (p1_eff_valid & ~p1_eff_misalign & ~p1_issue_flush_kill) begin
+                load_issue_valid_r[1] <= 1'b1;
+                load_issue_data_r[1]  <= p1_eff_data;
+                load_eff_addr_r[1]    <= p1_eff_addr;
+                load_nocache_r[1]     <= p1_eff_nocache;
             end
         end else begin
             // Port 0 and port 1 propagate their effective issue.  This includes
@@ -1919,7 +1964,17 @@ module lsu
                 // Drain after one cycle unless the retried load is still
                 // blocked by an older store whose address is known but whose
                 // data has not reached the SQ yet.
-                if (!p1_sq_order_wait_block && !p1_partial_fwd_wait &&
+                //
+                // !flush_in.valid: under BRU early-redirect a PARTIAL flush can
+                // coincide with a SURVIVING (older-than-flush) port-1 retry.  That
+                // cycle the retry's D-cache request is suppressed (dcache_load_req[1]
+                // is gated by ~flush_in.valid), so draining here would lose the load
+                // forever (no LMB entry, no retry) -> the same-line dual-load partner
+                // stalls the ROB head -> deadlock.  Holding the retry lets it re-fire
+                // next cycle.  Inert without partial flushes (a full_flush is killed
+                // by the branch above), so byte-identical when early-redirect is off.
+                if (!flush_in.valid &&
+                    !p1_sq_order_wait_block && !p1_partial_fwd_wait &&
                     !lq_p1_issue_block &&
                     (!p1_any_fwd_hit || !p1_fwd_hold_valid_r))
                     p1_retry_valid_r <= 1'b0;
@@ -2278,6 +2333,32 @@ module lsu
         end
     end
 
+    // =========================================================================
+    // LMB orphan re-probe — forward declarations (DSim decl-before-use)
+    // =========================================================================
+    // The orphan re-probe (see "LMB orphan re-probe" region below the LMB array)
+    // re-issues a port-0 D-cache load for an LMB entry that was left valid+!ready
+    // because its one-shot fill_snoop was missed (early-redirect partial-flush
+    // delayed the load's re-issue past its fill).  The request mux just below
+    // and the LMB completion clear in the LMB always_ff both USE these signals,
+    // but their natural declaration site is after the LMB array (~line 2700).
+    // DSim enforces declaration-before-use, so they are forward-declared here.
+    // The LMB array depth localparams are MOVED here for the same reason (the
+    // re-probe address build below needs LMB_IDX_BITS).
+    localparam int LMB_DEPTH    = 32;
+    localparam int LMB_IDX_BITS = $clog2(LMB_DEPTH);
+    logic                    reprobe_req_fire;   // port-0 re-probe request this cycle
+    logic [LMB_IDX_BITS-1:0] lmb_reprobe_idx;    // chosen orphan entry (comb scan)
+    logic [LMB_IDX_BITS-1:0] reprobe_idx_r;      // registered for 1-cyc dcache latency
+    logic                    reprobe_wb_won;     // re-probe arm won the port-0 load_wb mux
+    // Re-probe request payload — built from lmb[lmb_reprobe_idx] in the LMB
+    // region (after the LMB array is declared) and consumed by the port-0
+    // load_req mux just below.  Forward-declared so the mux can reference them
+    // without touching the not-yet-declared lmb array (DSim decl-before-use).
+    logic [63:0]             reprobe_req_addr;
+    mem_size_e               reprobe_req_size;
+    logic                    reprobe_req_is_unsigned;
+
     assign dcache_load_req_valid[0] = split_load_req_valid |
                                       p0_retry_fire |
                                       (load_issue_valid[0]
@@ -2290,32 +2371,40 @@ module lsu
                                        & ~p0_partial_fwd_wait
                                        & ~(load_issue_data[0].is_amo &&
                                            (load_issue_data[0].amo_op == AMO_SC))
-                                       & ~flush_in.valid);
-    assign dcache_load_req_addr[0]  = split_load_req_valid
+                                       & ~p0_issue_flush_kill) |
+                                      reprobe_req_fire;
+    assign dcache_load_req_addr[0]  = reprobe_req_fire
+                                    ? reprobe_req_addr
+                                    : (split_load_req_valid
                                     ? split_load_req_addr
                                     : (p0_retry_fire ? p0_retry_addr_r
-                                                     : load_mem_addr[0]);
-    assign dcache_load_req_size[0]  = split_load_req_valid
+                                                     : load_mem_addr[0]));
+    assign dcache_load_req_size[0]  = reprobe_req_fire
+                                    ? reprobe_req_size
+                                    : (split_load_req_valid
                                     ? MEM_DWORD
                                     : (p0_retry_fire ? p0_retry_data_r.mem_size
-                                                     : load_issue_data[0].mem_size);
-    assign dcache_load_req_is_unsigned[0] = split_load_req_valid
+                                                     : load_issue_data[0].mem_size));
+    assign dcache_load_req_is_unsigned[0] = reprobe_req_fire
+                                          ? reprobe_req_is_unsigned
+                                          : (split_load_req_valid
                                           ? 1'b1
                                           : (p0_retry_fire ? p0_retry_data_r.is_unsigned
-                                                           : load_issue_data[0].is_unsigned);
+                                                           : load_issue_data[0].is_unsigned));
 
     assign dcache_load_req_valid[1] = p1_eff_valid
                                     & ~p1_eff_misalign
                                     & ~p1_eff_addr_mmio
                                     & ~p1_any_fwd_hit
                                     & ~p1_partial_fwd_wait
-                                    & ~flush_in.valid;
+                                    & ~p1_issue_flush_kill;
     assign dcache_load_req_addr[1]  = p1_eff_addr;
     assign dcache_load_req_size[1]  = p1_eff_data.mem_size;
     assign dcache_load_req_is_unsigned[1] = p1_eff_data.is_unsigned;
 
     assign spec_wakeup_valid[0] = dcache_load_req_valid[0] &
                                   !split_load_req_valid &
+                                  ~reprobe_req_fire &
                                   ~(p0_retry_fire ? p0_retry_data_r.is_amo
                                                   : load_issue_data[0].is_amo);
     assign spec_wakeup_tag[0]   = p0_retry_fire ? p0_retry_data_r.pdst
@@ -2661,8 +2750,9 @@ module lsu
     // requested bytes from the fill data and generate a CDB writeback for
     // that load.  The LMB is a simple, free-list-allocated array.
     // =========================================================================
-    localparam int LMB_DEPTH    = 32;
-    localparam int LMB_IDX_BITS = $clog2(LMB_DEPTH);
+    // LMB_DEPTH / LMB_IDX_BITS moved up to the LMB orphan re-probe forward-decl
+    // block (just before the port-0 dcache_load_req mux) for DSim
+    // declaration-before-use.
 
     typedef struct packed {
         logic                       valid;
@@ -2870,6 +2960,151 @@ module lsu
             end
         end
     end
+
+    // =========================================================================
+    // LMB orphan re-probe (gated; default OFF = byte-identical)
+    // =========================================================================
+    // Recovers a load whose one-shot dcache fill_snoop was missed: the LMB entry
+    // is left valid+!ready with no MSHR and no future fill, so it never drains
+    // and the same-line dual-load partner stalls the ROB head -> hang.  When an
+    // entry sits valid+!ready with no fill/drain/alloc activity for
+    // LMB_REPROBE_THRESHOLD cycles, re-issue a port-0 D-cache load for its line
+    // (only when port 0 is otherwise idle); the line is resident now, so the
+    // re-probe hits and the load completes through the normal port-0 load_wb
+    // path (lowest priority).  Memory-safe: L1 is write-through and the load
+    // already cleared SQ-forwarding at its original issue, so a raw L1 re-read
+    // returns data consistent with the lost fill.  See
+    // doc/early_redirect_diag/lmb_reprobe_fix_spec.md.
+    localparam logic LMB_REPROBE_ENABLE    = 1'b1;
+    localparam logic [9:0] LMB_REPROBE_THRESHOLD = 10'd512;
+
+    logic        sim_lmb_reprobe;
+`ifdef SIMULATION
+    initial sim_lmb_reprobe = $test$plusargs("LMB_REPROBE") ? 1'b1 : 1'b0;
+`else
+    assign sim_lmb_reprobe = 1'b0;
+`endif
+    logic        lmb_reprobe_en;
+    assign lmb_reprobe_en = LMB_REPROBE_ENABLE || sim_lmb_reprobe;
+
+    logic        reprobe_inflight;     // a re-probe is awaiting its dcache resp
+    logic        lmb_has_waiter;       // any valid+flush_keep+!ready entry exists
+    logic        lmb_reprobe_avail;    // a re-probeable orphan exists this cycle
+    logic        lmb_orphan_trigger;   // timeout reached, ready to re-issue
+    logic [9:0]  lmb_stall_cyc;        // saturating no-activity counter
+    logic        lmb_alloc_this_cyc;   // an LMB alloc happens this cycle
+    logic        reprobe_wb_fire;      // re-probe response arrived (pre-mux)
+
+    // An LMB alloc this cycle (either load port) is "fill/drain/alloc activity"
+    // that resets the orphan timer.
+    assign lmb_alloc_this_cyc = (p0_miss_detect && lmb_free_avail) ||
+                                (p1_miss_detect && lmb_p1_alloc_avail);
+
+    // Orphan scan: lowest-index valid+flush_keep+!ready entry.
+    always_comb begin
+        lmb_has_waiter    = 1'b0;
+        lmb_reprobe_avail = 1'b0;
+        lmb_reprobe_idx   = '0;
+        for (int i = 0; i < LMB_DEPTH; i++) begin
+            if (lmb[i].valid && lmb_flush_keep[i] && !lmb[i].ready) begin
+                lmb_has_waiter = 1'b1;
+                if (!lmb_reprobe_avail) begin
+                    lmb_reprobe_avail = 1'b1;
+                    lmb_reprobe_idx   = LMB_IDX_BITS'(i);
+                end
+            end
+        end
+    end
+
+    // Timeout fires only when gated on AND no in-flight re-probe.
+    assign lmb_orphan_trigger = lmb_reprobe_en && lmb_reprobe_avail &&
+                                (lmb_stall_cyc >= LMB_REPROBE_THRESHOLD) &&
+                                !reprobe_inflight;
+
+    // Re-probe request payload (consumed by the port-0 load_req mux above).
+    assign reprobe_req_addr        = {lmb[lmb_reprobe_idx].line_addr[63:LINE_BITS],
+                                      lmb[lmb_reprobe_idx].byte_offset};
+    assign reprobe_req_size        = mem_size_e'(lmb[lmb_reprobe_idx].size);
+    assign reprobe_req_is_unsigned = lmb[lmb_reprobe_idx].is_unsigned;
+
+    // Fire the re-probe only when port 0 is NOT issuing any normal request this
+    // cycle (negate the exact normal port-0 dcache_load_req terms).
+    assign reprobe_req_fire = lmb_orphan_trigger &&
+        !(split_load_req_valid |
+          p0_retry_fire |
+          (load_issue_valid[0]
+           & ~p0_retry_valid_r
+           & ~load_addr_misaligned[0]
+           & ~load_cross_line[0]
+           & ~split_load_busy
+           & ~load_addr_mmio[0]
+           & ~p0_fwd_hit
+           & ~p0_partial_fwd_wait
+           & ~(load_issue_data[0].is_amo &&
+               (load_issue_data[0].amo_op == AMO_SC))
+           & ~flush_in.valid));
+
+    // The re-probe response arrives 1 cycle later (registered inflight).
+    assign reprobe_wb_fire = reprobe_inflight && dcache_load_resp_valid[0];
+
+    // Registered handshake + saturating orphan timer.  Registering
+    // reprobe_inflight breaks the req->resp->wb->clear combinational path so no
+    // new UNOPTFLAT is introduced.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            reprobe_inflight <= 1'b0;
+            reprobe_idx_r    <= '0;
+            lmb_stall_cyc    <= 10'd0;
+        end else begin
+            // Inflight: set on a fired re-probe, cleared the next cycle (the
+            // dcache responds with hit or miss_retry in 1 cycle).
+            if (reprobe_req_fire) begin
+                reprobe_inflight <= 1'b1;
+                reprobe_idx_r    <= lmb_reprobe_idx;
+            end else if (reprobe_inflight) begin
+                reprobe_inflight <= 1'b0;
+            end
+
+            // Orphan timer: count while a waiter sits with no fill/drain/alloc
+            // activity; reset on any activity or when re-probe is off.
+            if (lmb_reprobe_en && lmb_has_waiter &&
+                !dcache_fill_valid && !lmb_any_match && !lmb_alloc_this_cyc) begin
+                if (lmb_stall_cyc != 10'h3ff)
+                    lmb_stall_cyc <= lmb_stall_cyc + 10'd1;
+            end else begin
+                lmb_stall_cyc <= 10'd0;
+            end
+        end
+    end
+
+`ifdef SIMULATION
+    // Re-probe engagement counters (printed in a final block).
+    integer reprobe_fires;
+    integer reprobe_hits;
+    integer reprobe_retries;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            reprobe_fires   <= 0;
+            reprobe_hits    <= 0;
+            reprobe_retries <= 0;
+        end else if (lmb_reprobe_en) begin
+            if (reprobe_req_fire)
+                reprobe_fires <= reprobe_fires + 1;
+            if (reprobe_inflight && dcache_load_resp_valid[0])
+                reprobe_hits <= reprobe_hits + 1;
+            if (reprobe_inflight && dcache_load_miss_retry[0])
+                reprobe_retries <= reprobe_retries + 1;
+        end
+    end
+    final begin
+        if (lmb_reprobe_en) begin
+            $display("");
+            $display("=== LSU LMB RE-PROBE SUMMARY ===");
+            $display("Re-probe fires/hits/retries: %0d / %0d / %0d",
+                     reprobe_fires, reprobe_hits, reprobe_retries);
+        end
+    end
+`endif
 
 `ifdef SIMULATION
     logic lsu_stat_en;
@@ -3142,6 +3377,19 @@ module lsu
                 lmb[lmb_ready_idx].valid <= 1'b0;
                 lmb[lmb_ready_idx].ready <= 1'b0;
             end
+
+            // LMB orphan re-probe completion: clear the entry ONLY when the
+            // re-probe arm actually WON the port-0 load_wb mux this cycle
+            // (reprobe_wb_won), not merely because a dcache response arrived.
+            // If a higher-priority load_wb arm took the port, reprobe_wb_won is
+            // 0, the entry stays valid, and the orphan timeout re-arms next
+            // cycle.  On a dcache miss_retry the response is absent so
+            // reprobe_wb_won is 0 too: the entry stays valid (the dcache now
+            // allocates an MSHR, so the normal fill-match path completes it).
+            if (reprobe_wb_won) begin
+                lmb[reprobe_idx_r].valid <= 1'b0;
+                lmb[reprobe_idx_r].ready <= 1'b0;
+            end
         end
     end
 
@@ -3392,6 +3640,7 @@ module lsu
             lq_result_idx_sel[i] = '0;
         end
         mmio_load_wb_fire = 1'b0;
+        reprobe_wb_won = 1'b0;
         load_wb_mem_size[0] = MEM_DWORD;
         load_wb_mem_size[1] = MEM_DWORD;
 
@@ -3488,6 +3737,26 @@ module lsu
             lq_result_valid_sel[0]   = 1'b1;
             lq_result_idx_sel[0]     = mmio_resp_load_data_r.lq_idx;
             mmio_load_wb_fire        = 1'b1;
+        end else if (reprobe_wb_fire) begin
+            // LMB orphan re-probe completion (lowest priority).  This arm only
+            // reaches here when port 0 is otherwise idle (no higher-priority
+            // load_wb arm fired), so it never steals the port from a real load.
+            // reprobe_wb_won records that the re-probe actually won the mux this
+            // cycle; the LMB clear below is gated on it so the entry is NEVER
+            // cleared if a higher-priority arm took the port (which would lose
+            // the load forever).  The dcache already byte-extracts/aligns the
+            // response (same as the normal p0 hit path which uses
+            // dcache_load_resp_data[0] directly via load_extracted_dc).
+            reprobe_wb_won           = 1'b1;
+            load_wb_valid[0]         = 1'b1;
+            load_wb_rob_idx[0]       = lmb[reprobe_idx_r].rob_idx;
+            load_wb_pdst[0]          = lmb[reprobe_idx_r].pdst;
+            load_wb_data[0]          = dcache_load_resp_data[0];
+            load_wb_mem_size[0]      = mem_size_e'(lmb[reprobe_idx_r].size);
+            load_wb_has_exception[0] = 1'b0;
+            load_wb_exc_code[0]      = '0;
+            lq_result_valid_sel[0]   = 1'b1;
+            lq_result_idx_sel[0]     = lmb[reprobe_idx_r].lq_idx;
         end else begin
             load_wb_valid[0]         = 1'b0;
             load_wb_rob_idx[0]       = '0;

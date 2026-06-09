@@ -11,11 +11,11 @@ module rv64gc_core_top
     import fpu_pkg::*;
 #(
     parameter logic BPU_EXEC_MISP_UPDATE_ENABLE      = 1'b0,
-    parameter logic EXEC_PARTIAL_BRANCH_RECOVERY     = 1'b0,
+    parameter logic EXEC_PARTIAL_BRANCH_RECOVERY     = 1'b1,
     parameter logic SELECTIVE_BRANCH_RECOVERY        = 1'b0,
     parameter logic TAGE_TRAIN_MISP_COND_FIRST       = 1'b0,
-    parameter logic BRU0_EARLY_REDIRECT_ENABLE       = 1'b0,
-    parameter logic BRU1_EARLY_REDIRECT_ENABLE       = 1'b0,
+    parameter logic BRU0_EARLY_REDIRECT_ENABLE       = 1'b1,
+    parameter logic BRU1_EARLY_REDIRECT_ENABLE       = 1'b1,
     parameter logic UOP_CACHE_ENABLE                 = 1'b0
 )
 (
@@ -314,12 +314,20 @@ module rv64gc_core_top
         BRU0_EARLY_REDIRECT_ENABLE;
     localparam logic sim_bru1_early_redirect_en =
         BRU1_EARLY_REDIRECT_ENABLE;
+    // Any early-redirect / partial-recovery mode active => enable the IQ
+    // preg_ready_table re-snoop (deadlock-#3 fix).  0 when all off => the
+    // issue-queue wakeup path stays byte-identical to baseline.
+    localparam logic EARLY_REDIRECT_ACTIVE =
+        EXEC_PARTIAL_BRANCH_RECOVERY || SELECTIVE_BRANCH_RECOVERY ||
+        BRU0_EARLY_REDIRECT_ENABLE || BRU1_EARLY_REDIRECT_ENABLE;
 
     // Stall from decode/rename
     logic        backend_stall;
     logic        bru_redirect_quarantine_r;
     logic        bru_redirect_quarantine;
     logic        keep_early_frontend;
+    logic        suppress_redundant_redirect;
+    logic        early_redirect_workload_active;
     logic        fetch_exception_pending_r;
     logic [63:0] fetch_exception_pc_r;
     logic [3:0]  fetch_exception_code_r;
@@ -530,7 +538,7 @@ module rv64gc_core_top
     logic [2:0]    rename_dec_count;
 
     always_comb begin
-        if (bru_redirect_quarantine) begin
+        if (bru_redirect_quarantine_r) begin
             for (int i = 0; i < PIPE_WIDTH; i++)
                 rename_dec_in[i] = '0;
             rename_dec_count = 3'd0;
@@ -872,12 +880,29 @@ module rv64gc_core_top
 
 `ifdef SIMULATION
     logic sim_keep_early_frontend;
+    logic sim_suppress_redundant_redirect;
+    logic sim_early_redirect_vm_gate;
     initial begin
-        sim_keep_early_frontend = $test$plusargs("KEEP_EARLY_FRONTEND");
+        sim_keep_early_frontend          = $test$plusargs("KEEP_EARLY_FRONTEND");
+        sim_suppress_redundant_redirect  = $test$plusargs("SUPPRESS_REDUNDANT");
+        // VM-workload gate ON by default; +NO_VM_GATE makes the early-redirect
+        // always-active (ungated) for A/B measurement.
+        sim_early_redirect_vm_gate       = !$test$plusargs("NO_VM_GATE");
     end
-    assign keep_early_frontend = sim_keep_early_frontend;
+    assign keep_early_frontend         = sim_keep_early_frontend;
+    assign suppress_redundant_redirect = sim_suppress_redundant_redirect;
+    // early_redirect_workload_active is assigned later, after satp_vm_enabled is
+    // declared/assigned (DSim requires declaration-before-use in expressions).
 `else
-    assign keep_early_frontend = 1'b0;
+    assign keep_early_frontend         = 1'b0;
+    // Redundant-refetch suppressor DISABLED by default: it was meant to shave the
+    // benchmark per-fire refetch bubble, but the VM-workload gate already makes
+    // bare benchmarks byte-identical to baseline (early-redirect off there), so it
+    // adds no value -- and on the paged boot it is NET-HARMFUL (measured: it
+    // inflates partial-recovery events ~9x and drops boot IPC 2.06->1.50, likely
+    // by leaving fetch on a path that keeps re-resolving the same branch).  Kept
+    // as inert, plusarg-selectable (+SUPPRESS_REDUNDANT) for future study only.
+    assign suppress_redundant_redirect = 1'b0;
 `endif
 
     always_comb begin
@@ -903,15 +928,40 @@ module rv64gc_core_top
         end
     end
 
+    // Redundant late-flush suppression: when the FRONTEND early-redirect has
+    // already steered fetch to this branch's target (quarantine set, target
+    // match), the later flush_out re-redirect to the SAME target is redundant
+    // and only burns a refetch bubble.  Covers BOTH the commit full_flush AND
+    // the backend partial bru_flush (the partial path is the CoreMark/Dhrystone
+    // regression: the BE re-redirects fetch ~1 cyc after the FE already did).
+    // Each arm checks the redundancy is for the SAME branch the FE redirected
+    // (rob match) + same target.  Gated by suppress_redundant_redirect (NOT
+    // keep_early_frontend): for the fast partial path the quarantine clears at
+    // CDB before correct-path packets arrive, so no decode stall is needed --
+    // the buffer was already flushed at the execute-time redirect, and fetch has
+    // been refilling the correct path since then.
     assign frontend_late_flush_redundant =
-        keep_early_frontend &&
         bru_redirect_quarantine_r &&
         bru_redirect_is_cond_r &&
         flush_out.valid &&
-        flush_out.full_flush &&
-        commit_mispredict_branch_valid &&
-        (commit_mispredict_branch_rob == bru_redirect_rob_r) &&
-        (flush_out.redirect_pc == bru_redirect_target_r);
+        (flush_out.redirect_pc == bru_redirect_target_r) &&
+        (
+            // Partial (CDB) path: the quarantine clears ~1 cyc after the
+            // execute-time redirect, BEFORE correct-path packets reach rename,
+            // so dropping the second (redundant) fetch redirect is safe with NO
+            // decode stall.  Gated by suppress_redundant_redirect.
+            (suppress_redundant_redirect && !flush_out.full_flush &&
+             bru_partial_recovery_valid &&
+             (bru_partial_candidate_rob_idx == bru_redirect_rob_r)) ||
+            // Full (commit) path: the quarantine can span execute->commit (long),
+            // during which correct-path packets are fetched and would be dropped.
+            // Suppressing the commit fetch redirect is only safe when
+            // keep_early_frontend retains those packets via its decode stall;
+            // without retention they are lost and never refetched (hang).
+            (keep_early_frontend && flush_out.full_flush &&
+             commit_mispredict_branch_valid &&
+             (commit_mispredict_branch_rob == bru_redirect_rob_r))
+        );
 
     assign frontend_flush_valid =
         (flush_out.valid && !frontend_late_flush_redundant) ||
@@ -2262,7 +2312,8 @@ module rv64gc_core_top
     // =========================================================================
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2),
                   .SUPPORT_ENQ_ISSUE_BYPASS(1),
-                  .PORT0_ONLY_FU(3'd0))  // BRU can issue from either port
+                  .PORT0_ONLY_FU(3'd0),
+                  .EARLY_REDIRECT_WAKEUP(EARLY_REDIRECT_ACTIVE))  // BRU can issue from either port
     u_iq0 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -2305,7 +2356,8 @@ module rv64gc_core_top
     // retiring entries on port 1 that no functional unit executes
     // (which would cause the ROB to fill up with orphaned entries).
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
-                  .SUPPORT_ENQ_ISSUE_BYPASS(1))
+                  .SUPPORT_ENQ_ISSUE_BYPASS(1),
+                  .EARLY_REDIRECT_WAKEUP(EARLY_REDIRECT_ACTIVE))
     u_iq1 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -2361,7 +2413,8 @@ module rv64gc_core_top
           div_hold_valid_r);
 
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
-                  .SUPPORT_ENQ_ISSUE_BYPASS(1))
+                  .SUPPORT_ENQ_ISSUE_BYPASS(1),
+                  .EARLY_REDIRECT_WAKEUP(EARLY_REDIRECT_ACTIVE))
     u_iq2 (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -2404,7 +2457,8 @@ module rv64gc_core_top
     assign iq2_issue_data[1]  = '0;
 
     // Dual-select: dcache tag/data RAMs are dual-ported.
-    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2))
+    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(2),
+                  .EARLY_REDIRECT_WAKEUP(EARLY_REDIRECT_ACTIVE))
     u_iq_load (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -2443,7 +2497,8 @@ module rv64gc_core_top
     );
 
     // Store address IQ (STA): address publish depends only on rs1 readiness.
-    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
+    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
+                  .EARLY_REDIRECT_WAKEUP(EARLY_REDIRECT_ACTIVE))
     u_iq_store (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -2487,7 +2542,8 @@ module rv64gc_core_top
 
     // Store data IQ (STD): full flushes can now discard the queue because the
     // ROB no longer retires stores until both STA and STD have completed.
-    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1))
+    issue_queue #(.DEPTH(IQ_MEM_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
+                  .EARLY_REDIRECT_WAKEUP(EARLY_REDIRECT_ACTIVE))
     u_iq_store_data (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -2830,6 +2886,22 @@ module rv64gc_core_top
 
         assign fpu_issue =
             iq2_issue_valid[0] && iq2_issue_data[0].is_fp_op;
+        // Don't latch a wrong-path FP op into the request register on a
+        // partial-flush cycle (mirror div_issue_live).
+        logic fpu_issue_live;
+        assign fpu_issue_live =
+            fpu_issue &&
+            !(flush_out.valid && !flush_out.full_flush &&
+              rename_buf_partial_clear[iq2_issue_data[0].rob_idx]);
+        // Cancel the in-flight FP op ONLY on a full flush, or a partial flush
+        // whose squash window covers it -- a SURVIVING FP op must complete
+        // (the previous unconditional flush_out.valid aborted survivors ->
+        // ROB-head FP op never wrote back -> deadlock / FP compliance hang).
+        logic fpu_flush_kill;
+        assign fpu_flush_kill =
+            flush_out.valid &&
+            (flush_out.full_flush ||
+             rename_buf_partial_clear[fpu_req_data_r.rob_idx]);
         assign fpu_valid_in = fpu_req_valid_r;
         assign fpu_issue_rs1_data =
             iq2_issue_data[0].rs1_is_fp ? fp_bypassed_data[0] : bypassed_data[6];
@@ -2857,7 +2929,7 @@ module rv64gc_core_top
         end
 
         always_ff @(posedge clk or negedge rst_n) begin
-            if (!rst_n || flush_out.valid) begin
+            if (!rst_n || fpu_flush_kill) begin
                 fpu_req_valid_r    <= 1'b0;
                 fpu_req_data_r     <= '0;
                 fpu_req_rs1_data_r <= 64'd0;
@@ -2868,7 +2940,7 @@ module rv64gc_core_top
                 if (fpu_req_valid_r && fpu_ready)
                     fpu_req_valid_r <= 1'b0;
 
-                if (fpu_issue) begin
+                if (fpu_issue_live) begin
                     fpu_req_valid_r    <= 1'b1;
                     fpu_req_data_r     <= iq2_issue_data[0];
                     fpu_req_rs1_data_r <= fpu_issue_rs1_data;
@@ -2882,7 +2954,7 @@ module rv64gc_core_top
         fpu_top u_fpu_top (
             .clk_i        (clk),
             .rst_ni       (rst_n),
-            .flush_i      (flush_out.valid),
+            .flush_i      (fpu_flush_kill),
             .valid_i      (fpu_valid_in),
             .use_fpnew_i  (1'b1),
             .pipe_i       (fpu_req_data_r.fp_pipe),
@@ -2907,6 +2979,21 @@ module rv64gc_core_top
         .out_status_o (fpu_out_status),
         .unsupported_o(fpu_unsupported)
     );
+    // Suppress a wrong-path FP result that completed before the cancel pulse
+    // (multi-cycle leak guard).  Keyed on the COMPLETING op (fpu_out_rob_idx).
+    logic fpu_result_flushed;
+    logic fpu_valid_live;
+    logic fpu_unsupported_live;
+    assign fpu_result_flushed =
+        flush_out.valid && !flush_out.full_flush &&
+        rename_buf_partial_clear[fpu_out_rob_idx];
+    assign fpu_valid_live = fpu_out_valid && !fpu_result_flushed;
+    // The unsupported path retires the REQUEST-register op (fpu_req_data_r),
+    // so gate it on that op's wrong-path status.
+    assign fpu_unsupported_live =
+        fpu_unsupported &&
+        !(flush_out.valid && !flush_out.full_flush &&
+          rename_buf_partial_clear[fpu_req_data_r.rob_idx]);
 
     // =========================================================================
     // 11. BRU (shared with ALU0 on IQ0 port 0)
@@ -2982,10 +3069,12 @@ module rv64gc_core_top
     // default until backend recovery is completed.
     assign bru0_early_redirect =
         sim_bru0_early_redirect_en &&
+        early_redirect_workload_active &&
         !bru_redirect_quarantine_r && !commit_flush.valid &&
         bru_issue && bru_mispredict;
     assign bru1_early_redirect =
         sim_bru1_early_redirect_en &&
+        early_redirect_workload_active &&
         !bru0_early_redirect &&
         !bru_redirect_quarantine_r && !commit_flush.valid &&
         bru1_issue && bru1_mispredict;
@@ -3043,6 +3132,7 @@ module rv64gc_core_top
 
         bru_partial_recovery_valid =
             bru_partial_candidate_valid &&
+            early_redirect_workload_active &&
             (sim_exec_partial_branch_recovery ||
              (sim_selective_branch_recovery &&
               selective_branch_recovery_resource_ok));
@@ -3130,6 +3220,10 @@ module rv64gc_core_top
     integer sim_sel_rec_reject_rename_headroom;
     integer sim_sel_rec_reject_frontend_headroom;
     integer sim_sel_rec_reject_burst;
+    // Residual-cost probe: cycles rename is forced to zero by the BRU quarantine,
+    // and the would-be rename slots lost in those cycles (fused_count).
+    integer sim_quar_cycles;
+    integer sim_quar_lost_slots;
 
     initial begin
         sim_branch_opportunity_en =
@@ -3228,7 +3322,13 @@ module rv64gc_core_top
             sim_sel_rec_reject_rename_headroom <= 0;
             sim_sel_rec_reject_frontend_headroom <= 0;
             sim_sel_rec_reject_burst         <= 0;
+            sim_quar_cycles                  <= 0;
+            sim_quar_lost_slots              <= 0;
         end else begin
+            if (sim_branch_opportunity_en && bru_redirect_quarantine_r) begin
+                sim_quar_cycles     <= sim_quar_cycles + 1;
+                sim_quar_lost_slots <= sim_quar_lost_slots + int'(fused_count);
+            end
             if (sim_branch_opportunity_en &&
                 bru_partial_cdb_mispredict_valid) begin
                 sim_a0_cdb_mispredict_cycles <=
@@ -3428,6 +3528,10 @@ module rv64gc_core_top
                      sim_a0_younger_max);
             $display("xs branch opportunity younger ready max : %0d",
                      sim_a0_younger_ready_max);
+            $display("xs branch opportunity quarantine cycles : %0d",
+                     sim_quar_cycles);
+            $display("xs branch opportunity quarantine lost slots : %0d",
+                     sim_quar_lost_slots);
         end
 
         if (sim_selective_branch_recovery) begin
@@ -3655,20 +3759,41 @@ module rv64gc_core_top
     // =========================================================================
     logic [63:0] div_result;
     logic        div_issue;
+    logic        div_issue_live;
+    logic        div_result_flushed;
+    logic        div_valid_live;
     assign div_issue =
         iq2_issue_valid[0] &&
         !iq2_issue_data[0].is_fp_op &&
         (iq2_issue_data[0].fu_type == FU_DIV);
+    // Don't START a wrong-path div on a partial-flush cycle (mirror
+    // mul_issue_live).  A div whose own rob_idx is in the squash window is
+    // wrong-path and must not enter the (multi-cycle) divider.
+    assign div_issue_live =
+        div_issue &&
+        !(flush_out.valid && !flush_out.full_flush &&
+          rename_buf_partial_clear[iq2_issue_data[0].rob_idx]);
 
     // Track ROB idx and pdst for divider (capture at issue, hold until done)
     logic [ROB_IDX_BITS-1:0]  div_rob_idx_r;
     logic [PHYS_REG_BITS-1:0] div_pdst_r;
 
+    // Cancel the in-flight div ONLY on a full flush, or a partial flush whose
+    // squash window covers the in-flight (wrong-path) div.  A SURVIVING
+    // (older-than-partial-flush) div is preserved so it runs to completion --
+    // the previous unconditional flush_out.valid aborted survivors -> the ROB
+    // head div (e.g. remu) never wrote back -> ROB-full deadlock.
+    logic div_flush_kill;
+    assign div_flush_kill =
+        flush_out.valid &&
+        (flush_out.full_flush ||
+         rename_buf_partial_clear[div_rob_idx_r]);
+
     always_ff @(posedge clk) begin
-        if (!rst_n || flush_out.valid) begin
+        if (!rst_n || div_flush_kill) begin
             div_rob_idx_r <= '0;
             div_pdst_r    <= '0;
-        end else if (div_issue && !div_busy) begin
+        end else if (div_issue_live && !div_busy) begin
             div_rob_idx_r <= iq2_issue_data[0].rob_idx;
             div_pdst_r    <= iq2_issue_data[0].pdst;
         end
@@ -3677,16 +3802,23 @@ module rv64gc_core_top
     divider u_divider (
         .clk       (clk),
         .rst_n     (rst_n),
-        .valid_in  (div_issue),
+        .valid_in  (div_issue_live),
         .operand_a (bypassed_data[6]),
         .operand_b (bypassed_data[7]),
         .op        (iq2_issue_data[0].div_op),
         .is_w_op   (iq2_issue_data[0].is_w_op),
-        .flush     (flush_out.valid),
+        .flush     (div_flush_kill),
         .busy      (div_busy),
         .valid_out (div_valid_out),
         .result    (div_result)
     );
+    // Suppress a wrong-path div result that completed before the cancel pulse
+    // (multi-cycle leak guard) and gate all downstream consumers on the live
+    // version.
+    assign div_result_flushed =
+        flush_out.valid && !flush_out.full_flush &&
+        rename_buf_partial_clear[div_rob_idx_r];
+    assign div_valid_live = div_valid_out && !div_result_flushed;
 
     // =========================================================================
     // 14. CDB (Common Data Bus) Assembly
@@ -3968,12 +4100,20 @@ module rv64gc_core_top
     assign div_take_hold =
         div_hold_valid_r && !div_port_busy;
     assign div_take_fresh =
-        div_valid_out && !div_hold_valid_r && !div_port_busy;
+        div_valid_live && !div_hold_valid_r && !div_port_busy;
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || flush_out.valid) begin
+        // Drop a HELD div result only on a full flush, or a partial flush whose
+        // squash window covers the held (wrong-path) entry.  A held SURVIVOR
+        // result must persist (its consumer survives and needs it) -- the
+        // previous unconditional flush_out.valid wiped survivors too.
+        if (!rst_n ||
+            (flush_out.valid &&
+             (flush_out.full_flush ||
+              (div_hold_valid_r &&
+               rename_buf_partial_clear[div_hold_rob_idx_r])))) begin
             div_hold_valid_r <= 1'b0;
-        end else if (div_valid_out && !div_take_fresh) begin
+        end else if (div_valid_live && !div_take_fresh) begin
             div_hold_valid_r   <= 1'b1;
             div_hold_rob_idx_r <= div_rob_idx_r;
             div_hold_pdst_r    <= div_pdst_r;
@@ -3995,7 +4135,7 @@ module rv64gc_core_top
 
     // CDB[3]: FPU, ALU3 (same cycle), or DIV (multi-cycle, with hold)
         always_comb begin
-            if (fpu_out_valid || fpu_unsupported) begin
+            if (fpu_valid_live || fpu_unsupported_live) begin
                 cdb_valid[3]         = 1'b1;
                 cdb_tag[3]           = fpu_unsupported ? fpu_req_data_r.pdst
                                                         : fpu_out_pdst;
@@ -4047,7 +4187,7 @@ module rv64gc_core_top
         cdb_branch_taken_target[3] = 64'd0;
         cdb_branch_mispredict[3] = 1'b0;
         cdb_fp_fflags_valid[3]  =
-            fpu_out_valid && |{fpu_out_status.nv, fpu_out_status.dz,
+            fpu_valid_live && |{fpu_out_status.nv, fpu_out_status.dz,
                                fpu_out_status.of, fpu_out_status.uf,
                                fpu_out_status.nx};
         cdb_fp_fflags[3]        = {fpu_out_status.nv, fpu_out_status.dz,
@@ -5549,6 +5689,20 @@ module rv64gc_core_top
 
     assign satp_vm_enabled = (csr_satp[63:60] == 4'd8) ||
                              (csr_satp[63:60] == 4'd9);
+    // VM-workload gate for the early-redirect / partial-recovery.  This is a
+    // boot-IPC lever for paged (satp-enabled) workloads, where deep speculative
+    // stalls make early branch squash a large win.  Bare-metal throughput
+    // workloads (e.g. CoreMark/Dhrystone) run with paging off and are not
+    // latency-bound, so the early recovery only adds a per-fire refill bubble
+    // there -- gating on satp keeps those byte-identical to the commit-flush
+    // baseline while paged code keeps the win.  (Placed here so satp_vm_enabled
+    // is declared before use, which DSim requires.)
+`ifdef SIMULATION
+    assign early_redirect_workload_active =
+        sim_early_redirect_vm_gate ? satp_vm_enabled : 1'b1;
+`else
+    assign early_redirect_workload_active = satp_vm_enabled;
+`endif
     assign csr_data_priv_mode = (csr_priv_mode == PRIV_M && csr_mstatus_mprv)
                               ? csr_mstatus_mpp
                               : csr_priv_mode;
