@@ -1,0 +1,871 @@
+=N:[UsageMeter (2026-06-05 17:50:36 -0700)] Using /etc/ssl/certs as location of CA certificates to verify license server.
+=N:[UsageMeter (2026-06-05 17:50:36 -0700)] usage server initial connection
+=N:[License] 
+********************************************************************************
+
+[DSIM LICENSE NOTICE]
+
+The free license for DSim on-prem is scheduled to expire on September 1st.
+
+To ensure uninterrupted service after this date, please transition your
+
+environment to use Altair licensing.
+
+KEY DATES:
+
+Sept 1st: Free On-Prem licenses and DSim Cloud services discontinued.
+
+Oct 15th: All DSim Cloud data will be permanently deleted.
+
+For migration instructions and Altair licensing details, visit: altair.com/dsim
+
+********************************************************************************
+=N:[License] New lease granted.
+Using default typical min/typ/max.
+=S:Begin run-time elaboration and static initialization...
+=N:[dumpMXD] preparing MXD dump to 'run.mxd'.
+=N:[dump] Dump started at time 0
+=N:Starting event scheduler...
+=W:[ReadMemAddr] src/rtl/sim/sim_memory.sv:56:13: Too few data items, encountered EOF before end of specified address range.
+[BENCH_RESULT] index=0 field=magic value=5933002424540416049 hex=525642454e434831
+[BENCH_RESULT] index=1 field=bench_id value=1 hex=0000000000000001
+[BENCH_RESULT] index=2 field=iterations value=1 hex=0000000000000001
+[BENCH_RESULT] index=7 field=control value=1 hex=0000000000000001
+... cycle 10000  mcycle=9960 minstret=17747
+[FL_STATS] cyc=9999 free_cnt=25 committed_cnt=129 free_min=160 committed_min=160 allocs=5531 releases=6214 flushes=29 commits=6195
+[FL_STATS] cyc=9999 free_cnt=64 committed_cnt=64 free_min=96 committed_min=96 allocs=0 releases=0 flushes=29 commits=0
+... cycle 20000  mcycle=19960 minstret=39168
+[FL_STATS] cyc=19999 free_cnt=94 committed_cnt=129 free_min=25 committed_min=129 allocs=12401 releases=15082 flushes=32 commits=14997
+[FL_STATS] cyc=19999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=32 commits=0
+... cycle 30000  mcycle=29960 minstret=46121
+[FL_STATS] cyc=29999 free_cnt=4 committed_cnt=128 free_min=25 committed_min=129 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=29999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 40000  mcycle=39960 minstret=46121
+[FL_STATS] cyc=39999 free_cnt=4 committed_cnt=128 free_min=4 committed_min=128 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=39999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 50000  mcycle=49960 minstret=46121
+[FL_STATS] cyc=49999 free_cnt=4 committed_cnt=128 free_min=4 committed_min=128 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=49999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 60000  mcycle=59960 minstret=46121
+[FL_STATS] cyc=59999 free_cnt=4 committed_cnt=128 free_min=4 committed_min=128 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=59999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 70000  mcycle=69960 minstret=46121
+[FL_STATS] cyc=69999 free_cnt=4 committed_cnt=128 free_min=4 committed_min=128 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=69999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 80000  mcycle=79960 minstret=46121
+[FL_STATS] cyc=79999 free_cnt=4 committed_cnt=128 free_min=4 committed_min=128 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=79999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 90000  mcycle=89960 minstret=46121
+[FL_STATS] cyc=89999 free_cnt=4 committed_cnt=128 free_min=4 committed_min=128 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=89999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 100000  mcycle=99960 minstret=46121
+[FL_STATS] cyc=99999 free_cnt=4 committed_cnt=128 free_min=4 committed_min=128 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=99999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 110000  mcycle=109960 minstret=46121
+[FL_STATS] cyc=109999 free_cnt=4 committed_cnt=128 free_min=4 committed_min=128 allocs=14624 releases=17939 flushes=37 commits=17838
+[FL_STATS] cyc=109999 free_cnt=64 committed_cnt=64 free_min=64 committed_min=64 allocs=0 releases=0 flushes=37 commits=0
+... cycle 120000  mcycle=119960 minstret=46121
+TIMEOUT after 120000 cycles
+IPC: mcycle=119960 minstret=46121 IPC=0.384470
+==== PERF PROFILE ====
+Total cycles: 119960
+Raw fetch histogram (cycles with N instr from fetch_top):
+  fetch=0 : 100067 (83%)
+  fetch=1 : 8426 (7%)
+  fetch=2 : 1003 (0%)
+  fetch=3 : 1371 (1%)
+  fetch=4 : 9093 (7%)
+  fetch=5 : 0 (0%)
+  fetch=6 : 0 (0%)
+Effective frontend histogram (cycles with N instr to rename):
+  frontend=0 : 2856 (2%)
+  frontend=1 : 8815 (7%)
+  frontend=2 : 1000 (0%)
+  frontend=3 : 1391 (1%)
+  frontend=4 : 105898 (88%)
+  frontend=5 : 0 (0%)
+  frontend=6 : 0 (0%)
+Decode-path histogram (non-UOC cycles, fused_count):
+  fused=0 : 2725
+  fused=1 : 8843
+  fused=2 : 1018
+  fused=3 : 1404
+  fused=4 : 105970
+  fused=5 : 0
+  fused=6 : 0
+Decoded-op replay histogram (UOC-active cycles, uoc_count):
+  uoc_emit=0 : 0
+  uoc_emit=1 : 0
+  uoc_emit=2 : 0
+  uoc_emit=3 : 0
+  uoc_emit=4 : 0
+  uoc_emit=5 : 0
+  uoc_emit=6 : 0
+Decoded-op replay group-size histogram (UOC-active cycles, 6=>=6):
+  uoc_group=0 : 0
+  uoc_group=1 : 0
+  uoc_group=2 : 0
+  uoc_group=3 : 0
+  uoc_group=4 : 0
+  uoc_group=5 : 0
+  uoc_group>=6 : 0
+Fetch=0 breakdown:
+  total                     : 100067
+  frontend_hold             : 0
+  redirect_recovery         : 1238
+  packet_empty              : 1468
+  packet_valid_zeroout      : 97361
+  packet_empty_ftq_full     : 0
+  packet_empty_pkt_full     : 0
+  packet_empty_icreq_live   : 1468
+  packet_empty_wait_icresp  : 847
+  packet_empty_f2_wait      : 178
+  packet_empty_enq          : 0
+  packet_empty_enq_ctl      : 0
+  packet_empty_enq_noctl    : 0
+  packet_empty_enq_ctl_cond : 0
+  packet_empty_enq_ctl_nt   : 0
+  packet_empty_enq_ctl_taken: 0
+  packet_empty_enq_ctl_callret: 0
+  packet_empty_enq_ctl_other: 0
+  packet_empty_enq_done     : 0
+  packet_empty_enq_ftq_match: 0
+  packet_empty_f2_data      : 624
+  packet_empty_f2_emit      : 0
+  packet_empty_noemit_dup   : 327
+  packet_empty_noemit_ext0  : 297
+  packet_empty_noemit_other : 0
+  packet_empty_other        : 0
+Commit histogram (cycles with N instr committed):
+  commit=0: 100016 (83%)
+  commit=1: 3351 (2%)
+  commit=2: 8228 (6%)
+  commit=3: 7162 (5%)
+  commit=4: 1203 (1%)
+  commit=5: 0 (0%)
+  commit=6: 0 (0%)
+Loop buffer active: 0 cycles (0%)
+Standalone decoded-op replay active: 0 cycles (0%)
+UOC telemetry:
+  lookups        : 0
+  hits           : 0 (0%)
+  misses         : 0
+  fills          : 0
+  fills_evicting : 0
+  enter_playing  : 0
+  exit_on_miss   : 0
+  exit_nohit/unsafe: 0 / 0
+  emit groups/control: 0 / 0
+  emit cond/jal/jalr : 0 / 0 / 0
+  emit pred_taken    : 0
+  emit uops/control  : 0 / 0
+  active_flush_cycles: 0
+  invalidates    : 0
+Decoded-op replay forward-progress summary:
+  commit_no_load cycles       : 0
+  commit_no_load max run      : 0
+  mixed-path replay cycles    : 0
+Committed PC diversity (1024-cycle 64-bin windows):
+  windows total / low<=8    : 117 / 94
+  min / max unique bins       : 0 / 64
+Stall breakdown (cycle-based):
+  rename_stall : 97384
+  backend_stall: 97384
+  rob_full     : 96836
+  dq_full      : 0
+  lq_full      : 0
+  sq_full      : 0
+  iq0_full     : 96922
+  iq1_full     : 85
+  iq2_full     : 61
+Rename stall attribution (slot-0 resource):
+  stall_preg   : 97088
+  stall_ckpt   : 0
+  stall_rob    : 14
+  stall_dq     : 0
+  stall_backend_throttle: 0
+  stall_other  : 282
+Issue-stall classification (cycle-based, OR across all IQs):
+  operand_not_ready: 105359
+  fu_contention   : 3
+  arb_loss        : 353
+Issue queue detail:
+  iq0 operand/arb/issued/eligible_avg: 103890 / 158 / 21316 / 0.15
+  iq1 operand/arb/issued/eligible_avg: 97837 / 55 / 6028 / 0.03
+  iq2 operand/arb/issued/eligible_avg: 98200 / 147 / 1579 / 0.01
+Macro-fusion accounting:
+  rename_fused_uops: 20
+  commit_fused_uops: 16
+  commit fused alu/branch/load/store: 15 / 1 / 0 / 0
+Rename elimination accounting:
+  move_candidates: 7530
+  move rs1 ready/wait: 1289 / 6241
+  zero_eliminated: 262
+Average IQ occupancy (of 32):
+  iq0_avg: 18.15
+  iq1_avg: 9.84
+  iq2_avg: 9.81
+Flushes: 628
+LSU pressure summary:
+  ld0 candidate/issue/suppress: 108145 / 10970 / 97175
+  ld1 candidate/issue/suppress: 99808 / 3024 / 96784
+  sq_fwd_wait cycles          : 96834
+  storeIQ block ld0/ld1       : 96791 / 96760
+  block+STA issue ld0/ld1     : 30 / 9
+  p0 req/full/partial/waitonly: 107807 / 99 / 0 / 46
+  p0 same_cycle/csb hits      : 3 / 104
+  sq_wait_p1 cycles           : 96759
+  p1 wait_req cycles          : 99893
+  p1 sq ready full / partial  : 10 / 0
+  p1 sq wait-only / conflict  : 0 / 111
+  p1_retry live/captures      : 107 / 107
+Load issue-to-WB latency summary:
+  issue/reissue/wb/untracked  : 13994 / 0 / 13785 / 1
+  pending avg/max             : 0.11 / 3
+  latency buckets 0/1/2/3/4/5/6-7/8-15/16-31/32+: 0 / 13667 / 105 / 0 / 0 / 0 / 12 / 0 / 0 / 0
+  source dchit/fwd/lmb/misalign/unknown: 13650 / 122 / 12 / 0 / 0
+  top load WB PCs: pc count avg_lat max_lat dchit/fwd/lmb/other
+    000000008000213e 104 1.00 1 104/0/0/0
+    0000000080002250 1 1.00 1 1/0/0/0
+    000000008000395e 6 2.66 6 4/0/2/0
+    0000000080002842 2 1.00 1 1/1/0/0
+    00000000800023b6 36 1.00 1 36/0/0/0
+    000000008000300c 2 1.00 1 2/0/0/0
+    0000000080003564 571 1.07 6 562/0/9/0
+    00000000800035a6 22 1.00 1 22/0/0/0
+    00000000800035e6 22 1.00 1 22/0/0/0
+    00000000800035f4 32 1.00 1 32/0/0/0
+    00000000800035f0 10 1.00 1 10/0/0/0
+    0000000080002440 3060 1.00 1 3060/0/0/0
+    00000000800026d0 28 1.00 1 23/5/0/0
+    00000000800026d8 24 1.00 1 23/1/0/0
+    00000000800026a8 5 1.00 1 1/4/0/0
+    0000000080002464 9 1.00 1 9/0/0/0
+    000000008000235e 82 1.00 1 82/0/0/0
+    00000000800023a6 108 1.24 2 108/0/0/0
+    0000000080002128 105 1.00 1 105/0/0/0
+    0000000080002142 105 1.52 2 105/0/0/0
+    0000000080002158 105 1.00 1 105/0/0/0
+    0000000080002374 82 1.00 1 82/0/0/0
+    0000000080002392 41 1.00 1 41/0/0/0
+    00000000800023a2 107 1.00 1 107/0/0/0
+  pending load tracks: rob pc addr issue_cyc age port lq_result
+  live LQ entries: idx head rob addr_v exec result addr size data
+    0 0 1 1 1 1 00000000800ff810 3 00000000800ff900
+    1 0 9 0 0 0 0000000000000000 0 0000000000000000
+    2 0 21 0 0 0 0000000000000000 0 0000000000000000
+    3 0 31 0 0 0 0000000000000000 0 0000000000000000
+    4 0 32 0 0 0 0000000000000000 0 0000000000000000
+    5 0 45 0 0 0 0000000000000000 0 0000000000000000
+    6 0 52 0 0 0 0000000000000000 0 0000000000000000
+    31 1 123 0 0 0 0000000000000000 0 0000000000000000
+  live LMB entries: idx ready pc rob pdst lq line off size data
+    0 0 0000000080002250 122 72 30 00000000800ff640 16 3 0000000000000000
+  live D-cache MSHRs: idx addr wb fill_pend fill_done store victim dirty evict
+  spec wake p0/p1             : 10853 / 3007
+  std IQ spec match p0/p1     : 587 / 8
+  sta_issue/std_issue/store_req: 4836 / 4755 / 9380
+  SQ addr-only pending avg/max: 1.67 / 14
+  SQ addr->data lag 1/2/3/4-5/6+: 477 / 25 / 210 / 9 / 173
+  SQ addr-only drops          : 5
+Committed control summary:
+  cond/jal/jalr/call/ret      : 9027 / 421 / 5 / 139 / 134
+Committed mispredict summary:
+  cond/jal/jalr/call/ret      : 8 / 0 / 5 / 15 / 9
+  top mispredict PCs: pc count cond/jal/jalr/call/ret taken/not_taken
+    0000000080003962 5 0/0/5/0/0 5/0
+    00000000800023ac 15 0/0/0/15/0 15/0
+    000000008000215e 5 0/0/0/0/5 5/0
+    0000000080002396 1 1/0/0/0/0 1/0
+    00000000800023f4 1 0/0/0/0/1 1/0
+    0000000080002ffa 1 1/0/0/0/0 0/1
+    0000000080003570 2 2/0/0/0/0 0/2
+    00000000800029c4 1 1/0/0/0/0 1/0
+    000000008000242e 3 3/0/0/0/0 2/1
+    00000000800021ec 2 0/0/0/0/2 2/0
+    0000000080002256 1 0/0/0/0/1 1/0
+GHR restore summary:
+  total/nonzero               : 628 / 628
+RAS restore summary:
+  total                       : 1256
+[SHADOW_F2_PC_FROM_QUEUE] match=10788 diverge=8487
+[SHADOW_F2_PC_FROM_QUEUE] last_diverge cycle=23242 actual=00000000800039b6 proposed=00000000800039c0
+
+=== BRU EARLY REDIRECT RECOVERY SUMMARY ===
+Early redirects total / BRU0 / BRU1: 628 / 447 / 181
+Quarantine cycles:                   809
+Quarantine runs ended:               628
+  ended by branch mispredict flush:  37
+  ended by other flush:              591
+  open at simulation end:            0
+Quarantine avg cycles/run x100:      128
+Quarantine max cycles/run:           50
+Quarantine avg ROB age x100:         844
+Quarantine max ROB age:              116
+Checkpoint runs any/safe-boundary/no:599 / 599 / 29
+Safe-boundary quarantine cycles:     655
+Correct-path fused insns suppressed: 391
+Upper-bound rename slots suppressed: 3236
+BRU recovery PC attribution (approx top 16 by cycles):
+  pc               count cycles avg_x100 max avg_age_x100 max_age cond/jal/jalr ckpt/safe
+  0000000080002384 27 27 100 1 629 78 27/0/0 27/27
+  0000000080003962 5 10 200 2 200 2 0/0/5 0/0
+  0000000080002396 9 10 111 2 500 5 9/0/0 9/9
+  0000000080002380 32 32 100 1 878 95 32/0/0 32/32
+  00000000800023bc 8 8 100 1 0 0 8/0/0 8/8
+  00000000800023ae 37 37 100 1 840 103 37/0/0 37/37
+  00000000800023f4 1 6 600 6 1300 13 0/0/1 0/0
+  0000000080002ffa 6 55 916 50 6900 113 6/0/0 6/6
+  000000008000242e 168 171 101 2 545 7 168/0/0 168/168
+  0000000080002256 1 46 4600 46 9600 96 0/0/1 0/0
+  00000000800021ec 2 46 2300 32 5050 67 0/0/2 0/0
+  000000008000235a 23 23 100 1 443 21 23/0/0 23/23
+  000000008000236e 7 7 100 1 1257 85 7/0/0 7/7
+  00000000800023ac 15 31 206 3 473 5 0/0/15 0/0
+  00000000800039fe 2 2 100 1 8950 109 2/0/0 2/2
+  000000008000215e 5 15 300 3 780 8 0/0/5 0/0
+
+=== BRANCH RECOVERY OPPORTUNITY PROFILE ===
+xs branch opportunity cdb mispredict cycles : 637
+xs branch opportunity cdb mispredict slots : 646
+xs branch opportunity type cond : 607
+xs branch opportunity type jal : 0
+xs branch opportunity type jalr : 6
+xs branch opportunity type call : 15
+xs branch opportunity type ret : 9
+xs branch opportunity age head : 43
+xs branch opportunity age near : 239
+xs branch opportunity age mid : 321
+xs branch opportunity age far : 15
+xs branch opportunity age older : 19
+xs branch opportunity age sum : 4114
+xs branch opportunity age max : 115
+xs branch opportunity checkpoint any : 607
+xs branch opportunity checkpoint at branch : 607
+xs branch opportunity checkpoint missing : 30
+xs branch opportunity side effect : 16
+xs branch opportunity partial candidate : 591
+xs branch opportunity partial resource ok : 269
+xs branch opportunity reject commit : 9
+xs branch opportunity reject rename : 8
+xs branch opportunity reject uoc : 0
+xs branch opportunity reject side effect : 15
+xs branch opportunity reject checkpoint : 14
+xs branch opportunity reject rename headroom : 322
+xs branch opportunity reject frontend headroom : 0
+xs branch opportunity reject burst : 0
+xs branch opportunity younger sum : 4233
+xs branch opportunity younger ready sum : 372
+xs branch opportunity younger max : 22
+xs branch opportunity younger ready max : 13
+[SVA SUMMARY]
+  ordering_violations fired:        0
+  replay_valid fired:               0
+  violations gated by full_flush:   0
+  adjacent-cycle violations:        0
+  [A10] violations w/ flush in flight:   0
+  [A11] violations within 5 cyc of flush:0
+  [A12] violations in burst (<5 cyc):    0
+  [A13] same rob_idx repeated (<20 cyc): 0
+  [A14] viol followed by mispred(<20cyc):0
+  [A15] head-timeout diagnostic hits:    24
+  [A16] watchdog fires post-replay(<100):0
+=== ICACHE NEXT-LINE PREFETCH CEILING ===
+  distinct-line misses:        59
+  ...same-page succ of last hit: 20  (next-line-prefetch coverable)
+
+=== LOOP PREDICTOR HOT-PC SUMMARY ===
+pc                 p_lkp/hit/ovr/taken  a_lkp/hit/ovr/taken  upd/t/nt/misp/back/hit  exit_match/update  conf0/1/2/3
+0000000080003176 0/0/0/0 0/0/0/0 0/0/0/0/0/0 0/0 0/0/0/0
+00000000800031ec 0/0/0/0 0/0/0/0 0/0/0/0/0/0 0/0 0/0/0/0
+0000000080003aea 0/0/0/0 0/0/0/0 0/0/0/0/0/0 0/0 0/0/0/0
+0000000080003b12 0/0/0/0 0/0/0/0 0/0/0/0/0/0 0/0 0/0/0/0
+0000000080002446 3544/3543/204/3340 3394/3391/204/3189 3060/2958/102/0/3060/3059 101/1 59/30/30/2940
+00000000800036b4 0/0/0/0 0/0/0/0 0/0/0/0/0/0 0/0 0/0/0/0
+00000000800023ae 125/123/16/84 120/118/16/81 107/75/32/0/107/106 10/22 69/7/13/17
+0000000080003710 0/0/0/0 0/0/0/0 0/0/0/0/0/0 0/0 0/0/0/0
+
+=== BPU HOT-PC SUMMARY ===
+pc                 p(lkp tk cf lp/ovr loc tg wk sc)  a(lkp tk cf lp/ovr loc tg wk sc)  upd(t nt misp lp tg p0/1/2/3)
+00000000800036b4 0 0 0 0/0 0 0 0 0  0 0 0 0/0 0 0 0 0  0(0 0 0 0 0 0/0/0/0)
+0000000080003176 0 0 0 0/0 0 0 0 0  0 0 0 0/0 0 0 0 0  0(0 0 0 0 0 0/0/0/0)
+00000000800031ec 0 0 0 0/0 0 0 0 0  0 0 0 0/0 0 0 0 0  0(0 0 0 0 0 0/0/0/0)
+0000000080003710 0 0 0 0/0 0 0 0 0  0 0 0 0/0 0 0 0 0  0(0 0 0 0 0 0/0/0/0)
+00000000800023ae 125 84 83 123/16 0 0 45 12  120 81 83 118/16 0 0 40 10  107(75 32 0 106 0 0/0/0/0)
+0000000080002446 3544 3340 2873 3543/204 0 0 671 1  3394 3189 2865 3391/204 0 0 529 2  3060(2958 102 0 3059 0 0/0/0/0)
+00000000800036bc 0 0 0 0/0 0 0 0 0  0 0 0 0/0 0 0 0 0  0(0 0 0 0 0 0/0/0/0)
+0000000080002380 302 120 241 285/36 0 0 68 17  185 64 139 172/23 0 0 52 17  154(81 73 0 147 0 0/0/0/0)
+0000000080003b12 0 0 0 0/0 0 0 0 0  0 0 0 0/0 0 0 0 0  0(0 0 0 0 0 0/0/0/0)
+0000000080003aea 0 0 0 0/0 0 0 0 0  0 0 0 0/0 0 0 0 0  0(0 0 0 0 0 0/0/0/0)
+=== RAS RECOVERY SUMMARY (restores=1256 DEPTH=24) ===
+  gap hist: 0=1165 1=12 2-3=1 4-7=0 8+=78  max=23
+  top-repair: applied=1206 skipped(FIX-B addressable)=44
+  push-wrap (depth-24 overflow): 2
+=== BPU DYNAMIC PROFILE ===
+bpu_dyn_total updates=9027 misp=8 taken=7534 not_taken=1493 backward=7529 forward=1498 loop_hit=7464 tage_hit=77 untracked_misp_replaced=0 provider0=20 provider1=22 provider2=21 provider3=14
+bpu_dyn_tracked pc updates misp taken not_taken backward forward loop_hit tage_hit provider0 provider1 provider2 provider3
+bpu_dyn_pc 0000000080002396 26 1 26 0 26 0 25 5 2 2 0 1
+bpu_dyn_pc 0000000080002ffa 46 1 40 6 46 0 46 5 0 0 5 0
+bpu_dyn_pc 0000000080003570 421 2 355 66 421 0 421 31 12 8 0 11
+bpu_dyn_pc 00000000800029c4 1 1 1 0 0 1 0 0 0 0 0 0
+bpu_dyn_pc 000000008000242e 77 3 2 75 0 77 0 36 6 12 16 2
+
+=== XS NLPB CATCH-UP PROBE ===
+base duplicate cycles       : 220
+base with fetch_out=0       : 220
+base cross-line             : 0
+base with NLPB aux hit      : 1
+base with aux taken predict : 0
+recoverable cross-line      : 0
+recoverable target=last pc  : 0
+recoverable RET cycles      : 0
+xs packet-buffer stale owner: 0
+xs ftq empty cycles         : 1257
+xs ftq full cycles          : 0
+xs ftq occ sum              : 119047
+xs ftq occ max              : 2
+xs ftq occ hist 0           : 1257
+xs ftq occ hist 1           : 118359
+xs ftq occ hist 2to3        : 344
+xs ftq occ hist 4to7        : 0
+xs ftq occ hist 8to15       : 0
+xs ftq occ hist 16plus      : 0
+xs ftq alloc2ifu occ sum    : 0
+xs ftq alloc2ifu occ max    : 0
+xs ftq alloc2ifu occ hist 0 : 119960
+xs ftq alloc2ifu occ hist 1 : 0
+xs ftq alloc2ifu occ hist 2to3: 0
+xs ftq alloc2ifu occ hist 4to7: 0
+xs ftq alloc2ifu occ hist 8to15: 0
+xs ftq alloc2ifu occ hist 16plus: 0
+xs ftq ifu2wb occ sum       : 119047
+xs ftq ifu2wb occ max       : 2
+xs ftq ifu2wb occ hist 0    : 1257
+xs ftq ifu2wb occ hist 1    : 118359
+xs ftq ifu2wb occ hist 2to3 : 344
+xs ftq ifu2wb occ hist 4to7 : 0
+xs ftq ifu2wb occ hist 8to15: 0
+xs ftq ifu2wb occ hist 16plus: 0
+xs ftq ifu2commit occ sum   : 711450
+xs ftq ifu2commit occ max   : 9
+xs ftq ifu2commit occ hist 0: 1257
+xs ftq ifu2commit occ hist 1: 17229
+xs ftq ifu2commit occ hist 2to3: 3299
+xs ftq ifu2commit occ hist 4to7: 97366
+xs ftq ifu2commit occ hist 8to15: 809
+xs ftq ifu2commit occ hist 16plus: 0
+xs runahead req valid       : 244
+xs runahead req fire        : 244
+xs runahead cancel next     : 1
+xs runahead pending cycles  : 344
+xs runahead redirect match  : 234
+xs runahead dup alloc block : 234
+xs ftq depth gt1 cycles     : 0
+xs icq future head block    : 183
+xs f2 data wait             : 465
+xs f2 data wait icq empty   : 465
+xs f2 data wait icq valid   : 0
+xs f2 data wait icq line mismatch: 0
+xs f2 data wait line invalid: 0
+xs packet buf empty cycles  : 21544
+xs packet buf full cycles   : 97197
+xs packet buf occ sum       : 784227
+xs packet buf occ max       : 8
+xs packet buf occ hist 0    : 21544
+xs packet buf occ hist 1    : 114
+xs packet buf occ hist 2to3 : 153
+xs packet buf occ hist 4to7 : 952
+xs packet buf occ hist 8    : 97197
+xs ftq alloc cycles         : 18053
+xs ftq pop cycles           : 17377
+xs ftq alloc pop cycles     : 17143
+xs ic req valid cycles      : 22763
+xs ic stall frontend hold   : 0
+xs ic stall packet full     : 97197
+xs ic stall ftq full        : 0
+xs backend stall cycles     : 97384
+xs backend stall pkt ready  : 97370
+xs backend stall pkt empty  : 14
+xs frontend hold cycles     : 0
+xs data present no emit     : 97905
+xs data no emit dup         : 338
+xs data no emit pkt not ready: 96956
+xs data no emit redirect    : 370
+xs data no emit frontend hold: 0
+xs data no emit fe stall    : 241
+xs data no emit other       : 0
+xs data no emit post ifu live: 97905
+xs data no emit post ifu gt1: 97586
+xs data no emit wb gt1      : 19
+xs data no emit pktbuf empty: 679
+xs data no emit pktbuf nonempty: 97226
+xs data no emit pktbuf full : 97197
+xs data no emit owner live  : 97905
+xs data no emit owner not live: 0
+xs data no emit owner complete: 619
+xs data no emit dup post ifu gt1: 338
+xs data no emit redir post ifu gt1: 51
+xs data no emit dup pktbuf empty: 329
+xs data no emit redir pktbuf empty: 350
+xs dup suppressed           : 338
+xs dup same owner           : 107
+xs dup remainder            : 0
+xs dup owner not live       : 0
+xs dup owner complete       : 0
+xs dup redirect             : 2
+xs dup fe stall             : 0
+xs dup pkt not ready        : 0
+xs dup no data              : 0
+xs dup other                : 229
+xs packet full backend      : 96956
+xs packet full owner wait   : 0
+xs packet full drain ready  : 241
+xs packet full frontend hold: 0
+xs packet full other        : 0
+xs packet full head ctl     : 97118
+xs packet full head cond    : 97106
+xs packet full head taken   : 96965
+xs packet full head complete: 97126
+xs packet full head multi   : 97168
+xs packet full drain head ctl: 190
+xs packet full drain head cond: 187
+xs packet full drain head taken: 107
+xs packet full drain head complete: 206
+xs packet full drain head multi: 219
+xs backend stall pkt head ctl: 97237
+xs backend stall pkt head cond: 97218
+xs backend stall pkt head taken: 97046
+xs backend stall pkt head complete: 97273
+xs backend stall pkt head multi: 97292
+xs dup last emit            : 338
+xs dup replay guard         : 0
+xs dup both reasons         : 0
+xs dup next is seq          : 338
+xs dup next is branch target: 0
+xs dup next is self         : 0
+xs dup next same line       : 338
+xs dup next cross line      : 0
+xs dup with control         : 108
+xs dup with taken control   : 0
+xs dup with subgroup split  : 1
+xs dup with runahead pending: 0
+xs dup bpu redirect overlap : 0
+xs dup req redirect overlap : 0
+xs dup same-owner recover   : 107
+xs dup no same owner        : 231
+xs dup no owner no seq      : 0
+xs dup no owner extract0    : 0
+xs dup no owner final0      : 0
+xs dup no owner control     : 108
+xs dup no owner taken       : 0
+xs dup no owner subgroup    : 1
+xs dup no owner straddle    : 231
+xs dup no owner remainder   : 0
+xs dup no owner crossline   : 0
+xs dup no owner not live    : 0
+xs dup no owner complete    : 0
+xs dup no owner safe noctl  : 0
+xs dup no owner other       : 0
+xs f2 owner live            : 118703
+xs f2 owner no head         : 0
+xs f2 owner idx mismatch    : 0
+xs f2 owner epoch mismatch  : 0
+xs f2 owner tag mismatch    : 0
+xs f2 cursor wb no head     : 0
+xs f2 cursor wb idx skew    : 0
+xs f2 cursor wb epoch skew  : 0
+xs f2 cursor wb tag skew    : 0
+xs packet stale no head     : 0
+xs packet stale idx mismatch: 0
+xs packet stale epoch mismatch: 0
+xs packet stale tag mismatch: 0
+xs flowthrough candidate    : 18817
+xs flowthrough owner miss   : 0
+xs flowthrough incomplete owner: 2418
+xs flowthrough valid        : 18817
+xs same owner candidate     : 99357
+xs same owner emit cand     : 2309
+xs same owner advanced      : 2113
+xs same owner block no emit : 96941
+xs same owner block no enq  : 0
+xs same owner block no owner: 0
+xs same owner block complete: 0
+xs same owner block pred ctl: 0
+xs same owner block rem     : 303
+xs same owner block rem straddle: 0
+xs same owner block rem consume: 196
+xs same owner block rem consumed: 107
+xs same owner block rem control: 0
+xs same owner block rem taken: 0
+xs same owner block rem backend: 0
+xs same owner block rem packet full: 0
+xs same owner block rem runahead pending: 0
+xs same owner block crossln : 0
+xs same owner block other   : 0
+xs same owner no emit no payload: 0
+xs same owner no emit extract0: 0
+xs same owner no emit final0: 0
+xs same owner no emit dup   : 0
+xs same owner no emit pkt not ready: 96776
+xs same owner no emit redirect: 105
+xs same owner no emit frontend hold: 0
+xs same owner no emit fe stall: 60
+xs same owner no emit other : 0
+xs post delivery dup base   : 338
+xs post delivery dup ready  : 233
+xs post delivery dup not delivered: 0
+xs post delivery dup complete: 0
+xs post delivery dup pred ctl: 103
+xs post delivery dup pred ctl taken: 0
+xs post delivery dup pred ctl not taken: 103
+xs post delivery dup pred ctl predecode: 103
+xs post delivery dup pred ctl bp taken: 0
+xs post delivery dup pred ctl cond: 103
+xs post delivery dup pred ctl jal: 0
+xs post delivery dup pred ctl jalr: 0
+xs post delivery dup pred ctl ret: 0
+xs post delivery dup next owner: 0
+xs post delivery dup remainder: 0
+xs post delivery dup redirect: 2
+xs post delivery dup fe stall: 0
+xs post delivery dup take next: 0
+xs post delivery dup take request: 0
+xs post delivery dup take remainder: 0
+xs post delivery dup other  : 0
+recoverable top F1 PCs:
+duplicate-suppressed top F2 PCs:
+  00000000800035b2 2
+  0000000080002474 9
+  0000000080002478 94
+  0000000080002134 1
+  0000000080002138 105
+  000000008000214e 105
+  0000000080002afc 1
+  000000008000357a 13
+same-owner remainder top F2 PCs:
+  0000000080002640 1
+  000000008000264e 1
+  0000000080002140 105
+  000000008000214e 105
+  0000000080003580 90
+  000000008000248e 1
+data-present no-emit top F2 PCs:
+  0000000080003564 84
+  0000000080002478 75
+  0000000080002fce 54
+  000000008000242c 253
+  0000000080002fc0 47
+  0000000080002440 128
+  00000000800039c0 96717
+  000000008000357a 14
+data no-emit duplicate top F2 PCs:
+  00000000800035b2 2
+  0000000080002474 9
+  0000000080002478 94
+  0000000080002134 1
+  0000000080002138 105
+  000000008000214e 105
+  0000000080002afc 1
+  000000008000357a 13
+data no-emit redirect top F2 PCs:
+  000000008000242c 96
+  000000008000238c 24
+  0000000080002fb8 4
+  0000000080003564 76
+  0000000080002436 4
+  0000000080002396 1
+  0000000080003570 4
+  000000008000236e 8
+data no-emit stall top F2 PCs:
+  0000000080002fce 54
+  0000000080002fc0 48
+  000000008000243a 7
+  00000000800039c0 96717
+  000000008000242c 180
+  0000000080003564 8
+  000000008000243e 21
+  0000000080002440 128
+
+=== RENAME STALL SUMMARY (cyc=119960) ===
+Total work-slot cycles:     117117
+Total advanced slot cycles: 20015
+Slot advance rate:          17%
+Cycles with any valid slot:   117117
+Cycles any slot stalled:      97385
+Cycles ALL slots stalled:     97102
+Cycles rename.stall asserted: 97384
+Stall reason (slot-cycles, non-exclusive):
+  has_preg=0: 97382
+  has_rob=0:  96836
+  has_ckpt=0: 3
+  has_lq=0:   0
+  has_sq=0:   0
+  has_dq=0:   0
+  throttle=1: 0
+Eliminated at rename:
+  zero:       246
+  move:       0
+
+=== FREE_LIST FINAL SUMMARY (cyc=119960) ===
+Total allocs:   14624
+Total releases: 17939
+Total commits:  17838
+Total flushes:  37
+Min free_bitmap popcount (samples): 4 (of 160)
+Min committed_bitmap popcount (samples): 128 (expected: 128)
+
+=== FREE_LIST FINAL SUMMARY (cyc=119960) ===
+Total allocs:   0
+Total releases: 0
+Total commits:  0
+Total flushes:  37
+Min free_bitmap popcount (samples): 64 (of 96)
+Min committed_bitmap popcount (samples): 64 (expected: 64)
+
+=== CHECKPOINT SUMMARY ===
+Cycles sampled:             119960
+Max occupied:               17 / 64
+Full cycles pre-release:    0
+Full cycles after-release:  0
+Release while full cycles:  0
+Save req/success/blocked:   12788 / 12788 / 0
+Release count:              11237
+
+=== ROB HEAD STALL SUMMARY ===
+Cycles sampled:             119960
+Head valid-not-ready cycles:104944
+  load/store/branch/serial/other: 102143 / 464 / 387 / 2 / 1948
+  other-class: mul/div/csr/bru/unknown: 18 / 8 / 0 / 253 / 1669
+Max contiguous head wait:   96739
+Same-cycle WB ready bypass candidates: 1425
+  load/store/branch/serial/other: 0 / 0 / 0 / 0 / 1425
+Head-load WB bypass fires: 4743
+Head-arith WB bypass fires: 1425
+Slot1-load WB bypass fires: 9
+Slot1-arith WB bypass fires: 399
+Slot2-load WB bypass fires: 209
+Slot2-arith WB bypass fires: 548
+Watchdog fires total:       24
+  load/store/branch/serial/other: 24 / 0 / 0 / 0 / 0
+Head valid-not-ready PC samples (approx top 32 PCs):
+  pc=0000000080002432 total=284 load/store/branch/serial/other=284/0/0/0/0
+  pc=0000000080002b04 total=8 load/store/branch/serial/other=0/0/0/0/8
+  pc=0000000080002430 total=412 load/store/branch/serial/other=412/0/0/0/0
+  pc=000000008000243e total=29 load/store/branch/serial/other=0/0/0/0/29
+  pc=00000000800023ae total=18 load/store/branch/serial/other=0/0/18/0/0
+  pc=00000000800023a2 total=6 load/store/branch/serial/other=6/0/0/0/0
+  pc=000000008000395e total=15 load/store/branch/serial/other=15/0/0/0/0
+  pc=0000000080003962 total=5 load/store/branch/serial/other=0/0/0/0/5
+  pc=0000000080002252 total=96739 load/store/branch/serial/other=96739/0/0/0/0
+  pc=000000008000237c total=39 load/store/branch/serial/other=0/39/0/0/0
+  pc=0000000080002f84 total=5 load/store/branch/serial/other=0/0/0/0/5
+  pc=000000008000268a total=6 load/store/branch/serial/other=0/0/6/0/0
+  pc=00000000800035f4 total=32 load/store/branch/serial/other=32/0/0/0/0
+  pc=000000008000268e total=4 load/store/branch/serial/other=4/0/0/0/0
+  pc=0000000080003564 total=460 load/store/branch/serial/other=460/0/0/0/0
+  pc=00000000800023bc total=75 load/store/branch/serial/other=0/0/75/0/0
+  pc=00000000800035a6 total=84 load/store/branch/serial/other=84/0/0/0/0
+  pc=00000000800026a8 total=8 load/store/branch/serial/other=8/0/0/0/0
+  pc=00000000800035d0 total=4 load/store/branch/serial/other=4/0/0/0/0
+  pc=000000008000236e total=90 load/store/branch/serial/other=0/0/90/0/0
+  pc=00000000800026d8 total=8 load/store/branch/serial/other=8/0/0/0/0
+  pc=0000000080002388 total=12 load/store/branch/serial/other=0/0/12/0/0
+  pc=00000000800029c0 total=4 load/store/branch/serial/other=4/0/0/0/0
+  pc=00000000800026f8 total=4 load/store/branch/serial/other=4/0/0/0/0
+  pc=000000008000235a total=50 load/store/branch/serial/other=0/0/50/0/0
+  pc=000000008000235e total=28 load/store/branch/serial/other=28/0/0/0/0
+  pc=0000000080002364 total=32 load/store/branch/serial/other=0/0/0/0/32
+  pc=000000008000239e total=6 load/store/branch/serial/other=0/0/6/0/0
+  pc=000000008000211a total=39 load/store/branch/serial/other=0/0/39/0/0
+  pc=000000008000242c total=77 load/store/branch/serial/other=77/0/0/0/0
+  pc=0000000080002128 total=108 load/store/branch/serial/other=108/0/0/0/0
+  pc=0000000080002440 total=3190 load/store/branch/serial/other=3190/0/0/0/0
+
+=== LSU P1 CONFLICT SUMMARY ===
+total/capture same_line/diff_line : 111 / 107   111 / 0
+blocked by sq_hit/wait/partial/lq : 4 / 0 / 0 / 0
+LQ p1 skid push/pop/full/max_occ  : 0 / 0 / 0 / 0
+p0_pc              p1_pc              count same_line diff_line
+0000000080002968 000000008000296c 1 1 0
+00000000800023a2 00000000800023a6 26 26 0
+000000008000213e 0000000080002142 55 55 0
+0000000080002170 0000000080002176 4 4 0
+00000000800023d8 00000000800023da 1 1 0
+00000000800023e2 00000000800023e4 1 1 0
+00000000800023e8 00000000800023ea 1 1 0
+0000000080002978 000000008000297a 1 1 0
+0000000080002ae2 0000000080002aea 1 1 0
+000000008000299e 00000000800029a2 1 1 0
+0000000080002468 000000008000246c 2 2 0
+00000000800021e0 00000000800021e2 7 7 0
+00000000800021e6 00000000800021e8 7 7 0
+000000008000224a 0000000080002250 1 1 0
+0000000080002250 0000000080002252 2 2 0
+
+=== LSU LMB SUMMARY ===
+Cycles sampled:             119960
+Max occupied/full cycles:   3 / 0
+Miss detect p0/p1:          19 / 0
+Alloc p0/p1:                19 / 0
+Fill matches:               7
+Ready drains:               6
+Alloc ready from same fill:  0
+Dropped full/dual:          0 / 0
+Fwd-hold blocked cycles:    0
+LMB WB blocked cycles:      6
+=== LOAD1 TLB-WAIT SUPPRESSION SUMMARY ===
+  load1_tlb_wait cycles:           0
+  ... while DTLB port FREE (over):  0
+=== LMB LIVE DUMP (deadlock probe) ===
+  lmb[0] ready=0 rob_idx=122 lq_idx=30 line=00000000800ff640 pc=0000000080002250
+  retry_valid: p0=0 p1=0
+=== SQ OCCUPANCY SUMMARY (cyc=119960 DEPTH=32 gate>=29) ===
+  max=20  cyc_at_gate(full)=0
+  avg=8.35
+  hist 0-7=22518 8-15=97405 16-23=37 24-31=0 ==32:0
+=== LQ OCCUPANCY SUMMARY (cyc=119960 DEPTH=32 gate>=29) ===
+  max=15  cyc_at_gate(full)=0
+  avg=7.07
+  hist 0-7=17890 8-15=102070 16-23=0 24-31=0 ==32:0
+CSB summary:
+  deq_valid / ack cycles     : 9380 / 4591
+  deq_wait / enq_stall / full: 4789 / 66 / 67
+  max same-head wait run     : 9
+D-cache store summary:
+  req / ack cycles           : 9380 / 4591
+  hit_ack / fill_ack         : 4553 / 38
+  wait_fill / port_wait      : 195 / 2
+  miss_alloc / miss_merge    : 38 / 195
+  grant_a / grant_b          : 5825 / 3529
+  wt_enq / wt_deq / wt_full  : 4591 / 4591 / 0
+  wt_occ_max                 : 2
+D-cache load miss allocation summary:
+  both_loads_s1              : 2974
+  ld0 new/alloc/merge        : 13 / 13 / 6
+  ld1 new/alloc/merge        : 0 / 0 / 0
+  ld1 blocked by ld0 alloc   : 0
+    same_line / diff_line    : 0 / 0
+  new load miss no free MSHR : 0
+=== MSHR LIVE DUMP (deadlock probe) ===
+
+=== COMMIT FLUSH-CAUSE BREAKDOWN (cyc=119960) ===
+Total commits:        46105
+  branches committed: 9027
+  stores committed:   4591
+  loads committed:    13752
+Flush causes:
+  replay (ld order):  0
+  exception:          0
+  mispredict:         37
+    misp cond(TAGE):  8
+    misp jal/call:    15
+    misp jalr(ITTAGE):5
+    misp ret(RAS):    9
+  ret (mret/sret):    0
+  interrupt:          0
+=N:[dumpMXD] closing MXD dump
+=T:Simulation terminated by $finish at time 1200005000 (src/tb/tb_xsim.sv:117);
+Run directory: /home/jeremycai/agent-workspace/rv64gc-v2
+  System timescale is 1ps / 1ps
+  Altair DSim version: 2026.0.0 (b:R #c:127 h:14cc828913 os:rocky_8.10)
+  Random seed: (defaulted to 1)

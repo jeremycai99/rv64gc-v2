@@ -1,0 +1,119 @@
+TIMEOUT after 20000000 cycles
+[LINUX_DEBUG] last_commit_pc=000000008000fe00 last_commit_cycle=71102 last_commit_count=4
+[LINUX_DEBUG] mmio_req=0 uart_rd=0 uart_wr=0
+[LINUX_DEBUG_CORE] rob_empty=0 rob_free=41 rob_head=118 rob_tail=77 rename_stall=1 int_free=51 fp_free=64 fl_req=0 fl_avail=0 fp_req=0 fp_avail=0 hold=0000 ren_raw=0 dq_full=1 lq_full=0 sq_full=0 iq_occ=17/5/4
+[LINUX_DEBUG_HEAD] v=1111 r=0000 pc0=000000008000fe02 pc1=000000008000fe06 is_load=1111 is_store=0000 is_branch=0000 is_serial=0000
+[LINUX_DEBUG_LSU] lq_head=26 lq_tail=16 lq_count=22 lq_full=0 lmb_any=0 p0_retry=0 p1_retry=0 p0_miss_retry=0 p1_miss_retry=0 p0_miss=0 p1_miss=0 p0_fill_hit=0 p1_fill_hit=0 lmb_match=0 lmb_ready=0 lmb_wb_free=1
+[LINUX_DEBUG_LOAD_PIPE] issue=00 r=00 rr=00 p0_pc=0000000000000000 p0_addr=0000000000000000 p0_lq=0 p0_rob=0 p1_pc=0000000000000000 p1_addr=0000000000000000 p1_lq=0 p1_rob=0 resp_v=00 resp_hit=00 miss_retry=00 wb_v=00 wb_rob=0/0 wb_pdst=0/0
+[LINUX_DEBUG_LOAD_HOLD] p0_dcache=0 lq=0 rob=0 p1_dcache=0 lq=0 rob=0 p1_misalign=0 lq=0 rob=0 p0_fwd=0 lq=0 rob=0 p1_fwd=0 lq=2 rob=39
+[LINUX_DEBUG_AMO] wait=0 wb=0 store=0 committed=0 lq=0 rob=14 addr=0000000080040008 op=0
+[LINUX_DEBUG_DCACHE] l2_state=0 active=0 req=0 we=0 req_addr=0000000000000000 ready=1 resp=0 resp_addr=000000008001cd00 fill=0 fill_addr=000000008001cd00 free=1 free_idx=0 fill_avail=0 fill_idx=0 done_avail=0 done_idx=0 wb_avail=0 wb_idx=0 wt_count=0 wt_deq=0
+[LINUX_DEBUG_LQ] idx=0 head=0 rob=6 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=1 head=0 rob=10 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=2 head=0 rob=11 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=3 head=0 rob=12 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=4 head=0 rob=13 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=5 head=0 rob=24 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=6 head=0 rob=25 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=7 head=0 rob=26 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=8 head=0 rob=31 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=9 head=0 rob=49 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=10 head=0 rob=55 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=11 head=0 rob=59 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=12 head=0 rob=63 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=13 head=0 rob=67 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=14 head=0 rob=71 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=15 head=0 rob=75 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=26 head=1 rob=118 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=27 head=0 rob=119 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=28 head=0 rob=120 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=29 head=0 rob=121 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=30 head=0 rob=4 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+[LINUX_DEBUG_LQ] idx=31 head=0 rob=5 valid=1 addr_v=0 exec=0 result=0 addr=0000000000000000 size=0 data=0000000000000000
+IPC: mcycle=20000000 minstret=179463 IPC=0.008973
+- src/tb/tb_linux.sv:3937: Verilog $finish
+[SVA SUMMARY]
+  ordering_violations fired:        0
+  replay_valid fired:               0
+  violations gated by full_flush:   0
+  adjacent-cycle violations:        0
+  [A10] violations w/ flush in flight:   0
+  [A11] violations within 5 cyc of flush:0
+  [A12] violations in burst (<5 cyc):    0
+  [A13] same rob_idx repeated (<20 cyc): 0
+  [A14] viol followed by mispred(<20cyc):0
+  [A15] head-timeout diagnostic hits:    4866
+  [A16] watchdog fires post-replay(<100):0
+=== ICACHE NEXT-LINE PREFETCH CEILING ===
+  distinct-line misses:        108
+  ...same-page succ of last hit: 37  (next-line-prefetch coverable)
+=== RAS RECOVERY SUMMARY (restores=1163 DEPTH=24) ===
+  gap hist: 0=829 1=209 2-3=2 4-7=0 8+=123  max=23
+  top-repair: applied=1029 skipped(FIX-B addressable)=92
+  push-wrap (depth-24 overflow): 1
+
+=== RENAME STALL SUMMARY (cyc=20000001) ===
+Total work-slot cycles:     19986570
+Total advanced slot cycles: 54922
+Slot advance rate:          0%
+Cycles with any valid slot:   19986570
+Cycles any slot stalled:      19931668
+Cycles ALL slots stalled:     19931648
+Cycles rename.stall asserted: 19931667
+Stall reason (slot-cycles, non-exclusive):
+  has_preg=0: 19931648
+  has_rob=0:  0
+  has_ckpt=0: 20
+  has_lq=0:   419
+  has_sq=0:   2357
+  has_dq=0:   19928872
+  throttle=1: 0
+Eliminated at rename:
+  zero:       296
+  move:       0
+
+=== FREE_LIST FINAL SUMMARY (cyc=20000001) ===
+Total allocs:   51962
+Total releases: 57363
+Total commits:  57362
+Total flushes:  147
+Min free_bitmap popcount (samples): 160 (of 160)
+Min committed_bitmap popcount (samples): 160 (expected: 128)
+
+=== FREE_LIST FINAL SUMMARY (cyc=20000001) ===
+Total allocs:   0
+Total releases: 0
+Total commits:  0
+Total flushes:  147
+Min free_bitmap popcount (samples): 96 (of 96)
+Min committed_bitmap popcount (samples): 96 (expected: 64)
+
+=== LSU LMB RE-PROBE SUMMARY ===
+Re-probe fires/hits/retries: 3 / 3 / 0
+=== LOAD1 TLB-WAIT SUPPRESSION SUMMARY ===
+  load1_tlb_wait cycles:           0
+  ... while DTLB port FREE (over):  0
+=== SQ OCCUPANCY SUMMARY (cyc=20000001 DEPTH=32 gate>=29) ===
+  max=29  cyc_at_gate(full)=2361
+  avg=6.98
+  hist 0-7=19992028 8-15=4022 16-23=70 24-31=3881 ==32:0
+=== LQ OCCUPANCY SUMMARY (cyc=20000001 DEPTH=32 gate>=29) ===
+  max=30  cyc_at_gate(full)=463
+  avg=21.93
+  hist 0-7=64039 8-15=5106 16-23=19928988 24-31=1868 ==32:0
+
+=== COMMIT FLUSH-CAUSE BREAKDOWN (cyc=20000001) ===
+Total commits:        178697
+  branches committed: 17123
+  stores committed:   9541
+  loads committed:    38994
+Flush causes:
+  replay (ld order):  0
+  exception:          0
+  mispredict:         145
+    misp cond(TAGE):  0
+    misp jal/call:    0
+    misp jalr(ITTAGE):90
+    misp ret(RAS):    55
+  ret (mret/sret):    0
+  interrupt:          0
