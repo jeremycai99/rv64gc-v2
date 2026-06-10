@@ -5131,6 +5131,7 @@ module rv64gc_core_top
         .store_req_byte_mask(ptw_dcache_store_valid
                               ? 8'hff
                               : dc_store_req_byte_mask),
+        .store_req_is_ptw   (ptw_dcache_store_valid),
         // No-bubble next-store peek: must be killed while the PTW is
         // injecting (the peek refers to the CSB stream; bypassing during a
         // PTW-store ack would complete a younger CSB store before its
