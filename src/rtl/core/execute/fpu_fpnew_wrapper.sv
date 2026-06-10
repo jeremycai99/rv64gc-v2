@@ -246,9 +246,19 @@ module fpu_fpnew_wrapper
     );
 
     always_comb begin
-        ready_o = fpnew_unsupported ? 1'b1 : fpnew_in_ready;
-        unsupported_o = valid_i && fpnew_unsupported;
-        out_valid_o = fpnew_out_valid && !fpnew_unsupported;
+        // An FPnew completion drains UNCONDITIONALLY this cycle (out_ready_i
+        // is tied high below), so it must always be visible upstream.  Do NOT
+        // mask out_valid with the request-side unsupported decode: that
+        // decode describes the op sitting in the REQUEST register (possibly
+        // stale), not the op completing inside FPnew.  Masking it dropped
+        // late multi-cycle results (fdiv/fsqrt) on the floor, permanently
+        // wedging the ROB on their rob_idx.  When a completion and an
+        // unsupported-request retire collide on the single output slot, the
+        // completion wins and the unsupported retire is deferred one cycle
+        // (ready_o=0 holds the request register).
+        ready_o = fpnew_unsupported ? !fpnew_out_valid : fpnew_in_ready;
+        unsupported_o = valid_i && fpnew_unsupported && !fpnew_out_valid;
+        out_valid_o = fpnew_out_valid;
         out_rob_idx_o = fpnew_tag_out.rob_idx;
         out_pdst_o = fpnew_tag_out.pdst;
         out_data_o = fpnew_result;

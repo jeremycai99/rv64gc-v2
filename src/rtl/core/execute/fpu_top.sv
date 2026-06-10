@@ -109,7 +109,32 @@ module fpu_top
         out_data_o = 64'd0;
         out_status_o = '0;
 
-        if (pipe_i == FPU_PIPE_FMV) begin
+        if (use_fpnew_i && fpnew_out_valid) begin
+            // A completing FPnew op owns the output port THIS cycle: the
+            // wrapper drains FPnew unconditionally (out_ready_i tied high),
+            // so an invisible completion is lost forever.  The original mux
+            // selected the output source from pipe_i -- the pipe of whatever
+            // op sits in the (possibly stale, possibly drained) REQUEST
+            // register.  A late multi-cycle result (fdiv/fsqrt) emerging
+            // while the request register held an FMV-class op was silently
+            // dropped: its ROB entry never became ready and the core wedged
+            // at the ROB head (CoreMark-PRO linear_alg/nnet/loops freezes).
+            // A same-cycle FMV request is simply held (ready_o=0) and
+            // completes on a later cycle; an FPnew-class request may still
+            // be ACCEPTED concurrently (input/output are independent ports).
+            out_valid_o   = 1'b1;
+            out_rob_idx_o = fpnew_out_rob_idx;
+            out_pdst_o    = fpnew_out_pdst;
+            out_data_o    = fpnew_out_data;
+            out_status_o  = fpnew_out_status;
+            if (pipe_i == FPU_PIPE_FMV) begin
+                ready_o       = 1'b0;
+                unsupported_o = 1'b0;
+            end else begin
+                ready_o       = fpnew_ready;
+                unsupported_o = fpnew_unsupported;
+            end
+        end else if (pipe_i == FPU_PIPE_FMV) begin
             ready_o = 1'b1;
             unsupported_o = 1'b0;
             out_valid_o = fmv_valid;

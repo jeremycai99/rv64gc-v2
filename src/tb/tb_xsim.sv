@@ -159,6 +159,18 @@ module tb_xsim;
             if (sim_cycle % 100000 == 0) begin
                 $display("[PCS] cyc=%0d commits=%0d last_pc=%0h",
                          sim_cycle, pcs_commits, pcs_last_pc);
+                // FPU/IQ2 handshake state (wedge diagnosis)
+                $display("[PCS-FPU] reqv=%0b rdy=%0b outv=%0b unsupp=%0b iq2v=%0b iq2sup=%0b divb=%0b divhold=%0b robhead=%0d iq2occ=%0d iq0occ=%0d iq1occ=%0d iqmem=%0d hv=%0b hr=%0b",
+                         u_tb.u_core.fpu_req_valid_r, u_tb.u_core.fpu_ready,
+                         u_tb.u_core.fpu_out_valid, u_tb.u_core.fpu_unsupported,
+                         u_tb.u_core.iq2_issue_valid[0],
+                         u_tb.u_core.iq2_issue_suppress_s[0],
+                         u_tb.u_core.div_busy, u_tb.u_core.div_hold_valid_r,
+                         u_tb.u_core.rob_head_idx,
+                         u_tb.u_core.iq2_occ, u_tb.u_core.iq0_occ,
+                         u_tb.u_core.iq1_occ, u_tb.u_core.iq_load_occ,
+                         u_tb.u_core.rob_head_valid[0],
+                         u_tb.u_core.rob_head_ready[0]);
             end
             // Line-lifetime watcher (+WATCH_LINE=<hex line addr>): every tag
             // write to the line's set, every install selecting it or its set,
