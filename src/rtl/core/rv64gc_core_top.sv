@@ -11,11 +11,11 @@ module rv64gc_core_top
     import fpu_pkg::*;
 #(
     parameter logic BPU_EXEC_MISP_UPDATE_ENABLE      = 1'b0,
-    parameter logic EXEC_PARTIAL_BRANCH_RECOVERY     = 1'b1,
+    parameter logic EXEC_PARTIAL_BRANCH_RECOVERY     = 1'b0,
     parameter logic SELECTIVE_BRANCH_RECOVERY        = 1'b0,
     parameter logic TAGE_TRAIN_MISP_COND_FIRST       = 1'b0,
-    parameter logic BRU0_EARLY_REDIRECT_ENABLE       = 1'b1,
-    parameter logic BRU1_EARLY_REDIRECT_ENABLE       = 1'b1,
+    parameter logic BRU0_EARLY_REDIRECT_ENABLE       = 1'b0,
+    parameter logic BRU1_EARLY_REDIRECT_ENABLE       = 1'b0,
     parameter logic UOP_CACHE_ENABLE                 = 1'b0
 )
 (
