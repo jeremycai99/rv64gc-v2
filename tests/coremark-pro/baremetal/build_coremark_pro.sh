@@ -192,13 +192,43 @@ build_workload() {
         )
         EXTRA_SRCS+=(
             "$BMETAL_DIR/parser_kernel_direct.c"
+            "$BMETAL_DIR/string_opt.c"
+            "$CMPRO_DIR/benchmarks/darkmark/parser/ezxml.c"
+        )
+        BYPASS_MITH=1
+        ;;
+
+    # ---- phase-isolation A/B variants (small iters so they run to halt) ----
+    parser-ko-full)
+        EXTRA_CFLAGS+=(
+            -I"$CMPRO_DIR/benchmarks/darkmark/parser"
+            -DPARSER_KERNEL_ITERS=2
+            -DPARSER_BUF_SIZE=125000
+        )
+        EXTRA_SRCS+=(
+            "$BMETAL_DIR/parser_kernel_direct.c"
+            "$BMETAL_DIR/string_opt.c"
+            "$CMPRO_DIR/benchmarks/darkmark/parser/ezxml.c"
+        )
+        BYPASS_MITH=1
+        ;;
+    parser-ko-parseonly)
+        EXTRA_CFLAGS+=(
+            -I"$CMPRO_DIR/benchmarks/darkmark/parser"
+            -DPARSER_KERNEL_ITERS=2
+            -DPARSER_BUF_SIZE=125000
+            -DPARSER_SKIP_TRAVERSE
+        )
+        EXTRA_SRCS+=(
+            "$BMETAL_DIR/parser_kernel_direct.c"
+            "$BMETAL_DIR/string_opt.c"
             "$CMPRO_DIR/benchmarks/darkmark/parser/ezxml.c"
         )
         BYPASS_MITH=1
         ;;
 
     *)
-        echo "ERROR: Unknown workload '$WL'. Supported: sha-test parser-125k radix2-big-64k sha-kernel-direct parser-kernel-direct all" >&2
+        echo "ERROR: Unknown workload '$WL'. Supported: sha-test parser-125k radix2-big-64k sha-kernel-direct parser-kernel-direct parser-ko-full parser-ko-parseonly all" >&2
         exit 1
         ;;
     esac

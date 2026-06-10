@@ -28,6 +28,12 @@ module dcache
     input  wire [63:0] store_req_addr,
     input  wire [63:0] store_req_data,
     input  wire [7:0]  store_req_byte_mask,
+    // Next-store peek (no-bubble bypass): looked up in S0 during the cycle the
+    // current head is being acknowledged, so back-to-back stores ack 1/cyc.
+    input  wire        store_req_next_valid,
+    input  wire [63:0] store_req_next_addr,
+    input  wire [63:0] store_req_next_data,
+    input  wire [7:0]  store_req_next_byte_mask,
     output reg        store_ack,
     // L2 interface (miss handling)
     output reg        l2_req_valid,
@@ -216,8 +222,28 @@ module dcache
     // Advance a store into s1 only when it actually won one of the ports;
     // otherwise the tag/data outputs still belong to a load and the store
     // must remain in the CSB.
-    assign s0_store_lookup_grant_a = store_req_valid && !load_req_valid[0];
-    assign s0_store_lookup_grant_b = store_req_valid && load_req_valid[0]
+    // No-bubble bypass: during the cycle the S1 store acknowledges the
+    // presented CSB head, the head re-presented on store_req_* is stale (the
+    // CSB advances on this edge).  Instead of dropping the S0 lookup (a dead
+    // cycle), look up the NEXT store (head+1 peek) so back-to-back stores
+    // sustain one ack per cycle.  Gated; 0 = legacy 2-cycle cadence.
+    logic        s0_st_bypass;
+    logic        s0_store_eff_valid;
+    logic [63:0] s0_store_eff_addr;
+    logic [63:0] s0_store_eff_data;
+    logic [7:0]  s0_store_eff_mask;
+    assign s0_st_bypass = STORE_PIPE_NOBUBBLE_ENABLE && store_ack_matches_head &&
+                          store_req_next_valid;
+    assign s0_store_eff_valid = s0_st_bypass ? 1'b1 : store_req_valid;
+    assign s0_store_eff_addr  = s0_st_bypass ? store_req_next_addr
+                                             : store_req_addr;
+    assign s0_store_eff_data  = s0_st_bypass ? store_req_next_data
+                                             : store_req_data;
+    assign s0_store_eff_mask  = s0_st_bypass ? store_req_next_byte_mask
+                                             : store_req_byte_mask;
+
+    assign s0_store_lookup_grant_a = s0_store_eff_valid && !load_req_valid[0];
+    assign s0_store_lookup_grant_b = s0_store_eff_valid && load_req_valid[0]
                                    && !load_req_valid[1];
 
     // Tag RAM port A: load port 0 (priority), then store
@@ -225,7 +251,7 @@ module dcache
         if (load_req_valid[0])
             tr_raddr = load_req_addr[0][INDEX_HI:INDEX_LO];
         else if (s0_store_lookup_grant_a)
-            tr_raddr = store_req_addr[INDEX_HI:INDEX_LO];
+            tr_raddr = s0_store_eff_addr[INDEX_HI:INDEX_LO];
         else
             tr_raddr = '0;
     end
@@ -233,7 +259,7 @@ module dcache
     // Tag RAM port B: load port 1, or store when load1 is idle.
     assign tr_raddr2 = load_req_valid[1] ? load_req_addr[1][INDEX_HI:INDEX_LO]
                                          : (s0_store_lookup_grant_b
-                                            ? store_req_addr[INDEX_HI:INDEX_LO]
+                                            ? s0_store_eff_addr[INDEX_HI:INDEX_LO]
                                             : '0);
 
     // Data RAM port A: load port 0, or store when load0 is idle.
@@ -242,7 +268,7 @@ module dcache
             dr_raddr = load_req_addr[0][INDEX_HI:INDEX_LO];
             dr_rway  = 2'd0;
         end else if (s0_store_lookup_grant_a) begin
-            dr_raddr = store_req_addr[INDEX_HI:INDEX_LO];
+            dr_raddr = s0_store_eff_addr[INDEX_HI:INDEX_LO];
             dr_rway  = 2'd0;
         end else begin
             dr_raddr = '0;
@@ -253,7 +279,7 @@ module dcache
     // Data RAM port B: load port 1, or store when load1 is idle.
     assign dr_raddr2 = load_req_valid[1] ? load_req_addr[1][INDEX_HI:INDEX_LO]
                                          : (s0_store_lookup_grant_b
-                                            ? store_req_addr[INDEX_HI:INDEX_LO]
+                                            ? s0_store_eff_addr[INDEX_HI:INDEX_LO]
                                             : '0);
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -286,13 +312,14 @@ module dcache
             // store_ack_s1 is generated from the previous cycle's S1 store
             // lookup.  When it acknowledges the current CSB head, the CSB
             // will advance on this edge; do not re-latch that same store into
-            // S1 or the next cycle could perform a duplicate write while the
-            // CSB is already presenting the following store.
+            // S1 (a duplicate write) — UNLESS the no-bubble bypass redirected
+            // this cycle's S0 lookup to the NEXT store (s0_st_bypass), in
+            // which case the latched store is the new head, not a duplicate.
             s1_st_valid     <= (s0_store_lookup_grant_a || s0_store_lookup_grant_b) &&
-                               !store_ack_matches_head;
-            s1_st_addr      <= store_req_addr;
-            s1_st_data      <= store_req_data;
-            s1_st_byte_mask <= store_req_byte_mask;
+                               (s0_st_bypass || !store_ack_matches_head);
+            s1_st_addr      <= s0_store_eff_addr;
+            s1_st_data      <= s0_store_eff_data;
+            s1_st_byte_mask <= s0_store_eff_mask;
             s1_st_use_port_b <= s0_store_lookup_grant_b;
         end
     end
@@ -460,6 +487,17 @@ module dcache
     localparam int MSHR_DEPTH    = L1D_MSHR_DEPTH; // 16
     localparam int MSHR_IDX_BITS = $clog2(MSHR_DEPTH); // 4
 
+    // No-write-allocate (write-validate) enable.  When set, a streaming store
+    // miss is NOT held for a read-for-ownership fill: it accumulates a per-line
+    // overlay in an MSHR (nwa_pending), is acknowledged immediately (write-
+    // around: bytes also go to L2 via the existing write-through queue), and
+    // the L1D line is installed clean once the overlay mask covers the full
+    // line.  A load/atomic that needs the line, or MSHR pressure, upgrades the
+    // entry back to a normal read-for-ownership fill (the fill folds the
+    // overlay, so reads are always coherent regardless of WT drain).  ENABLE=0
+    // is byte-identical to the legacy write-allocate path.
+    localparam logic nwa_en = NO_WRITE_ALLOCATE_ENABLE;
+
     typedef struct packed {
         logic                    valid;
         logic [63:0]             addr;          // line-aligned miss address
@@ -473,6 +511,8 @@ module dcache
         logic [7:0]              store_byte_mask;// valid bytes in store_data
         logic [LINE_SIZE*8-1:0]  store_line_data;// full-line store overlay
         logic [LINE_SIZE-1:0]    store_line_mask;// bytes valid in overlay
+        logic                    nwa_pending;    // NWA: deferred no-fill streaming-store line
+        logic                    nwa_wt_owed;    // NWA: line owes a full-line write-through at install
         logic [1:0]              victim;         // victim way for fill
         logic                    dirty_evict;    // victim was dirty
         logic [511:0]            evict_data;     // dirty line data for writeback
@@ -628,6 +668,14 @@ module dcache
     logic [63:0]                 wt_addr_q [0:WT_DEPTH-1];
     logic [LINE_SIZE*8-1:0]      wt_data_q [0:WT_DEPTH-1];
 
+    // NWA forward declarations (driven below; declared here for strict
+    // declaration-before-use simulators).
+    logic         nwa_wt_room;       // registered WT-queue room (loop-safe)
+    logic         nwa_inst_wt_valid; // install-time full-line WT request
+    logic [63:0]  nwa_inst_wt_addr;
+    logic [511:0] nwa_inst_wt_data;
+    assign nwa_wt_room = (wt_count_q < WT_COUNT_BITS'(WT_DEPTH));
+
     // Find a MSHR entry with pending writeback
     logic [MSHR_IDX_BITS-1:0] wb_mshr_idx;
     logic                     wb_mshr_avail;
@@ -729,7 +777,7 @@ module dcache
                              st_wt_deq_fire;
     assign st_wt_merge_fire = st_wt_enq_valid && st_wt_merge_ready;
     assign st_wt_push_fire  = st_wt_enq_valid && !st_wt_merge_ready;
-    assign st_wt_enq_full_line = fill_done_store_merge;
+    assign st_wt_enq_full_line = nwa_inst_wt_valid || fill_done_store_merge;
     assign st_wt_deq_same_line =
         st_wt_deq_fire &&
         (wt_addr_q[wt_head_q][63:LINE_BITS] ==
@@ -747,9 +795,53 @@ module dcache
         fill_done_idx   = '0;
         fill_done_avail = 1'b0;
         for (int m = 0; m < MSHR_DEPTH; m++) begin
-            if (mshr[m].valid && mshr[m].fill_done && !fill_done_avail) begin
+            // An ex-nwa fill that still owes its full-line write-through may
+            // install only when there is WT-queue room (so the install-time WT
+            // is never dropped); a normal fill installs unconditionally.
+            if (mshr[m].valid && mshr[m].fill_done && !fill_done_avail &&
+                (!mshr[m].nwa_wt_owed || nwa_wt_room)) begin
                 fill_done_avail = 1'b1;
                 fill_done_idx   = MSHR_IDX_BITS'(m);
+            end
+        end
+    end
+
+    // NWA write-validate: a deferred streaming-store MSHR whose overlay now
+    // covers the whole line is ready to install clean (no fill).  Must wait for
+    // any dirty-victim writeback to drain first (writeback_pend) AND for room in
+    // the WT queue (the install enqueues one full-line write-through).  Lowest.
+    logic [MSHR_IDX_BITS-1:0] nwa_validate_idx;
+    logic                     nwa_validate_avail;
+    always_comb begin
+        nwa_validate_idx   = '0;
+        nwa_validate_avail = 1'b0;
+        if (nwa_en && nwa_wt_room) begin
+            for (int m = 0; m < MSHR_DEPTH; m++) begin
+                if (mshr[m].valid && mshr[m].nwa_pending &&
+                    (&mshr[m].store_line_mask) && !mshr[m].writeback_pend &&
+                    !nwa_validate_avail) begin
+                    nwa_validate_avail = 1'b1;
+                    nwa_validate_idx   = MSHR_IDX_BITS'(m);
+                end
+            end
+        end
+    end
+
+    // NWA pressure-upgrade: when a new miss needs an MSHR slot but none is
+    // free, convert the lowest partial nwa_pending entry back to a normal fill
+    // (fetch the rest of the line, fold the overlay) so the pool always drains.
+    logic [MSHR_IDX_BITS-1:0] nwa_upgrade_idx;
+    logic                     nwa_upgrade_avail;
+    always_comb begin
+        nwa_upgrade_idx   = '0;
+        nwa_upgrade_avail = 1'b0;
+        if (nwa_en) begin
+            for (int m = 0; m < MSHR_DEPTH; m++) begin
+                if (mshr[m].valid && mshr[m].nwa_pending &&
+                    !(&mshr[m].store_line_mask) && !nwa_upgrade_avail) begin
+                    nwa_upgrade_avail = 1'b1;
+                    nwa_upgrade_idx   = MSHR_IDX_BITS'(m);
+                end
             end
         end
     end
@@ -802,6 +894,27 @@ module dcache
         end
     end
 
+    // NWA install-time write-through: streaming-store lines are NOT written
+    // through per store (the cache is write-through but L2 takes only full
+    // lines).  Instead one FULL-LINE write-through is enqueued when the line is
+    // installed: from the overlay at write-validate, or from the merged fill
+    // line when an ex-nwa entry was upgraded to a fill.  Highest WT priority.
+    // (Signals forward-declared next to the WT queue.)
+    always_comb begin
+        nwa_inst_wt_valid = 1'b0;
+        nwa_inst_wt_addr  = '0;
+        nwa_inst_wt_data  = '0;
+        if (nwa_validate_avail) begin
+            nwa_inst_wt_valid = 1'b1;
+            nwa_inst_wt_addr  = mshr[nwa_validate_idx].addr;
+            nwa_inst_wt_data  = mshr[nwa_validate_idx].store_line_data;
+        end else if (fill_done_avail && mshr[fill_done_idx].nwa_wt_owed) begin
+            nwa_inst_wt_valid = 1'b1;
+            nwa_inst_wt_addr  = mshr[fill_done_idx].addr;
+            nwa_inst_wt_data  = fill_done_line_data;
+        end
+    end
+
     always_comb begin
         st_wt_line_data = st_cache_hit
                         ? merge_store_overlay_into_line(
@@ -810,12 +923,16 @@ module dcache
                               st_full_mask
                           )
                         : '0;
-        st_wt_enq_addr  = fill_done_store_merge
-                        ? mshr[fill_done_idx].addr
-                        : st_line_addr;
-        st_wt_enq_data  = fill_done_store_merge
-                        ? fill_done_line_data
-                        : st_wt_line_data;
+        st_wt_enq_addr  = nwa_inst_wt_valid
+                        ? nwa_inst_wt_addr
+                        : (fill_done_store_merge
+                           ? mshr[fill_done_idx].addr
+                           : st_line_addr);
+        st_wt_enq_data  = nwa_inst_wt_valid
+                        ? nwa_inst_wt_data
+                        : (fill_done_store_merge
+                           ? fill_done_line_data
+                           : st_wt_line_data);
         st_wt_push_data = st_wt_enq_data;
         if (!st_wt_enq_full_line && st_wt_deq_same_line) begin
             st_wt_push_data =
@@ -867,6 +984,22 @@ module dcache
             dr_waddr  = mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO];
             dr_wway   = mshr[fill_done_idx].victim;
             dr_wdata  = fill_done_line_data;
+        end else if (nwa_validate_avail) begin
+            // NWA write-validate: the streaming line is fully defined by stores
+            // (overlay mask all-ones).  Install it clean from the overlay (no
+            // fill); the bytes already reached L2 via the write-through queue,
+            // so the L1D copy is clean and no second dirty writeback is owed.
+            tr_we     = 1'b1;
+            tr_waddr  = mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO];
+            tr_wway   = mshr[nwa_validate_idx].victim;
+            tr_wvalid = 1'b1;
+            tr_wdirty = 1'b0;
+            tr_wtag   = mshr[nwa_validate_idx].addr[TAG_HI:TAG_LO];
+
+            dr_we     = 1'b1;
+            dr_waddr  = mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO];
+            dr_wway   = mshr[nwa_validate_idx].victim;
+            dr_wdata  = mshr[nwa_validate_idx].store_line_data;
         end else if (s1_st_valid && st_cache_hit) begin
             // Store hit: byte-enable write. The lower hierarchy is updated via
             // the write-through queue, so the L1D copy remains clean.
@@ -903,17 +1036,41 @@ module dcache
     assign s1_st_waiting_for_fill = s1_st_valid && !st_cache_hit &&
                                     !invalidate_all;
 
+    // NWA write-around: a streaming store miss is acknowledged immediately once
+    // it is accepted into a deferred (no-fill) overlay MSHR — either by
+    // allocating a fresh nwa entry or merging into an existing one — instead of
+    // being held for a read-for-ownership fill.  Its bytes are captured in the
+    // MSHR overlay and reach L2 as ONE full-line write-through at install time
+    // (nwa_inst_wt), so this ack does NOT itself enqueue a write-through.
+    logic nwa_store_accept;
+    assign nwa_store_accept =
+        nwa_en && s1_st_valid && !st_cache_hit && !invalidate_all &&
+        !fill_done_avail &&
+        ( s1_st_can_allocate_mshr ||
+          (mshr_st_match_hit && mshr[mshr_st_match_idx].nwa_pending &&
+           !(&mshr[mshr_st_match_idx].store_line_mask)) );
+
+    // A store HIT or a legacy fill-merge produces a per-store full-line
+    // write-through (st_wt_enq below); an NWA write-around does not.
+    logic store_produces_wt;
+    assign store_produces_wt =
+        s1_st_valid &&
+        (fill_done_store_merge ||
+         (!fill_done_avail && !nwa_validate_avail && !invalidate_all && st_cache_hit));
+
     // Completion is resolved in S1, one cycle after the CSB presents a store
     // on store_req_*.  Only acknowledge the CSB when its current head is still
     // the S1 store being completed; otherwise a completion for the previous
     // store can incorrectly dequeue the next store and drop it before D-cache
-    // ever observes it.
+    // ever observes it.  A WT-producing store may ack only if it actually wins
+    // the single WT enqueue port this cycle (the install-time WT preempts it).
     assign store_ack_s1 =
-        s1_st_valid &&
-        (fill_done_store_merge ||
-         (!fill_done_avail && !invalidate_all && st_cache_hit)) &&
-        st_wt_enq_ready;
-    assign st_wt_enq_valid = store_ack_s1;
+        (store_produces_wt && st_wt_enq_ready && !nwa_inst_wt_valid) ||
+        nwa_store_accept;
+
+    // WT enqueue: install-time full line (priority) or the store's full line.
+    // ENABLE=0: nwa_inst_wt_valid=0 -> byte-identical to the legacy path.
+    assign st_wt_enq_valid = nwa_inst_wt_valid || (store_produces_wt && st_wt_enq_ready);
 
     assign store_ack_matches_head =
         store_ack_s1 &&
@@ -1066,9 +1223,14 @@ module dcache
     // that the fill data travels one cycle AHEAD of the cache read-out path:
     // the LSU takes this snoop directly, without going through the cache
     // data RAM.
-    assign fill_snoop_valid = fill_done_avail;
-    assign fill_snoop_addr  = mshr[fill_done_idx].addr;
-    assign fill_snoop_data  = fill_done_line_data;
+    // Also snoop NWA write-validate installs so a load/AMO that needs the
+    // freshly installed streaming line wakes immediately (else it would miss
+    // the fill_done wakeup and stall in the LSU load-miss buffer / AMO FSM).
+    assign fill_snoop_valid = fill_done_avail || nwa_validate_avail;
+    assign fill_snoop_addr  = fill_done_avail ? mshr[fill_done_idx].addr
+                                              : mshr[nwa_validate_idx].addr;
+    assign fill_snoop_data  = fill_done_avail ? fill_done_line_data
+                                              : mshr[nwa_validate_idx].store_line_data;
 
     // =========================================================================
     // Load response outputs
@@ -1110,6 +1272,16 @@ module dcache
                     2'd1: plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b0, plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]][0]};
                     2'd2: plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]][1], 1'b1};
                     2'd3: plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[mshr[fill_done_idx].addr[INDEX_HI:INDEX_LO]][1], 1'b0};
+                    default: ;
+                endcase
+            // NWA write-validate install: mark the installed way MRU so the
+            // freshly streamed line is not immediately re-victimized.
+            end else if (nwa_validate_avail) begin
+                case (mshr[nwa_validate_idx].victim)
+                    2'd0: plru_state[mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b1, plru_state[mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO]][0]};
+                    2'd1: plru_state[mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b1, 1'b0, plru_state[mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO]][0]};
+                    2'd2: plru_state[mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO]][1], 1'b1};
+                    2'd3: plru_state[mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO]] <= {1'b0, plru_state[mshr[nwa_validate_idx].addr[INDEX_HI:INDEX_LO]][1], 1'b0};
                     default: ;
                 endcase
             end
@@ -1191,6 +1363,8 @@ module dcache
                 mshr[mshr_free_idx].store_byte_mask<= 8'd0;
                 mshr[mshr_free_idx].store_line_data <= '0;
                 mshr[mshr_free_idx].store_line_mask <= '0;
+                mshr[mshr_free_idx].nwa_pending     <= 1'b0;
+                mshr[mshr_free_idx].nwa_wt_owed     <= 1'b0;
                 mshr[mshr_free_idx].writeback_pend <= mshr_ld_dirty_v;
                 if (mshr_ld_dirty_v) begin
                     // Need to evict dirty line: save its address and data
@@ -1214,6 +1388,8 @@ module dcache
                 mshr[mshr_free_idx].store_byte_mask<= 8'd0;
                 mshr[mshr_free_idx].store_line_data <= '0;
                 mshr[mshr_free_idx].store_line_mask <= '0;
+                mshr[mshr_free_idx].nwa_pending     <= 1'b0;
+                mshr[mshr_free_idx].nwa_wt_owed     <= 1'b0;
                 mshr[mshr_free_idx].writeback_pend <= mshr_ld1_dirty_v;
                 if (mshr_ld1_dirty_v) begin
                     mshr[mshr_free_idx].evict_data <= dr_rdata_all2[mshr_ld1_vway];
@@ -1232,7 +1408,11 @@ module dcache
                 mshr[mshr_free_idx].addr           <= st_line_addr;
                 mshr[mshr_free_idx].victim         <= mshr_st_vway;
                 mshr[mshr_free_idx].dirty_evict    <= mshr_st_dirty_v;
-                mshr[mshr_free_idx].fill_pend      <= 1'b1;
+                // NWA: defer the read-for-ownership fill for a streaming store
+                // miss (install clean once the overlay covers the line).
+                mshr[mshr_free_idx].fill_pend      <= nwa_en ? 1'b0 : 1'b1;
+                mshr[mshr_free_idx].nwa_pending     <= nwa_en;
+                mshr[mshr_free_idx].nwa_wt_owed     <= nwa_en;
                 mshr[mshr_free_idx].fill_done      <= 1'b0;
                 mshr[mshr_free_idx].store_pending  <= 1'b1;
                 mshr[mshr_free_idx].store_byte_off <= s1_st_addr[5:0];
@@ -1249,8 +1429,13 @@ module dcache
             end
 
             // ---- Merge accepted store miss into an existing line fill ----
+            // NWA: do NOT merge into an nwa entry whose overlay is already full
+            // (it is about to write-validate-install); hold that store so it
+            // retries and hits the freshly installed line next cycle.
             if (s1_st_valid && !st_cache_hit && mshr_st_match_hit &&
-                !invalidate_all && !fill_done_avail) begin
+                !invalidate_all && !fill_done_avail &&
+                !(nwa_en && mshr[mshr_st_match_idx].nwa_pending &&
+                  (&mshr[mshr_st_match_idx].store_line_mask))) begin
                 mshr[mshr_st_match_idx].store_pending <= 1'b1;
                 mshr[mshr_st_match_idx].store_line_mask <=
                     mshr[mshr_st_match_idx].store_line_mask | st_full_mask;
@@ -1264,6 +1449,41 @@ module dcache
                 mshr[mshr_st_match_idx].store_byte_off  <= s1_st_addr[5:0];
                 mshr[mshr_st_match_idx].store_data      <= s1_st_data;
                 mshr[mshr_st_match_idx].store_byte_mask <= s1_st_byte_mask;
+            end
+
+            // ---- NWA: write-validate install completes -> free the entry ----
+            if (nwa_validate_avail) begin
+                mshr[nwa_validate_idx].valid       <= 1'b0;
+                mshr[nwa_validate_idx].nwa_pending <= 1'b0;
+                mshr[nwa_validate_idx].nwa_wt_owed <= 1'b0;
+            end
+
+            // ---- NWA load-upgrade: a load that needs a not-yet-complete nwa
+            //      line reverts that entry to a normal read-for-ownership fill.
+            //      The fill folds the accumulated overlay (store_pending), so
+            //      the load observes every prior store regardless of WT drain.
+            if (nwa_en && ld0_miss_merge_req &&
+                mshr[mshr_match_idx].nwa_pending &&
+                !(&mshr[mshr_match_idx].store_line_mask)) begin
+                mshr[mshr_match_idx].fill_pend   <= 1'b1;
+                mshr[mshr_match_idx].nwa_pending <= 1'b0;
+            end
+            if (nwa_en && ld1_miss_merge_req &&
+                mshr[mshr_ld1_match_idx].nwa_pending &&
+                !(&mshr[mshr_ld1_match_idx].store_line_mask)) begin
+                mshr[mshr_ld1_match_idx].fill_pend   <= 1'b1;
+                mshr[mshr_ld1_match_idx].nwa_pending <= 1'b0;
+            end
+
+            // ---- NWA pressure-upgrade: when a new miss cannot allocate an MSHR
+            //      (pool exhausted), convert a partial nwa entry to a fill so
+            //      the pool always drains (forward-progress guarantee).
+            if (nwa_en && nwa_upgrade_avail && !mshr_free_avail &&
+                (ld0_new_miss_req || ld1_new_miss_req ||
+                 (s1_st_valid && !st_cache_hit && !mshr_st_match_hit &&
+                  !invalidate_all))) begin
+                mshr[nwa_upgrade_idx].fill_pend   <= 1'b1;
+                mshr[nwa_upgrade_idx].nwa_pending <= 1'b0;
             end
 
             // ---- Fill response: capture data, mark fill_done ----

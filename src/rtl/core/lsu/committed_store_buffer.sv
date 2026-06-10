@@ -21,6 +21,14 @@ module committed_store_buffer
     output reg [7:0]  deq_byte_mask,
     output reg [1:0]  deq_size,
     input  wire        deq_ack,       // D-cache accepted the write
+
+    // Next-entry peek (head+1): lets the D-cache S0 lookup pipeline the
+    // following store during the head's ack cycle (store-pipe no-bubble).
+    output reg        deq_next_valid,
+    output reg [63:0] deq_next_addr,
+    output reg [63:0] deq_next_data,
+    output reg [7:0]  deq_next_byte_mask,
+    output reg [1:0]  deq_next_size,
     // Store-to-load forwarding (check CSB before going to cache)
     input  wire        fwd_valid,
     input  wire [63:0] fwd_addr,
@@ -81,6 +89,15 @@ module committed_store_buffer
     assign deq_data      = buf_q[head_r].data;
     assign deq_byte_mask = buf_q[head_r].byte_mask;
     assign deq_size      = buf_q[head_r].size;
+
+    // Head+1 peek (valid only with >= 2 buffered entries)
+    logic [IDX_BITS-1:0] head_next;
+    assign head_next          = head_r + IDX_BITS'(1);
+    assign deq_next_valid     = (count_r > (IDX_BITS+1)'(1)) && buf_q[head_next].valid;
+    assign deq_next_addr      = buf_q[head_next].addr;
+    assign deq_next_data      = buf_q[head_next].data;
+    assign deq_next_byte_mask = buf_q[head_next].byte_mask;
+    assign deq_next_size      = buf_q[head_next].size;
 
     // =========================================================================
     // Store-to-load forwarding

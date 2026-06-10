@@ -171,7 +171,11 @@ int main(void)
         /* Parse — this is the hot kernel */
         ezxml_t top = ezxml_parse_str(xml_work, xml_len);
         if (top) {
-            traverse_tree(top);
+#ifndef PARSER_SKIP_TRAVERSE
+            traverse_tree(top);   /* phase-isolation A/B: -DPARSER_SKIP_TRAVERSE drops this */
+#else
+            (void)traverse_tree;
+#endif
             ezxml_free(top);
         }
     }

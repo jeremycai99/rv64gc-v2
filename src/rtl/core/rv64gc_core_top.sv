@@ -2401,13 +2401,19 @@ module rv64gc_core_top
 
     // CSR operations read committed CSR state. Keep them resident until
     // their ROB entry reaches the head so older CSR writes are visible.
+        // FPU occupancy term: the request register natively loads-while-
+        // draining, so with the pipelined-issue fix the suppress only needs
+        // to hold while the register is occupied AND the FPU cannot accept
+        // it this cycle.  Legacy (ENABLE=0) keys on bare occupancy, which
+        // caps FP-arith issue at one op per 2 cycles.
         assign iq2_issue_suppress_s[0] =
             iq2_issue_candidate_valid_s[0] &&
          (((iq2_issue_data_s[0].fu_type == FU_CSR) &&
            (iq2_issue_data_s[0].rob_idx != rob_head_idx)) ||
           ((iq2_issue_data_s[0].fu_type == FU_DIV) &&
            div_busy) ||
-          fpu_req_valid_r ||
+          (FPU_PIPELINED_ISSUE_ENABLE ? (fpu_req_valid_r && !fpu_ready)
+                                      : fpu_req_valid_r) ||
           fpu_out_valid ||
           div_valid_out ||
           div_hold_valid_r);
@@ -4558,6 +4564,10 @@ module rv64gc_core_top
     logic [63:0] dc_store_req_addr;
     logic [63:0] dc_store_req_data;
     logic [7:0]  dc_store_req_byte_mask;
+    logic        dc_store_req_next_valid;
+    logic [63:0] dc_store_req_next_addr;
+    logic [63:0] dc_store_req_next_data;
+    logic [7:0]  dc_store_req_next_byte_mask;
     logic        dc_store_ack;
     logic        dcache_store_ack_raw;
 
@@ -5054,6 +5064,10 @@ module rv64gc_core_top
         .dcache_store_req_addr  (dc_store_req_addr),
         .dcache_store_req_data  (dc_store_req_data),
         .dcache_store_req_byte_mask(dc_store_req_byte_mask),
+        .dcache_store_req_next_valid(dc_store_req_next_valid),
+        .dcache_store_req_next_addr(dc_store_req_next_addr),
+        .dcache_store_req_next_data(dc_store_req_next_data),
+        .dcache_store_req_next_byte_mask(dc_store_req_next_byte_mask),
         .dcache_store_ack       (dc_store_ack),
         // D-cache fill snoop (for load miss late response)
         .dcache_fill_valid      (dc_fill_snoop_valid),
@@ -5117,6 +5131,15 @@ module rv64gc_core_top
         .store_req_byte_mask(ptw_dcache_store_valid
                               ? 8'hff
                               : dc_store_req_byte_mask),
+        // No-bubble next-store peek: must be killed while the PTW is
+        // injecting (the peek refers to the CSB stream; bypassing during a
+        // PTW-store ack would complete a younger CSB store before its
+        // still-unacked older head — an ordering violation).
+        .store_req_next_valid    (!ptw_dcache_store_valid &&
+                                  dc_store_req_next_valid),
+        .store_req_next_addr     (dc_store_req_next_addr),
+        .store_req_next_data     (dc_store_req_next_data),
+        .store_req_next_byte_mask(dc_store_req_next_byte_mask),
         .store_ack          (dcache_store_ack_raw),
         .l2_req_valid       (dc_l2_req_valid),
         .l2_req_addr        (dc_l2_req_addr),

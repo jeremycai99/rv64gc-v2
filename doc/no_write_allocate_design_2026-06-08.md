@@ -74,3 +74,42 @@ multi-component microarchitecture change, not a localized dcache edit. Scope/pla
 STABLE CHECKPOINT (this session): the design + the confirmed write-through policy + the gated param
 `NO_WRITE_ALLOCATE_ENABLE=1'b0` (inert, lint 15, byte-identical baseline). The multi-component
 implementation is the next focused effort.
+
+## >>> IMPLEMENTATION ROUND 1 (2026-06-09) — first cut + adversarial review findings
+
+Implemented a first NWA cut in dcache.sv (MSHR `nwa_pending` flag; deferred-fill alloc; immediate
+write-around ack `nwa_store_accept`; write-validate install `nwa_validate_avail`; load-upgrade +
+pressure-upgrade fallbacks). Lint clean (UNOPTFLAT=15), ENABLE=0 byte-identical (all gated). An
+adversarial code review (feature-dev:code-reviewer) found the first cut is **NOT shippable at ENABLE=1**:
+
+- **CRITICAL Bug 1 — L2 corruption.** The cache is write-through and **L2 has no byte-mask write port**
+  (`l2_req_we`/`l2_req_wdata` only; `data_ram[set][way] <= arb_wdata` is a full-line replace,
+  l2_cache.sv:791). A store MISS has no full line to write, so the per-store write-around enqueues
+  `st_wt_line_data='0` (dcache.sv:857-863, the `!st_cache_hit` arm) → a ZERO line drains to L2 and
+  clobbers the non-stored bytes. **Root constraint: stores must reach L2 as FULL LINES.**
+- **CRITICAL Bug 2 — AMO deadlock.** `fill_snoop_valid = fill_done_avail` only (dcache.sv:1150); it does
+  not fire on `nwa_validate_avail`, so an AMO load that completes via a write-validate install never
+  wakes the AMO FSM (lsu.sv amo_load_fill_fire) → hang (AMOs bypass the LMB re-probe).
+- **HIGH Bug 3 — normal load 512-cyc LMB stall** (same fill_snoop gap).
+- **HIGH Bug 4 — PLRU not updated on nwa_validate install** → the freshly installed line is the next
+  victim → thrash (every nwa line evicted on the next miss to its set).
+
+## >>> CORRECTED DESIGN (Option A — full-line write-through at completion; no L2 change)
+
+Stores must reach L2 as full lines, so NWA accumulates the full line in the MSHR overlay and
+write-throughs ONCE, at install, instead of per-store:
+1. **Suppress the per-store nwa WT** — `nwa_store_accept` acks the store (bytes captured in the overlay)
+   WITHOUT enqueuing a write-through; decouple `store_ack_s1` from `st_wt_enq_ready` for the nwa arm.
+2. **Inject a full-line WT at install** — when `nwa_validate_avail` installs (overlay = full line) OR an
+   ex-nwa MSHR's fill installs (`nwa_wt_owed` flag, set at nwa alloc, survives upgrade, cleared on
+   free), enqueue ONE full-line WT (`st_wt_enq_full_line=1`) of the installed line. Arbitrate vs a
+   concurrent store-hit WT (install priority; the store holds one cycle — rare, ~1 WT per 8 stores).
+3. **fill_snoop_valid |= nwa_validate_avail** (addr/data muxed to the validating MSHR) — fixes Bug 2/3.
+4. **PLRU update arm for nwa_validate** install (mirror the fill_done arm) — fixes Bug 4.
+5. **Exclude atomics (AMO/LR/SC) from `nwa_store_accept`** — force them through the legacy fill path
+   (they read-modify-write the line; not the streaming bottleneck). Needs the store-port is_amo signal.
+
+ENABLE=0 must stay byte-identical at EVERY step (validate after each edit). L2 stays unchanged (it
+already handles full-line writes). Note: even corrected, NWA alone is S1-bubble-capped at ~0.5 ack/cyc
+=> ~1.0 IPC on sf~0.5 workloads (per the feasibility verify); the S1-fix + dual-port are still required
+for linear_alg/loops to reach 2.0. cjpeg/nnet (lower sf) may clear with NWA+S1-fix alone.

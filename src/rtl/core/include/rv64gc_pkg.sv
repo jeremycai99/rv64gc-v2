@@ -156,7 +156,18 @@ package rv64gc_pkg;
     // No-write-allocate (write-validate full-line store-misses): skip the read-
     // for-ownership fill for compulsory streaming full-line writes; install the
     // store-defined line clean + write-through. Gated; 1'b0 = baseline (write-allocate).
-    localparam logic NO_WRITE_ALLOCATE_ENABLE = 1'b0;
+    localparam logic NO_WRITE_ALLOCATE_ENABLE = 1'b1;
+    // Store-pipe S1 re-latch bubble fix: during a store-ack cycle the D-cache
+    // S0 lookup takes the CSB's NEXT entry (head+1 peek) instead of re-reading
+    // the stale head, sustaining 1 store-ack/cyc back-to-back (vs 0.5 with the
+    // legacy duplicate-suppression bubble).  1'b0 = legacy 2-cycle cadence.
+    localparam logic STORE_PIPE_NOBUBBLE_ENABLE = 1'b1;
+    // FPU pipelined-issue fix: the FPU request register natively supports
+    // load-while-drain, but the IQ2 issue suppress keys on bare occupancy
+    // (fpu_req_valid_r), forcing one FP-arith op per 2 cycles (0.5/cyc cap).
+    // When set, suppress only while the register is occupied AND the FPU
+    // cannot drain it this cycle (fpu_req_valid_r && !fpu_ready) -> 1 op/cyc.
+    localparam logic FPU_PIPELINED_ISSUE_ENABLE = 1'b0;
 
     // L2 Cache: 2 MB, 8-way, 64B lines, 32 MSHRs, 8-cycle hit
     localparam int L2_SIZE        = 2097152;

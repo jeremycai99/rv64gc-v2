@@ -109,6 +109,11 @@ module lsu
     output reg [63:0] dcache_store_req_addr,
     output reg [63:0] dcache_store_req_data,
     output reg [7:0] dcache_store_req_byte_mask,
+    // Next-store peek for the D-cache store-pipe no-bubble bypass
+    output reg dcache_store_req_next_valid,
+    output reg [63:0] dcache_store_req_next_addr,
+    output reg [63:0] dcache_store_req_next_data,
+    output reg [7:0] dcache_store_req_next_byte_mask,
     input  wire dcache_store_ack,
 
     // L2 fill snoop (for load miss handling)
@@ -1208,6 +1213,14 @@ module lsu
     logic        split_store_second_ack;
     logic        csb_normal_store_req_valid;
     logic        csb_store_ack;
+    logic        csb_deq_next_valid;
+    logic [63:0] csb_deq_next_addr;
+    logic [63:0] csb_deq_next_data;
+    logic [7:0]  csb_deq_next_byte_mask;
+    logic [1:0]  csb_deq_next_size;
+    logic        csb_deq_next_mmio;
+    logic        csb_deq_next_cross_line;
+    logic [3:0]  csb_deq_next_size_bytes;
 
     committed_store_buffer u_csb (
         .clk            (clk),
@@ -1223,6 +1236,12 @@ module lsu
         .deq_byte_mask  (csb_deq_byte_mask),
         .deq_size       (csb_deq_size),
         .deq_ack        (csb_deq_ack),
+        // Head+1 peek (store-pipe no-bubble bypass)
+        .deq_next_valid     (csb_deq_next_valid),
+        .deq_next_addr      (csb_deq_next_addr),
+        .deq_next_data      (csb_deq_next_data),
+        .deq_next_byte_mask (csb_deq_next_byte_mask),
+        .deq_next_size      (csb_deq_next_size),
         // Store-to-load forwarding
         .fwd_valid      (load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid),
         .fwd_addr       ((load_issue_candidate_valid[0] & ~load_addr_misaligned[0] & ~flush_in.valid)
@@ -1351,6 +1370,41 @@ module lsu
                                       : (split_store_req_valid
                                          ? split_store_req_mask
                                          : csb_deq_byte_mask);
+
+    // ---- Next-store peek for the D-cache no-bubble bypass ----
+    // Valid only when the CURRENT request is the plain CSB-head case (no AMO,
+    // no split in flight) and the NEXT entry is itself a plain cacheable,
+    // non-line-crossing store.  Anything else falls back to the legacy
+    // one-bubble cadence (rare paths keep their existing timing).
+    always_comb begin
+        case (csb_deq_next_size)
+            MEM_HALF:  csb_deq_next_size_bytes = 4'd2;
+            MEM_WORD:  csb_deq_next_size_bytes = 4'd4;
+            MEM_DWORD: csb_deq_next_size_bytes = 4'd8;
+            default:   csb_deq_next_size_bytes = 4'd1;
+        endcase
+    end
+    assign csb_deq_next_cross_line =
+        ({1'b0, csb_deq_next_addr[5:0]} + {3'b000, csb_deq_next_size_bytes}) >
+        7'd64;
+    assign csb_deq_next_mmio =
+        ((csb_deq_next_addr >= CLINT_BASE) &&
+         (csb_deq_next_addr < (CLINT_BASE + CLINT_SIZE))) ||
+        ((csb_deq_next_addr >= PLIC_BASE) &&
+         (csb_deq_next_addr < (PLIC_BASE + PLIC_SIZE))) ||
+        ((csb_deq_next_addr >= UART_BASE) &&
+         (csb_deq_next_addr < (UART_BASE + UART_SIZE)));
+
+    assign dcache_store_req_next_valid =
+        STORE_PIPE_NOBUBBLE_ENABLE &&
+        csb_normal_store_req_valid &&
+        !amo_store_req_valid &&
+        csb_deq_next_valid &&
+        !csb_deq_next_mmio &&
+        !csb_deq_next_cross_line;
+    assign dcache_store_req_next_addr      = csb_deq_next_addr;
+    assign dcache_store_req_next_data      = csb_deq_next_data;
+    assign dcache_store_req_next_byte_mask = csb_deq_next_byte_mask;
 
     // =========================================================================
     // D-cache load request generation
