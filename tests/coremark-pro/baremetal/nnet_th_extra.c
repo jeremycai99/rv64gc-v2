@@ -212,6 +212,44 @@ unsigned int ee_ifpbits_buffer_dp(double *signal, intparts *ref, int size, snr_r
     return 60;
 }
 
+/* ---- SP variants (used by USE_FP32 kernels: linear_alg, loops) ----------- */
+/* Same "always pass" approach as the DP stubs above.  SP mantissa is 24 bits,
+ * so report 24 accurate bits (well above the kernels' minbits thresholds). */
+
+unsigned int fp_iaccurate_bits_sp(float sig, intparts *refbits)
+{
+    (void)sig; (void)refbits;
+    return 24; /* always report "24 bits accurate" -> pass */
+}
+
+unsigned int ee_ifpbits_buffer_sp(float *signal, intparts *ref, int size, snr_result *res)
+{
+    (void)signal; (void)ref; (void)size;
+    if (res) { res->pass = 1; res->bmin = 24; }
+    return 24;
+}
+
+char *th_sprint_sp(float value, char *buf)
+{
+    (void)value;
+    if (buf) buf[0] = '\0';
+    return buf ? buf : (char *)"";
+}
+
+/* th_print_sp/th_print_dp: dump value as intparts via th_printf (a no-op
+ * stub in this build) — used by loops.c gen_ref paths.  Return 1 = ok. */
+int th_print_sp(float value)
+{
+    (void)value;
+    return 1;
+}
+
+int th_print_dp(double value)
+{
+    (void)value;
+    return 1;
+}
+
 /* ---- th_sprint_dp / th_fpprintf stubs ----------------------------------- */
 /* Used by bmark_verify_nnet (which we don't call) -- but they are referenced
  * by nnet.c's gen_ref path. Provide no-ops. */

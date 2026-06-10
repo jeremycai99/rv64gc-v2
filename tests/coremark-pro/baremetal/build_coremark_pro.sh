@@ -198,6 +198,183 @@ build_workload() {
         BYPASS_MITH=1
         ;;
 
+    # ------------------------------------------------- radix2-kernel-direct
+    # Bypasses mith: generates twiddles + data, calls the FFT kernel directly.
+    # bump_alloc.c overrides newlib malloc (whose free-list scan degenerated
+    # bare-metal: the prior "2.49 IPC" run was 100% malloc loop, kernel never
+    # reached).
+    radix2-big-64k-kernel-direct)
+        EXTRA_CFLAGS+=(
+            -I"$CMPRO_DIR/benchmarks/fp/fft_radix2"
+            -DFLOAT_SUPPORT=1
+            -DFP_KERNELS_SUPPORT=1
+            -DUSE_FP64=1
+            -DUSE_FP32=0
+            -DUSE_MATH_H=1
+        )
+        EXTRA_SRCS+=(
+            "$BMETAL_DIR/radix2-big-64k_kernel_direct.c"
+            "$BMETAL_DIR/bump_alloc.c"
+        )
+        BYPASS_MITH=1
+        ;;
+
+    # ------------------------------------------------------ nnet-kernel-direct
+    # Bypasses mith: calls t_run_test_nnet directly (back-prop NN training).
+    # Double-precision (USE_FP64=1); real libm exp() — do NOT stub.
+    # nnet_th_extra.c: store_dp/load_dp/store_sp/load_sp + intparts_zero +
+    # parse-flag/fp-bits/aligned-malloc stubs (the HOST_EXAMPLE_CODE variants).
+    # th_rand.c: mith PRNG (needs store_dp/store_sp from nnet_th_extra.c).
+    nnet-kernel-direct)
+        EXTRA_CFLAGS+=(
+            -I"$CMPRO_DIR/benchmarks/fp/nnet"
+            -DFLOAT_SUPPORT=1
+            -DFP_KERNELS_SUPPORT=1
+            -DUSE_FP64=1
+            -DUSE_FP32=0
+            -DUSE_MATH_H=1
+        )
+        EXTRA_SRCS+=(
+            "$BMETAL_DIR/nnet_kernel_direct.c"
+            "$CMPRO_DIR/benchmarks/fp/nnet/nnet.c"
+            "$CMPRO_DIR/benchmarks/fp/nnet/ref/letters.c"
+            "$CMPRO_DIR/benchmarks/fp/nnet/ref/1letter.c"
+            "$CMPRO_DIR/mith/src/th_rand.c"
+            "$BMETAL_DIR/nnet_th_extra.c"
+        )
+        BYPASS_MITH=1
+        ;;
+
+    # ------------------------------------------------ linear_alg-kernel-direct
+    # Bypasses mith: calls t_run_test_linpack directly (100x100 SP LINPACK).
+    # Single-precision (USE_FP32=1).  inputs_f32.c provides init_presets_linpack
+    # (preset 4 = n=100, ntimes=10).  No linear_alg-specific th_extra exists:
+    # nnet_th_extra.c covers store/load_sp/dp + parse-flag stubs, zip_th_extra.c
+    # covers th_calloc_x (th_lib.h maps th_calloc -> th_calloc_x).
+    linear_alg-kernel-direct)
+        EXTRA_CFLAGS+=(
+            -I"$CMPRO_DIR/benchmarks/fp/linpack"
+            -DFLOAT_SUPPORT=1
+            -DFP_KERNELS_SUPPORT=1
+            -DUSE_FP64=0
+            -DUSE_FP32=1
+            -DUSE_MATH_H=1
+        )
+        EXTRA_SRCS+=(
+            "$BMETAL_DIR/linear_alg_kernel_direct.c"
+            "$CMPRO_DIR/benchmarks/fp/linpack/linpack.c"
+            "$CMPRO_DIR/benchmarks/fp/linpack/ref/inputs_f32.c"
+            "$CMPRO_DIR/mith/src/th_rand.c"
+            "$BMETAL_DIR/nnet_th_extra.c"
+            "$BMETAL_DIR/zip_th_extra.c"
+        )
+        BYPASS_MITH=1
+        ;;
+
+    # -------------------------------------- loops-all-mid-10k-sp-kernel-direct
+    # Bypasses mith: calls t_run_test_loops directly (25 Livermore loops).
+    # Single-precision (USE_FP32=1); ref-sp/*.c provide init_preset_0..7
+    # (loops.c calls all 8 unconditionally).
+    # NOTE: loops-all-mid-10k-sp_th_extra.c is NOT linked — its
+    # verify_output/reporting_threshold definitions duplicate th_stubs.c
+    # (it was written for an earlier ad-hoc link that included mith th_lib.c).
+    loops-all-mid-10k-sp-kernel-direct)
+        EXTRA_CFLAGS+=(
+            -I"$CMPRO_DIR/benchmarks/fp/loops"
+            -DFLOAT_SUPPORT=1
+            -DFP_KERNELS_SUPPORT=1
+            -DUSE_FP64=0
+            -DUSE_FP32=1
+            -DUSE_MATH_H=1
+        )
+        EXTRA_SRCS+=(
+            "$BMETAL_DIR/loops-all-mid-10k-sp_kernel_direct.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/loops.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/ref-sp/1k.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/ref-sp/10k.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/ref-sp/100k.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/ref-sp/100.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/ref-sp/32.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/ref-sp/10kdot.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/ref-sp/1kdot.c"
+            "$CMPRO_DIR/benchmarks/fp/loops/ref-sp/100kdot.c"
+            "$CMPRO_DIR/mith/src/th_rand.c"
+            "$BMETAL_DIR/nnet_th_extra.c"
+            "$BMETAL_DIR/zip_th_extra.c"
+        )
+        BYPASS_MITH=1
+        ;;
+
+    # ----------------------------------------------------- cjpeg-kernel-direct
+    # Bypasses mith: calls cjpeg_main() directly on the embedded Rose256 BMP.
+    # Integer/fixed-point JPEG encode (jfdctint) — no FP defines needed.
+    # Links all libjpeg compression sources EXCEPT bmark_lite.c/bm_lib.c
+    # (replaced by the kernel_direct main).  cjpeg_th_extra.c: Calc_crc8,
+    # th_sscanf/th_stat/file-IO extras not in the shared th_stubs.c.
+    cjpeg-kernel-direct)
+        EXTRA_CFLAGS+=(
+            -I"$CMPRO_DIR/benchmarks/consumer_v2/cjpeg"
+            -I"$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/data"
+        )
+        EXTRA_SRCS+=(
+            "$BMETAL_DIR/cjpeg_kernel_direct.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/cjpeg.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/cdjpeg.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/filedata.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcapimin.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcapistd.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jccoefct.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jccolor.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcdctmgr.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jchuff.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcinit.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcmainct.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcmarker.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcmaster.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcomapi.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcparam.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcprepct.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jcsample.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jdatadst.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jerror.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jfdctint.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jmemansi.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jmemmgr.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/jutils.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/rdbmp.c"
+            "$CMPRO_DIR/benchmarks/consumer_v2/cjpeg/data/Rose256_bmp.c"
+            "$BMETAL_DIR/cjpeg_th_extra.c"
+        )
+        BYPASS_MITH=1
+        ;;
+
+    # ------------------------------------------------------- zip-kernel-direct
+    # Bypasses mith: generates a ~1MB XML-like buffer, calls zlib-1.2.8
+    # compress()/uncompress() in a loop.  Integer-only — no FP defines.
+    # Links the in-memory zlib subset (no infback.c/gzclose.c/gzlib.c —
+    # gz* file API is unused).  zip_th_extra.c: th_calloc_x for zutil.c
+    # (this zlib is EEMBC-modified: zutil.h includes th_lib.h/th_file.h).
+    zip-kernel-direct)
+        EXTRA_CFLAGS+=(
+            -I"$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8"
+        )
+        EXTRA_SRCS+=(
+            "$BMETAL_DIR/zip_kernel_direct.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/compress.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/uncompr.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/deflate.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/trees.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/inflate.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/inffast.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/inftrees.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/adler32.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/crc32.c"
+            "$CMPRO_DIR/benchmarks/darkmark/zip/zlib-1.2.8/zutil.c"
+            "$BMETAL_DIR/zip_th_extra.c"
+        )
+        BYPASS_MITH=1
+        ;;
+
     # ---- phase-isolation A/B variants (small iters so they run to halt) ----
     parser-ko-full)
         EXTRA_CFLAGS+=(
@@ -228,7 +405,7 @@ build_workload() {
         ;;
 
     *)
-        echo "ERROR: Unknown workload '$WL'. Supported: sha-test parser-125k radix2-big-64k sha-kernel-direct parser-kernel-direct parser-ko-full parser-ko-parseonly all" >&2
+        echo "ERROR: Unknown workload '$WL'. Supported: sha-test parser-125k radix2-big-64k sha-kernel-direct parser-kernel-direct nnet-kernel-direct linear_alg-kernel-direct loops-all-mid-10k-sp-kernel-direct cjpeg-kernel-direct zip-kernel-direct parser-ko-full parser-ko-parseonly all" >&2
         exit 1
         ;;
     esac

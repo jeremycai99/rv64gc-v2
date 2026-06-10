@@ -28,6 +28,10 @@ module dcache
     input  wire [63:0] store_req_addr,
     input  wire [63:0] store_req_data,
     input  wire [7:0]  store_req_byte_mask,
+    // PTW-injected store (page-table A/D update).  The PTW reads PTEs through
+    // its OWN L2 port, bypassing the L1D, so PTW stores must NOT take the NWA
+    // deferred-overlay path (their write-through must reach L2 promptly).
+    input  wire        store_req_is_ptw,
     // Next-store peek (no-bubble bypass): looked up in S0 during the cycle the
     // current head is being acknowledged, so back-to-back stores ack 1/cyc.
     input  wire        store_req_next_valid,
@@ -210,6 +214,7 @@ module dcache
     logic [63:0]             s1_st_addr;
     logic [63:0]             s1_st_data;
     logic [7:0]              s1_st_byte_mask;
+    logic                    s1_st_is_ptw;
     logic                    s1_st_use_port_b;
     logic                    s0_store_lookup_grant_a;
     logic                    s0_store_lookup_grant_b;
@@ -296,6 +301,7 @@ module dcache
             s1_st_addr      <= '0;
             s1_st_data      <= '0;
             s1_st_byte_mask <= '0;
+            s1_st_is_ptw    <= 1'b0;
             s1_st_use_port_b <= 1'b0;
         end else begin
             s1_ld0_valid    <= load_req_valid[0];
@@ -320,6 +326,10 @@ module dcache
             s1_st_addr      <= s0_store_eff_addr;
             s1_st_data      <= s0_store_eff_data;
             s1_st_byte_mask <= s0_store_eff_mask;
+            // The bypass never engages while the PTW is injecting (next_valid
+            // is killed externally), so the effective store is PTW iff the
+            // presented head is.
+            s1_st_is_ptw    <= store_req_is_ptw && !s0_st_bypass;
             s1_st_use_port_b <= s0_store_lookup_grant_b;
         end
     end
@@ -513,6 +523,7 @@ module dcache
         logic [LINE_SIZE-1:0]    store_line_mask;// bytes valid in overlay
         logic                    nwa_pending;    // NWA: deferred no-fill streaming-store line
         logic                    nwa_wt_owed;    // NWA: line owes a full-line write-through at install
+        logic [6:0]              nwa_idle_cnt;   // NWA: cycles since alloc; bounds L2 visibility
         logic [1:0]              victim;         // victim way for fill
         logic                    dirty_evict;    // victim was dirty
         logic [511:0]            evict_data;     // dirty line data for writeback
@@ -810,12 +821,21 @@ module dcache
     // covers the whole line is ready to install clean (no fill).  Must wait for
     // any dirty-victim writeback to drain first (writeback_pend) AND for room in
     // the WT queue (the install enqueues one full-line write-through).  Lowest.
+    //
+    // MUST be suppressed whenever a fill install is selected this cycle
+    // (fill_done_avail): the install mux gives fills priority, so a validate
+    // asserting in the same cycle would lose the install port yet still free
+    // its MSHR (line vanishes), steal the fill's install-time write-through
+    // slot (the ex-nwa fill's folded stores then never reach L2 -> stale line
+    // resurrected after a silent clean eviction), and corrupt the fill_snoop
+    // mux.  All consumers key off this one signal, so the single guard keeps
+    // install / WT / free / snoop / PLRU consistent.
     logic [MSHR_IDX_BITS-1:0] nwa_validate_idx;
     logic                     nwa_validate_avail;
     always_comb begin
         nwa_validate_idx   = '0;
         nwa_validate_avail = 1'b0;
-        if (nwa_en && nwa_wt_room) begin
+        if (nwa_en && nwa_wt_room && !fill_done_avail) begin
             for (int m = 0; m < MSHR_DEPTH; m++) begin
                 if (mshr[m].valid && mshr[m].nwa_pending &&
                     (&mshr[m].store_line_mask) && !mshr[m].writeback_pend &&
@@ -1026,6 +1046,19 @@ module dcache
     // must never be acknowledged only because its MSHR was allocated, since a
     // later line fill can otherwise overwrite the store data.
 
+    // (Declared here for strict declaration-before-use simulators; assigned
+    // in the load-miss section below.)
+    logic ld0_new_miss_req;
+    logic ld1_new_miss_req;
+    logic ld0_miss_alloc_sel;
+    logic ld1_miss_alloc_sel;
+    logic ld0_miss_merge_req;
+    logic ld1_miss_merge_req;
+    logic ld1_new_blocked_by_ld0_alloc;
+    logic ld1_new_blocked_same_line;
+    logic ld1_new_blocked_diff_line;
+    logic ld_new_blocked_no_free;
+
     logic s1_st_can_allocate_mshr;
     assign s1_st_can_allocate_mshr = s1_st_valid && !st_cache_hit &&
                                      !mshr_st_match_hit && mshr_free_avail &&
@@ -1042,11 +1075,18 @@ module dcache
     // being held for a read-for-ownership fill.  Its bytes are captured in the
     // MSHR overlay and reach L2 as ONE full-line write-through at install time
     // (nwa_inst_wt), so this ack does NOT itself enqueue a write-through.
+    // PTW stores are excluded: the walker reads PTEs through its own L2 port
+    // (around the L1D), so a PTW store deferred into an overlay would be
+    // invisible to it.  PTW stores take the legacy held-until-fill path.
+    // The alloc arm must also verify the store actually WINS the single MSHR
+    // alloc slot this cycle (the alloc else-if chain prioritizes load misses);
+    // acking without capturing the store would lose it.
     logic nwa_store_accept;
     assign nwa_store_accept =
-        nwa_en && s1_st_valid && !st_cache_hit && !invalidate_all &&
-        !fill_done_avail &&
-        ( s1_st_can_allocate_mshr ||
+        nwa_en && s1_st_valid && !s1_st_is_ptw && !st_cache_hit &&
+        !invalidate_all && !fill_done_avail &&
+        ( (s1_st_can_allocate_mshr &&
+           !ld0_miss_alloc_sel && !ld1_miss_alloc_sel) ||
           (mshr_st_match_hit && mshr[mshr_st_match_idx].nwa_pending &&
            !(&mshr[mshr_st_match_idx].store_line_mask)) );
 
@@ -1080,17 +1120,6 @@ module dcache
         (store_req_byte_mask == s1_st_byte_mask);
 
     assign store_ack = store_ack_matches_head;
-
-    logic ld0_new_miss_req;
-    logic ld1_new_miss_req;
-    logic ld0_miss_alloc_sel;
-    logic ld1_miss_alloc_sel;
-    logic ld0_miss_merge_req;
-    logic ld1_miss_merge_req;
-    logic ld1_new_blocked_by_ld0_alloc;
-    logic ld1_new_blocked_same_line;
-    logic ld1_new_blocked_diff_line;
-    logic ld_new_blocked_no_free;
 
     assign ld0_new_miss_req = s1_ld0_valid && !ld0_cache_hit &&
                               !mshr_match_hit && !invalidate_all;
@@ -1410,9 +1439,12 @@ module dcache
                 mshr[mshr_free_idx].dirty_evict    <= mshr_st_dirty_v;
                 // NWA: defer the read-for-ownership fill for a streaming store
                 // miss (install clean once the overlay covers the line).
-                mshr[mshr_free_idx].fill_pend      <= nwa_en ? 1'b0 : 1'b1;
-                mshr[mshr_free_idx].nwa_pending     <= nwa_en;
-                mshr[mshr_free_idx].nwa_wt_owed     <= nwa_en;
+                // PTW stores stay on the legacy fill path: the walker reads
+                // PTEs around the L1D, so their write-through must not defer.
+                mshr[mshr_free_idx].fill_pend      <= (nwa_en && !s1_st_is_ptw) ? 1'b0 : 1'b1;
+                mshr[mshr_free_idx].nwa_pending     <= nwa_en && !s1_st_is_ptw;
+                mshr[mshr_free_idx].nwa_wt_owed     <= nwa_en && !s1_st_is_ptw;
+                mshr[mshr_free_idx].nwa_idle_cnt    <= 7'd0;
                 mshr[mshr_free_idx].fill_done      <= 1'b0;
                 mshr[mshr_free_idx].store_pending  <= 1'b1;
                 mshr[mshr_free_idx].store_byte_off <= s1_st_addr[5:0];
@@ -1484,6 +1516,40 @@ module dcache
                   !invalidate_all))) begin
                 mshr[nwa_upgrade_idx].fill_pend   <= 1'b1;
                 mshr[nwa_upgrade_idx].nwa_pending <= 1'b0;
+            end
+
+            // ---- NWA PTW-store upgrade: a held PTW store whose line sits in
+            //      a deferred nwa entry upgrades it to a fill (the fill folds
+            //      the overlay, fill_done_store_merge then acks the PTW store
+            //      with legacy semantics, and the install-WT makes the line
+            //      visible to the walker's L2-side reads).
+            if (nwa_en && s1_st_valid && s1_st_is_ptw && !st_cache_hit &&
+                mshr_st_match_hit && !invalidate_all &&
+                mshr[mshr_st_match_idx].nwa_pending) begin
+                mshr[mshr_st_match_idx].fill_pend   <= 1'b1;
+                mshr[mshr_st_match_idx].nwa_pending <= 1'b0;
+            end
+
+            // ---- NWA idle-timeout upgrade: bound how long a deferred line's
+            //      bytes can stay invisible to L2 (the PTW reads PTEs around
+            //      the L1D; kernel page-table stores are sparse partial-line
+            //      writes whose mask never completes).  Streaming lines fill
+            //      their mask in ~8-16 cycles, far below the threshold, so
+            //      this never fires for them.  One upgrade per cycle.
+            begin : nwa_idle_sweep
+                logic nwa_idle_upgraded;
+                nwa_idle_upgraded = 1'b0;
+                for (int m = 0; m < MSHR_DEPTH; m++) begin
+                    if (nwa_en && mshr[m].valid && mshr[m].nwa_pending) begin
+                        if (mshr[m].nwa_idle_cnt >= 7'd64 && !nwa_idle_upgraded) begin
+                            mshr[m].fill_pend   <= 1'b1;
+                            mshr[m].nwa_pending <= 1'b0;
+                            nwa_idle_upgraded   = 1'b1;
+                        end else begin
+                            mshr[m].nwa_idle_cnt <= mshr[m].nwa_idle_cnt + 7'd1;
+                        end
+                    end
+                end
             end
 
             // ---- Fill response: capture data, mark fill_done ----
