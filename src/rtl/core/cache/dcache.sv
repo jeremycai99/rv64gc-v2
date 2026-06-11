@@ -508,6 +508,10 @@ module dcache
     // is byte-identical to the legacy write-allocate path.
     localparam logic nwa_en = NO_WRITE_ALLOCATE_ENABLE;
 
+    // L2-fill comb-assert dispatch (dead-cycle fix A).  ENABLE=0 is
+    // byte-identical to the legacy registered IDLE->FILL_REQ dispatch.
+    localparam logic l2f_comb_en = L2_FILL_COMB_REQ_ENABLE;
+
     typedef struct packed {
         logic                    valid;
         logic [63:0]             addr;          // line-aligned miss address
@@ -717,6 +721,34 @@ module dcache
         end
     end
 
+    // Guarded fill selection for the L2_FILL_COMB_REQ_ENABLE comb-assert arm:
+    // mask entries whose fill response is arriving THIS cycle.  fill_pend is
+    // cleared by the registered response handler, so the raw selection above
+    // still sees such an entry as pending this cycle; comb-issuing a fill for
+    // it would launch a redundant request (the L2 can deliver write-miss
+    // responses while this FSM sits in IDLE).  This also covers the just-
+    // serviced l2_active_mshr_q entry: by the time the FSM is back in IDLE
+    // its fill_pend flop has settled to 0, and in the response cycle itself
+    // the address-match term masks it.  The mask is transient (one cycle),
+    // so a masked-only situation simply holds IDLE until fill_pend settles —
+    // no deadlock, no fallback arm needed.
+    logic [MSHR_IDX_BITS-1:0] fill_mshr_idx_g;
+    logic                     fill_mshr_avail_g;
+
+    always_comb begin
+        fill_mshr_idx_g   = '0;
+        fill_mshr_avail_g = 1'b0;
+        for (int m = 0; m < MSHR_DEPTH; m++) begin
+            if (mshr[m].valid && mshr[m].fill_pend && !mshr[m].writeback_pend &&
+                !(l2_resp_valid &&
+                  (l2_resp_addr[63:LINE_BITS] == mshr[m].addr[63:LINE_BITS])) &&
+                !fill_mshr_avail_g) begin
+                fill_mshr_avail_g = 1'b1;
+                fill_mshr_idx_g   = MSHR_IDX_BITS'(m);
+            end
+        end
+    end
+
     // L2 FSM combinational
     always_comb begin
         l2_state_d       = l2_state_q;
@@ -736,7 +768,18 @@ module dcache
                 end else if (wb_mshr_avail) begin
                     l2_state_d       = L2_WRITEBACK;
                     l2_active_mshr_d = wb_mshr_idx;
-                end else if (fill_mshr_avail) begin
+                end else if (l2f_comb_en && fill_mshr_avail_g) begin
+                    // L2_FILL_COMB_REQ_ENABLE: assert the fill request directly
+                    // from IDLE (same loop-safe comb-assert idiom as the WT
+                    // drain arm above), skipping the registered IDLE->FILL_REQ
+                    // hop.  Accepted -> straight to FILL_WAIT; not accepted ->
+                    // FILL_REQ holds the request as before.
+                    l2_req_valid     = 1'b1;
+                    l2_req_we        = 1'b0;
+                    l2_req_addr      = mshr[fill_mshr_idx_g].addr;
+                    l2_active_mshr_d = fill_mshr_idx_g;
+                    l2_state_d       = l2_req_ready ? L2_FILL_WAIT : L2_FILL_REQ;
+                end else if (!l2f_comb_en && fill_mshr_avail) begin
                     l2_state_d       = L2_FILL_REQ;
                     l2_active_mshr_d = fill_mshr_idx;
                 end

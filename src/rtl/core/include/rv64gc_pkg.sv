@@ -168,6 +168,15 @@ package rv64gc_pkg;
     // When set, suppress only while the register is occupied AND the FPU
     // cannot drain it this cycle (fpu_req_valid_r && !fpu_ready) -> 1 op/cyc.
     localparam logic FPU_PIPELINED_ISSUE_ENABLE = 1'b0;
+    // L2-fill FSM dead-cycle fix A: assert the fill request combinationally
+    // from L2_IDLE (mirroring the WT-drain arm's loop-safe comb-assert idiom)
+    // and transition straight to L2_FILL_WAIT when l2_req_ready, instead of
+    // registering an L2_IDLE -> L2_FILL_REQ hop that wastes one req-channel
+    // cycle per fill (measured fill period 10 cyc on an 8-cyc L2 hit).  The
+    // comb arm uses a guarded MSHR selection that masks entries whose fill
+    // response arrives this cycle (fill_pend clear is registered).
+    // 1'b0 = legacy registered dispatch (byte-identical baseline).
+    localparam logic L2_FILL_COMB_REQ_ENABLE = 1'b0;
 
     // L2 Cache: 2 MB, 8-way, 64B lines, 32 MSHRs, 8-cycle hit
     localparam int L2_SIZE        = 2097152;
