@@ -13,8 +13,24 @@ module free_list
     input  wire clk,
     input  wire rst_n,
 
-    // Allocate: up to 6 per cycle
+    // Allocate: up to 6 per cycle.
+    // GRANT vs CONSUME split (leak fix):
+    //   - alloc_req_count sizes the combinational GRANT window: the free list
+    //     presents up to alloc_req_count free indices on alloc_preg[] and
+    //     reports how many it could cover via alloc_avail_count.  Presenting
+    //     is NON-DESTRUCTIVE: it does not modify the bitmap.
+    //   - alloc_consume_count is the number of presented pregs that were
+    //     actually CONSUMED by rename slots that fully advanced this cycle
+    //     (rename pass-2: in-order advance + preg availability).  Only the
+    //     first alloc_consume_count presented bits are retired (cleared) at
+    //     the clock edge.  Because rename advance is an in-order prefix, the
+    //     consumed pregs are always exactly alloc_preg[0..consume-1].
+    //   Previously the bitmap clear was gated by alloc_req_count (pass-1
+    //   only), so when an older slot blocked on preg availability, younger
+    //   slots' pass-1 requests still cleared bits that no RAT ever latched
+    //   and no commit ever released -> orphaned pregs -> pool exhaustion.
     input  wire [2:0] alloc_req_count,
+    input  wire [2:0] alloc_consume_count,
     output reg [PHYS_REG_BITS-1:0] alloc_preg [0:PIPE_WIDTH-1],
     output reg [2:0] alloc_avail_count,
     output reg [PHYS_REG_BITS:0] free_count,
@@ -211,18 +227,33 @@ module free_list
             stat_free_min      <= PRF_DEPTH;
             stat_committed_min <= PRF_DEPTH;
         end else begin
+            // Accumulate per-slot events into automatic vars, then a single
+            // NBA per counter.  The previous `cnt <= cnt + 1` inside the
+            // for-loop saturated at +1/cycle (NBA last-write-wins), which
+            // made multi-slot cycles undercount and leak diagnostics lie.
+            automatic int alloc_inc   = 0;
+            automatic int release_inc = 0;
+            automatic int commit_inc  = 0;
+
             leak_cyc <= leak_cyc + 1;
 
-            // Accumulate counters (approximate; multi-slot cycles count each)
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                if (found_valid[i] && (3'(i) < alloc_req_count))
-                    stat_alloc_count   <= stat_alloc_count + 1;
-                if ((3'(i) < release_count) &&
-                    (!PROTECT_ZERO || (release_preg[i] != '0)))
-                    stat_release_count <= stat_release_count + 1;
+                // Mirror the free_bitmap update exactly: allocations and
+                // releases only apply on non-flush/non-restore cycles, and
+                // allocs count CONSUMED pregs (the bits actually cleared).
+                if (!flush && !ckpt_restore) begin
+                    if (found_valid[i] && (3'(i) < alloc_consume_count))
+                        alloc_inc = alloc_inc + 1;
+                    if ((3'(i) < release_count) &&
+                        (!PROTECT_ZERO || (release_preg[i] != '0)))
+                        release_inc = release_inc + 1;
+                end
                 if (commit_wr_valid[i] && (commit_pdst[i] != '0))
-                    stat_commit_count  <= stat_commit_count + 1;
+                    commit_inc = commit_inc + 1;
             end
+            stat_alloc_count   <= stat_alloc_count   + alloc_inc;
+            stat_release_count <= stat_release_count + release_inc;
+            stat_commit_count  <= stat_commit_count  + commit_inc;
             if (flush) stat_flush_count <= stat_flush_count + 1;
 
             // Popcount sample every 10K cycles
@@ -285,13 +316,20 @@ module free_list
 `endif
         end else begin
             for (int i = 0; i < PIPE_WIDTH; i++) begin
-                // Allocations: clear bits that were allocated
-                if (found_valid[i] && (3'(i) < alloc_req_count)) begin
+                // Allocations: retire ONLY the pregs actually consumed by
+                // slots that fully advanced (alloc_consume_count, rename
+                // pass-2) — NOT the speculative pass-1 request count.  Bits
+                // presented but not consumed stay free and are re-presented
+                // next cycle.  Timing: alloc_consume_count is a pass-2
+                // prefix count, the same lateness class as the existing
+                // ckpt_save_alloc_count -> ckpt_save_bitmap_next path; no
+                // new critical path is introduced.
+                if (found_valid[i] && (3'(i) < alloc_consume_count)) begin
                     free_bitmap[found_idx[i]] <= 1'b0;
 `ifdef SIMULATION
                     if (trace_leak_en)
-                        $display("[FL_FREE_ALC] cyc=%0d slot=%0d pdst=%0d was=%0b alc_req=%0d",
-                            leak_cyc, i, found_idx[i], free_bitmap[found_idx[i]], alloc_req_count);
+                        $display("[FL_FREE_ALC] cyc=%0d slot=%0d pdst=%0d was=%0b alc_req=%0d alc_consume=%0d",
+                            leak_cyc, i, found_idx[i], free_bitmap[found_idx[i]], alloc_req_count, alloc_consume_count);
 `endif
                 end
                 // Releases: set bits back to free (never release p0)

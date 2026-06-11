@@ -128,6 +128,104 @@ module tb_xsim;
         pcs_last_pc = '0; pcs_commits = 0; pcs_traps = 0; pcs_hash = 64'hcbf29ce484222325;
     end
 
+    // One-shot wedge snapshot (+WEDGE_SNAP): when commits have been frozen
+    // for 200K cycles, dump the ROB head identity, the LSU LMB array, the
+    // LSU retry registers, and the full D-cache MSHR array ONCE ([WSNAP]
+    // tags).  Built 2026-06-10 for the rvb-mm wedge (LSU/LMB/NWA completion
+    // machinery suspected).  Sim-only, plusarg-gated, inert by default.
+    logic        wsnap_en;
+    logic        wsnap_fired;
+    longint      wsnap_last_commit_cyc;
+    longint      wsnap_last_flush_cyc;
+    logic        wsnap_last_flush_full;
+    logic [63:0] wsnap_last_flush_pc;
+    initial begin
+        wsnap_en              = $test$plusargs("WEDGE_SNAP");
+        wsnap_fired           = 1'b0;
+        wsnap_last_commit_cyc = 0;
+        wsnap_last_flush_cyc  = -1;
+        wsnap_last_flush_full = 1'b0;
+        wsnap_last_flush_pc   = '0;
+    end
+
+    always @(posedge clk) begin
+        if (rst_n && wsnap_en) begin
+            if (u_tb.u_core.commit_count != 0)
+                wsnap_last_commit_cyc <= sim_cycle;
+            if (u_tb.u_core.flush_out.valid) begin
+                wsnap_last_flush_cyc  <= sim_cycle;
+                wsnap_last_flush_full <= u_tb.u_core.flush_out.full_flush;
+                wsnap_last_flush_pc   <= u_tb.u_core.flush_out.redirect_pc;
+            end
+            if (!wsnap_fired &&
+                (longint'(sim_cycle) - wsnap_last_commit_cyc) >= 200000) begin
+                wsnap_fired <= 1'b1;
+                $display("[WSNAP] ==== wedge snapshot cyc=%0d last_commit_cyc=%0d frozen=%0d ====",
+                         sim_cycle, wsnap_last_commit_cyc,
+                         longint'(sim_cycle) - wsnap_last_commit_cyc);
+                $display("[WSNAP] last_flush_cyc=%0d (freeze-flush delta=%0d) full=%0b redirect_pc=%0h",
+                         wsnap_last_flush_cyc,
+                         wsnap_last_commit_cyc - wsnap_last_flush_cyc,
+                         wsnap_last_flush_full, wsnap_last_flush_pc);
+                // 1. ROB head identity
+                begin
+                    automatic int h = int'(u_tb.u_core.u_rob.head_r);
+                    $display("[WSNAP-ROB] head=%0d valid=%0b ready=%0b is_load=%0b is_store=%0b st_addr_done=%0b st_data_done=%0b pc=%0h tail=%0d count=%0d",
+                             h,
+                             u_tb.u_core.u_rob.valid_r[h],
+                             u_tb.u_core.u_rob.ready_r[h],
+                             u_tb.u_core.u_rob.is_load_r[h],
+                             u_tb.u_core.u_rob.is_store_r[h],
+                             u_tb.u_core.u_rob.store_addr_done_r[h],
+                             u_tb.u_core.u_rob.store_data_done_r[h],
+                             u_tb.u_core.u_rob.pc_packed[h*64 +: 64],
+                             u_tb.u_core.u_rob.tail_r,
+                             u_tb.u_core.u_rob.count_r);
+                end
+                // 2. LMB array (valid entries; LMB_DEPTH=32)
+                for (int li = 0; li < 32; li++) begin
+                    if (u_tb.u_core.u_lsu.lmb[li].valid)
+                        $display("[WSNAP-LMB] idx=%0d valid=%0b ready=%0b line_addr=%0h rob_idx=%0d pdst=%0d pc=%0h",
+                                 li,
+                                 u_tb.u_core.u_lsu.lmb[li].valid,
+                                 u_tb.u_core.u_lsu.lmb[li].ready,
+                                 u_tb.u_core.u_lsu.lmb[li].line_addr,
+                                 u_tb.u_core.u_lsu.lmb[li].rob_idx,
+                                 u_tb.u_core.u_lsu.lmb[li].pdst,
+                                 u_tb.u_core.u_lsu.lmb[li].pc);
+                end
+                $display("[WSNAP-LMB] lmb_any_valid=%0b (only valid entries printed above)",
+                         u_tb.u_core.u_lsu.lmb_any_valid);
+                // 3. Retry registers
+                $display("[WSNAP-RETRY] p0_retry_valid_r=%0b p0_rob_idx=%0d p0_addr=%0h | p1_retry_valid_r=%0b p1_rob_idx=%0d p1_addr=%0h",
+                         u_tb.u_core.u_lsu.p0_retry_valid_r,
+                         u_tb.u_core.u_lsu.p0_retry_data_r.rob_idx,
+                         u_tb.u_core.u_lsu.p0_retry_addr_r,
+                         u_tb.u_core.u_lsu.p1_retry_valid_r,
+                         u_tb.u_core.u_lsu.p1_retry_data_r.rob_idx,
+                         u_tb.u_core.u_lsu.p1_retry_addr_r);
+                // 4. Full MSHR array (MSHR_DEPTH=16) + write-through counter
+                for (int m = 0; m < 16; m++) begin
+                    $display("[WSNAP-MSHR] m=%0d v=%0b addr=%0h fill_pend=%0b fill_done=%0b wb_pend=%0b st_pend=%0b nwa_pending=%0b nwa_wt_owed=%0b mask_any=%0b mask_full=%0b nwa_idle_cnt=%0d",
+                             m,
+                             u_tb.u_core.u_dcache.mshr[m].valid,
+                             u_tb.u_core.u_dcache.mshr[m].addr,
+                             u_tb.u_core.u_dcache.mshr[m].fill_pend,
+                             u_tb.u_core.u_dcache.mshr[m].fill_done,
+                             u_tb.u_core.u_dcache.mshr[m].writeback_pend,
+                             u_tb.u_core.u_dcache.mshr[m].store_pending,
+                             u_tb.u_core.u_dcache.mshr[m].nwa_pending,
+                             u_tb.u_core.u_dcache.mshr[m].nwa_wt_owed,
+                             |u_tb.u_core.u_dcache.mshr[m].store_line_mask,
+                             &u_tb.u_core.u_dcache.mshr[m].store_line_mask,
+                             u_tb.u_core.u_dcache.mshr[m].nwa_idle_cnt);
+                end
+                $display("[WSNAP] wt_count_q=%0d", u_tb.u_core.u_dcache.wt_count_q);
+                $display("[WSNAP] ==== end ====");
+            end
+        end
+    end
+
     always @(posedge clk) begin
         sim_cycle <= sim_cycle + 1;
 

@@ -322,6 +322,10 @@ module rename
         .clk              (clk),
         .rst_n            (rst_n),
         .alloc_req_count  (fl_req_count),
+        // Retire (clear) only pregs consumed by slots that fully advanced
+        // (pass-2).  Pass-1 requests that stalled on has_preg/in_order_open
+        // stay free — fixes the orphaned-preg pool leak.
+        .alloc_consume_count(preg_consumed_before[PIPE_WIDTH]),
         .alloc_preg       (fl_alloc_preg),
         .alloc_avail_count(fl_avail_count),
         .free_count       (fl_free_count),
@@ -345,6 +349,7 @@ module rename
         .clk              (clk),
         .rst_n            (rst_n),
         .alloc_req_count  (fp_fl_req_count),
+        .alloc_consume_count(fp_preg_consumed_before[PIPE_WIDTH]),
         .alloc_preg       (fp_fl_alloc_preg),
         .alloc_avail_count(fp_fl_avail_count),
         .free_count       (fp_fl_free_count),
@@ -508,11 +513,15 @@ module rename
     // Pass 1: slot_can_advance_sp (sans preg).
     //
     // We need a pre-fl-avail decision on whether each slot CAN advance
-    // based on non-preg resources, so that fl_req_count only requests
-    // pregs for slots that will actually use them.  This eliminates the
-    // "alloc-but-no-advance orphan" leak where free_list clears a bit for
-    // a slot that ultimately can't advance due to LQ/SQ/CKPT/ROB/DQ
-    // limits.  preg shortage is handled afterwards by has_preg below.
+    // based on non-preg resources, so that fl_req_count (the free-list
+    // GRANT window) only covers slots not already blocked by LQ/SQ/CKPT/
+    // ROB/DQ limits.  preg shortage is handled afterwards by has_preg in
+    // Pass 2.  NOTE: sp-gating alone does NOT prevent orphan allocations —
+    // a slot can pass here and still fail Pass 2 (its own has_preg=0, or
+    // an older slot blocks and in_order_open closes).  The free list
+    // therefore retires bits by alloc_consume_count (the Pass-2 consumed
+    // prefix), not by this request count; presenting a grant is
+    // non-destructive.
     // =========================================================================
     always_comb begin
         sp_ckpt_consumed_before[0] = 1'b0;
@@ -556,8 +565,10 @@ module rename
 
     // =========================================================================
     // Free list allocation request count (gated by slot_can_advance_sp).
-    // Only slots that will actually advance (modulo preg availability) are
-    // counted — avoids orphan allocations.
+    // This sizes the combinational GRANT window only; it must not gate the
+    // bitmap retirement (a slot counted here can still fail Pass 2).  The
+    // free list clears bits per alloc_consume_count, wired from the Pass-2
+    // prefix sums preg_consumed_before/fp_preg_consumed_before below.
     // =========================================================================
     always_comb begin
         fl_req_count = '0;
@@ -602,9 +613,12 @@ module rename
     // slot_can_advance_sp.  Here we add the preg gate: fl_slot_idx[i] (the
     // sp-gated prefix count of preg-needing slots before i) must be less
     // than fl_avail_count returned by the free list.  If a slot needed a
-    // preg but pool exhausted, it doesn't advance and its preg position
-    // won't be consumed by free_list (fl_req_count is sp-gated too, so
-    // free_list only clears bits that will actually be used).
+    // preg but the pool is exhausted, it doesn't advance, in_order_open
+    // closes for all younger slots, and the free list retires NOTHING for
+    // them: preg_consumed_before[PIPE_WIDTH] (computed below) drives the
+    // free list's alloc_consume_count, so only the pregs latched into a
+    // RAT by advancing slots are cleared from the bitmap.  Granted-but-
+    // unconsumed pregs are re-presented next cycle.
     // =========================================================================
     always_comb begin
         preg_consumed_before[0] = '0;
@@ -1067,26 +1081,54 @@ module rename
             zero_elim_cnt              <= 0;
             move_elim_cnt              <= 0;
         end else begin
+            // Accumulate per-slot events into automatic vars, then a single
+            // NBA per counter.  The previous `cnt <= cnt + 1` inside the
+            // for-loop saturated at +1/cycle (NBA last-write-wins), which
+            // undercounted multi-slot cycles.
+            automatic int work_inc  = 0;
+            automatic int adv_inc   = 0;
+            automatic int zelim_inc = 0;
+            automatic int melim_inc = 0;
+            automatic int preg_inc  = 0;
+            automatic int rob_inc   = 0;
+            automatic int ckpt_inc  = 0;
+            automatic int lq_inc    = 0;
+            automatic int sq_inc    = 0;
+            automatic int dq_inc    = 0;
+            automatic int thr_inc   = 0;
+
             rn_leak_cyc <= rn_leak_cyc + 1;
 
             for (int i = 0; i < PIPE_WIDTH; i++) begin
                 if (work_valid[i]) begin
-                    total_work_slot_cycles <= total_work_slot_cycles + 1;
+                    work_inc = work_inc + 1;
                     if (slot_can_advance[i]) begin
-                        total_advanced_slot_cycles <= total_advanced_slot_cycles + 1;
-                        if (is_zero_elim[i]) zero_elim_cnt <= zero_elim_cnt + 1;
-                        if (is_move_elim[i]) move_elim_cnt <= move_elim_cnt + 1;
+                        adv_inc = adv_inc + 1;
+                        if (is_zero_elim[i]) zelim_inc = zelim_inc + 1;
+                        if (is_move_elim[i]) melim_inc = melim_inc + 1;
                     end else begin
-                        if (slot_needs_preg[i] && !has_preg[i]) stall_preg_cnt <= stall_preg_cnt + 1;
-                        if (!has_rob[i])                        stall_rob_cnt  <= stall_rob_cnt + 1;
-                        if (slot_needs_ckpt[i] && !has_ckpt[i]) stall_ckpt_cnt <= stall_ckpt_cnt + 1;
-                        if (slot_needs_lq[i] && !has_lq[i])     stall_lq_cnt   <= stall_lq_cnt + 1;
-                        if (slot_needs_sq[i] && !has_sq[i])     stall_sq_cnt   <= stall_sq_cnt + 1;
-                        if (!has_dq[i])                         stall_dq_cnt   <= stall_dq_cnt + 1;
-                        if (!has_admission[i])                  stall_backend_throttle_cnt <= stall_backend_throttle_cnt + 1;
+                        if (slot_needs_preg[i] && !has_preg[i]) preg_inc = preg_inc + 1;
+                        if (!has_rob[i])                        rob_inc  = rob_inc + 1;
+                        if (slot_needs_ckpt[i] && !has_ckpt[i]) ckpt_inc = ckpt_inc + 1;
+                        if (slot_needs_lq[i] && !has_lq[i])     lq_inc   = lq_inc + 1;
+                        if (slot_needs_sq[i] && !has_sq[i])     sq_inc   = sq_inc + 1;
+                        if (!has_dq[i])                         dq_inc   = dq_inc + 1;
+                        if (!has_admission[i])                  thr_inc  = thr_inc + 1;
                     end
                 end
             end
+
+            total_work_slot_cycles     <= total_work_slot_cycles     + work_inc;
+            total_advanced_slot_cycles <= total_advanced_slot_cycles + adv_inc;
+            zero_elim_cnt              <= zero_elim_cnt              + zelim_inc;
+            move_elim_cnt              <= move_elim_cnt              + melim_inc;
+            stall_preg_cnt             <= stall_preg_cnt             + preg_inc;
+            stall_rob_cnt              <= stall_rob_cnt              + rob_inc;
+            stall_ckpt_cnt             <= stall_ckpt_cnt             + ckpt_inc;
+            stall_lq_cnt               <= stall_lq_cnt               + lq_inc;
+            stall_sq_cnt               <= stall_sq_cnt               + sq_inc;
+            stall_dq_cnt               <= stall_dq_cnt               + dq_inc;
+            stall_backend_throttle_cnt <= stall_backend_throttle_cnt + thr_inc;
 
             if (|work_valid)                            cycle_any_valid        <= cycle_any_valid + 1;
             if (|(work_valid & ~slot_can_advance))      cycle_any_stall        <= cycle_any_stall + 1;
