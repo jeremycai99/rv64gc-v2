@@ -231,6 +231,14 @@ module tb_linux;
     integer linux_trace_cycle_window_en;
     integer linux_stop_on_no_commit_en;
     integer linux_no_commit_limit;
+    // Early-kernel panic visibility probe (see probe block below).
+    integer linux_panic_probe_en;
+    integer linux_stop_on_panic_en;
+    integer linux_trace_printk_en;
+    logic [63:0] linux_panic_pc;
+    logic [63:0] linux_die_pc;
+    logic [63:0] linux_warn_pc;
+    logic [63:0] linux_printk_pc;
     integer linux_trace_cycle_lo;
     integer linux_trace_cycle_hi;
     logic [63:0] boot_hartid;
@@ -618,6 +626,99 @@ module tb_linux;
         end
     end
 
+    // -------------------------------------------------------------------------
+    // Early-kernel panic visibility probe (sim-only).
+    //
+    // WHY: under Verilator the S-mode kernel panics BEFORE earlycon
+    // registration, so the panic message only reaches the in-RAM printk
+    // log_buf and the UART stays silent; the boot then spins forever in
+    // panic()'s mdelay blink loop (udelay PCs ffffffff80bba8xx and the
+    // jal-udelay loop at ffffffff80bbb70e..718).  This looks like a "udelay
+    // / time stall" from the outside but is really a silent early panic.
+    //
+    // This probe makes the failure visible: when the commit stream retires
+    // the entry PC of panic()/die()/__warn() (and optionally _printk()),
+    // dump the format-string argument directly from backdoor sim memory.
+    // Format strings live in kernel .rodata, which is loaded from the boot
+    // image and never written, so reading u_mem.mem (bypassing the cache
+    // hierarchy) is safe and exact.
+    //
+    // VA -> mem index: with nokaslr the kernel image VA base
+    // 0xffffffff_80000000 maps to load PA 0x80200000 (OpenSBI "Domain0 Next
+    // Address"), and sim_memory is indexed by PA - 0x8000_0000, so
+    //   idx = va - 64'hffffffff_80000000 + 64'h0020_0000.
+    // Entry PCs come from the fw_payload vmlinux System.map and can be
+    // overridden via +LINUX_PANIC_PC/+LINUX_DIE_PC/+LINUX_WARN_PC/
+    // +LINUX_PRINTK_PC for a different payload.
+    // -------------------------------------------------------------------------
+    function automatic string linux_kva_string(input logic [63:0] va);
+        logic [63:0] idx;
+        logic [7:0]  b;
+        string s;
+        s = "";
+        if ((va >= 64'hffff_ffff_8000_0000) &&
+            (va <  64'hffff_ffff_8800_0000)) begin
+            idx = va - 64'hffff_ffff_8000_0000 + 64'h0020_0000;
+            for (int k = 0; k < 256; k++) begin
+                if ((idx + 64'(k)) >= 64'(128 * 1024 * 1024))
+                    break;
+                b = u_mem.mem[int'(idx) + k];
+                if (b == 8'h00)
+                    break;
+                if ((b >= 8'h20) && (b < 8'h7f))
+                    s = {s, $sformatf("%c", b)};
+                else if (b == 8'h0a)
+                    s = {s, "\\n"};
+                else
+                    s = {s, "."};
+            end
+        end
+        return s;
+    endfunction
+
+    always @(posedge clk) begin
+        if (rst_n && (linux_panic_probe_en != 0) &&
+            (u_core.commit_count != 0)) begin
+            for (int ci = 0; ci < PIPE_WIDTH; ci++) begin
+                if (ci < int'(u_core.commit_count)) begin
+                    if ((u_core.rob_head_pc[ci] == linux_panic_pc) ||
+                        (u_core.rob_head_pc[ci] == linux_die_pc) ||
+                        (u_core.rob_head_pc[ci] == linux_warn_pc)) begin
+                        $display("[LINUX_PANIC_PROBE] cyc=%0d pc=%016h ra=%016h a0=%016h a1=%016h a2=%016h priv=%0d satp=%016h",
+                                 sim_cycle,
+                                 u_core.rob_head_pc[ci],
+                                 u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[1]],
+                                 u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[10]],
+                                 u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[11]],
+                                 u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[12]],
+                                 u_core.csr_priv_mode,
+                                 u_core.csr_satp);
+                        $display("[LINUX_PANIC_PROBE] a0_str='%s' a1_str='%s'",
+                                 linux_kva_string(
+                                     u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[10]]),
+                                 linux_kva_string(
+                                     u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[11]]));
+                        if (linux_stop_on_panic_en != 0) begin
+                            $display("[LINUX_PANIC_PROBE] +LINUX_STOP_ON_PANIC set; stopping at cyc=%0d",
+                                     sim_cycle);
+                            $finish;
+                        end
+                    end else if ((linux_trace_printk_en != 0) &&
+                                 (u_core.rob_head_pc[ci] == linux_printk_pc)) begin
+                        $display("[LINUX_PRINTK] cyc=%0d a0=%016h fmt='%s' a1=%016h a1_str='%s'",
+                                 sim_cycle,
+                                 u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[10]],
+                                 linux_kva_string(
+                                     u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[10]]),
+                                 u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[11]],
+                                 linux_kva_string(
+                                     u_core.u_int_prf.regfile_copy0[u_core.u_rename.u_rat.committed_rat[11]]));
+                    end
+                end
+            end
+        end
+    end
+
     initial begin
         max_cycles = 100000;
         uart_log_fd = 0;
@@ -812,6 +913,22 @@ module tb_linux;
         if ($test$plusargs("LINUX_STOP_ON_NO_COMMIT"))
             linux_stop_on_no_commit_en = 1;
         void'($value$plusargs("LINUX_NO_COMMIT_LIMIT=%d", linux_no_commit_limit));
+        // Panic probe: ON by default (only fires on panic/die/__warn commits).
+        // PCs are the fw_payload kernel's System.map entry points; override
+        // via plusargs when the payload changes.
+        linux_panic_probe_en  = 1;
+        linux_stop_on_panic_en = $test$plusargs("LINUX_STOP_ON_PANIC") ? 1 : 0;
+        linux_trace_printk_en  = $test$plusargs("LINUX_TRACE_PRINTK") ? 1 : 0;
+        if ($test$plusargs("LINUX_NO_PANIC_PROBE"))
+            linux_panic_probe_en = 0;
+        linux_panic_pc  = 64'hffff_ffff_80bb_b490;  // T panic
+        linux_die_pc    = 64'hffff_ffff_8000_4852;  // T die
+        linux_warn_pc   = 64'hffff_ffff_80bb_b722;  // T __warn
+        linux_printk_pc = 64'hffff_ffff_80bb_c096;  // T _printk
+        void'($value$plusargs("LINUX_PANIC_PC=%h", linux_panic_pc));
+        void'($value$plusargs("LINUX_DIE_PC=%h", linux_die_pc));
+        void'($value$plusargs("LINUX_WARN_PC=%h", linux_warn_pc));
+        void'($value$plusargs("LINUX_PRINTK_PC=%h", linux_printk_pc));
         void'($value$plusargs("BOOT_HARTID=%h", boot_hartid));
         void'($value$plusargs("DTB_ADDR=%h", boot_dtb_addr));
     end

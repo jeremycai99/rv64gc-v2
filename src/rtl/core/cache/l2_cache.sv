@@ -388,18 +388,91 @@ module l2_cache
 
     // =========================================================================
     // Combinational: match memory response to MSHR entry
+    //
+    // The memory interface carries no response tag, so read responses return
+    // strictly in REQUEST ORDER.  Match each response to the OLDEST
+    // outstanding read (issue order) via the rd_order queue below -- NOT the
+    // lowest-numbered WAIT_MEM MSHR.  With memory latency > 1 several MSHRs
+    // can be in WAIT_MEM at once, and a freed low-index MSHR can be
+    // re-allocated and issued while an older read on a higher index is still
+    // outstanding; lowest-index matching would then attach the older read's
+    // data to the younger MSHR.  Invisible with a 1-cycle memory (at most one
+    // WAIT_MEM entry exists at any response cycle, so both policies pick the
+    // same entry), wrong for any latency > 1.
     // =========================================================================
+    logic [4:0]                       rd_order_q [0:L2_MSHR_DEPTH-1];
+    logic [$clog2(L2_MSHR_DEPTH):0]   rd_order_count_q;
+    logic [$clog2(L2_MSHR_DEPTH)-1:0] rd_order_head_q;
+    logic [$clog2(L2_MSHR_DEPTH)-1:0] rd_order_tail_q;
+    logic                             rd_issue_fire;
+    logic                             rd_resp_consume;
+
+    // Mirrors the PENDING -> WAIT_MEM transition condition (read accepted by
+    // memory) and the WAIT_MEM exit condition (response captured) in the
+    // main always_ff below.
+    assign rd_issue_fire   = mshr_has_issue && respq_can_accept &&
+                             mem_req_ready && !inv_wb_pending &&
+                             !mshr_has_wb_issue;
+    assign rd_resp_consume = mem_resp_capture && respq_can_accept;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rd_order_head_q  <= '0;
+            rd_order_tail_q  <= '0;
+            rd_order_count_q <= '0;
+        end else begin
+            if (rd_issue_fire) begin
+                rd_order_q[rd_order_tail_q] <= mshr_issue_idx;
+                rd_order_tail_q <= rd_order_tail_q + 1'b1;
+            end
+            if (rd_resp_consume) begin
+                rd_order_head_q <= rd_order_head_q + 1'b1;
+            end
+            case ({rd_issue_fire, rd_resp_consume})
+                2'b10:   rd_order_count_q <= rd_order_count_q + 1'b1;
+                2'b01:   rd_order_count_q <= rd_order_count_q - 1'b1;
+                default: ;
+            endcase
+        end
+    end
+
     always_comb begin
         mshr_resp_found = 1'b0;
         mshr_resp_idx   = 5'd0;
-        for (int i = 0; i < L2_MSHR_DEPTH; i++) begin
-            if (mshr[i].valid && (mshr[i].state == MSHR_WAIT_MEM) &&
-                !mshr_resp_found) begin
-                mshr_resp_found = 1'b1;
-                mshr_resp_idx   = 5'(i);
+        if (rd_order_count_q != '0) begin
+            mshr_resp_idx   = rd_order_q[rd_order_head_q];
+            mshr_resp_found = mshr[rd_order_q[rd_order_head_q]].valid &&
+                              (mshr[rd_order_q[rd_order_head_q]].state ==
+                               MSHR_WAIT_MEM);
+        end
+    end
+
+`ifdef SIMULATION
+    // Tripwires (sim-only): make latent response-path corners loud instead of
+    // silent wedges.
+    always_ff @(posedge clk) begin
+        if (rst_n) begin
+            // A memory response with no oldest outstanding read, or whose
+            // oldest outstanding read is not in WAIT_MEM, means the issue
+            // order queue and the MSHR state machine have desynchronized.
+            if (mem_resp_valid && !mshr_resp_found) begin
+                $fatal(1, "l2_cache: memory response with no matching oldest outstanding read (rd_order_count=%0d)",
+                       rd_order_count_q);
+            end
+            // A response arriving while the respq cannot accept is dropped by
+            // the capture logic and the MSHR wedges in WAIT_MEM forever.
+            if (mem_resp_valid && mshr_resp_found && !respq_can_accept) begin
+                $fatal(1, "l2_cache: memory response dropped, respq full (count=%0d) and no deq this cycle",
+                       respq_count_q);
+            end
+            // rd_order queue overflow is impossible (an outstanding read holds
+            // an MSHR in WAIT_MEM, so <= L2_MSHR_DEPTH reads are in flight).
+            if (rd_issue_fire && (rd_order_count_q == ($clog2(L2_MSHR_DEPTH)+1)'(L2_MSHR_DEPTH))) begin
+                $fatal(1, "l2_cache: rd_order queue overflow");
             end
         end
     end
+`endif
 
     // =========================================================================
     // Arbitration: D-cache has priority, but blocked when invalidation running

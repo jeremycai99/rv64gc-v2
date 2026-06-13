@@ -3178,6 +3178,15 @@ module lsu
     integer lsu_lmb_alloc_ready_cnt;
     integer lsu_fwd_hold_blocked_cnt;
     integer lsu_lmb_wb_blocked_cnt;
+    // Batch-#4 LMB drain-burst probe (doc/ipc3x_gate_results_2026-06-11.md
+    // §4.3 item 5): per fill event, how many LMB entries the fill satisfies
+    // (burst size histogram {1,2,3,4+}) plus the serialization cost of
+    // draining bursts > 1 through the single port-0 writeback (burst_size-1
+    // extra cycles summed per fill). Read at MEM_LATENCY 1 vs 80 inside the
+    // cache-sizing sweep to size the port-1-drain claim.
+    integer lsu_lmb_fill_burst_now;
+    integer lsu_lmb_fill_burst_hist [0:3];
+    integer lsu_lmb_fill_burst_serial_cyc;
 
     initial lsu_stat_en =
         ($test$plusargs("PERF_PROFILE") || $test$plusargs("STAT_DUMP")) ? 1'b1 : 1'b0;
@@ -3191,9 +3200,12 @@ module lsu
 
     always_comb begin
         lsu_lmb_occ_now = 0;
+        lsu_lmb_fill_burst_now = 0;
         for (int i = 0; i < LMB_DEPTH; i++) begin
             if (lmb[i].valid)
                 lsu_lmb_occ_now++;
+            if (lmb_fill_match[i])
+                lsu_lmb_fill_burst_now++;
         end
     end
 
@@ -3213,6 +3225,9 @@ module lsu
             lsu_lmb_alloc_ready_cnt <= 0;
             lsu_fwd_hold_blocked_cnt <= 0;
             lsu_lmb_wb_blocked_cnt <= 0;
+            lsu_lmb_fill_burst_serial_cyc <= 0;
+            for (int i = 0; i < 4; i++)
+                lsu_lmb_fill_burst_hist[i] <= 0;
         end else if (lsu_stat_en) begin
             lsu_lmb_cyc <= lsu_lmb_cyc + 1;
 
@@ -3248,6 +3263,16 @@ module lsu
 
             if (lmb_any_match)
                 lsu_lmb_fill_match_cnt <= lsu_lmb_fill_match_cnt + 1;
+            if (lmb_any_match) begin : lsu_lmb_burst_record
+                int b;
+                b = (lsu_lmb_fill_burst_now >= 4)
+                    ? 3 : (lsu_lmb_fill_burst_now - 1);
+                lsu_lmb_fill_burst_hist[b] <= lsu_lmb_fill_burst_hist[b] + 1;
+                if (lsu_lmb_fill_burst_now > 1)
+                    lsu_lmb_fill_burst_serial_cyc <=
+                        lsu_lmb_fill_burst_serial_cyc +
+                        (lsu_lmb_fill_burst_now - 1);
+            end
             if (lmb_wb_port_free && !lmb_any_match && lmb_ready_any)
                 lsu_lmb_ready_wb_cnt <= lsu_lmb_ready_wb_cnt + 1;
             if (fwd_hold_blocked)
@@ -3266,6 +3291,10 @@ module lsu
             $display("Miss detect p0/p1:          %0d / %0d", lsu_lmb_p0_miss_cnt, lsu_lmb_p1_miss_cnt);
             $display("Alloc p0/p1:                %0d / %0d", lsu_lmb_p0_alloc_cnt, lsu_lmb_p1_alloc_cnt);
             $display("Fill matches:               %0d", lsu_lmb_fill_match_cnt);
+            $display("Fill burst hist 1/2/3/4+:   %0d / %0d / %0d / %0d",
+                     lsu_lmb_fill_burst_hist[0], lsu_lmb_fill_burst_hist[1],
+                     lsu_lmb_fill_burst_hist[2], lsu_lmb_fill_burst_hist[3]);
+            $display("Fill burst serial cycles:   %0d", lsu_lmb_fill_burst_serial_cyc);
             $display("Ready drains:               %0d", lsu_lmb_ready_wb_cnt);
             $display("Alloc ready from same fill:  %0d", lsu_lmb_alloc_ready_cnt);
             $display("Dropped full/dual:          %0d / %0d", lsu_lmb_drop_full_cnt, lsu_lmb_drop_dual_cnt);

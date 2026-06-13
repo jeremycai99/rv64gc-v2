@@ -2406,6 +2406,26 @@ module rv64gc_core_top
         // to hold while the register is occupied AND the FPU cannot accept
         // it this cycle.  Legacy (ENABLE=0) keys on bare occupancy, which
         // caps FP-arith issue at one op per 2 cycles.
+        //
+        // CDB[3]-collision term (fpu_out_valid / div_valid_out /
+        // div_hold_valid_r): a result completing on CDB[3] THIS cycle would
+        // collide with an ALU3/CSR candidate, which writes CDB[3] the SAME
+        // cycle it issues -- so a non-FP IQ2 candidate must be suppressed.
+        // An FP-arith candidate (is_fp_op) does NOT write CDB[3] this cycle:
+        // it latches into the FPU request register next cycle and completes
+        // some later cycle, so FP-after-FP (and FP-after-DIV) is collision-
+        // free on CDB[3].  The only real backpressure on a new FP op is the
+        // FPU's own accept gate (fpu_req_valid_r && !fpu_ready), already in
+        // the occupancy term above.  With FPU_PIPELINED_ISSUE_ENABLE set,
+        // make the completion-collision term FP-aware so the completing
+        // result does NOT block an FP candidate -- this is what unlocks the
+        // 1.0/cyc FP-arith cadence.  ENABLE=0 keeps the legacy unconditional
+        // suppress (bit-identical baseline).  RV64F/D correctness: the new FP
+        // op's data path (request register + FPnew accept) is independent of
+        // the completing op's output port (out_ready_i tied high in
+        // fpu_fpnew_wrapper) -- no shared write port, no stale-operand hazard.
+        logic iq2_cand_is_fp;
+        assign iq2_cand_is_fp = iq2_issue_data_s[0].is_fp_op;
         assign iq2_issue_suppress_s[0] =
             iq2_issue_candidate_valid_s[0] &&
          (((iq2_issue_data_s[0].fu_type == FU_CSR) &&
@@ -2414,9 +2434,9 @@ module rv64gc_core_top
            div_busy) ||
           (FPU_PIPELINED_ISSUE_ENABLE ? (fpu_req_valid_r && !fpu_ready)
                                       : fpu_req_valid_r) ||
-          fpu_out_valid ||
-          div_valid_out ||
-          div_hold_valid_r);
+          ((FPU_PIPELINED_ISSUE_ENABLE && iq2_cand_is_fp) ? 1'b0 : fpu_out_valid) ||
+          ((FPU_PIPELINED_ISSUE_ENABLE && iq2_cand_is_fp) ? 1'b0 : div_valid_out) ||
+          ((FPU_PIPELINED_ISSUE_ENABLE && iq2_cand_is_fp) ? 1'b0 : div_hold_valid_r));
 
     issue_queue #(.DEPTH(IQ_INT_DEPTH), .NUM_ENQUEUE(2), .NUM_SELECT(1),
                   .SUPPORT_ENQ_ISSUE_BYPASS(1),
@@ -5458,6 +5478,122 @@ module rv64gc_core_top
     end
 
 
+    // =========================================================================
+    // Commit TAGE-update spill queue (TAGE_UPDATE_SPILL_ENABLE, pkg-gated).
+    // Collects every committed conditional of the batch in slot (age) order;
+    // presents exactly one per cycle on the TAGE update port.  Flow-through
+    // when the queue is empty keeps the common 1-cond-per-batch case
+    // cycle-identical to the legacy oldest-only path.  Strict FIFO order:
+    // while the queue is non-empty all newly committed conditionals enqueue
+    // behind it, so updates are never reordered (loop-predictor count/reset
+    // sequences are order-sensitive).  Overflow drops the youngest, which is
+    // exactly the legacy behavior for those updates.
+    // =========================================================================
+    typedef struct packed {
+        logic [63:0]         pc;
+        logic                taken;
+        logic                misp;
+        logic [63:0]         target;
+        logic [GHR_BITS-1:0] ghr;
+    } tusq_entry_t;
+
+    localparam int TUSQ_PTR_BITS = $clog2(TAGE_UPDATE_SPILL_DEPTH);
+
+    tusq_entry_t                 tusq_mem_r [TAGE_UPDATE_SPILL_DEPTH];
+    logic [TUSQ_PTR_BITS-1:0]    tusq_head_r;
+    logic [TUSQ_PTR_BITS:0]      tusq_count_r;
+    tusq_entry_t                 tusq_batch_c [PIPE_WIDTH];
+    logic [2:0]                  tusq_batch_n_c;
+    logic                        tusq_pop_c;
+    tusq_entry_t                 tusq_out_c;
+    logic                        tusq_out_valid_c;
+    logic [2:0]                  tusq_enq_from_c;
+
+    always_comb begin
+        // Gather this batch's committed conditionals, oldest first.
+        tusq_batch_n_c = 3'd0;
+        for (int i = 0; i < PIPE_WIDTH; i++) begin
+            tusq_batch_c[i] = '0;
+        end
+        // Stream scope per batch: the oldest committed conditional (the one
+        // legacy trains -- any class) plus younger BACKWARD (loop-class) or
+        // MISPREDICTED conditionals.  The measured starvation pathology is
+        // loop-count corruption on backward branches (ud 0x2342, minver
+        // 0x2078); younger forward correctly-predicted conditionals keep the
+        // legacy drop so forward-dominated training equilibria (nsichneu,
+        // coremark) are untouched.  In code with at most one conditional per
+        // batch the queue stays empty and the presented stream is
+        // bit-identical to legacy.  Per-PC update order is preserved: every
+        // in-scope update enters the same FIFO stream.
+        begin
+            automatic logic tusq_first_seen;
+            tusq_first_seen = 1'b0;
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if (commit_out[i].valid &&
+                    rob_head_is_branch[i] &&
+                    (rob_head_bpu_type[i] == BT_COND)) begin
+                    if (!tusq_first_seen ||
+                        (rob_head_branch_taken_target[i] < rob_head_pc[i]) ||
+                        rob_head_branch_mispredict[i]) begin
+                        tusq_batch_c[tusq_batch_n_c].pc     = rob_head_pc[i];
+                        tusq_batch_c[tusq_batch_n_c].taken  = rob_head_branch_taken[i];
+                        tusq_batch_c[tusq_batch_n_c].misp   = rob_head_branch_mispredict[i];
+                        tusq_batch_c[tusq_batch_n_c].target = rob_head_branch_taken_target[i];
+                        tusq_batch_c[tusq_batch_n_c].ghr    = rb_head_bp_ghr[i];
+                        tusq_batch_n_c = tusq_batch_n_c + 3'd1;
+                    end
+                    tusq_first_seen = 1'b1;
+                end
+            end
+        end
+
+        // Present one update: queue head if backed up, else flow-through the
+        // batch's oldest conditional.
+        tusq_out_valid_c = 1'b0;
+        tusq_out_c       = '0;
+        tusq_pop_c       = 1'b0;
+        tusq_enq_from_c  = 3'd0;
+        if (TAGE_UPDATE_SPILL_ENABLE && !exec_bpu_update_valid) begin
+            if (tusq_count_r != '0) begin
+                tusq_out_valid_c = 1'b1;
+                tusq_out_c       = tusq_mem_r[tusq_head_r];
+                tusq_pop_c       = 1'b1;
+                tusq_enq_from_c  = 3'd0;   // enqueue the whole batch behind
+            end else if (tusq_batch_n_c != 3'd0) begin
+                tusq_out_valid_c = 1'b1;
+                tusq_out_c       = tusq_batch_c[0];
+                tusq_enq_from_c  = 3'd1;   // enqueue the younger extras
+            end
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            tusq_head_r  <= '0;
+            tusq_count_r <= '0;
+        end else if (TAGE_UPDATE_SPILL_ENABLE) begin
+            automatic logic [TUSQ_PTR_BITS:0]   cnt;
+            automatic logic [TUSQ_PTR_BITS-1:0] tail;
+            cnt = tusq_count_r;
+            if (tusq_pop_c) begin
+                tusq_head_r <= tusq_head_r + 1'b1;
+                cnt = cnt - 1'b1;
+            end
+            tail = (tusq_pop_c ? tusq_head_r + 1'b1 : tusq_head_r) +
+                   cnt[TUSQ_PTR_BITS-1:0];
+            for (int i = 0; i < PIPE_WIDTH; i++) begin
+                if ((3'(i) >= tusq_enq_from_c) &&
+                    (3'(i) < tusq_batch_n_c) &&
+                    (cnt < (TUSQ_PTR_BITS+1)'(TAGE_UPDATE_SPILL_DEPTH))) begin
+                    tusq_mem_r[tail] <= tusq_batch_c[i];
+                    tail = tail + 1'b1;
+                    cnt  = cnt + 1'b1;
+                end
+            end
+            tusq_count_r <= cnt;
+        end
+    end
+
     always_comb begin
         if (exec_bpu_update_valid) begin
             bpu_update_valid      = exec_bpu_update_valid;
@@ -5487,6 +5623,16 @@ module rv64gc_core_top
             bpu_update_target     = commit_bpu_update_target;
             bpu_update_type       = commit_bpu_update_type;
             bpu_update_ghr        = commit_bpu_update_ghr;
+            // Spill-queue override of the TAGE direction stream only; the
+            // BTB-side (bpu_update_*) oldest-control selection is untouched.
+            if (TAGE_UPDATE_SPILL_ENABLE) begin
+                bpu_tage_update_valid      = tusq_out_valid_c;
+                bpu_tage_update_pc         = tusq_out_c.pc;
+                bpu_tage_update_taken      = tusq_out_c.taken;
+                bpu_tage_update_mispredict = tusq_out_c.misp;
+                bpu_tage_update_target     = tusq_out_c.target;
+                bpu_tage_update_ghr        = tusq_out_c.ghr;
+            end
         end
     end
 

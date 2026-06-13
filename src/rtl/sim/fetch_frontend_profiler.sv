@@ -115,7 +115,27 @@ module fetch_frontend_profiler
     input  wire                             ifu_runahead_redirect_match_c,
     input  wire                             ifu_runahead_duplicate_alloc_blocked_c,
     input  wire                             ifu_runahead_depth_gt1_c,
-    input  wire                             itlb_miss_inflight
+    input  wire                             itlb_miss_inflight,
+    input  wire                             icq_full,
+    input  wire                             ftq_enq_ready,
+    input  wire                             remainder_valid,
+    input  wire                             ifu_frontend_hold_in,
+    input  wire                             ifu_required_ftq_need_alloc_c,
+    input  wire                             ifu_owner_live_registered_c,
+    input  wire                             ifu_runahead_target_valid_c,
+    input  wire                             ifu_runahead_target_direct_c,
+    input  wire                             ifu_runahead_target_before_ctl_c,
+    input  wire                             ifu_runahead_budget_avail_c,
+    input  wire                             ifu_runahead_next_owner_match_c,
+    input  wire                             ifu_runahead_candidate_c,
+    input  wire [2:0]                       icq_count,
+    // F2 prediction-snapshot consumption probe inputs (xsnap)
+    input  wire [63:0]                      xs_req_pc_c,
+    input  wire                             xs_bpu_f2_capture_c,
+    input  wire                             xs_f2_btb_hit_r,
+    input  wire [5:0]                       xs_f2_btb_offset_r,
+    input  wire [2:0]                       xs_pd_ctl_slot_c,
+    input  wire [2:0]                       xs_final_count_c
 );
 
     localparam logic [2:0] BT_COND = 3'd0;
@@ -326,6 +346,20 @@ module fetch_frontend_profiler
     integer xs_runahead_pending_cycles;
     integer xs_runahead_redirect_match_cycles;
     integer xs_runahead_duplicate_alloc_blocked_cycles;
+    localparam int XS_RA_NTERMS = 20;
+    integer xs_tbb_events [0:1];
+    integer xs_tbb_bubble_sum [0:1];
+    integer xs_tbb_hist [0:1][0:4];
+    integer xs_tbb_aborted_events;
+    logic   xs_tbb_open_r;
+    logic   xs_tbb_covered_r;
+    integer xs_tbb_count_r;
+    logic   xs_ra_opp_c;
+    logic [XS_RA_NTERMS-1:0] xs_ra_block_c;
+    integer xs_ra_opp_cycles;
+    integer xs_ra_cand_cycles;
+    integer xs_ra_term_fail  [0:XS_RA_NTERMS-1];
+    integer xs_ra_term_first [0:XS_RA_NTERMS-1];
     integer xs_ftq_depth_gt1_cycles;
     integer xs_icq_future_head_block_cycles;
     integer xs_f2_data_wait_cycles;
@@ -333,6 +367,17 @@ module fetch_frontend_profiler
     integer xs_f2_data_wait_icq_valid_cycles;
     integer xs_f2_data_wait_icq_line_mismatch_cycles;
     integer xs_f2_data_wait_line_invalid_cycles;
+    integer xs_b4_partial_cycles;
+    integer xs_b4_end_taken_cycles;
+    integer xs_b4_end_line_complete_cycles;
+    integer xs_b4_end_redirect_tail_cycles;
+    integer xs_b4_end_backend_zeroout_cycles;
+    integer xs_b4_end_straddle_guard_cycles;
+    integer xs_b4_end_other_cycles;
+    integer xs_b4_donor_f2_now_cycles;
+    integer xs_b4_donor_icq_flight_cycles;
+    integer xs_b4_donor_unrequested_cycles;
+    logic   xs_b4_post_redirect_r;
 
     logic [63:0] xs_catchup_top_pc [0:XS_CATCHUP_TOPN-1];
     integer xs_catchup_top_count [0:XS_CATCHUP_TOPN-1];
@@ -487,6 +532,19 @@ module fetch_frontend_profiler
     logic xs_f2_data_wait_icq_valid_c;
     logic xs_f2_data_wait_icq_line_mismatch_c;
     logic xs_f2_data_wait_line_invalid_c;
+    logic        xs_b4_partial_c;
+    logic [1:0]  xs_b4_last_slot_c;
+    logic [63:0] xs_b4_last_end_pc_c;
+    logic        xs_b4_line_end_c;
+    logic        xs_b4_end_taken_c;
+    logic        xs_b4_end_line_complete_c;
+    logic        xs_b4_end_redirect_tail_c;
+    logic        xs_b4_end_backend_zeroout_c;
+    logic        xs_b4_end_straddle_guard_c;
+    logic        xs_b4_end_other_c;
+    logic        xs_b4_donor_f2_now_c;
+    logic        xs_b4_donor_icq_flight_c;
+    logic        xs_b4_donor_unrequested_c;
 
     initial begin
         xs_catchup_probe_en = 1'b0;
@@ -1100,6 +1158,125 @@ module fetch_frontend_profiler
     assign xs_f2_data_wait_line_invalid_c =
         xs_f2_data_wait_c &&
         !f2_work_line_valid_c;
+    // runahead disqualifier census: opportunity = work cursor owns a block
+    // with a valid predicted-taken target (the base terms of
+    // runahead_candidate_c); xs_ra_block_c enumerates the remaining terms.
+    assign xs_ra_opp_c =
+        f2_work_valid_c &&
+        f2_work_ftq_valid_c &&
+        ifu_runahead_target_valid_c;
+    assign xs_ra_block_c = {
+        ifu_runahead_next_owner_match_c,     // [19] target already next owner
+        ifu_runahead_pending_c,              // [18] depth-1 pending occupied
+        !ifu_runahead_budget_avail_c,        // [17] owner depth budget
+        !ifu_runahead_target_before_ctl_c,   // [16] cursor past pred ctl
+        !ifu_runahead_target_direct_c,       // [15] indirect target (JALR/RET)
+        f2_work_owner_complete_c,            // [14] owner complete
+        !ifu_owner_live_registered_c,        // [13] owner not live registered
+        !f2_work_owner_delivered_c,          // [12] owner not delivered
+        consumed_remainder_r,                // [11] consumed remainder
+        consume_remainder_c,                 // [10] consume remainder
+        line_straddle_advance_c,             // [9]  line straddle advance
+        remainder_valid,                     // [8]  remainder valid
+        !ftq_enq_ready,                      // [7]  ftq enq not ready
+        icq_full,                            // [6]  icq full
+        packet_buf_full,                     // [5]  packet buf full
+        ifu_frontend_hold_in,                // [4]  frontend hold
+        !f1_valid,                           // [3]  f1 invalid
+        req_redirect_c,                      // [2]  bpu redirect
+        redirect_valid,                      // [1]  backend redirect
+        ifu_required_ftq_need_alloc_c        // [0]  demand alloc owns the slot
+    };
+
+    // batch-#4 repacker gate (doc/ipc3x_gate_results_2026-06-11.md §4.3 item
+    // 1): on each delivery cycle whose RAW fetch width is 1..3 (the same
+    // fetch_count the tb_top 'Raw fetch histogram' samples; nonzero only when
+    // a packet actually delivers), classify the group-end cause in priority
+    // order taken-ctl > owner-line-complete-seq > redirect-recovery-tail >
+    // backend-zeroout > straddle/guard corner > other, and sample donor
+    // availability on the same cycles.
+    // Decision rule these feed: fund repacker RTL only if donor-in-flight
+    // (xs_b4_donor_f2_now + xs_b4_donor_icq_flight) > 50% of partial emits
+    // (xs_b4_partial) on a workload whose repack UB crosses 2.95.
+    // NOTE the literal 'backend stall truncated the emit' mechanism does not
+    // exist in this frontend (instr_compact's will_emit/final_count never
+    // depend on backend_stall; delivery is whole-packet). The zeroout bucket
+    // is the nearest derivable proxy: a partial group delivered from packet-
+    // buffer occupancy (!flowthrough), i.e. emitted while delivery was
+    // blocked downstream, where the emit-cycle cause signals are lost.
+    // Donor terms are deliberately generous (no owner-live qualifier) so a
+    // <50% readout is an upper bound on repacker yield, i.e. an airtight kill.
+    assign xs_b4_partial_c =
+        (fetch_count >= 3'd1) && (fetch_count <= 3'd3);
+    assign xs_b4_last_slot_c =
+        xs_b4_partial_c ? 2'(fetch_count - 3'd1) : 2'd0;
+    assign xs_b4_last_end_pc_c =
+        packet_buf_head.fetch_pc[xs_b4_last_slot_c] +
+        (packet_buf_head.fetch_is_rvc[xs_b4_last_slot_c] ? 64'd2 : 64'd4);
+    assign xs_b4_line_end_c =
+        (xs_b4_last_end_pc_c[63:LINE_BITS] != packet_buf_head.ifu_line_addr);
+    assign xs_b4_end_taken_c =
+        xs_b4_partial_c &&
+        (|packet_buf_head.fetch_bp_taken);
+    assign xs_b4_end_line_complete_c =
+        xs_b4_partial_c &&
+        !xs_b4_end_taken_c &&
+        packet_buf_head.ftq_owner_complete &&
+        xs_b4_line_end_c;
+    assign xs_b4_end_redirect_tail_c =
+        xs_b4_partial_c &&
+        !xs_b4_end_taken_c &&
+        !xs_b4_end_line_complete_c &&
+        xs_b4_post_redirect_r;
+    assign xs_b4_end_backend_zeroout_c =
+        xs_b4_partial_c &&
+        !xs_b4_end_taken_c &&
+        !xs_b4_end_line_complete_c &&
+        !xs_b4_end_redirect_tail_c &&
+        !packet_flowthrough_valid;
+    assign xs_b4_end_straddle_guard_c =
+        xs_b4_partial_c &&
+        !xs_b4_end_taken_c &&
+        !xs_b4_end_line_complete_c &&
+        !xs_b4_end_redirect_tail_c &&
+        !xs_b4_end_backend_zeroout_c &&
+        (straddle_detected_c ||
+         line_straddle_advance_c ||
+         consume_remainder_c ||
+         consumed_remainder_r ||
+         f2_duplicate_suppressed_c);
+    assign xs_b4_end_other_c =
+        xs_b4_partial_c &&
+        !xs_b4_end_taken_c &&
+        !xs_b4_end_line_complete_c &&
+        !xs_b4_end_redirect_tail_c &&
+        !xs_b4_end_backend_zeroout_c &&
+        !xs_b4_end_straddle_guard_c;
+    // donor-data-in-F2-now: a live line other than the delivering one holds
+    // undelivered instructions in the F2/packet path right now -- either a
+    // second packet beyond the delivering head still sits in the packet
+    // buffer (count > 1; flowthrough requires empty so it contributes 0), or
+    // the F2 work cursor has valid line data with extractable payload
+    // (final_count > 0) on a different line than the delivered packet's.
+    assign xs_b4_donor_f2_now_c =
+        xs_b4_partial_c &&
+        ((packet_buf_count > 4'd1) ||
+         (f2_work_valid_c && f2_data_valid && f2_work_line_valid_c &&
+          f2_has_emit_payload_c &&
+          (f2_work_line_addr_c != packet_buf_head.ifu_line_addr)));
+    // donor-line-in-ICQ-flight: a fetched-but-not-yet-extracted line exists
+    // in the ICQ -- the head is a different line than the delivering one, or
+    // a second entry sits behind the head (only the head is inspectable).
+    assign xs_b4_donor_icq_flight_c =
+        xs_b4_partial_c &&
+        !xs_b4_donor_f2_now_c &&
+        icq_deq_valid &&
+        ((icq_deq_line_addr != packet_buf_head.ifu_line_addr) ||
+         (icq_count > 3'd1));
+    assign xs_b4_donor_unrequested_c =
+        xs_b4_partial_c &&
+        !xs_b4_donor_f2_now_c &&
+        !xs_b4_donor_icq_flight_c;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -1292,6 +1469,22 @@ module fetch_frontend_profiler
             xs_runahead_pending_cycles         <= 0;
             xs_runahead_redirect_match_cycles  <= 0;
             xs_runahead_duplicate_alloc_blocked_cycles <= 0;
+            xs_tbb_aborted_events <= 0;
+            xs_tbb_open_r    <= 1'b0;
+            xs_tbb_covered_r <= 1'b0;
+            xs_tbb_count_r   <= 0;
+            xs_ra_opp_cycles  <= 0;
+            xs_ra_cand_cycles <= 0;
+            for (int i = 0; i < 2; i++) begin
+                xs_tbb_events[i]     <= 0;
+                xs_tbb_bubble_sum[i] <= 0;
+                for (int j = 0; j < 5; j++)
+                    xs_tbb_hist[i][j] <= 0;
+            end
+            for (int i = 0; i < XS_RA_NTERMS; i++) begin
+                xs_ra_term_fail[i]  <= 0;
+                xs_ra_term_first[i] <= 0;
+            end
             xs_ftq_depth_gt1_cycles            <= 0;
             xs_icq_future_head_block_cycles    <= 0;
             xs_f2_data_wait_cycles             <= 0;
@@ -1299,6 +1492,17 @@ module fetch_frontend_profiler
             xs_f2_data_wait_icq_valid_cycles   <= 0;
             xs_f2_data_wait_icq_line_mismatch_cycles <= 0;
             xs_f2_data_wait_line_invalid_cycles <= 0;
+            xs_b4_partial_cycles               <= 0;
+            xs_b4_end_taken_cycles             <= 0;
+            xs_b4_end_line_complete_cycles     <= 0;
+            xs_b4_end_redirect_tail_cycles     <= 0;
+            xs_b4_end_backend_zeroout_cycles   <= 0;
+            xs_b4_end_straddle_guard_cycles    <= 0;
+            xs_b4_end_other_cycles             <= 0;
+            xs_b4_donor_f2_now_cycles          <= 0;
+            xs_b4_donor_icq_flight_cycles      <= 0;
+            xs_b4_donor_unrequested_cycles     <= 0;
+            xs_b4_post_redirect_r              <= 1'b0;
             for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
                 xs_catchup_top_pc[i]    <= 64'd0;
                 xs_catchup_top_count[i] <= 0;
@@ -2154,6 +2358,50 @@ module fetch_frontend_profiler
             if (ifu_runahead_duplicate_alloc_blocked_c)
                 xs_runahead_duplicate_alloc_blocked_cycles <=
                     xs_runahead_duplicate_alloc_blocked_cycles + 1;
+            // taken-branch bubble tracker: work_redirect -> next packet emit
+            if (xs_tbb_open_r) begin
+                if (packet_buf_enq || redirect_valid || ifu_work_redirect_c) begin
+                    if (redirect_valid && !packet_buf_enq)
+                        xs_tbb_aborted_events <= xs_tbb_aborted_events + 1;
+                    else begin : xs_tbb_record
+                        int b;
+                        b = (xs_tbb_count_r >= 4) ? 4 : xs_tbb_count_r;
+                        xs_tbb_events[xs_tbb_covered_r] <=
+                            xs_tbb_events[xs_tbb_covered_r] + 1;
+                        xs_tbb_bubble_sum[xs_tbb_covered_r] <=
+                            xs_tbb_bubble_sum[xs_tbb_covered_r] + xs_tbb_count_r;
+                        xs_tbb_hist[xs_tbb_covered_r][b] <=
+                            xs_tbb_hist[xs_tbb_covered_r][b] + 1;
+                    end
+                    xs_tbb_open_r <= 1'b0;
+                end else
+                    xs_tbb_count_r <= xs_tbb_count_r + 1;
+            end
+            if (ifu_work_redirect_c && !redirect_valid) begin
+                xs_tbb_open_r    <= 1'b1;
+                xs_tbb_covered_r <= ifu_runahead_redirect_match_c;
+                xs_tbb_count_r   <= 0;
+            end
+            // runahead disqualifier census
+            if (xs_ra_opp_c) begin
+                xs_ra_opp_cycles <= xs_ra_opp_cycles + 1;
+                if (ifu_runahead_candidate_c)
+                    xs_ra_cand_cycles <= xs_ra_cand_cycles + 1;
+                else begin : xs_ra_census
+                    int first_idx;
+                    first_idx = -1;
+                    for (int i = 0; i < XS_RA_NTERMS; i++) begin
+                        if (xs_ra_block_c[i]) begin
+                            xs_ra_term_fail[i] <= xs_ra_term_fail[i] + 1;
+                            if (first_idx < 0)
+                                first_idx = i;
+                        end
+                    end
+                    if (first_idx >= 0)
+                        xs_ra_term_first[first_idx] <=
+                            xs_ra_term_first[first_idx] + 1;
+                end
+            end
             if (ifu_runahead_depth_gt1_c ||
                 (({1'b0, ftq_count_alloc_to_ifu} +
                   {1'b0, ftq_count_ifu_to_wb}) >
@@ -2177,6 +2425,39 @@ module fetch_frontend_profiler
             if (xs_f2_data_wait_line_invalid_c)
                 xs_f2_data_wait_line_invalid_cycles <=
                     xs_f2_data_wait_line_invalid_cycles + 1;
+            // batch-#4 repacker gate: redirect-recovery-tail tracker (set on
+            // a backend redirect, cleared by the first delivery after it)
+            // plus the partial-emit cause / donor-availability counters.
+            if (redirect_valid)
+                xs_b4_post_redirect_r <= 1'b1;
+            else if (fetch_count != 3'd0)
+                xs_b4_post_redirect_r <= 1'b0;
+            if (xs_b4_partial_c)
+                xs_b4_partial_cycles <= xs_b4_partial_cycles + 1;
+            if (xs_b4_end_taken_c)
+                xs_b4_end_taken_cycles <= xs_b4_end_taken_cycles + 1;
+            if (xs_b4_end_line_complete_c)
+                xs_b4_end_line_complete_cycles <=
+                    xs_b4_end_line_complete_cycles + 1;
+            if (xs_b4_end_redirect_tail_c)
+                xs_b4_end_redirect_tail_cycles <=
+                    xs_b4_end_redirect_tail_cycles + 1;
+            if (xs_b4_end_backend_zeroout_c)
+                xs_b4_end_backend_zeroout_cycles <=
+                    xs_b4_end_backend_zeroout_cycles + 1;
+            if (xs_b4_end_straddle_guard_c)
+                xs_b4_end_straddle_guard_cycles <=
+                    xs_b4_end_straddle_guard_cycles + 1;
+            if (xs_b4_end_other_c)
+                xs_b4_end_other_cycles <= xs_b4_end_other_cycles + 1;
+            if (xs_b4_donor_f2_now_c)
+                xs_b4_donor_f2_now_cycles <= xs_b4_donor_f2_now_cycles + 1;
+            if (xs_b4_donor_icq_flight_c)
+                xs_b4_donor_icq_flight_cycles <=
+                    xs_b4_donor_icq_flight_cycles + 1;
+            if (xs_b4_donor_unrequested_c)
+                xs_b4_donor_unrequested_cycles <=
+                    xs_b4_donor_unrequested_cycles + 1;
 
             if (xs_catchup_base_c)
                 xs_catchup_base_cycles <= xs_catchup_base_cycles + 1;
@@ -2258,6 +2539,221 @@ module fetch_frontend_profiler
                          f1_aux_pred_ctl_type_c,
                          f1_aux_pred_ctl_target_c,
                          xs_catchup_target_last_c);
+            end
+        end
+    end
+
+    // =========================================================================
+    // F2 prediction-snapshot consumption probe (xsnap).
+    //
+    // The pred_checker validates every emitted packet against the registered
+    // F2 BPU snapshot (f2_btb_*_r / f2_tage_taken_r), which is overwritten by
+    // whatever F1 lookup ran last (bpu.sv capture: !flush && !stall &&
+    // f2_capture).  This probe mirrors the capture condition, remembers the
+    // lookup PC (and 1-deep history) backing the live snapshot, and on every
+    // emit of a packet whose predecode found an in-packet conditional control
+    // classifies the consumed snapshot as FRESH (the backing lookup PC is on
+    // the control's line at-or-before its offset, i.e. the BTB line+boffs
+    // filter can describe the control) or STALE, split by packet class:
+    //   cls 0 = remainder-stitch emit      (consume_remainder_c)
+    //   cls 1 = post-stitch emit           (consumed_remainder_r)
+    //   cls 2 = straddle-trimmed emit      (straddle_detected_c)
+    //   cls 3 = everything else
+    // +SNAPWATCH=<hex pc> additionally histograms the backing-lookup PC for
+    // one branch PC.  Counting is enabled under PERF_PROFILE/STAT_DUMP (same
+    // gate as the catch-up probe) or when a watch is given; inert otherwise.
+    // =========================================================================
+    logic        xs_snap_watch_en;
+    logic [63:0] xs_snap_watch_pc;
+    logic        xs_snap_en;
+    longint      xs_snap_cycle_q;
+    logic [63:0] xs_snap_cap_pc_r;
+    logic [63:0] xs_snap_cap_pc_r1;
+    longint      xs_snap_cap_cycle_r;
+    longint      xs_snap_ev      [0:3][0:1];   // [class][fresh]
+    longint      xs_snap_prevok  [0:3];        // stale, but previous capture was fresh
+    longint      xs_snap_age_sum [0:3];
+    longint      xs_snap_age_max [0:3];
+    longint      xs_snap_w_ev, xs_snap_w_fresh, xs_snap_w_pred_taken;
+    longint      xs_snap_w_btbhit, xs_snap_w_offmatch;
+    longint      xs_snap_w_by_cls [0:3];
+    longint      xs_snap_w_cap_hist [bit [63:0]];
+
+    logic        xs_snap_event_c;
+    logic [1:0]  xs_snap_cls_c;
+    logic        xs_snap_fresh_c;
+    logic        xs_snap_prev_fresh_c;
+
+    initial begin
+        xs_snap_watch_en = ($value$plusargs("SNAPWATCH=%h", xs_snap_watch_pc) != 0);
+        if (!xs_snap_watch_en) xs_snap_watch_pc = 64'hFFFFFFFF_FFFFFFFF;
+        xs_snap_en = xs_snap_watch_en ||
+                     $test$plusargs("PERF_PROFILE") ||
+                     $test$plusargs("STAT_DUMP");
+        xs_snap_cycle_q = 0;
+        xs_snap_cap_pc_r = '0; xs_snap_cap_pc_r1 = '0; xs_snap_cap_cycle_r = 0;
+        for (int c = 0; c < 4; c++) begin
+            xs_snap_ev[c][0] = 0; xs_snap_ev[c][1] = 0;
+            xs_snap_prevok[c] = 0;
+            xs_snap_age_sum[c] = 0; xs_snap_age_max[c] = 0;
+            xs_snap_w_by_cls[c] = 0;
+        end
+        xs_snap_w_ev = 0; xs_snap_w_fresh = 0; xs_snap_w_pred_taken = 0;
+        xs_snap_w_btbhit = 0; xs_snap_w_offmatch = 0;
+    end
+
+    // Emit cycle of a packet whose kept slots include a conditional control:
+    // the cycle its prediction snapshot is consumed by pred_checker.
+    assign xs_snap_event_c =
+        f2_work_valid_c && f2_data_valid && f2_will_emit_c &&
+        !fe_stall && !redirect_valid &&
+        predecode_ctl_found_c &&
+        (predecode_ctl_type_c == BT_COND) &&
+        (xs_pd_ctl_slot_c < xs_final_count_c);
+    assign xs_snap_cls_c =
+        consume_remainder_c   ? 2'd0 :
+        (consumed_remainder_r ? 2'd1 :
+        (straddle_detected_c  ? 2'd2 : 2'd3));
+    assign xs_snap_fresh_c =
+        (xs_snap_cap_pc_r[63:6] == predecode_ctl_pc_c[63:6]) &&
+        (xs_snap_cap_pc_r[5:0]  <= predecode_ctl_pc_c[5:0]);
+    assign xs_snap_prev_fresh_c =
+        (xs_snap_cap_pc_r1[63:6] == predecode_ctl_pc_c[63:6]) &&
+        (xs_snap_cap_pc_r1[5:0]  <= predecode_ctl_pc_c[5:0]);
+
+    always @(posedge clk) begin
+        if (rst_n && xs_snap_en) begin
+            xs_snap_cycle_q <= xs_snap_cycle_q + 1;
+            if (xs_snap_event_c) begin
+                automatic longint age = xs_snap_cycle_q - xs_snap_cap_cycle_r;
+                xs_snap_ev[xs_snap_cls_c][xs_snap_fresh_c] <=
+                    xs_snap_ev[xs_snap_cls_c][xs_snap_fresh_c] + 1;
+                if (!xs_snap_fresh_c && xs_snap_prev_fresh_c)
+                    xs_snap_prevok[xs_snap_cls_c] <=
+                        xs_snap_prevok[xs_snap_cls_c] + 1;
+                xs_snap_age_sum[xs_snap_cls_c] <=
+                    xs_snap_age_sum[xs_snap_cls_c] + age;
+                if (age > xs_snap_age_max[xs_snap_cls_c])
+                    xs_snap_age_max[xs_snap_cls_c] <= age;
+                if (xs_snap_watch_en &&
+                    (predecode_ctl_pc_c == xs_snap_watch_pc)) begin
+                    xs_snap_w_ev <= xs_snap_w_ev + 1;
+                    if (xs_snap_fresh_c) xs_snap_w_fresh <= xs_snap_w_fresh + 1;
+                    if (bp_branch_found_c && bp_taken_c)
+                        xs_snap_w_pred_taken <= xs_snap_w_pred_taken + 1;
+                    if (xs_f2_btb_hit_r) xs_snap_w_btbhit <= xs_snap_w_btbhit + 1;
+                    if (xs_f2_btb_hit_r &&
+                        (xs_f2_btb_offset_r == predecode_ctl_pc_c[5:0]) &&
+                        (predecode_ctl_pc_c[63:6] == f2_work_pc_c[63:6]))
+                        xs_snap_w_offmatch <= xs_snap_w_offmatch + 1;
+                    xs_snap_w_by_cls[xs_snap_cls_c] <=
+                        xs_snap_w_by_cls[xs_snap_cls_c] + 1;
+                    // Associative-array update uses blocking assignment: DSim
+                    // rejects NBA to assoc arrays (Verilator tolerates it).
+                    // Sim-only histogram, no same-cycle reader, so blocking is
+                    // semantically identical here (matches the l2p_shadow idiom).
+                    if (xs_snap_w_cap_hist.exists(xs_snap_cap_pc_r))
+                        xs_snap_w_cap_hist[xs_snap_cap_pc_r] =
+                            xs_snap_w_cap_hist[xs_snap_cap_pc_r] + 1;
+                    else
+                        xs_snap_w_cap_hist[xs_snap_cap_pc_r] = 1;
+                end
+            end
+            // Mirror of the bpu.sv F2 snapshot capture condition.
+            if (!redirect_valid && !fe_stall && xs_bpu_f2_capture_c) begin
+                xs_snap_cap_pc_r1   <= xs_snap_cap_pc_r;
+                xs_snap_cap_pc_r    <= xs_req_pc_c;
+                xs_snap_cap_cycle_r <= xs_snap_cycle_q;
+            end
+        end
+    end
+
+    // =========================================================================
+    // +UOCTRACE : sim-only per-delivered-group trace dump for the offline
+    // uop-cache-REPACK gate (doc/uoc_repack_gate_2026-06-13.md). One [UOCG]
+    // line per delivery cycle (fetch_count != 0, i.e. packet_out_valid drained
+    // packet_buf_head to decode); one [UOCF] line per backend/commit flush
+    // (redirect_valid -> trace restart). Reuses the already-validated batch-#4
+    // group-end cause classifier (line 1209+) verbatim; adds zero synthesizable
+    // logic; ENABLE-off (no +UOCTRACE) the block is inert (no side effects on
+    // any net). end-cause codes match the offline model:
+    //   0 taken-ctl  1 line-complete-seq  2 redirect-tail  3 backend-zeroout
+    //   4 straddle/guard  5 other  6 full-4 (not a partial emit)
+    // Per-slot raw insn is dumped so the model can detect serializing
+    // (CSR/FENCE/AMO) and indirect (JALR/RET) segment-stops itself.
+    logic        xs_uoctrace_en;
+    logic [2:0]  xs_uoctrace_cause_c;
+    initial begin
+        xs_uoctrace_en = $test$plusargs("UOCTRACE");
+    end
+    assign xs_uoctrace_cause_c =
+        xs_b4_end_taken_c         ? 3'd0 :
+        xs_b4_end_line_complete_c ? 3'd1 :
+        xs_b4_end_redirect_tail_c ? 3'd2 :
+        xs_b4_end_backend_zeroout_c ? 3'd3 :
+        xs_b4_end_straddle_guard_c ? 3'd4 :
+        xs_b4_partial_c           ? 3'd5 : 3'd6;
+
+    always @(posedge clk) begin
+        if (rst_n && xs_uoctrace_en) begin
+            if (redirect_valid)
+                $display("[UOCF] cyc=%0d", xs_snap_cycle_q);
+            if (fetch_count != 3'd0) begin
+                $display("[UOCG] cyc=%0d hpc=%016h n=%0d cause=%0d line=%013h oc=%b takenmask=%0d p0=%016h r0=%b i0=%08h p1=%016h r1=%b i1=%08h p2=%016h r2=%b i2=%08h p3=%016h r3=%b i3=%08h tgt=%016h",
+                         xs_snap_cycle_q,
+                         packet_buf_head.fetch_pc[0],
+                         fetch_count,
+                         xs_uoctrace_cause_c,
+                         packet_buf_head.ifu_line_addr,
+                         packet_buf_head.ftq_owner_complete,
+                         packet_buf_head.fetch_bp_taken,
+                         packet_buf_head.fetch_pc[0],
+                         packet_buf_head.fetch_is_rvc[0],
+                         packet_buf_head.fetch_insn[0],
+                         packet_buf_head.fetch_pc[1],
+                         packet_buf_head.fetch_is_rvc[1],
+                         packet_buf_head.fetch_insn[1],
+                         packet_buf_head.fetch_pc[2],
+                         packet_buf_head.fetch_is_rvc[2],
+                         packet_buf_head.fetch_insn[2],
+                         packet_buf_head.fetch_pc[3],
+                         packet_buf_head.fetch_is_rvc[3],
+                         packet_buf_head.fetch_insn[3],
+                         packet_buf_head.fetch_bp_target[xs_b4_last_slot_c]);
+            end
+        end
+    end
+
+    final begin
+        if (xs_snap_en) begin
+            $display("");
+            $display("=== XSNAP F2 SNAPSHOT CONSUMPTION PROBE ===");
+            for (int c = 0; c < 4; c++) begin
+                automatic longint tot = xs_snap_ev[c][0] + xs_snap_ev[c][1];
+                $display("xsnap cls%0d (%s) events fresh/stale/prevok: %0d / %0d / %0d  age_sum/max: %0d / %0d",
+                         c,
+                         (c == 0) ? "stitch" :
+                         (c == 1) ? "post-stitch" :
+                         (c == 2) ? "straddle-trim" : "normal",
+                         xs_snap_ev[c][1], xs_snap_ev[c][0], xs_snap_prevok[c],
+                         xs_snap_age_sum[c], xs_snap_age_max[c]);
+                if (tot == 0) continue;
+            end
+            if (xs_snap_watch_en) begin
+                $display("xsnap watch=%016h events=%0d fresh=%0d pred_taken=%0d btbhit=%0d offmatch=%0d cls0/1/2/3=%0d/%0d/%0d/%0d",
+                         xs_snap_watch_pc, xs_snap_w_ev, xs_snap_w_fresh,
+                         xs_snap_w_pred_taken, xs_snap_w_btbhit, xs_snap_w_offmatch,
+                         xs_snap_w_by_cls[0], xs_snap_w_by_cls[1],
+                         xs_snap_w_by_cls[2], xs_snap_w_by_cls[3]);
+                begin
+                    automatic bit [63:0] k;
+                    if (xs_snap_w_cap_hist.first(k)) begin
+                        do begin
+                            $display("xsnap watch cap_pc %016h : %0d",
+                                     k, xs_snap_w_cap_hist[k]);
+                        end while (xs_snap_w_cap_hist.next(k));
+                    end
+                end
             end
         end
     end
@@ -2364,6 +2860,59 @@ module fetch_frontend_profiler
                      xs_runahead_redirect_match_cycles);
             $display("xs runahead dup alloc block : %0d",
                      xs_runahead_duplicate_alloc_blocked_cycles);
+            $display("xs tbb uncov events         : %0d", xs_tbb_events[0]);
+            $display("xs tbb uncov bubble sum     : %0d", xs_tbb_bubble_sum[0]);
+            $display("xs tbb uncov hist 0,1,2,3,4+: %0d,%0d,%0d,%0d,%0d",
+                     xs_tbb_hist[0][0], xs_tbb_hist[0][1], xs_tbb_hist[0][2],
+                     xs_tbb_hist[0][3], xs_tbb_hist[0][4]);
+            $display("xs tbb cov events           : %0d", xs_tbb_events[1]);
+            $display("xs tbb cov bubble sum       : %0d", xs_tbb_bubble_sum[1]);
+            $display("xs tbb cov hist 0,1,2,3,4+  : %0d,%0d,%0d,%0d,%0d",
+                     xs_tbb_hist[1][0], xs_tbb_hist[1][1], xs_tbb_hist[1][2],
+                     xs_tbb_hist[1][3], xs_tbb_hist[1][4]);
+            $display("xs tbb aborted events       : %0d", xs_tbb_aborted_events);
+            $display("xs ra opp cycles            : %0d", xs_ra_opp_cycles);
+            $display("xs ra candidate cycles      : %0d", xs_ra_cand_cycles);
+            $display("xs ra term fail/first demand_alloc     : %0d %0d",
+                     xs_ra_term_fail[0], xs_ra_term_first[0]);
+            $display("xs ra term fail/first backend_redirect : %0d %0d",
+                     xs_ra_term_fail[1], xs_ra_term_first[1]);
+            $display("xs ra term fail/first bpu_redirect     : %0d %0d",
+                     xs_ra_term_fail[2], xs_ra_term_first[2]);
+            $display("xs ra term fail/first f1_invalid       : %0d %0d",
+                     xs_ra_term_fail[3], xs_ra_term_first[3]);
+            $display("xs ra term fail/first frontend_hold    : %0d %0d",
+                     xs_ra_term_fail[4], xs_ra_term_first[4]);
+            $display("xs ra term fail/first packet_buf_full  : %0d %0d",
+                     xs_ra_term_fail[5], xs_ra_term_first[5]);
+            $display("xs ra term fail/first icq_full         : %0d %0d",
+                     xs_ra_term_fail[6], xs_ra_term_first[6]);
+            $display("xs ra term fail/first ftq_not_ready    : %0d %0d",
+                     xs_ra_term_fail[7], xs_ra_term_first[7]);
+            $display("xs ra term fail/first remainder_valid  : %0d %0d",
+                     xs_ra_term_fail[8], xs_ra_term_first[8]);
+            $display("xs ra term fail/first line_straddle    : %0d %0d",
+                     xs_ra_term_fail[9], xs_ra_term_first[9]);
+            $display("xs ra term fail/first consume_rem      : %0d %0d",
+                     xs_ra_term_fail[10], xs_ra_term_first[10]);
+            $display("xs ra term fail/first consumed_rem     : %0d %0d",
+                     xs_ra_term_fail[11], xs_ra_term_first[11]);
+            $display("xs ra term fail/first not_delivered    : %0d %0d",
+                     xs_ra_term_fail[12], xs_ra_term_first[12]);
+            $display("xs ra term fail/first owner_not_live   : %0d %0d",
+                     xs_ra_term_fail[13], xs_ra_term_first[13]);
+            $display("xs ra term fail/first owner_complete   : %0d %0d",
+                     xs_ra_term_fail[14], xs_ra_term_first[14]);
+            $display("xs ra term fail/first not_direct       : %0d %0d",
+                     xs_ra_term_fail[15], xs_ra_term_first[15]);
+            $display("xs ra term fail/first past_ctl         : %0d %0d",
+                     xs_ra_term_fail[16], xs_ra_term_first[16]);
+            $display("xs ra term fail/first budget_exceeded  : %0d %0d",
+                     xs_ra_term_fail[17], xs_ra_term_first[17]);
+            $display("xs ra term fail/first pending_occupied : %0d %0d",
+                     xs_ra_term_fail[18], xs_ra_term_first[18]);
+            $display("xs ra term fail/first next_owner_match : %0d %0d",
+                     xs_ra_term_fail[19], xs_ra_term_first[19]);
             $display("xs ftq depth gt1 cycles     : %0d",
                      xs_ftq_depth_gt1_cycles);
             $display("xs icq future head block    : %0d",
@@ -2708,6 +3257,26 @@ module fetch_frontend_profiler
                      xs_post_delivery_dup_take_remainder_cycles);
             $display("xs post delivery dup other  : %0d",
                      xs_post_delivery_dup_other_cycles);
+            $display("xs b4 partial emits         : %0d",
+                     xs_b4_partial_cycles);
+            $display("xs b4 end taken ctl         : %0d",
+                     xs_b4_end_taken_cycles);
+            $display("xs b4 end line complete seq : %0d",
+                     xs_b4_end_line_complete_cycles);
+            $display("xs b4 end redirect tail     : %0d",
+                     xs_b4_end_redirect_tail_cycles);
+            $display("xs b4 end backend zeroout   : %0d",
+                     xs_b4_end_backend_zeroout_cycles);
+            $display("xs b4 end straddle guard    : %0d",
+                     xs_b4_end_straddle_guard_cycles);
+            $display("xs b4 end other             : %0d",
+                     xs_b4_end_other_cycles);
+            $display("xs b4 donor f2 now          : %0d",
+                     xs_b4_donor_f2_now_cycles);
+            $display("xs b4 donor icq flight      : %0d",
+                     xs_b4_donor_icq_flight_cycles);
+            $display("xs b4 donor unrequested     : %0d",
+                     xs_b4_donor_unrequested_cycles);
             $display("recoverable top F1 PCs:");
             for (int i = 0; i < XS_CATCHUP_TOPN; i++) begin
                 if (xs_catchup_top_count[i] != 0) begin
@@ -2876,6 +3445,25 @@ bind fetch_top fetch_frontend_profiler u_fetch_frontend_profiler (
     .ifu_runahead_redirect_match_c   (ifu_runahead_redirect_match_c),
     .ifu_runahead_duplicate_alloc_blocked_c(ifu_runahead_duplicate_alloc_blocked_c),
     .ifu_runahead_depth_gt1_c        (ifu_runahead_depth_gt1_c),
-    .itlb_miss_inflight              (instr_translation_stall)
+    .itlb_miss_inflight              (instr_translation_stall),
+    .icq_full                        (icq_full),
+    .ftq_enq_ready                   (ftq_enq_ready),
+    .remainder_valid                 (remainder_valid_r),
+    .ifu_frontend_hold_in            (u_ifu.frontend_hold_i),
+    .ifu_required_ftq_need_alloc_c   (u_ifu.required_ftq_need_alloc_c),
+    .ifu_owner_live_registered_c     (u_ifu.owner_live_registered_c),
+    .ifu_runahead_target_valid_c     (u_ifu.runahead_target_valid_c),
+    .ifu_runahead_target_direct_c    (u_ifu.runahead_target_direct_c),
+    .ifu_runahead_target_before_ctl_c(u_ifu.runahead_target_before_ctl_c),
+    .ifu_runahead_budget_avail_c     (u_ifu.runahead_budget_avail_c),
+    .ifu_runahead_next_owner_match_c (u_ifu.runahead_next_owner_match_c),
+    .ifu_runahead_candidate_c        (u_ifu.runahead_candidate_c),
+    .icq_count                       (icq_count),
+    .xs_req_pc_c                     (req_pc_c),
+    .xs_bpu_f2_capture_c             (bpu_f2_capture_c),
+    .xs_f2_btb_hit_r                 (f2_btb_hit_r),
+    .xs_f2_btb_offset_r              (f2_btb_offset_r),
+    .xs_pd_ctl_slot_c                (predecode_ctl_slot),
+    .xs_final_count_c                (final_count)
 );
 `endif

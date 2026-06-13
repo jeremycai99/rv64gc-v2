@@ -595,6 +595,14 @@ module tb_top
     integer issue_stall_operand_cyc;   // entries valid but no src ready
     integer issue_stall_fu_cyc;        // operands ready but FU suppress dropped grant
     integer issue_stall_arb_cyc;       // eligible_count > NUM_SELECT (selection ceiling)
+    // F1 pre-check (sim-only): cycles where an IQ2 FP-arith candidate was a
+    // valid select but its grant was dropped ONLY by the CDB[3] completion-
+    // collision suppress terms (fpu_out_valid / div_valid_out /
+    // div_hold_valid_r), i.e. NOT by the genuine FPU-accept backpressure
+    // (fpu_req_valid_r && !fpu_ready) nor a CSR/DIV-busy hold.  This is the
+    // recoverable-slot population the F1 FP-aware suppress reclaims (it should
+    // track the 21-63% fu_contention on the FP rows).  Inert by default.
+    integer fpu_b2b_lost_cyc;
     integer iq0_operand_stall_cyc, iq1_operand_stall_cyc, iq2_operand_stall_cyc;
     integer iq0_arb_loss_cyc, iq1_arb_loss_cyc, iq2_arb_loss_cyc;
     integer iq0_issue_uops, iq1_issue_uops, iq2_issue_uops;
@@ -1264,6 +1272,7 @@ module tb_top
             issue_stall_operand_cyc <= 0;
             issue_stall_fu_cyc      <= 0;
             issue_stall_arb_cyc     <= 0;
+            fpu_b2b_lost_cyc        <= 0;
             iq0_operand_stall_cyc   <= 0;
             iq1_operand_stall_cyc   <= 0;
             iq2_operand_stall_cyc   <= 0;
@@ -2239,6 +2248,31 @@ module tb_top
                 if (any_iq_operand_stall) issue_stall_operand_cyc <= issue_stall_operand_cyc + 1;
                 if (any_iq_fu_stall)      issue_stall_fu_cyc      <= issue_stall_fu_cyc + 1;
                 if (any_iq_arb_stall)     issue_stall_arb_cyc     <= issue_stall_arb_cyc + 1;
+            end
+
+            // F1 pre-check counter: an IQ2 FP-arith candidate was a valid
+            // select but its grant was dropped ONLY by the CDB[3] completion-
+            // collision terms (fpu_out_valid / div_valid_out / div_hold_valid_r),
+            // NOT by the genuine FPU-accept backpressure or a CSR/DIV-busy hold.
+            // Recompute the non-collision suppress reasons here (mirrors
+            // rv64gc_core_top:2409) so the count is the recoverable population
+            // the F1 fix reclaims.  Independent of FPU_PIPELINED_ISSUE_ENABLE
+            // so it reads the same baseline population in either arm.
+            begin : fpu_b2b_lost_probe
+                automatic logic cand_fp;
+                automatic logic accept_bp;     // genuine FPU-accept backpressure
+                automatic logic collision_only;
+                cand_fp = u_core.iq2_issue_candidate_valid_s[0] &&
+                          u_core.iq2_issue_data_s[0].is_fp_op;
+                // FPU cannot accept a new op this cycle (request reg occupied
+                // and FPU not ready): the real, non-recoverable backpressure.
+                accept_bp = u_core.fpu_req_valid_r && !u_core.fpu_ready;
+                // Grant dropped purely by the completion-collision terms.
+                collision_only = cand_fp && !accept_bp &&
+                                 (u_core.fpu_out_valid ||
+                                  u_core.div_valid_out ||
+                                  u_core.div_hold_valid_r);
+                if (collision_only) fpu_b2b_lost_cyc <= fpu_b2b_lost_cyc + 1;
             end
 
             begin : bottleneck_profile
@@ -5450,6 +5484,7 @@ module tb_top
             $display("Issue-stall classification (cycle-based, OR across all IQs):");
             $display("  operand_not_ready: %0d", issue_stall_operand_cyc);
             $display("  fu_contention   : %0d", issue_stall_fu_cyc);
+            $display("  fpu_b2b_lost    : %0d", fpu_b2b_lost_cyc);
             $display("  arb_loss        : %0d", issue_stall_arb_cyc);
             $display("Issue queue detail:");
             $display("  iq0 operand/arb/issued/eligible_avg: %0d / %0d / %0d / %0d.%02d",
@@ -8999,8 +9034,21 @@ module tb_top
 
     // =========================================================================
     // Simulation memory instantiation
+    //
+    // MEM_SIZE_BYTES must cover the full physical footprint of the bare-metal
+    // workloads, NOT just their load image: crt0 puts the stack top at
+    // 0x87F8_0000 (offset 127.5 MB above the 0x8000_0000 base).  sim_memory
+    // indexes its array with mem_req_addr[$clog2(MEM_SIZE)-1:0], so any
+    // address above MEM_SIZE wraps (mod MEM_SIZE) onto the low image.  With
+    // the old 2 MB default the stack aliased the top of bss/heap (offset
+    // ~1.5 MB mod 2 MB): invisible with the 2 MB L2 (no post-warmup memory
+    // traffic at all), but any configuration that actually evicts/refills
+    // (e.g. L2 capacity A/Bs) corrupts stack<->data lines through the
+    // backing store.  128 MB covers the stack and matches tb_linux.
     // =========================================================================
-    sim_memory u_mem (
+    sim_memory #(
+        .MEM_SIZE_BYTES  (128 * 1024 * 1024)
+    ) u_mem (
         .clk             (clk),
         .rst_n           (rst_n),
 

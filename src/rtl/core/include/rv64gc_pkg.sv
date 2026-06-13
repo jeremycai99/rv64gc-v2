@@ -177,6 +177,79 @@ package rv64gc_pkg;
     // response arrives this cycle (fill_pend clear is registered).
     // 1'b0 = legacy registered dispatch (byte-identical baseline).
     localparam logic L2_FILL_COMB_REQ_ENABLE = 1'b0;
+    // IFU dup-hold cursor fix A -- straddle re-extraction: an emit whose raw
+    // extraction hit a line-straddling 32-bit instr clears same_owner_continue
+    // and owner_complete (pred_checker), so no structured cursor-advance term
+    // fires and the f1_pc_r fallback re-lands on the just-emitted PC: one dead
+    // cycle vetoed by ifu_duplicate_guard per straddle emit.  When set, an
+    // explicit advance term steps the work cursor to seq_next_pc (the straddle
+    // PC, same line by construction) ahead of the fallback; the remainder
+    // machinery stitches the straddling instr unchanged.  1'b0 = legacy.
+    localparam logic IFU_STRADDLE_ADVANCE_FIX_ENABLE = 1'b1;
+    // IFU dup-hold cursor fix B -- consumed-remainder echo: the cycle after a
+    // remainder consume-emit, the consumed_remainder_r cursor-mux branch
+    // outranks same-owner advance and re-loads the PC being emitted that very
+    // cycle: one dead cycle, the day-late dup-advance then redoes the same
+    // step.  When set, same-owner advance outranks the echo branch AND the F1
+    // re-pin to post_remainder_pc_r is skipped under the identical condition,
+    // keeping f1_pc_r and the work cursor in lockstep (a divergence would let
+    // required_ftq_need_alloc_c allocate a fresh owner at an already-emitted
+    // PC -- a double-enqueue the owner-tagged guard cannot catch).
+    // 1'b0 = legacy echo.
+    localparam logic IFU_REMAINDER_ECHO_FIX_ENABLE = 1'b1;
+    // Loop-predictor exact spec-count hardening: the loop-exit corrector
+    // needs an exact speculative trip count at lookup, but spec updates
+    // register at end-of-cycle and the same-cycle count-bypass is gated by a
+    // learned confidence (loop_bypass_conf) trained up only by mispredicted
+    // correct-limit exits and down by correct exits -- a homeostat that
+    // re-equilibrates at quantized exit-mispredict plateaus (50%/75%) when
+    // the cursor fixes shrink the lookup-to-update distance at line
+    // crossings.  When set: (a) the same-cycle bypass becomes unconditional
+    // (it is deterministic bookkeeping of an already-made prediction, not a
+    // speculation -- the conf gate is what manufactures the plateaus), and
+    // (b) a 1-deep pending register makes a loop spec update that fired last
+    // cycle visible to this cycle's lookups even when the end-of-cycle array
+    // write did not happen (truncated emit at a line crossing); the pending
+    // state honors the flush-copy restore (capture gated !flush, dies with
+    // the flush, never leaks wrong-path counts into the restored state).
+    // 1'b0 = legacy conf-gated homeostat (bit-identical baseline).
+    localparam logic LOOP_SPEC_COUNT_EXACT_ENABLE = 1'b0;
+    // Loop-predictor commit-side spec-count no-clobber (FIX-THEN-PROMOTE
+    // piece 2, 2026-06-12).  Measured root cause of the 4-workload mispredict
+    // regression under the cursor fixes (and of a pre-existing exit-misp
+    // floor in BOTH arms): on a committed loop exit the update path
+    // unconditionally wrote loop_spec_count <= 0, a commit-order sync that is
+    // only correct when no younger instance is in flight.  The speculative
+    // count stream is fetch-order self-consistent (the exit's own spec update
+    // resets it, subsequent instances count from there) and every divergence
+    // is repaired by the flush-copy restore, so the no-flush commit-side
+    // reset can only destroy valid in-flight counts of the NEXT loop
+    // instance.  The legacy dup-hold dead cycles masked the race by delaying
+    // the next instance's fetch past the exit commit; the cursor fixes
+    // removed that delay and flipped the race (event-exact first-divergence
+    // traces: log/piece2_runs/lpwtrace_*).  When set, the commit-side
+    // loop_spec_count reset on exit fires only under flush (where commit
+    // order == fetch order by squash).  1'b0 = legacy clobber (bit-identical
+    // baseline).
+    localparam logic LOOP_SPEC_COMMIT_NOCLOBBER_ENABLE = 1'b1;
+    // Commit TAGE-update spill queue (FIX-THEN-PROMOTE piece 2b, 2026-06-12).
+    // The commit-side trainer presents at most ONE conditional-branch update
+    // per commit batch (oldest wins); a 4-wide batch containing two or more
+    // committed conditionals silently drops the younger ones.  Tight loops
+    // with 2-3 conditionals per 4-instr window (embench-ud 0x233c+0x2342,
+    // minver 0x2064/0x206e/0x2078) chronically starve whichever branch sits
+    // younger in the batch, and the batch PHASE is set by frontend packet
+    // boundaries -- the cursor fixes shifted it, collapsing ud's loop-
+    // corrector training (visible updates 64,199 -> 60,476 for an identical
+    // committed instruction stream; conf-3 occupancy 13,755 -> 1,536).  When
+    // set, all committed conditionals of a batch enter a strict-order FIFO
+    // drained 1/cycle into the TAGE update port (flow-through when empty, so
+    // the common 1-cond case is cycle-identical); drops occur only on FIFO
+    // overflow.  Commit-side updates are post-architectural, so delayed
+    // presentation is squash-safe and each entry carries its own GHR.
+    // 1'b0 = legacy oldest-only (bit-identical baseline).
+    localparam logic TAGE_UPDATE_SPILL_ENABLE = 1'b0;
+    localparam int   TAGE_UPDATE_SPILL_DEPTH  = 8;
 
     // L2 Cache: 2 MB, 8-way, 64B lines, 32 MSHRs, 8-cycle hit
     localparam int L2_SIZE        = 2097152;

@@ -127,6 +127,9 @@ module fetch_top
     logic        f2_bpu_redirect_scrub_r;
     logic        req_redirect_c;
     logic        line_straddle_advance_c;
+    // Raw-extraction straddle flag (instr_boundary, declared with the F2
+    // boundary signals): consumed by the IFU cursor policy below.
+    logic        straddle_detected;
 
     // Sequential next PC: computed from how many bytes F2 consumed
     logic [63:0] f2_seq_next_pc;
@@ -354,6 +357,7 @@ module fetch_top
         .successor_req_valid_i                    (successor_req_valid_c),
         .successor_req_pc_i                       (successor_req_pc_c),
         .line_straddle_advance_i                  (line_straddle_advance_c),
+        .straddle_detected_i                      (straddle_detected),
         .consume_remainder_i                      (consume_remainder_c),
         .owner_complete_i                         (f2_work_owner_complete_c),
         .packet_valid_i                           (packet_buf_in.valid),
@@ -847,7 +851,6 @@ module fetch_top
     logic [2:0]  subgroup_split_type_c;
     logic [63:0] subgroup_split_pc_c;
     logic [63:0] subgroup_split_target_c;
-    logic        straddle_detected;
     logic [63:0] straddle_pc;
 
     instr_boundary u_instr_boundary (

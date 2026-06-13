@@ -23,6 +23,7 @@ module mmu_mem_profiler
     input  wire        ptw_dtlb_fill,
     input  wire        ptw_itlb_fault,
     input  wire        ptw_dtlb_fault,
+    input  wire        ptw_flush_abort,
     input  wire [63:0] satp_raw,
     // Family 3: flushes
     input  wire        commit_flush_valid,
@@ -38,8 +39,12 @@ module mmu_mem_profiler
     logic [63:0] satp_prev;
     logic        ptw_busy_r;
     wire         ptw_walk_start = ptw_itlb_req_fire || ptw_dtlb_req_fire;
+    // walk_end must also cover flush-aborted walks: ptw.sv:269-277 forces
+    // S_IDLE on flush_i/translation_flush_i without ever emitting a fill or
+    // a fault, which left ptw_busy_r stuck (boot read ~93% busy).
     wire         ptw_walk_end   = ptw_itlb_fill || ptw_dtlb_fill
-                                  || ptw_itlb_fault || ptw_dtlb_fault;
+                                  || ptw_itlb_fault || ptw_dtlb_fault
+                                  || ptw_flush_abort;
     wire         satp_changed   = (satp_raw != satp_prev);
 
     // ---- Family 1: I-TLB / PTW ----
@@ -107,6 +112,7 @@ bind rv64gc_core_top mmu_mem_profiler u_mmu_mem_profiler (
     .ptw_dtlb_fill       (u_ptw.dtlb_fill_valid_o),
     .ptw_itlb_fault      (u_ptw.fault_valid_o &&  u_ptw.fault_is_itlb_o),
     .ptw_dtlb_fault      (u_ptw.fault_valid_o && !u_ptw.fault_is_itlb_o),
+    .ptw_flush_abort     (u_ptw.flush_i || u_ptw.translation_flush_i),
     .satp_raw            (csr_satp),
     .commit_flush_valid  (commit_flush.valid),
     .bru_flush_valid     (bru_flush.valid),

@@ -50,6 +50,7 @@ module ifu
     input  wire                          successor_req_valid_i,
     input  wire [63:0]                   successor_req_pc_i,
     input  wire                          line_straddle_advance_i,
+    input  wire                          straddle_detected_i,
     input  wire                          consume_remainder_i,
     input  wire                          owner_complete_i,
     input  wire                          packet_valid_i,
@@ -156,6 +157,7 @@ module ifu
     logic        work_same_owner_emit_advance_c;
     logic        work_same_owner_dup_advance_c;
     logic        work_same_owner_advance_c;
+    logic        work_straddle_emit_advance_c;
     logic        work_same_owner_event_c;
     logic        work_undelivered_owner_hold_c;
     logic        pred_control_outside_next_packet_c;
@@ -405,7 +407,7 @@ module ifu
         same_owner_next_owner_safe_c &&
         !line_straddle_advance_i &&
         !consume_remainder_i &&
-        !consumed_remainder_r &&
+        (IFU_REMAINDER_ECHO_FIX_ENABLE || !consumed_remainder_r) &&
         (seq_next_pc_i[63:LINE_BITS] == work_r.line_addr);
     assign work_same_owner_dup_advance_c =
         same_owner_continue_i &&
@@ -424,6 +426,24 @@ module ifu
     assign work_same_owner_advance_c =
         work_same_owner_emit_advance_c ||
         work_same_owner_dup_advance_c;
+    // Dup-hold fix A (straddle re-extraction): a straddle emit clears
+    // same_owner_continue_i and owner_complete_i (pred_checker), defeating
+    // every structured advance term, so the f1_pc_r fallback re-lands on the
+    // just-emitted PC.  Advance to seq_next_pc_i instead (the straddle PC,
+    // same line by construction; for a trimmed packet, the successor of the
+    // last kept slot).  The remainder latched this cycle stitches the
+    // straddling instr unchanged.
+    assign work_straddle_emit_advance_c =
+        IFU_STRADDLE_ADVANCE_FIX_ENABLE &&
+        straddle_detected_i &&
+        seq_valid_i &&
+        will_emit_i &&
+        packet_enq_i &&
+        owner_live_c &&
+        work_r.ftq_valid &&
+        !owner_complete_i &&
+        pred_control_outside_next_packet_c &&
+        same_owner_next_owner_safe_c;
     assign work_undelivered_owner_hold_c =
         work_r.valid &&
         work_r.ftq_valid &&
@@ -602,12 +622,21 @@ module ifu
                     work_pc_next = seq_next_pc_i;
                 else if (consume_remainder_i)
                     work_pc_next = seq_next_pc_i;
-                else if (consumed_remainder_r)
+                // Dup-hold fix B: on the post-remainder emit cycle the echo
+                // branch loses to same-owner advance, else the cursor
+                // re-loads the PC being emitted this very cycle.  Guard is
+                // textually identical to the f1_pc_r re-pin gate so F1 and
+                // the work cursor move together.
+                else if (consumed_remainder_r &&
+                         !(IFU_REMAINDER_ECHO_FIX_ENABLE &&
+                           work_same_owner_advance_c))
                     work_pc_next = post_remainder_pc_r;
                 else if (work_same_owner_advance_c)
                     work_pc_next = seq_next_pc_i;
                 else if (work_undelivered_owner_hold_c)
                     work_pc_next = work_r.pc;
+                else if (work_straddle_emit_advance_c)
+                    work_pc_next = seq_next_pc_i;
                 else
                     work_pc_next = f1_pc_r;
 
@@ -707,7 +736,24 @@ module ifu
                 if (!fe_stall_c) begin
                     if (bpu_redirect_i)
                         f1_pc_r <= bpu_target_i;
-                    else if (consumed_remainder_r)
+                    // Dup-hold fix B companion: skip the re-pin exactly when
+                    // the cursor mux skips the echo branch.  The cursor takes
+                    // same-owner advance only under !work_redirect_o (==
+                    // !bpu_redirect_i here), !work_take_ftq_next_owner_o
+                    // (owner_complete_i excludes it) and !line_straddle/
+                    // !consume_remainder (advance qualifiers), so the two
+                    // guards coincide cycle for cycle.  On that cycle
+                    // next_pc_c is forced to seq_next_pc_i (emit implies
+                    // pc_consumed_i and !duplicate_suppressed_i;
+                    // owner_complete_i=0 blocks successor_req_allowed_c), so
+                    // f1_pc_r lands on the cursor's successor.  A diverged F1
+                    // would let required_ftq_need_alloc_c's (normal_req_pc !=
+                    // work.pc) term allocate a fresh owner at an
+                    // already-emitted PC -- a double-enqueue the owner-tagged
+                    // duplicate guard cannot catch.
+                    else if (consumed_remainder_r &&
+                             !(IFU_REMAINDER_ECHO_FIX_ENABLE &&
+                               work_same_owner_advance_c))
                         f1_pc_r <= post_remainder_pc_r;
                     else
                         f1_pc_r <= next_pc_c;

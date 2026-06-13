@@ -486,29 +486,113 @@ module tage_sc_l
     assign aux_loop_lkp_tag = aux_pc[LOOP_TAG_BITS+1:2];
     assign loop_bypass_enabled = loop_bypass_conf[spec_loop_idx] >= 2'd2;
 
+    // LOOP_SPEC_COUNT_EXACT (gated, pkg localparam): 1-deep pending capture
+    // of a loop spec update that fired last cycle.  The registered spec
+    // update (end of this file) lands in loop_spec_count at end-of-cycle and
+    // is gated on the ctl slot actually emitting (spec_update_valid); a
+    // truncated emit at a line crossing fires loop_spec_update_valid without
+    // the array write, leaving a window in which lookups read a one-stale
+    // count.  The legacy conf-gated bypass papered over that window only
+    // while the loop_bypass_conf homeostat happened to be open.  The pending
+    // register holds the post-update count for exactly one cycle so the
+    // window is covered deterministically; a re-fire of the still-pending
+    // (unwritten) event re-arms it with the same value instead of
+    // double-counting.
+    logic                      loop_spec_pending_valid_r;
+    logic [LOOP_IDX_BITS-1:0]  loop_spec_pending_idx_r;
+    logic [LOOP_CNT_BITS-1:0]  loop_spec_pending_count_r;
+    logic                      loop_spec_bypass_fire_c;
+    logic                      loop_spec_write_fire_c;
+    logic                      loop_spec_pending_refire_c;
+
+    assign loop_spec_bypass_fire_c =
+        loop_spec_update_valid && spec_loop_hit && spec_loop_backward;
+    assign loop_spec_write_fire_c =
+        spec_update_valid && spec_loop_hit && spec_loop_backward;
+    assign loop_spec_pending_refire_c =
+        loop_spec_pending_valid_r &&
+        (loop_spec_pending_idx_r == spec_loop_idx);
+
     always_comb begin
         if (!sim_disable_loop_spec_count) begin
             loop_lookup_count = loop_spec_count[loop_lkp_idx];
             aux_loop_lookup_count = loop_spec_count[aux_loop_lkp_idx];
 
+            // Pending (last-cycle) spec-update override: a loop spec update
+            // that fired last cycle is visible to this cycle's lookups even
+            // when the end-of-cycle array write did not happen.
+            if (LOOP_SPEC_COUNT_EXACT_ENABLE && loop_spec_pending_valid_r) begin
+                if (loop_spec_pending_idx_r == loop_lkp_idx) begin
+                    loop_lookup_count = loop_spec_pending_count_r;
+                end
+                if (loop_spec_pending_idx_r == aux_loop_lkp_idx) begin
+                    aux_loop_lookup_count = loop_spec_pending_count_r;
+                end
+            end
+
+            // Same-cycle count bypass.  With LOOP_SPEC_COUNT_EXACT_ENABLE the
+            // learned conf gate is dropped: the bypass is deterministic
+            // bookkeeping of an already-made prediction, not a speculation.
             if (loop_spec_update_valid &&
                 spec_loop_hit &&
                 spec_loop_backward &&
-                loop_bypass_enabled) begin
+                (LOOP_SPEC_COUNT_EXACT_ENABLE || loop_bypass_enabled)) begin
                 if (spec_loop_idx == loop_lkp_idx) begin
-                    loop_lookup_count = loop_spec_taken
-                        ? loop_spec_count[loop_lkp_idx] + 14'd1
-                        : '0;
+                    if (LOOP_SPEC_COUNT_EXACT_ENABLE &&
+                        loop_spec_pending_refire_c) begin
+                        // Re-fire of the pending (not-yet-written) event
+                        // across a multi-cycle stitch: already counted in the
+                        // pending value -- do not increment again.
+                        loop_lookup_count = loop_spec_pending_count_r;
+                    end else begin
+                        loop_lookup_count = loop_spec_taken
+                            ? loop_lookup_count + 14'd1
+                            : '0;
+                    end
                 end
                 if (spec_loop_idx == aux_loop_lkp_idx) begin
-                    aux_loop_lookup_count = loop_spec_taken
-                        ? loop_spec_count[aux_loop_lkp_idx] + 14'd1
-                        : '0;
+                    if (LOOP_SPEC_COUNT_EXACT_ENABLE &&
+                        loop_spec_pending_refire_c) begin
+                        aux_loop_lookup_count = loop_spec_pending_count_r;
+                    end else begin
+                        aux_loop_lookup_count = loop_spec_taken
+                            ? aux_loop_lookup_count + 14'd1
+                            : '0;
+                    end
                 end
             end
         end else begin
             loop_lookup_count = loop_count[loop_lkp_idx];
             aux_loop_lookup_count = loop_count[aux_loop_lkp_idx];
+        end
+    end
+
+    // Pending capture.  Mirrors the loop_spec_count flush machinery exactly:
+    // the registered spec write is gated !flush and the flush-copy restores
+    // loop_spec_count[i] <= loop_count[i]; the pending register is likewise
+    // captured only when !flush and self-expires after one cycle, so a flush
+    // can never leak a wrong-path pending update into the restored state
+    // (first post-flush cycle always has loop_spec_pending_valid_r == 0).
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            loop_spec_pending_valid_r <= 1'b0;
+            loop_spec_pending_idx_r   <= '0;
+            loop_spec_pending_count_r <= '0;
+        end else begin
+            loop_spec_pending_valid_r <= 1'b0;
+            if (LOOP_SPEC_COUNT_EXACT_ENABLE &&
+                !flush &&
+                !sim_disable_loop_spec_count &&
+                loop_spec_bypass_fire_c &&
+                !loop_spec_write_fire_c) begin
+                loop_spec_pending_valid_r <= 1'b1;
+                loop_spec_pending_idx_r   <= spec_loop_idx;
+                loop_spec_pending_count_r <= loop_spec_pending_refire_c
+                    ? loop_spec_pending_count_r
+                    : (loop_spec_taken
+                        ? loop_spec_count[spec_loop_idx] + 14'd1
+                        : '0);
+            end
         end
     end
 
@@ -771,6 +855,69 @@ module tage_sc_l
             $test$plusargs("STAT_DUMP");
         sim_watch_pc_valid =
             $value$plusargs("LOOPPRED_WATCH_PC=%h", sim_watch_pc);
+    end
+
+    // Per-event watch-PC trace (+LPW_TRACE, needs +LOOPPRED_WATCH_PC=<hex>):
+    // every primary lookup / spec update / commit update / divergent flush
+    // touching the watch PC's loop entry, with per-category indices for
+    // ON/OFF-arm stream alignment (cycle numbers shift between arms; event
+    // indices do not).  First divergence in the value stream = causal site.
+    logic   sim_lpw_trace_en;
+    longint sim_lpw_trace_max;
+    longint sim_lpw_cycle_q;
+    longint sim_lpw_lines_q;
+    longint sim_lpw_n_lkp, sim_lpw_n_spec, sim_lpw_n_upd, sim_lpw_n_flush;
+    initial begin
+        sim_lpw_trace_en = $test$plusargs("LPW_TRACE");
+        if ($value$plusargs("LPW_TRACE_MAX=%d", sim_lpw_trace_max) == 0)
+            sim_lpw_trace_max = 64'd200000;
+        sim_lpw_cycle_q = 0; sim_lpw_lines_q = 0;
+        sim_lpw_n_lkp = 0; sim_lpw_n_spec = 0; sim_lpw_n_upd = 0;
+        sim_lpw_n_flush = 0;
+    end
+    always @(posedge clk) begin
+        if (rst_n && sim_lpw_trace_en && sim_watch_pc_valid) begin
+            automatic logic [LOOP_IDX_BITS-1:0] widx = loop_idx_hash(sim_watch_pc);
+            sim_lpw_cycle_q <= sim_lpw_cycle_q + 1;
+            if (sim_lpw_lines_q < sim_lpw_trace_max) begin
+                if (pc == sim_watch_pc) begin
+                    sim_lpw_n_lkp <= sim_lpw_n_lkp + 1;
+                    sim_lpw_lines_q <= sim_lpw_lines_q + 1;
+                    $display("[LPW-LKP] n=%0d cyc=%0d cnt=%0d lim=%0d conf=%0d byc=%0d hit=%b ovr=%b pred=%b sc=%b ghr=%08h",
+                             sim_lpw_n_lkp, sim_lpw_cycle_q,
+                             loop_lookup_count,
+                             loop_limit[loop_lkp_idx], loop_conf[loop_lkp_idx],
+                             loop_bypass_conf[loop_lkp_idx],
+                             loop_hit, loop_override, pred_taken, sc_pred,
+                             ghr_r[31:0] ^ ghr_r[63:32]);
+                end
+                if (spec_update_valid && (spec_pc == sim_watch_pc)) begin
+                    sim_lpw_n_spec <= sim_lpw_n_spec + 1;
+                    sim_lpw_lines_q <= sim_lpw_lines_q + 1;
+                    $display("[LPW-SPEC] n=%0d cyc=%0d taken=%b flush=%b cnt_b=%0d",
+                             sim_lpw_n_spec, sim_lpw_cycle_q, spec_taken, flush,
+                             loop_spec_count[spec_loop_idx]);
+                end
+                if (update_valid && (update_pc == sim_watch_pc)) begin
+                    sim_lpw_n_upd <= sim_lpw_n_upd + 1;
+                    sim_lpw_lines_q <= sim_lpw_lines_q + 1;
+                    $display("[LPW-UPD] n=%0d cyc=%0d taken=%b misp=%b cnt=%0d spec=%0d lim=%0d conf=%0d byc=%0d",
+                             sim_lpw_n_upd, sim_lpw_cycle_q,
+                             update_taken, update_mispredict,
+                             loop_count[upd_loop_idx],
+                             loop_spec_count[upd_loop_idx],
+                             loop_limit[upd_loop_idx], loop_conf[upd_loop_idx],
+                             loop_bypass_conf[upd_loop_idx]);
+                end
+                if (flush && (loop_spec_count[widx] != loop_count[widx])) begin
+                    sim_lpw_n_flush <= sim_lpw_n_flush + 1;
+                    sim_lpw_lines_q <= sim_lpw_lines_q + 1;
+                    $display("[LPW-FLUSH] n=%0d cyc=%0d spec=%0d cnt=%0d",
+                             sim_lpw_n_flush, sim_lpw_cycle_q,
+                             loop_spec_count[widx], loop_count[widx]);
+                end
+            end
+        end
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -1555,7 +1702,16 @@ module tage_sc_l
                         loop_bypass_conf[upd_loop_idx] <= 2'd0;
                     end
                     loop_count[upd_loop_idx] <= '0;
-                    loop_spec_count[upd_loop_idx] <= '0;
+                    // Commit-side spec reset: a commit-order sync that is
+                    // wrong when younger instances are already in flight
+                    // (their spec fires get silently zeroed).  With
+                    // LOOP_SPEC_COMMIT_NOCLOBBER_ENABLE the reset fires only
+                    // under flush, where the squash makes commit order equal
+                    // fetch order; on a correctly-predicted exit the
+                    // fetch-side spec stream has already reset and re-counted
+                    // (see rv64gc_pkg.sv for the measured race).
+                    if (!LOOP_SPEC_COMMIT_NOCLOBBER_ENABLE || flush)
+                        loop_spec_count[upd_loop_idx] <= '0;
                     loop_dir[upd_loop_idx]   <= update_taken;
                 end
             end else begin

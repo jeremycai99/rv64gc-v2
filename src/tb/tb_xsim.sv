@@ -106,6 +106,206 @@ module tb_xsim;
         end
     endtask
 
+    // Supply census (+CENSUS): commit-width histogram, ROB-occupancy histogram
+    // (8 buckets of 16 entries), and the supply-vs-window cross flags that gate
+    // the G0/G1' frontend package (doc/ipc3x_structural_study_2026-06-10.md
+    // §4.1 step 2).  starved_headroom = rename advanced 0 uops with no backend
+    // stall and ROB count < 96 (window underfed by the frontend).  Sim-only,
+    // plusarg-gated, inert by default.
+    logic        cns_en;
+    longint      cns_cycles;
+    longint      cns_cw_hist  [0:4];
+    longint      cns_rob_hist [0:7];
+    longint      cns_ren_zero, cns_starved_headroom, cns_rob_full, cns_backend_stall;
+    initial begin
+        cns_en = $test$plusargs("CENSUS");
+        cns_cycles = 0; cns_ren_zero = 0; cns_starved_headroom = 0;
+        cns_rob_full = 0; cns_backend_stall = 0;
+        for (int i = 0; i < 5; i++) cns_cw_hist[i]  = 0;
+        for (int i = 0; i < 8; i++) cns_rob_hist[i] = 0;
+    end
+    always @(posedge clk) begin
+        if (rst_n && cns_en) begin
+            automatic int cw = int'(u_tb.u_core.commit_count);
+            automatic int rb = int'(u_tb.u_core.u_rob.count_r) / 16;
+            cns_cycles <= cns_cycles + 1;
+            cns_cw_hist[(cw > 4) ? 4 : cw]  <= cns_cw_hist[(cw > 4) ? 4 : cw] + 1;
+            cns_rob_hist[(rb > 7) ? 7 : rb] <= cns_rob_hist[(rb > 7) ? 7 : rb] + 1;
+            if (u_tb.u_core.ren_count_w == 3'd0) begin
+                cns_ren_zero <= cns_ren_zero + 1;
+                if (!u_tb.u_core.rename_stall &&
+                    (int'(u_tb.u_core.u_rob.count_r) < 96))
+                    cns_starved_headroom <= cns_starved_headroom + 1;
+            end
+            if (u_tb.u_core.u_rob.full)   cns_rob_full      <= cns_rob_full + 1;
+            if (u_tb.u_core.rename_stall) cns_backend_stall <= cns_backend_stall + 1;
+        end
+    end
+    task automatic print_census;
+        if (cns_en && cns_cycles != 0) begin
+            $display("[CENSUS] cycles=%0d cw0=%0d cw1=%0d cw2=%0d cw3=%0d cw4=%0d",
+                     cns_cycles, cns_cw_hist[0], cns_cw_hist[1], cns_cw_hist[2],
+                     cns_cw_hist[3], cns_cw_hist[4]);
+            $display("[CENSUS] rob_occ16=%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d",
+                     cns_rob_hist[0], cns_rob_hist[1], cns_rob_hist[2],
+                     cns_rob_hist[3], cns_rob_hist[4], cns_rob_hist[5],
+                     cns_rob_hist[6], cns_rob_hist[7]);
+            $display("[CENSUS] ren_zero=%0d starved_headroom=%0d rob_full=%0d backend_stall=%0d",
+                     cns_ren_zero, cns_starved_headroom, cns_rob_full, cns_backend_stall);
+        end
+    endtask
+
+    // L2 eviction-path corruption probes (+L2PROBE): one-cycle detectors for
+    // the three statically-identified L2 miss/evict hazards, plus a WT-shadow
+    // coherence checker.  The shadow holds the latest full-line data of every
+    // line the D$ has written through (D$ WTs are always full coherent lines),
+    // i.e. the architecturally-correct memory image for those lines.  Any L2
+    // fill or INSTALL_WB whose installed data differs from the shadow is
+    // corruption entering the hierarchy, printed with line addr + cycle.
+    //   [L2P-DROP]      mem response not consumed (resp lost, MSHR orphaned)
+    //   [L2P-WIPE]      WT accepted in the same cycle its line's INSTALL_WB
+    //                   MSHR installs+deallocates (wb_merge recorded then
+    //                   wiped by the dealloc -> store data lost)
+    //   [L2P-DIRTYLOSS] WT collides cycle-exact with the fill response (data
+    //                   merged via mem_resp_wb_merge_now but dirty_ram is set
+    //                   from the stale registered wb_merge_valid=0)
+    //   [L2P-FILLMM]    installed fill data != shadow (corruption observed)
+    //   [L2P-INSTMM]    INSTALL_WB data != shadow (corruption observed)
+    //   [L2P-WBMM]      evict/inv writeback data != shadow (informational)
+    // Sim-only, plusarg-gated, inert by default.
+    // NOTE: shadow entries carry a written-tag in bit [512] because Verilator
+    // assoc-array reads default-insert on miss (VlAssocArray::at) and the
+    // exists()&&-read short-circuit is not reliable — a bare exists() guard
+    // self-pollutes the array with zero entries (observed).  Default-inserted
+    // entries have tag=0 and are never compared.
+    logic         l2p_en;
+    bit [512:0]   l2p_shadow [bit [63:0]];
+    integer       l2p_pr_drop, l2p_pr_wipe, l2p_pr_dl, l2p_pr_fmm, l2p_pr_imm, l2p_pr_wmm;
+    longint       l2p_wts, l2p_fills, l2p_installs, l2p_wbs;
+    longint       l2p_n_drop, l2p_n_wipe, l2p_n_dirtyloss;
+    longint       l2p_n_fillmm, l2p_n_instmm, l2p_n_wbmm;
+    initial begin
+        l2p_en = $test$plusargs("L2PROBE");
+        l2p_pr_drop = 0; l2p_pr_wipe = 0; l2p_pr_dl = 0;
+        l2p_pr_fmm = 0; l2p_pr_imm = 0; l2p_pr_wmm = 0;
+        l2p_wts = 0; l2p_fills = 0; l2p_installs = 0; l2p_wbs = 0;
+        l2p_n_drop = 0; l2p_n_wipe = 0; l2p_n_dirtyloss = 0;
+        l2p_n_fillmm = 0; l2p_n_instmm = 0; l2p_n_wbmm = 0;
+    end
+    always @(posedge clk) begin
+        if (rst_n && l2p_en) begin
+            automatic bit [63:0]  l2p_k;
+            automatic bit [511:0] l2p_d;
+            automatic bit [512:0] l2p_e;
+            // (0) shadow update: every accepted D$ write-through (full line).
+            //     Must precede the compares (blocking) so a same-cycle merge
+            //     (mem_resp_wb_merge_now) compares against the merged value.
+            if (u_tb.u_core.u_l2_cache.dcache_req_valid &&
+                u_tb.u_core.u_l2_cache.dcache_req_we &&
+                u_tb.u_core.u_l2_cache.dcache_req_ready) begin
+                l2p_shadow[{u_tb.u_core.u_l2_cache.dcache_req_addr[63:6], 6'b0}]
+                    = {1'b1, u_tb.u_core.u_l2_cache.dcache_req_wdata};
+                l2p_wts++;
+            end
+            // (P1) dirty-loss corner of the same-cycle fill/WT merge
+            if (u_tb.u_core.u_l2_cache.mem_resp_wb_merge_now &&
+                !u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_resp_idx].wb_merge_valid) begin
+                l2p_n_dirtyloss++;
+                if (l2p_pr_dl < 60) begin l2p_pr_dl++;
+                    $display("[L2P-DIRTYLOSS] cyc=%0d line=%0h", sim_cycle,
+                             {u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_resp_idx].addr[63:6], 6'b0});
+                end
+            end
+            // (P2) memory response dropped (no WAIT_MEM match or respq blocked)
+            if (u_tb.u_core.u_l2_cache.mem_resp_valid &&
+                !(u_tb.u_core.u_l2_cache.mem_resp_capture &&
+                  u_tb.u_core.u_l2_cache.respq_can_accept)) begin
+                l2p_n_drop++;
+                if (l2p_pr_drop < 60) begin l2p_pr_drop++;
+                    $display("[L2P-DROP] cyc=%0d found=%0b respq_ok=%0b respq_cnt=%0d hitresp=%0b",
+                             sim_cycle,
+                             u_tb.u_core.u_l2_cache.mshr_resp_found,
+                             u_tb.u_core.u_l2_cache.respq_can_accept,
+                             u_tb.u_core.u_l2_cache.respq_count_q,
+                             u_tb.u_core.u_l2_cache.hit_resp_valid);
+                end
+            end
+            // (P3) WT merge recorded into an MSHR that installs+deallocs this cycle
+            if (u_tb.u_core.u_l2_cache.arb_fire &&
+                u_tb.u_core.u_l2_cache.arb_we &&
+                u_tb.u_core.u_l2_cache.mshr_addr_match &&
+                u_tb.u_core.u_l2_cache.mshr_has_install &&
+                (u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_install_idx].addr[63:6] ==
+                 u_tb.u_core.u_l2_cache.arb_addr[63:6])) begin
+                l2p_n_wipe++;
+                if (l2p_pr_wipe < 60) begin l2p_pr_wipe++;
+                    $display("[L2P-WIPE] cyc=%0d line=%0h", sim_cycle,
+                             {u_tb.u_core.u_l2_cache.arb_addr[63:6], 6'b0});
+                end
+            end
+            // (P4) fill-install data vs shadow
+            if (u_tb.u_core.u_l2_cache.mem_resp_capture &&
+                u_tb.u_core.u_l2_cache.respq_can_accept) begin
+                l2p_fills++;
+                l2p_k = {u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_resp_idx].addr[63:6], 6'b0};
+                l2p_e = l2p_shadow[l2p_k];
+                if (l2p_e[512] &&
+                    (u_tb.u_core.u_l2_cache.mem_resp_data_merged != l2p_e[511:0])) begin
+                    l2p_n_fillmm++;
+                    if (l2p_pr_fmm < 60) begin l2p_pr_fmm++;
+                        $display("[L2P-FILLMM] cyc=%0d line=%0h src=%0d got_q0=%0h exp_q0=%0h",
+                                 sim_cycle, l2p_k,
+                                 u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_resp_idx].source,
+                                 u_tb.u_core.u_l2_cache.mem_resp_data_merged[63:0],
+                                 l2p_e[63:0]);
+                    end
+                end
+            end
+            // (P4b) INSTALL_WB data vs shadow
+            if (u_tb.u_core.u_l2_cache.mshr_has_install) begin
+                l2p_installs++;
+                l2p_k = {u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_install_idx].addr[63:6], 6'b0};
+                l2p_d = u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_install_idx].wb_merge_valid ?
+                        u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_install_idx].wb_merge_data :
+                        u_tb.u_core.u_l2_cache.mshr[u_tb.u_core.u_l2_cache.mshr_install_idx].wb_data;
+                l2p_e = l2p_shadow[l2p_k];
+                if (l2p_e[512] && (l2p_d != l2p_e[511:0])) begin
+                    l2p_n_instmm++;
+                    if (l2p_pr_imm < 60) begin l2p_pr_imm++;
+                        $display("[L2P-INSTMM] cyc=%0d line=%0h got_q0=%0h exp_q0=%0h",
+                                 sim_cycle, l2p_k, l2p_d[63:0], l2p_e[63:0]);
+                    end
+                end
+            end
+            // (P5) evict/inv writeback data vs shadow (informational; a WT
+            //      accepted this same cycle for the same line is a benign
+            //      false positive)
+            if (u_tb.u_core.u_l2_cache.mem_req_valid &&
+                u_tb.u_core.u_l2_cache.mem_req_we) begin
+                l2p_wbs++;
+                l2p_k = {u_tb.u_core.u_l2_cache.mem_req_addr[63:6], 6'b0};
+                l2p_e = l2p_shadow[l2p_k];
+                if (l2p_e[512] &&
+                    (u_tb.u_core.u_l2_cache.mem_req_wdata != l2p_e[511:0])) begin
+                    l2p_n_wbmm++;
+                    if (l2p_pr_wmm < 60) begin l2p_pr_wmm++;
+                        $display("[L2P-WBMM] cyc=%0d line=%0h got_q0=%0h exp_q0=%0h",
+                                 sim_cycle, l2p_k,
+                                 u_tb.u_core.u_l2_cache.mem_req_wdata[63:0],
+                                 l2p_e[63:0]);
+                    end
+                end
+            end
+        end
+    end
+    task automatic print_l2probe;
+        if (l2p_en) begin
+            $display("[L2PROBE] wts=%0d fills=%0d installs=%0d wbs=%0d", l2p_wts, l2p_fills, l2p_installs, l2p_wbs);
+            $display("[L2PROBE] drop=%0d wipe=%0d dirtyloss=%0d fillmm=%0d instmm=%0d wbmm=%0d",
+                     l2p_n_drop, l2p_n_wipe, l2p_n_dirtyloss, l2p_n_fillmm, l2p_n_instmm, l2p_n_wbmm);
+        end
+    endtask
+
     // Commit-PC / trap sampler (+PC_SAMPLE): prints the last committed PC every
     // 100K cycles plus the first 20 trap events (cause/epc/tvec).  Sim-only,
     // plusarg-gated, inert by default.  Built to settle where a workload
@@ -408,6 +608,8 @@ module tb_xsim;
                      perf_mcycle, perf_minstret,
                      $itor(perf_minstret) / $itor(perf_mcycle));
             print_memdep;
+            print_census;
+            print_l2probe;
             $finish;
         end
 
@@ -418,6 +620,8 @@ module tb_xsim;
                      perf_mcycle, perf_minstret,
                      $itor(perf_minstret) / $itor(perf_mcycle));
             print_memdep;
+            print_census;
+            print_l2probe;
             $finish;
         end
     end

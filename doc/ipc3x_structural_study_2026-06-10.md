@@ -3,6 +3,9 @@
 **Core:** rv64gc-v2, 4-wide OoO RV64GC (shipping config, ER-off, honest suite).
 **Inputs:** Studies A–D (READ-ONLY RTL + landed 41-workload `+PERF_PROFILE` sweep, `log/onboard_runs/`) + adversarial verification of all 13 proposals. Builds on `doc/perf_lever_study_2_2026-06-10.md`, `doc/bottleneck_map_41w_2026-06-10.md`, `doc/dse_headroom_map_2026-06-07.md`. No new sims were run for this study.
 
+> **2026-06-11 UPDATE — §4 gates fired and ALL resolved:** see `doc/ipc3x_gate_results_2026-06-11.md`.
+> P1 **REFUTED** for the integer roster (rsort/memcpy move 0 under a lat-2 proxy; stream-l2 −19.1% transfers to the FP campaign). Zicond **REFUTED as stated** (three-arm attribution: czero ≈ −1% multiply / −11% mont64-only; median premise factually wrong — GCC already emits zbb max; controls blown ±5–26% by the compiler swap). G0 **NO-GO on the §4.2a direct histogram** (taken-edge bubbles are 0.5–3.3% of cycles; full elimination caps rsort 2.82 / statemate 2.67 / DS-ww 2.83; depth-1→2 probe unfunded; §4.2b: runahead is blocked by demand-alloc slot conflicts, not relaxable qualifiers). multiply's "fetch-bound ≤1.30" attribution voided (measured 2.37 branch-free). **Surviving thread:** the starvation mass is same-line dup-suppression holds (~11% of cycles on rsort/statemate/sha) + truncation fragmentation — emit-repacking-shaped (G1′ or a cheaper packet-buffer re-entry), root-cause in flight.
+
 **Headline answer.** Exactly **two structural mechanisms** can mint new 3.x members, and both are *conditional on one cheap measurement*:
 
 1. **Fetch-through-taken-branch delivery** (decoupled FTQ-runahead frontend, or an FTQ-attached µop-cache loop replayer) — lifts the *supply-bound* subset of the 2.5–2.8 band (rsort, statemate, DS) to 2.9–3.2, **iff** the P0 census proves the ~2.1–2.8 wall is supply-induced rather than chain-saturated.
