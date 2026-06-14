@@ -5099,6 +5099,10 @@ module rv64gc_core_top
         .dcache_fill_valid      (dc_fill_snoop_valid),
         .dcache_fill_addr       (dc_fill_snoop_addr),
         .dcache_fill_data       (dc_fill_snoop_data),
+        // D-side hardware prefetch request (Lever A)
+        .dpf_req_valid          (dc_pf_req_valid),
+        .dpf_req_addr           (dc_pf_req_addr),
+        .dpf_req_taken          (dc_pf_req_taken),
         // Uncached data MMIO
         .data_mmio_req_valid    (data_mmio_req_valid),
         .data_mmio_req_we       (data_mmio_req_we),
@@ -5127,6 +5131,9 @@ module rv64gc_core_top
     logic [511:0] dc_l2_resp_data;
     logic        dc_invalidate_busy;
     logic        dc_store_wt_busy;
+    logic        dc_pf_req_valid;
+    logic [63:0] dc_pf_req_addr;
+    logic        dc_pf_req_taken;
     logic        ptw_dcache_store_valid;
     logic [63:0] ptw_dcache_store_addr;
     logic [63:0] ptw_dcache_store_data;
@@ -5180,6 +5187,9 @@ module rv64gc_core_top
         .fill_snoop_addr    (dc_fill_snoop_addr),
         .fill_snoop_data    (dc_fill_snoop_data),
         .store_wt_busy      (dc_store_wt_busy),
+        .pf_req_valid       (dc_pf_req_valid),
+        .pf_req_addr        (dc_pf_req_addr),
+        .pf_req_taken       (dc_pf_req_taken),
         .invalidate_all     (1'b0),
         .invalidate_busy    (dc_invalidate_busy)
     );

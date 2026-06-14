@@ -57,6 +57,18 @@ module dcache
     // Store write-through drain state, used to hold FENCE.I until older
     // committed stores are instruction-visible in the backing hierarchy.
     output reg        store_wt_busy,
+    // D-side hardware prefetch request (Lever A).  A fill-only line request
+    // from the LSU stride engine: line-aligned PHYSICAL address.  It runs its
+    // own S0/S1 tag probe on RAM port B (only when port B is idle, so it never
+    // displaces a demand load1/store lookup), and allocates a free MSHR as the
+    // LOWEST-priority alloc arm (demand strict-priority).  It produces NO load
+    // response and NO writeback -- the existing fill/install path brings the
+    // line into the L1D and frees the MSHR.  Accepted (pf_req_taken) only when
+    // the probe slot is granted; the LSU drops the request otherwise.
+    // ENABLE=0 => pf_req_valid is tied 0 at the LSU => this whole path is dead.
+    input  wire        pf_req_valid,
+    input  wire [63:0] pf_req_addr,
+    output reg        pf_req_taken,
     // Invalidate
     input  wire        invalidate_all,
     output reg        invalidate_busy
@@ -216,6 +228,10 @@ module dcache
     logic [7:0]              s1_st_byte_mask;
     logic                    s1_st_is_ptw;
     logic                    s1_st_use_port_b;
+
+    // Stage-0 → Stage-1 for the D-prefetch probe (shares RAM port B with load1)
+    logic                    s1_pf_valid;
+    logic [63:0]             s1_pf_addr;   // line-aligned physical prefetch addr
     logic                    s0_store_lookup_grant_a;
     logic                    s0_store_lookup_grant_b;
     logic                    store_ack_s1;
@@ -251,6 +267,16 @@ module dcache
     assign s0_store_lookup_grant_b = s0_store_eff_valid && load_req_valid[0]
                                    && !load_req_valid[1];
 
+    // D-prefetch probe grant: port B is free this cycle iff neither load1 nor a
+    // port-B store lookup is using it.  The prefetch is the LOWEST priority
+    // consumer of port B -- it never displaces a demand lookup.  Gated by the
+    // pkg ENABLE (constant-folds the whole path away when 0).
+    localparam logic dpf_en = D_PREFETCH_ENABLE;
+    logic pf_probe_grant;
+    assign pf_probe_grant = dpf_en && pf_req_valid &&
+                            !load_req_valid[1] && !s0_store_lookup_grant_b;
+    assign pf_req_taken = pf_probe_grant;
+
     // Tag RAM port A: load port 0 (priority), then store
     always_comb begin
         if (load_req_valid[0])
@@ -261,11 +287,13 @@ module dcache
             tr_raddr = '0;
     end
 
-    // Tag RAM port B: load port 1, or store when load1 is idle.
+    // Tag RAM port B: load port 1, store when load1 idle, then prefetch probe.
     assign tr_raddr2 = load_req_valid[1] ? load_req_addr[1][INDEX_HI:INDEX_LO]
                                          : (s0_store_lookup_grant_b
                                             ? s0_store_eff_addr[INDEX_HI:INDEX_LO]
-                                            : '0);
+                                            : (pf_probe_grant
+                                               ? pf_req_addr[INDEX_HI:INDEX_LO]
+                                               : '0));
 
     // Data RAM port A: load port 0, or store when load0 is idle.
     always_comb begin
@@ -281,11 +309,15 @@ module dcache
         end
     end
 
-    // Data RAM port B: load port 1, or store when load1 is idle.
+    // Data RAM port B: load port 1, store when load1 idle, then prefetch probe.
+    // (The prefetch only needs the victim's dirty-line data for a possible
+    //  write-back, which dr_rdata_all2 supplies the same as a load1 miss.)
     assign dr_raddr2 = load_req_valid[1] ? load_req_addr[1][INDEX_HI:INDEX_LO]
                                          : (s0_store_lookup_grant_b
                                             ? s0_store_eff_addr[INDEX_HI:INDEX_LO]
-                                            : '0);
+                                            : (pf_probe_grant
+                                               ? pf_req_addr[INDEX_HI:INDEX_LO]
+                                               : '0));
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -303,11 +335,18 @@ module dcache
             s1_st_byte_mask <= '0;
             s1_st_is_ptw    <= 1'b0;
             s1_st_use_port_b <= 1'b0;
+            s1_pf_valid     <= 1'b0;
+            s1_pf_addr      <= '0;
         end else begin
             s1_ld0_valid    <= load_req_valid[0];
             s1_ld0_addr     <= load_req_addr[0];
             s1_ld0_size     <= load_req_size[0];
             s1_ld0_unsigned <= load_req_is_unsigned[0];
+
+            // Prefetch probe S1 register: a granted probe carries its
+            // line-aligned address into S1 for tag-port-B hit/victim resolution.
+            s1_pf_valid     <= pf_probe_grant;
+            s1_pf_addr      <= {pf_req_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
 
             // No conflict suppression — port B handles port 1 independently
             s1_ld1_valid    <= load_req_valid[1];
@@ -415,6 +454,23 @@ module dcache
         end
     end
 
+    // Prefetch probe hit detection (port B tag read, line-aligned).  A probe
+    // that hits an installed line or whose lookup index is stale (port B was
+    // granted to a demand consumer this cycle) is dropped; only a clean
+    // resident-miss with a free MSHR allocates.
+    logic [L1D_SET_BITS-1:0] s1_pf_index;
+    logic [L1D_TAG_BITS-1:0] s1_pf_tag;
+    assign s1_pf_index = s1_pf_addr[INDEX_HI:INDEX_LO];
+    assign s1_pf_tag   = s1_pf_addr[TAG_HI:TAG_LO];
+    logic pf_cache_hit;
+    always_comb begin
+        pf_cache_hit = 1'b0;
+        for (int w = 0; w < L1D_WAYS; w++) begin
+            if (tr_valid_out2[w] && (tr_tag_out2[w] == s1_pf_tag))
+                pf_cache_hit = 1'b1;
+        end
+    end
+
     // =========================================================================
     // Data mux from RAM output (way selected by hit way)
     // The data RAM was read with the s0 address so its output is available in s1.
@@ -453,6 +509,16 @@ module dcache
             victim_way_st = plru_state[s1_st_index][1] ? 2'd0 : 2'd1;
         else
             victim_way_st = plru_state[s1_st_index][0] ? 2'd2 : 2'd3;
+    end
+
+    // Prefetch-fill victim selection uses the prefetch line's own set index
+    // (port-B tag/data reads supply that set's ways).
+    logic [1:0] victim_way_pf;
+    always_comb begin
+        if (!plru_state[s1_pf_index][2])
+            victim_way_pf = plru_state[s1_pf_index][1] ? 2'd0 : 2'd1;
+        else
+            victim_way_pf = plru_state[s1_pf_index][0] ? 2'd2 : 2'd3;
     end
 
     // =========================================================================
@@ -622,20 +688,48 @@ module dcache
         end
     end
 
+    // MSHR match check for the prefetch probe (an in-flight miss already
+    // covers the line -- the prefetch is redundant, drop it).
+    logic [63:0] pf_line_addr;
+    assign pf_line_addr = {s1_pf_addr[63:LINE_BITS], {LINE_BITS{1'b0}}};
+    logic mshr_pf_match_hit;
+    always_comb begin
+        mshr_pf_match_hit = 1'b0;
+        for (int m = 0; m < MSHR_DEPTH; m++) begin
+            if (mshr[m].valid && (mshr[m].addr == pf_line_addr))
+                mshr_pf_match_hit = 1'b1;
+        end
+    end
+
     // Find a free MSHR slot
     logic [MSHR_IDX_BITS-1:0] mshr_free_idx;
     logic                     mshr_free_avail;
+    // MSHR occupancy (for the prefetch reservation gate).  The decisive census
+    // hazard is that the high-MLP STREAM rows saturate the L1D MSHR / L2 arb:
+    // a prefetch that takes an MSHR there displaces demand fills (measured
+    // stream-l2 +4..7%).  Reserve the upper MSHRs for DEMAND: a prefetch may
+    // allocate only when occupancy is below DPF_MSHR_RESERVE (lots of free
+    // slots).  The bandwidth-bound STREAM rows keep their MSHRs busy with demand
+    // => prefetch is refused; the low-MLP kernel/memcpy (mostly-idle MSHRs)
+    // prefetch freely.  This is the census's "issue only into a free slot,
+    // never steal a demand slot" rule placed where demand+prefetch ACTUALLY
+    // contend (the dcache MSHR), not the upstream LSU LMB.
+    logic [MSHR_IDX_BITS:0]   mshr_occ;
+    logic                     mshr_pf_room;
 
     always_comb begin
         mshr_free_idx   = '0;
         mshr_free_avail = 1'b0;
+        mshr_occ        = '0;
         for (int m = 0; m < MSHR_DEPTH; m++) begin
             if (!mshr[m].valid && !mshr_free_avail) begin
                 mshr_free_avail = 1'b1;
                 mshr_free_idx   = MSHR_IDX_BITS'(m);
             end
+            if (mshr[m].valid) mshr_occ = mshr_occ + 1'b1;
         end
     end
+    assign mshr_pf_room = mshr_occ < (MSHR_IDX_BITS+1)'(DPF_MSHR_RESERVE);
 
     // =========================================================================
     // L2 arbitration FSM
@@ -1171,6 +1265,26 @@ module dcache
     assign ld0_miss_alloc_sel = ld0_new_miss_req && mshr_free_avail;
     assign ld1_miss_alloc_sel = !ld0_miss_alloc_sel && ld1_new_miss_req &&
                                 mshr_free_avail;
+
+    // D-prefetch fill alloc: lowest priority for the single MSHR alloc slot.
+    // Only when the probed line is a clean resident-miss (no L1D hit, no
+    // in-flight MSHR), a slot is free, the MSHR-reserve gate has demand headroom
+    // (mshr_pf_room), AND no demand load/store wins the slot this cycle.
+    // Drop-on-full / drop-on-demand-contention / MSHR-reserve is the census's
+    // mandatory throttle (never displace demand).  NOTE: this protects the
+    // low-MLP kernel/memcpy and the boot burst, but does NOT neutralize the
+    // bandwidth-bound stream-l2 (+4%) -- its MSHRs drain in 8 cyc so occupancy
+    // never trips the gate; an L2-channel-idle throttle was tried and REJECTED
+    // (it destroyed memcpy timeliness -- memcpy is also L2-busy yet latency-
+    // exposed).  A throughput/rate-aware throttle that distinguishes latency-
+    // exposed memcpy from bandwidth-bound stream-l2 is the named follow-up.
+    logic pf_new_fill_req;
+    logic pf_fill_alloc_sel;
+    assign pf_new_fill_req = dpf_en && s1_pf_valid && !pf_cache_hit &&
+                             !mshr_pf_match_hit && !invalidate_all;
+    assign pf_fill_alloc_sel = pf_new_fill_req && mshr_free_avail && mshr_pf_room &&
+                               !ld0_miss_alloc_sel && !ld1_miss_alloc_sel &&
+                               !s1_st_can_allocate_mshr;
     assign ld0_miss_merge_req = s1_ld0_valid && !ld0_cache_hit &&
                                 mshr_match_hit && !invalidate_all;
     assign ld1_miss_merge_req = s1_ld1_valid && !ld1_cache_hit &&
@@ -1500,6 +1614,35 @@ module dcache
                     mshr[mshr_free_idx].evict_data <= st_data_way[mshr_st_vway];
                     mshr[mshr_free_idx].evict_addr <=
                         {st_tag_way[mshr_st_vway], s1_st_index, {LINE_BITS{1'b0}}};
+                end
+            end
+            // ---- Allocate new MSHR on D-prefetch (lowest priority) ----
+            // A fill-only entry: read-for-ownership fill, NO store overlay, NO
+            // load waiter.  The existing fill-response / fill-install path
+            // brings the line into the L1D and frees the MSHR; no register
+            // write occurs because no LMB/LQ entry references it.  Demand
+            // strict-priority: pf_fill_alloc_sel is 0 whenever any load/store
+            // wins the slot, so this never displaces demand.
+            else if (pf_fill_alloc_sel) begin
+                mshr[mshr_free_idx].valid          <= 1'b1;
+                mshr[mshr_free_idx].addr           <= pf_line_addr;
+                mshr[mshr_free_idx].victim         <= victim_way_pf;
+                mshr[mshr_free_idx].dirty_evict    <= tr_dirty_out2[victim_way_pf];
+                mshr[mshr_free_idx].fill_pend      <= 1'b1;
+                mshr[mshr_free_idx].fill_done      <= 1'b0;
+                mshr[mshr_free_idx].store_pending  <= 1'b0;
+                mshr[mshr_free_idx].store_byte_off <= 6'd0;
+                mshr[mshr_free_idx].store_data     <= 64'd0;
+                mshr[mshr_free_idx].store_byte_mask<= 8'd0;
+                mshr[mshr_free_idx].store_line_data <= '0;
+                mshr[mshr_free_idx].store_line_mask <= '0;
+                mshr[mshr_free_idx].nwa_pending     <= 1'b0;
+                mshr[mshr_free_idx].nwa_wt_owed     <= 1'b0;
+                mshr[mshr_free_idx].writeback_pend <= tr_dirty_out2[victim_way_pf];
+                if (tr_dirty_out2[victim_way_pf]) begin
+                    mshr[mshr_free_idx].evict_data <= dr_rdata_all2[victim_way_pf];
+                    mshr[mshr_free_idx].evict_addr <=
+                        {tr_tag_out2[victim_way_pf], s1_pf_index, {LINE_BITS{1'b0}}};
                 end
             end
 

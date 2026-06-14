@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Run the Stage 3 Linux platform simulation binary with Verilator.
+#
+# A FULL Linux boot to BOOT OK needs ~148M cycles (DSim golden = 148.2M; Verilator
+# tracks within ~0.5% IPC). Pass MAX_CYCLES >= 160000000 for a full boot. The 1M
+# default below is for short runs only. Under-budgeting looks like a post-9p "hang"
+# but is just the deterministic initramfs-decompression phase (~cyc 14M-82M, no UART
+# output) — confirmed no RTL/timer bug (2026-06-14, doc/...verilator boot root-cause).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

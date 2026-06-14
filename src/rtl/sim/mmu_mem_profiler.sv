@@ -32,7 +32,19 @@ module mmu_mem_profiler
     input  wire        dtlb_lookup_valid,
     input  wire        dtlb_hit,
     input  wire        dcache_resp_valid,
-    input  wire        dcache_resp_hit
+    input  wire        dcache_resp_hit,
+    // Family 5: L2 source arbitration (QoS) + ICache MSHR (idea-7 / idea-8)
+    // Strict fixed priority in l2_cache.sv:487-512 is DCache > PTW > ICache >
+    // Prefetch. These observe whether the ICache fill port starves under kernel
+    // D-side + page-walk L2 traffic. Pure observers.
+    input  wire        l2_dcache_req_valid,
+    input  wire        l2_dcache_req_ready,
+    input  wire        l2_ptw_req_valid,
+    input  wire        l2_ptw_req_ready,
+    input  wire        l2_icache_req_valid,
+    input  wire        l2_icache_req_ready,
+    input  wire        l2_prefetch_req_valid,
+    input  wire        ic_mshr_free_avail
 );
 
     // ---- Derived signals: ptw busy + satp change ----
@@ -66,6 +78,26 @@ module mmu_mem_profiler
     longint unsigned dcache_accesses;
     longint unsigned dcache_misses;
 
+    // ---- Family 5: L2 source arbitration (QoS) + ICache MSHR ----
+    longint unsigned l2_grant_dcache;   // L2 cycles granted to D-cache
+    longint unsigned l2_grant_ptw;      // L2 cycles granted to PTW
+    longint unsigned l2_grant_icache;   // L2 cycles granted to I-cache
+    longint unsigned l2_icache_req_cyc; // cycles I-cache asserted an L2 fill req
+    longint unsigned l2_icache_starve;  // I-cache wanted L2 but lost arbitration
+    longint unsigned l2_icache_starve_by_ptw;   // ... lost specifically to PTW
+    longint unsigned l2_icache_starve_by_dcache;// ... lost specifically to D-cache
+    longint unsigned l2_dc_ptw_collide; // cycles D-cache AND PTW both want L2
+    longint unsigned ic_mshr_full_cyc;  // I-cache MSHR (depth 2) had no free entry
+
+    // Grant = source is highest-priority valid requestor that is also ready.
+    wire l2_grant_dc_c  = l2_dcache_req_valid && l2_dcache_req_ready;
+    wire l2_grant_ptw_c = l2_ptw_req_valid && l2_ptw_req_ready && !l2_dcache_req_valid;
+    wire l2_grant_ic_c  = l2_icache_req_valid && l2_icache_req_ready
+                          && !l2_dcache_req_valid && !l2_ptw_req_valid;
+    // I-cache starve = wants L2 but a higher-priority source (DCache/PTW) holds it.
+    wire l2_ic_starve_c = l2_icache_req_valid &&
+                          (l2_dcache_req_valid || l2_ptw_req_valid);
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             satp_prev <= '0; ptw_busy_r <= 1'b0;
@@ -75,6 +107,10 @@ module mmu_mem_profiler
             flush_commit <= '0; flush_bru <= '0; flush_satp <= '0;
             dtlb_lookups <= '0; dtlb_misses <= '0;
             dcache_accesses <= '0; dcache_misses <= '0;
+            l2_grant_dcache <= '0; l2_grant_ptw <= '0; l2_grant_icache <= '0;
+            l2_icache_req_cyc <= '0; l2_icache_starve <= '0;
+            l2_icache_starve_by_ptw <= '0; l2_icache_starve_by_dcache <= '0;
+            l2_dc_ptw_collide <= '0; ic_mshr_full_cyc <= '0;
         end else begin
             satp_prev <= satp_raw;
             // set wins over clear on same-cycle start+end (conservative occupancy)
@@ -96,6 +132,20 @@ module mmu_mem_profiler
             if (dtlb_lookup_valid && !dtlb_hit) dtlb_misses <= dtlb_misses + 64'd1;
             if (dcache_resp_valid) dcache_accesses <= dcache_accesses + 64'd1;
             if (dcache_resp_valid && !dcache_resp_hit) dcache_misses <= dcache_misses + 64'd1;
+            // Family 5: L2 QoS + ICache MSHR
+            if (l2_grant_dc_c)  l2_grant_dcache <= l2_grant_dcache + 64'd1;
+            if (l2_grant_ptw_c) l2_grant_ptw    <= l2_grant_ptw + 64'd1;
+            if (l2_grant_ic_c)  l2_grant_icache <= l2_grant_icache + 64'd1;
+            if (l2_icache_req_valid) l2_icache_req_cyc <= l2_icache_req_cyc + 64'd1;
+            if (l2_ic_starve_c) l2_icache_starve <= l2_icache_starve + 64'd1;
+            // attribute the starve cause (DCache wins priority over PTW)
+            if (l2_icache_req_valid && l2_dcache_req_valid)
+                l2_icache_starve_by_dcache <= l2_icache_starve_by_dcache + 64'd1;
+            else if (l2_icache_req_valid && l2_ptw_req_valid)
+                l2_icache_starve_by_ptw <= l2_icache_starve_by_ptw + 64'd1;
+            if (l2_dcache_req_valid && l2_ptw_req_valid)
+                l2_dc_ptw_collide <= l2_dc_ptw_collide + 64'd1;
+            if (!ic_mshr_free_avail) ic_mshr_full_cyc <= ic_mshr_full_cyc + 64'd1;
         end
     end
 
@@ -122,6 +172,15 @@ bind rv64gc_core_top mmu_mem_profiler u_mmu_mem_profiler (
     // (load_resp_valid is hit-only in this dcache, so it cannot express a miss.)
     .dcache_resp_valid   (u_dcache.s1_ld0_valid || u_dcache.s1_ld1_valid),
     .dcache_resp_hit     (!((u_dcache.s1_ld0_valid && !u_dcache.ld0_cache_hit) ||
-                            (u_dcache.s1_ld1_valid && !u_dcache.ld1_cache_hit)))
+                            (u_dcache.s1_ld1_valid && !u_dcache.ld1_cache_hit))),
+    // Family 5: L2 source arbitration (read off the L2 ports) + ICache MSHR.
+    .l2_dcache_req_valid   (u_l2_cache.dcache_req_valid),
+    .l2_dcache_req_ready    (u_l2_cache.dcache_req_ready),
+    .l2_ptw_req_valid       (u_l2_cache.ptw_req_valid),
+    .l2_ptw_req_ready       (u_l2_cache.ptw_req_ready),
+    .l2_icache_req_valid    (u_l2_cache.icache_req_valid),
+    .l2_icache_req_ready    (u_l2_cache.icache_req_ready),
+    .l2_prefetch_req_valid  (u_l2_cache.prefetch_req_valid),
+    .ic_mshr_free_avail     (u_fetch_top.u_ifu_line_fetch.u_icache.ic_mshr_free_avail)
 );
 `endif

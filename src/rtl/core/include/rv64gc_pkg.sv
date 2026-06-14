@@ -251,6 +251,51 @@ package rv64gc_pkg;
     localparam logic TAGE_UPDATE_SPILL_ENABLE = 1'b0;
     localparam int   TAGE_UPDATE_SPILL_DEPTH  = 8;
 
+    // =========================================================================
+    // D-side stride/stream hardware prefetcher (Lever A, FUND verdict
+    // doc/dprefetch_census_2026-06-14.md).  A PC-indexed constant-stride table
+    // in the LSU is trained on completing loads (byte-granular stride -- the
+    // regular quantity; a line-granular stride alternates 0/+1 and defeats
+    // detection, census bug #1).  On a confident-stride load it issues
+    // DEGREE prefetches (addr = demand_addr + k*stride, k=1..DEGREE) into a
+    // FREE L1D MSHR via a dedicated dcache prefetch port -- demand strict-
+    // priority for the single alloc slot, confidence-gated, drop-on-MSHR-full.
+    // The census proved degree-1 is UNTIMELY on every high-coverage row
+    // (STREAM/memcpy line-cross misses every 2-7 cyc < 8-cyc L2 latency), so
+    // DEGREE>=2 is mandatory.  The engine trains and prefetches on the
+    // PHYSICAL byte address (port-0 load_eff_addr_r is post-DTLB in VM mode)
+    // and drops any prefetch whose target crosses the demand 4 KB page
+    // (pf_pa[63:12] != demand_pa[63:12]) -- this keeps the PA correct without
+    // a speculative DTLB lookup or page walk (the census paged-safety rule).
+    // ENABLE=0 -> the prefetch issue is masked to 0 => bit-exact baseline.
+    localparam logic D_PREFETCH_ENABLE = 1'b0;
+    // Stride-table sizing (HW budget, sized down from the census's 8192).
+    localparam int   DPF_TABLE_SETS    = 64;               // PC-indexed entries
+    localparam int   DPF_TABLE_IDX_BITS= $clog2(DPF_TABLE_SETS); // 6
+    localparam int   DPF_CONF_BAR      = 2;                // confident at >=2 of 3
+    // Prefetch lookahead.  DEGREE = how many lines ahead to request per train
+    // event; >=2 mandatory (census timeliness).  One prefetch issued per cycle
+    // (the dcache has a single MSHR alloc slot); the per-load degree is swept
+    // by retiring k=1..DEGREE round-robin off the confident PC's last train.
+    localparam int   DPF_DEGREE        = 3;                // lookahead lines (>=2)
+    localparam int   DPF_PAGE_OFF_BITS = 12;               // 4 KB page (Sv39/48)
+    // MLP / bandwidth gate: suppress prefetch issue when the in-flight demand-
+    // miss count (LMB occupancy, of 32) is at/above this.  The high-MLP STREAM
+    // rows saturate fill bandwidth (~30 in flight) and a prefetch there displaces
+    // demand (measured stream-l2 +4% without this gate); the low-MLP real kernel
+    // (mostly-idle LMB) prefetches freely.  8 of 32 = back off once a quarter of
+    // the LMB is in flight (well below STREAM's ~30, above the kernel's baseline).
+    localparam int   DPF_MLP_GATE      = 32;               // LMB-occ backstop (permissive; dcache MSHR gate is authoritative)
+    // Dcache MSHR reservation: a prefetch may allocate an L1D MSHR only when
+    // fewer than this many of the 16 MSHRs are occupied -- the upper
+    // (16-DPF_MSHR_RESERVE) MSHRs are reserved for DEMAND.  This is the decisive
+    // anti-displacement gate (the LSU-LMB MLP gate above does not track dcache-
+    // MSHR pressure on the high-MLP STREAM rows: stream-l2's LMB drains fast so
+    // its LMB-occ stays low, but its MSHRs are demand-saturated).  6 of 16 = a
+    // prefetch needs >=10 free MSHRs; the bandwidth-bound STREAM rows refuse it,
+    // the low-MLP kernel/memcpy (mostly-idle MSHRs) allow it.
+    localparam int   DPF_MSHR_RESERVE  = 6;                // dcache MSHR occ ceiling for PF
+
     // L2 Cache: 2 MB, 8-way, 64B lines, 32 MSHRs, 8-cycle hit
     localparam int L2_SIZE        = 2097152;
     localparam int L2_WAYS        = 8;

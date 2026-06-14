@@ -126,6 +126,14 @@ module lsu
     input  wire [63:0] dcache_fill_addr,
     input  wire [LINE_SIZE*8-1:0] dcache_fill_data,
 
+    // D-side hardware prefetch request to the D-cache (Lever A).  Line-aligned
+    // PHYSICAL address driven by the PC-stride engine; accepted iff
+    // dpf_req_taken (the dcache granted the port-B probe slot).  Tied 0 when
+    // D_PREFETCH_ENABLE=0 (bit-exact baseline).
+    output reg         dpf_req_valid,
+    output reg [63:0]  dpf_req_addr,
+    input  wire        dpf_req_taken,
+
     // Uncached data MMIO interface
     output reg        data_mmio_req_valid,
     output reg        data_mmio_req_we,
@@ -3188,6 +3196,73 @@ module lsu
     integer lsu_lmb_fill_burst_hist [0:3];
     integer lsu_lmb_fill_burst_serial_cyc;
 
+    // =====================================================================
+    // D-PREFETCH FUND/KILL CENSUS (Lever A, doc/fresh_lever_program_2026-06-14)
+    // Pure sim-only observer: a PC-indexed constant-stride table trained on
+    // committed/completing loads, used to decide whether a HW stride/stream
+    // prefetcher would cover the D$ misses (>=40% coverage) and whether the
+    // miss-to-use lead time is long enough for a degree-1 prefetch to be
+    // timely (>= L2-hit latency = 8 cyc).  Drives NOTHING functional; gated
+    // by lsu_stat_en (+PERF_PROFILE/+STAT_DUMP).  ENABLE-off = the absent
+    // plusarg => the always_ff body is skipped => bit-exact.
+    //   stride table: DPF_SETS direct-mapped, PC-indexed.  Stride is trained on
+    //   the full BYTE virtual address (the regular quantity for a unit-stride
+    //   loop — line-granular stride alternates 0/+1 and defeats detection).
+    //   A miss is "covered" if its PC has a CONFIDENT non-zero byte-stride AND
+    //   the previous access by that PC was to a DIFFERENT line (so a degree-N
+    //   prefetch issued from the prior access would have fetched this line).
+    //   confidence: 2-bit saturating; CONFIDENT when conf >= DPF_CONF_THRESH.
+    localparam int DPF_SETS        = 8192;        // PC-indexed entries (alias-free
+                                                  // ceiling; HW budget revisited if FUND)
+    localparam int DPF_IDX_BITS    = 13;          // $clog2(DPF_SETS)
+    localparam int DPF_CONF_THRESH = 2;           // confident at >=2 (of 3)
+    localparam int DPF_L2_HIT_LAT  = 8;           // L2-hit latency (cyc)
+    // per-entry state
+    logic [63:0]  dpf_tag       [0:DPF_SETS-1];   // full PC (alias check)
+    logic         dpf_valid     [0:DPF_SETS-1];
+    logic [63:0]  dpf_last_addr [0:DPF_SETS-1];   // last BYTE addr seen
+    logic signed [63:0] dpf_stride [0:DPF_SETS-1];// last confirmed BYTE stride
+    logic [1:0]   dpf_conf      [0:DPF_SETS-1];   // saturating confidence
+    integer       dpf_last_cyc  [0:DPF_SETS-1];   // cyc of last access by PC
+    // census accumulators
+    longint       dpf_loads;                       // loads inspected
+    longint       dpf_misses;                      // D$ misses inspected
+    longint       dpf_miss_conf_stride;            // misses w/ confident PC-stride (covered)
+    longint       dpf_miss_conf_sameline;          // confident-stride but same-line (not new fetch)
+    longint       dpf_miss_irregular;              // misses, PC seen but stride not confident
+    longint       dpf_miss_firsttouch;             // misses, slot cold (PC never seen here)
+    longint       dpf_miss_alias;                  // subset: slot valid but tag mismatch (collision)
+    longint       dpf_hit_conf_stride;             // hits classified confident-stride
+    // timeliness: lead-time (inter-access interval by same PC) for covered misses
+    longint       dpf_timely_misses;               // covered misses w/ lead >= L2 lat
+    longint       dpf_untimely_misses;             // covered misses w/ lead <  L2 lat
+    longint       dpf_lead_sum;                     // sum of lead times (covered)
+    longint       dpf_lead_hist [0:5];              // 0:<2 1:2-3 2:4-7 3:8-15 4:16-79 5:>=80
+    // MLP: distinct missing lines in flight = LMB occupancy sampled each cycle
+    // (true in-flight count; LMB is the load-miss buffer).  Max + histogram.
+    integer       dpf_mlp_max;
+    longint       dpf_mlp_hist [0:8];               // occupancy 0..7, 8=>=8
+    // scratch (procedural)
+    logic [63:0]  dpf_pc0, dpf_pc1, dpf_addr0, dpf_addr1;
+    logic [DPF_IDX_BITS-1:0] dpf_i0, dpf_i1;
+    logic signed [63:0] dpf_ns0, dpf_ns1;
+    logic         dpf_conf0_now, dpf_conf1_now;
+    integer       dpf_lead0, dpf_lead1, dpf_b;
+    // PC->index hash: XOR two PC slices (drop low 1 bit for RVC 2B alignment)
+    // to scatter aliasing pairs.  Pure function of PC; alias is still detected
+    // by the full-PC tag compare, so a collision degrades to first-touch, never
+    // a false stride.
+    function automatic logic [DPF_IDX_BITS-1:0] dpf_hash(input logic [63:0] pc);
+        dpf_hash = pc[DPF_IDX_BITS:1] ^ pc[2*DPF_IDX_BITS:DPF_IDX_BITS+1];
+    endfunction
+    // top-miss-PC sampler (diagnostic): which static loads dominate misses.
+    localparam int DPF_TOPN = 12;
+    logic [63:0]  dpf_top_pc  [0:DPF_TOPN-1];
+    longint       dpf_top_cnt [0:DPF_TOPN-1];
+    logic [63:0]  dpf_top_str [0:DPF_TOPN-1]; // last byte-stride seen for that PC
+    integer       dpf_ti, dpf_tfree;
+    logic         dpf_thit;
+
     initial lsu_stat_en =
         ($test$plusargs("PERF_PROFILE") || $test$plusargs("STAT_DUMP")) ? 1'b1 : 1'b0;
     initial lsu_trace_lmb_hot = $test$plusargs("TRACE_LMB_HOT") ? 1'b1 : 1'b0;
@@ -3279,6 +3354,448 @@ module lsu
                 lsu_fwd_hold_blocked_cnt <= lsu_fwd_hold_blocked_cnt + 1;
             if (!lmb_wb_port_free && (lmb_any_match || lmb_ready_any))
                 lsu_lmb_wb_blocked_cnt <= lsu_lmb_wb_blocked_cnt + 1;
+        end
+    end
+
+    // ---------------------------------------------------------------------
+    // D-PREFETCH CENSUS update (observer; reads load PC/VA + hit/miss + cyc).
+    // Processes both load ports sequentially in one tick so a port classifies
+    // against the table state *before* its own update (matches a real engine
+    // that looks up, then trains).  MLP tracks distinct missing lines in
+    // flight = (miss issues) - (fills) saturating at LMB+MSHR scale.
+    // ---------------------------------------------------------------------
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int s = 0; s < DPF_SETS; s++) begin
+                dpf_valid[s]     <= 1'b0;
+                dpf_tag[s]       <= 64'd0;
+                dpf_last_addr[s] <= 64'd0;
+                dpf_stride[s]    <= 64'sd0;
+                dpf_conf[s]      <= 2'd0;
+                dpf_last_cyc[s]  <= 0;
+            end
+            dpf_loads <= 0; dpf_misses <= 0; dpf_miss_conf_stride <= 0;
+            dpf_miss_conf_sameline <= 0; dpf_miss_irregular <= 0;
+            dpf_miss_firsttouch <= 0; dpf_miss_alias <= 0; dpf_hit_conf_stride <= 0;
+            dpf_timely_misses <= 0; dpf_untimely_misses <= 0; dpf_lead_sum <= 0;
+            for (int b = 0; b < 6; b++) dpf_lead_hist[b] <= 0;
+            dpf_mlp_max <= 0;
+            for (int b = 0; b < 9; b++) dpf_mlp_hist[b] <= 0;
+            for (int b = 0; b < DPF_TOPN; b++) begin
+                dpf_top_pc[b] <= 64'd0; dpf_top_cnt[b] <= 0; dpf_top_str[b] <= 64'd0;
+            end
+        end else if (lsu_stat_en) begin
+            // ---- MLP: sample true distinct lines in flight (LMB occupancy) ----
+            if (lsu_lmb_occ_now > dpf_mlp_max) dpf_mlp_max <= lsu_lmb_occ_now;
+            dpf_b = (lsu_lmb_occ_now > 8) ? 8 : lsu_lmb_occ_now;
+            dpf_mlp_hist[dpf_b] <= dpf_mlp_hist[dpf_b] + 1;
+
+            // Shared denominators incremented ONCE by the port-active count
+            // (two NBA `+1` from both ports in one tick would race and lose a
+            // count — denominator-only bug, classification buckets are per-port).
+            dpf_loads <= dpf_loads
+                + ((!flush_in.valid && (p0_dcache_hit_valid || p0_miss_detect)) ? 1 : 0)
+                + ((!flush_in.valid && (p1_dcache_hit_valid || p1_miss_detect)) ? 1 : 0);
+            dpf_misses <= dpf_misses
+                + ((!flush_in.valid && p0_miss_detect && !p0_miss_fill_hit) ? 1 : 0)
+                + ((!flush_in.valid && p1_miss_detect && !p1_miss_fill_hit) ? 1 : 0);
+
+            // ---- PORT 0 ----
+            if (!flush_in.valid &&
+                (p0_dcache_hit_valid || p0_miss_detect)) begin
+                dpf_pc0   = load_issue_data_r[0].pc;
+                dpf_addr0 = load_eff_addr_r[0];                 // BYTE virtual addr
+                dpf_i0    = dpf_hash(dpf_pc0);                  // hashed PC index
+                // confident byte-stride for this PC (state BEFORE its own update)
+                dpf_conf0_now = dpf_valid[dpf_i0] && (dpf_tag[dpf_i0] == dpf_pc0) &&
+                                (dpf_conf[dpf_i0] >= DPF_CONF_THRESH[1:0]) &&
+                                (dpf_stride[dpf_i0] != 64'sd0);
+                dpf_lead0 = lsu_lmb_cyc - dpf_last_cyc[dpf_i0];
+                if (p0_miss_detect && !p0_miss_fill_hit) begin
+                    // top-miss-PC sampler (port-0 diagnostic): count misses per PC.
+                    dpf_thit = 1'b0; dpf_tfree = -1;
+                    for (dpf_ti = 0; dpf_ti < DPF_TOPN; dpf_ti++) begin
+                        if (dpf_top_cnt[dpf_ti] != 0 && dpf_top_pc[dpf_ti] == dpf_pc0) begin
+                            dpf_top_cnt[dpf_ti] <= dpf_top_cnt[dpf_ti] + 1;
+                            dpf_top_str[dpf_ti] <= $signed(dpf_addr0) -
+                                                   $signed(dpf_last_addr[dpf_i0]);
+                            dpf_thit = 1'b1;
+                        end else if (dpf_top_cnt[dpf_ti] == 0 && dpf_tfree < 0)
+                            dpf_tfree = dpf_ti;
+                    end
+                    if (!dpf_thit && dpf_tfree >= 0) begin
+                        dpf_top_pc[dpf_tfree]  <= dpf_pc0;
+                        dpf_top_cnt[dpf_tfree] <= 1;
+                        dpf_top_str[dpf_tfree] <= $signed(dpf_addr0) -
+                                                  $signed(dpf_last_addr[dpf_i0]);
+                    end
+                    if (!dpf_valid[dpf_i0] || (dpf_tag[dpf_i0] != dpf_pc0)) begin
+                        dpf_miss_firsttouch <= dpf_miss_firsttouch + 1;
+                        if (dpf_valid[dpf_i0] && (dpf_tag[dpf_i0] != dpf_pc0))
+                            dpf_miss_alias <= dpf_miss_alias + 1;
+                    end else if (dpf_conf0_now) begin
+                        // covered iff prior access was on a DIFFERENT line (a degree-N
+                        // prefetch from the prior access would have fetched THIS line).
+                        if (dpf_addr0[63:LINE_BITS] != dpf_last_addr[dpf_i0][63:LINE_BITS]) begin
+                            dpf_miss_conf_stride <= dpf_miss_conf_stride + 1;
+                            dpf_lead_sum <= dpf_lead_sum + dpf_lead0;
+                            if (dpf_lead0 >= DPF_L2_HIT_LAT)
+                                dpf_timely_misses <= dpf_timely_misses + 1;
+                            else
+                                dpf_untimely_misses <= dpf_untimely_misses + 1;
+                            dpf_b = (dpf_lead0 < 2) ? 0 : (dpf_lead0 < 4) ? 1 :
+                                    (dpf_lead0 < 8) ? 2 : (dpf_lead0 < 16) ? 3 :
+                                    (dpf_lead0 < 80) ? 4 : 5;
+                            dpf_lead_hist[dpf_b] <= dpf_lead_hist[dpf_b] + 1;
+                        end else
+                            dpf_miss_conf_sameline <= dpf_miss_conf_sameline + 1;
+                    end else
+                        dpf_miss_irregular <= dpf_miss_irregular + 1;
+                end else if (p0_dcache_hit_valid && dpf_conf0_now)
+                    dpf_hit_conf_stride <= dpf_hit_conf_stride + 1;
+                // train table on byte-stride (after classification)
+                dpf_ns0 = $signed(dpf_addr0) - $signed(dpf_last_addr[dpf_i0]);
+                if (dpf_valid[dpf_i0] && (dpf_tag[dpf_i0] == dpf_pc0)) begin
+                    if ((dpf_ns0 == dpf_stride[dpf_i0]) && (dpf_ns0 != 64'sd0)) begin
+                        if (dpf_conf[dpf_i0] != 2'd3) dpf_conf[dpf_i0] <= dpf_conf[dpf_i0] + 2'd1;
+                    end else begin
+                        dpf_stride[dpf_i0] <= dpf_ns0;
+                        dpf_conf[dpf_i0]   <= 2'd0;
+                    end
+                end else begin
+                    dpf_valid[dpf_i0]  <= 1'b1;
+                    dpf_tag[dpf_i0]    <= dpf_pc0;
+                    dpf_stride[dpf_i0] <= 64'sd0;
+                    dpf_conf[dpf_i0]   <= 2'd0;
+                end
+                dpf_last_addr[dpf_i0] <= dpf_addr0;
+                dpf_last_cyc[dpf_i0]  <= lsu_lmb_cyc;
+            end
+
+            // ---- PORT 1 ----
+            if (!flush_in.valid &&
+                (p1_dcache_hit_valid || p1_miss_detect)) begin
+                dpf_pc1   = load_issue_data_r[1].pc;
+                dpf_addr1 = load_eff_addr_r[1];
+                dpf_i1    = dpf_hash(dpf_pc1);
+                dpf_conf1_now = dpf_valid[dpf_i1] && (dpf_tag[dpf_i1] == dpf_pc1) &&
+                                (dpf_conf[dpf_i1] >= DPF_CONF_THRESH[1:0]) &&
+                                (dpf_stride[dpf_i1] != 64'sd0);
+                dpf_lead1 = lsu_lmb_cyc - dpf_last_cyc[dpf_i1];
+                if (p1_miss_detect && !p1_miss_fill_hit) begin
+                    if (!dpf_valid[dpf_i1] || (dpf_tag[dpf_i1] != dpf_pc1)) begin
+                        dpf_miss_firsttouch <= dpf_miss_firsttouch + 1;
+                        if (dpf_valid[dpf_i1] && (dpf_tag[dpf_i1] != dpf_pc1))
+                            dpf_miss_alias <= dpf_miss_alias + 1;
+                    end else if (dpf_conf1_now) begin
+                        if (dpf_addr1[63:LINE_BITS] != dpf_last_addr[dpf_i1][63:LINE_BITS]) begin
+                            dpf_miss_conf_stride <= dpf_miss_conf_stride + 1;
+                            dpf_lead_sum <= dpf_lead_sum + dpf_lead1;
+                            if (dpf_lead1 >= DPF_L2_HIT_LAT)
+                                dpf_timely_misses <= dpf_timely_misses + 1;
+                            else
+                                dpf_untimely_misses <= dpf_untimely_misses + 1;
+                            dpf_b = (dpf_lead1 < 2) ? 0 : (dpf_lead1 < 4) ? 1 :
+                                    (dpf_lead1 < 8) ? 2 : (dpf_lead1 < 16) ? 3 :
+                                    (dpf_lead1 < 80) ? 4 : 5;
+                            dpf_lead_hist[dpf_b] <= dpf_lead_hist[dpf_b] + 1;
+                        end else
+                            dpf_miss_conf_sameline <= dpf_miss_conf_sameline + 1;
+                    end else
+                        dpf_miss_irregular <= dpf_miss_irregular + 1;
+                end else if (p1_dcache_hit_valid && dpf_conf1_now)
+                    dpf_hit_conf_stride <= dpf_hit_conf_stride + 1;
+                dpf_ns1 = $signed(dpf_addr1) - $signed(dpf_last_addr[dpf_i1]);
+                if (dpf_valid[dpf_i1] && (dpf_tag[dpf_i1] == dpf_pc1)) begin
+                    if ((dpf_ns1 == dpf_stride[dpf_i1]) && (dpf_ns1 != 64'sd0)) begin
+                        if (dpf_conf[dpf_i1] != 2'd3) dpf_conf[dpf_i1] <= dpf_conf[dpf_i1] + 2'd1;
+                    end else begin
+                        dpf_stride[dpf_i1] <= dpf_ns1;
+                        dpf_conf[dpf_i1]   <= 2'd0;
+                    end
+                end else begin
+                    dpf_valid[dpf_i1]  <= 1'b1;
+                    dpf_tag[dpf_i1]    <= dpf_pc1;
+                    dpf_stride[dpf_i1] <= 64'sd0;
+                    dpf_conf[dpf_i1]   <= 2'd0;
+                end
+                dpf_last_addr[dpf_i1] <= dpf_addr1;
+                dpf_last_cyc[dpf_i1]  <= lsu_lmb_cyc;
+            end
+        end
+    end
+
+    // =====================================================================
+    // D-SIDE STRIDE/STREAM PREFETCHER (Lever A, synthesizable, gated
+    // D_PREFETCH_ENABLE; doc/dprefetch_census_2026-06-14 FUND verdict).
+    //
+    // A 64-entry PC-indexed constant-stride table trained on completing port-0
+    // loads (port 0 carries the post-DTLB PHYSICAL byte address in VM mode;
+    // load_eff_addr_r[0] == load_mem_addr[0] == dtlb_pa_i).  Stride is trained
+    // in BYTES on the physical address (census bug #1: a line-granular stride
+    // alternates 0/+1 and defeats detection).  On a confident-stride load the
+    // engine launches DEGREE prefetches (line(base + k*stride), k=1..DEGREE),
+    // one line/cyc, into a free L1D MSHR via dpf_req_* -> dcache.  Throttle:
+    // confidence-gated, MSHR-free-gated (the dcache only takes the probe when a
+    // slot is free and no demand wins it), drop-on-not-taken.  Paged-safe: a
+    // prefetch is issued only when its target stays in the SAME 4 KB page as
+    // the demand access (pf_pa[63:12] == base_pa[63:12]); a cross-page target
+    // is dropped (no speculative DTLB lookup / page walk -- the PA would be
+    // unknown across the page).  DEGREE>=2 is mandatory: the census shows
+    // degree-1 is untimely on every high-coverage row (line-cross every 2-7 cyc
+    // < 8-cyc L2 latency).  ENABLE=0 -> dpf_req_valid is tied 0 (bit-exact).
+    // =====================================================================
+    localparam logic dpf_pf_en = D_PREFETCH_ENABLE;
+
+    // ---- Stride table (separate, small, synthesizable) ----
+    logic [63:0]        pfs_tag    [0:DPF_TABLE_SETS-1];  // full PC (alias check)
+    logic               pfs_valid  [0:DPF_TABLE_SETS-1];
+    logic [63:0]        pfs_last   [0:DPF_TABLE_SETS-1];  // last byte PA seen
+    logic signed [63:0] pfs_stride [0:DPF_TABLE_SETS-1];  // last confirmed stride
+    logic [1:0]         pfs_conf   [0:DPF_TABLE_SETS-1];  // saturating confidence
+
+    function automatic logic [DPF_TABLE_IDX_BITS-1:0] pfs_hash(input logic [63:0] pc);
+        pfs_hash = pc[DPF_TABLE_IDX_BITS:1] ^
+                   pc[2*DPF_TABLE_IDX_BITS:DPF_TABLE_IDX_BITS+1];
+    endfunction
+
+    // The port-0 train event: a completing port-0 load (hit or new miss), not a
+    // flush, not nocache (MMIO / cross-line / AMO are excluded by load_nocache).
+    logic               pf_train_fire;
+    logic [63:0]        pf_train_pc;
+    logic [63:0]        pf_train_pa;
+    assign pf_train_fire = dpf_pf_en && !flush_in.valid && !load_nocache_r[0] &&
+                           (p0_dcache_hit_valid || p0_miss_detect);
+    assign pf_train_pc   = load_issue_data_r[0].pc;
+    assign pf_train_pa   = load_eff_addr_r[0];   // physical byte addr (port 0)
+
+    logic [DPF_TABLE_IDX_BITS-1:0] pf_idx;
+    logic signed [63:0]            pf_new_stride;
+    logic                          pf_hit_tag;
+    logic                          pf_confident;
+    assign pf_idx        = pfs_hash(pf_train_pc);
+    assign pf_hit_tag    = pfs_valid[pf_idx] && (pfs_tag[pf_idx] == pf_train_pc);
+    assign pf_new_stride = $signed(pf_train_pa) - $signed(pfs_last[pf_idx]);
+    // Confident iff the tag matches, conf>=bar, stride non-zero, AND the
+    // CURRENT access confirms the stored stride (so we launch off a freshly
+    // re-confirmed stride, not a stale one).
+    assign pf_confident  = pf_hit_tag &&
+                           (pfs_conf[pf_idx] >= DPF_CONF_BAR[1:0]) &&
+                           (pfs_stride[pf_idx] != 64'sd0) &&
+                           (pf_new_stride == pfs_stride[pf_idx]);
+
+    // ---- Degree launcher (absolute-frontier).  The engine keeps a marching
+    //      prefetch FRONTIER: the most-distant line it has already requested
+    //      for the active stream.  Each confident train advances the WINDOW
+    //      TOP = line(demand_pa + DEGREE*stride); the launcher then issues one
+    //      line per cycle, stepping the frontier toward the window top by one
+    //      stride-direction line per issue.  This stays exactly DEGREE lines
+    //      ahead in steady state (primes DEGREE lines on the first train of a
+    //      stream, then ~1 new frontier line per subsequent train) -- the
+    //      census's mandatory degree>=2 timeliness, robust to a train every
+    //      cycle (a tight stream).  A frontier-restart only happens when the
+    //      stream identity changes (new base far from the frontier, or the
+    //      window top would jump past the frontier by > DEGREE lines), which
+    //      re-seeds the frontier at demand+1 line. ----
+    logic                pf_active_r;          // a stream frontier is live
+    logic signed [63:0]  pf_stride_r;          // confirmed byte stride of the stream
+    logic [63:0]         pf_base_pa_r;         // most-recent demand PA (window anchor)
+    logic [63:0]         pf_frontier_r;        // last line already requested (line-aligned)
+    logic [63:0]         pf_window_top_r;      // line(base + DEGREE*stride) (line-aligned)
+    logic [63:0]         pf_page_r;            // page of the anchor (cross-page guard)
+
+    // Frontier step = the stride magnitude rounded to whole cache lines,
+    // clamped to at least one line and signed by the stride direction.  This
+    // targets the STRIDED lines the stream will actually touch (not every
+    // intermediate line): for a unit-stride / sub-line stride it is +/-1 line
+    // (consecutive lines), for a multi-line stride it skips the untouched lines
+    // (no pollution), and the cross-page guard caps any large-stride run.
+    logic [63:0]         pf_stride_mag;        // |stride| in bytes
+    logic [63:0]         pf_stride_lines;      // |stride| rounded up to lines (>=1)
+    logic signed [63:0]  pf_line_step;
+    assign pf_stride_mag   = (pf_stride_r < 0) ? $unsigned(-pf_stride_r)
+                                               : $unsigned(pf_stride_r);
+    assign pf_stride_lines = (pf_stride_mag <= LINE_SIZE)
+                             ? 64'(LINE_SIZE)
+                             : {((pf_stride_mag + LINE_SIZE - 1) >> LINE_BITS),
+                                {LINE_BITS{1'b0}}};
+    assign pf_line_step    = (pf_stride_r >= 0) ? $signed(pf_stride_lines)
+                                                : -$signed(pf_stride_lines);
+
+    // Next candidate line = frontier + one stride-direction line.
+    logic [63:0]         pf_next_line_c;
+    logic                pf_frontier_done_c;   // frontier has reached the window top
+    logic                pf_same_page_c;       // next line stays in the anchor page
+    assign pf_next_line_c     = pf_frontier_r + pf_line_step;
+    // "Reached" when stepping once more would pass the window top (direction-aware).
+    assign pf_frontier_done_c = (pf_stride_r >= 0)
+                                ? (pf_frontier_r >= pf_window_top_r)
+                                : (pf_frontier_r <= pf_window_top_r);
+    assign pf_same_page_c     = (pf_next_line_c[63:DPF_PAGE_OFF_BITS] ==
+                                 pf_page_r[63:DPF_PAGE_OFF_BITS]);
+
+    // MLP / bandwidth gate (synthesizable).  The decisive census hazard is the
+    // high-MLP STREAM rows: the demand stream already SATURATES L1D-fill / L2
+    // bandwidth (LMB near-full, MLP ~30), so any prefetch that squeaks into a
+    // momentarily-free MSHR slot DISPLACES demand (measured: stream-l2 +4% with
+    // a slot-only throttle, 1.35M busy-drops).  Gate the prefetch off whenever
+    // the in-flight demand-miss count (LMB occupancy) is at/above DPF_MLP_GATE.
+    // This is a COARSE upstream backstop: the AUTHORITATIVE anti-displacement
+    // throttle lives in the dcache (the MSHR-reservation gate, where demand and
+    // prefetch actually contend -- the LSU-LMB occupancy does NOT track dcache-
+    // MSHR pressure on the high-MLP STREAM rows whose LMB drains fast).  Kept
+    // permissive (32-of-32) so it never suppresses a legitimate low-MLP
+    // prefetch; the dcache MSHR-reserve gate does the real work.
+    logic [LMB_IDX_BITS:0] pf_lmb_occ;
+    always_comb begin
+        pf_lmb_occ = '0;
+        for (int i = 0; i < LMB_DEPTH; i++)
+            if (lmb[i].valid) pf_lmb_occ = pf_lmb_occ + 1'b1;
+    end
+    logic pf_bw_ok;
+    assign pf_bw_ok = pf_lmb_occ < (LMB_IDX_BITS+1)'(DPF_MLP_GATE);
+
+    // Issue when active, frontier not yet at the window top, in-page, and the
+    // coarse LMB backstop is clear (the dcache MSHR-reserve gate is the real
+    // throttle -- it refuses the alloc when demand owns the MSHRs).
+    assign dpf_req_valid = dpf_pf_en && pf_active_r && !pf_frontier_done_c &&
+                           pf_same_page_c && pf_bw_ok;
+    assign dpf_req_addr  = pf_next_line_c;
+
+    // Window top for the CURRENT train (combinational; line-aligned).
+    logic signed [63:0]  pf_train_top_pa_c;
+    logic [63:0]         pf_train_top_line_c;
+    logic [63:0]         pf_train_demand_line_c;
+    assign pf_train_top_pa_c     = $signed(pf_train_pa) +
+                                   ($signed(64'(DPF_DEGREE)) * pfs_stride[pf_idx]);
+    assign pf_train_top_line_c   = {pf_train_top_pa_c[63:LINE_BITS], {LINE_BITS{1'b0}}};
+    assign pf_train_demand_line_c= {pf_train_pa[63:LINE_BITS], {LINE_BITS{1'b0}}};
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int s = 0; s < DPF_TABLE_SETS; s++) begin
+                pfs_valid[s]  <= 1'b0;
+                pfs_tag[s]    <= 64'd0;
+                pfs_last[s]   <= 64'd0;
+                pfs_stride[s] <= 64'sd0;
+                pfs_conf[s]   <= 2'd0;
+            end
+            pf_active_r     <= 1'b0;
+            pf_stride_r     <= 64'sd0;
+            pf_base_pa_r    <= 64'd0;
+            pf_frontier_r   <= 64'd0;
+            pf_window_top_r <= 64'd0;
+            pf_page_r       <= 64'd0;
+        end else if (dpf_pf_en) begin
+            // pf_frontier_r has at most ONE writer per cycle.  A confident train
+            // that RE-SEEDS the stream sets the frontier to the demand line and
+            // takes strict priority over the same-cycle frontier advance (the
+            // census's dual-port NBA-race warning: a single guarded writer, not
+            // two NBA assigns relying on source-order).  pf_frontier_reseed
+            // captures the re-seed decision; pf_frontier_advance the issue step.
+            logic pf_train_now;
+            logic pf_reseed;
+            pf_train_now = pf_train_fire && pf_confident;
+            // Re-seed when the train starts a NEW/foreign stream: not currently
+            // active, a stride change, or a page change vs the live anchor.
+            pf_reseed = pf_train_now &&
+                        (!pf_active_r ||
+                         (pf_stride_r != pfs_stride[pf_idx]) ||
+                         (pf_train_pa[63:DPF_PAGE_OFF_BITS] !=
+                          pf_page_r[63:DPF_PAGE_OFF_BITS]));
+
+            // ---- Stream-window control (anchor/stride/top/page) ----
+            if (pf_train_now) begin
+                pf_active_r     <= 1'b1;
+                pf_stride_r     <= pfs_stride[pf_idx];
+                pf_base_pa_r    <= pf_train_pa;
+                pf_window_top_r <= pf_train_top_line_c;
+                pf_page_r       <= pf_train_pa;
+            end else if (pf_active_r && !pf_frontier_done_c && !pf_same_page_c) begin
+                pf_active_r <= 1'b0;            // frontier walked off the page
+            end
+
+            // ---- Frontier register: re-seed wins, else advance on a taken issue.
+            if (pf_reseed)
+                pf_frontier_r <= pf_train_demand_line_c;  // prime at demand line
+            else if (pf_active_r && !pf_frontier_done_c && pf_same_page_c &&
+                     dpf_req_taken)
+                pf_frontier_r <= pf_next_line_c;          // step one line ahead
+
+            // ---- Stride-table train (after the confident read above) ----
+            if (pf_train_fire) begin
+                if (pf_hit_tag) begin
+                    if ((pf_new_stride == pfs_stride[pf_idx]) &&
+                        (pf_new_stride != 64'sd0)) begin
+                        if (pfs_conf[pf_idx] != 2'd3)
+                            pfs_conf[pf_idx] <= pfs_conf[pf_idx] + 2'd1;
+                    end else begin
+                        pfs_stride[pf_idx] <= pf_new_stride;
+                        pfs_conf[pf_idx]   <= 2'd0;   // stride changed: reset
+                    end
+                    pfs_last[pf_idx] <= pf_train_pa;
+                end else begin
+                    pfs_valid[pf_idx]  <= 1'b1;
+                    pfs_tag[pf_idx]    <= pf_train_pc;
+                    pfs_last[pf_idx]   <= pf_train_pa;
+                    pfs_stride[pf_idx] <= 64'sd0;
+                    pfs_conf[pf_idx]   <= 2'd0;
+                end
+            end
+        end
+    end
+
+`ifndef SYNTHESIS
+    // Prefetch accuracy/coverage counters (sim-only; gated by lsu_stat_en).
+    longint pf_issued_cnt;       // prefetch requests TAKEN by the dcache
+    longint pf_dropped_xpage;    // dropped: cross-page
+    longint pf_dropped_busy;     // dropped: dcache port busy (in-page, not taken)
+    longint pf_late_hit_cnt;     // demand miss on a line a prefetch later filled
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            pf_issued_cnt    <= 0;
+            pf_dropped_xpage <= 0;
+            pf_dropped_busy  <= 0;
+            pf_late_hit_cnt  <= 0;
+        end else if (lsu_stat_en && dpf_pf_en) begin
+            if (dpf_req_valid && dpf_req_taken) pf_issued_cnt <= pf_issued_cnt + 1;
+            if (pf_active_r && !pf_frontier_done_c && !pf_same_page_c)
+                pf_dropped_xpage <= pf_dropped_xpage + 1;
+            if (dpf_req_valid && !dpf_req_taken) pf_dropped_busy <= pf_dropped_busy + 1;
+        end
+    end
+    final begin
+        if (lsu_stat_en && dpf_pf_en) begin
+            $display("");
+            $display("=== DPREFETCH ENGINE (Lever A, ENABLE=1) ===");
+            $display("DPFE issued=%0d dropped_xpage=%0d dropped_busy=%0d",
+                     pf_issued_cnt, pf_dropped_xpage, pf_dropped_busy);
+        end
+    end
+`endif
+
+    final begin
+        if (lsu_stat_en) begin
+            $display("");
+            $display("=== DPREFETCH CENSUS (Lever A) ===");
+            $display("DPF loads=%0d misses=%0d", dpf_loads, dpf_misses);
+            $display("DPF miss_conf_stride=%0d miss_conf_sameline=%0d miss_irregular=%0d miss_firsttouch=%0d miss_alias=%0d",
+                     dpf_miss_conf_stride, dpf_miss_conf_sameline,
+                     dpf_miss_irregular, dpf_miss_firsttouch, dpf_miss_alias);
+            $display("DPF hit_conf_stride=%0d", dpf_hit_conf_stride);
+            $display("DPF timely_misses=%0d untimely_misses=%0d lead_sum=%0d",
+                     dpf_timely_misses, dpf_untimely_misses, dpf_lead_sum);
+            $display("DPF lead_hist <2=%0d 2-3=%0d 4-7=%0d 8-15=%0d 16-79=%0d >=80=%0d",
+                     dpf_lead_hist[0], dpf_lead_hist[1], dpf_lead_hist[2],
+                     dpf_lead_hist[3], dpf_lead_hist[4], dpf_lead_hist[5]);
+            $display("DPF mlp_max=%0d mlp_hist 0=%0d 1=%0d 2=%0d 3=%0d 4=%0d 5=%0d 6=%0d 7=%0d 8+=%0d",
+                     dpf_mlp_max, dpf_mlp_hist[0], dpf_mlp_hist[1], dpf_mlp_hist[2],
+                     dpf_mlp_hist[3], dpf_mlp_hist[4], dpf_mlp_hist[5], dpf_mlp_hist[6],
+                     dpf_mlp_hist[7], dpf_mlp_hist[8]);
+            for (int b = 0; b < DPF_TOPN; b++)
+                if (dpf_top_cnt[b] != 0)
+                    $display("DPF top_miss_pc[%0d]=%016h cnt=%0d last_byte_stride=%0d",
+                             b, dpf_top_pc[b], dpf_top_cnt[b], $signed(dpf_top_str[b]));
         end
     end
 

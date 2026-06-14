@@ -3995,7 +3995,7 @@ module tb_linux;
                          mem_req_addr,
                          mem_resp_valid);
                 if (perf_profile_en != 0) begin
-                    $display("[PERF_PROFILE] cyc=%0d itlb_lookups=%0d itlb_misses=%0d ptw_walks_itlb=%0d ptw_walks_dtlb=%0d ptw_busy_cycles=%0d ptw_faults=%0d fe_stall_total=%0d fe_stall_xlate=%0d fe_stall_icache=%0d fe_stall_backend=%0d flush_commit=%0d flush_bru=%0d flush_satp=%0d dtlb_lookups=%0d dtlb_misses=%0d dcache_accesses=%0d dcache_misses=%0d",
+                    $display("[PERF_PROFILE] cyc=%0d itlb_lookups=%0d itlb_misses=%0d ptw_walks_itlb=%0d ptw_walks_dtlb=%0d ptw_busy_cycles=%0d ptw_faults=%0d fe_stall_total=%0d fe_stall_xlate=%0d fe_stall_icache=%0d fe_stall_backend=%0d flush_commit=%0d flush_bru=%0d flush_satp=%0d dtlb_lookups=%0d dtlb_misses=%0d dcache_accesses=%0d dcache_misses=%0d l2_grant_dcache=%0d l2_grant_ptw=%0d l2_grant_icache=%0d l2_icache_req_cyc=%0d l2_icache_starve=%0d l2_icache_starve_by_ptw=%0d l2_icache_starve_by_dcache=%0d l2_dc_ptw_collide=%0d ic_mshr_full_cyc=%0d",
                              sim_cycle,
                              u_core.u_mmu_mem_profiler.itlb_lookups,
                              u_core.u_mmu_mem_profiler.itlb_misses,
@@ -4013,7 +4013,16 @@ module tb_linux;
                              u_core.u_mmu_mem_profiler.dtlb_lookups,
                              u_core.u_mmu_mem_profiler.dtlb_misses,
                              u_core.u_mmu_mem_profiler.dcache_accesses,
-                             u_core.u_mmu_mem_profiler.dcache_misses);
+                             u_core.u_mmu_mem_profiler.dcache_misses,
+                             u_core.u_mmu_mem_profiler.l2_grant_dcache,
+                             u_core.u_mmu_mem_profiler.l2_grant_ptw,
+                             u_core.u_mmu_mem_profiler.l2_grant_icache,
+                             u_core.u_mmu_mem_profiler.l2_icache_req_cyc,
+                             u_core.u_mmu_mem_profiler.l2_icache_starve,
+                             u_core.u_mmu_mem_profiler.l2_icache_starve_by_ptw,
+                             u_core.u_mmu_mem_profiler.l2_icache_starve_by_dcache,
+                             u_core.u_mmu_mem_profiler.l2_dc_ptw_collide,
+                             u_core.u_mmu_mem_profiler.ic_mshr_full_cyc);
                 end
             end
 
