@@ -485,7 +485,13 @@ module rv64gc_core_top
                 .handoff_pc             (uoc_handoff_pc),
                 .redirect_valid         (frontend_flush_valid),
                 .redirect_pc            (frontend_flush_pc),
-                .invalidate             (fence_i_signal),
+                // Inversion #6 (UOC-REPACK correctness contract): the dense
+                // trace is VA-tagged (58-bit PC tag, no ASID/translation
+                // context).  A VM context switch (satp write) or SFENCE.VMA
+                // aliases stale dense entries, so invalidate on those too --
+                // not FENCE.I alone (the as-built latent paged-mode bug).
+                // translation_tlb_invalidate = sfence_vma_commit||satp_commit.
+                .invalidate             (fence_i_signal || translation_tlb_invalidate),
                 .stall                  (rename_stall),
                 .ev_lookup              (uoc_ev_lookup),
                 .ev_hit                 (uoc_ev_hit),

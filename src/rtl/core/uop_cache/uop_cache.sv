@@ -1,23 +1,58 @@
 /* file: uop_cache.sv
- Description: UOP-cache decoded-op cache. Caches post-fusion fetch
-              groups indexed by their start PC and streams cached groups to
-              rename once the predicted next PC hits. This is an explicit
-              research path and is disabled for Stage 1 signoff until it is
-              tied to live BPU/FTQ validation.
+ Description: UOP-cache decoded-op cache (UOC-REPACK revision).
 
-              Pipeline:
-                F0  (lookup)   - drive SRAM addr = predicted next-group PC
-                F1  (hit)      - SRAM data + tag compare ready
-                F2  (mux/fill) - emit cached group OR fill from fused output
+   ============================================================================
+   UOC-REPACK (2026-06-13).  Gated by UOP_CACHE_ENABLE (default 0 = not
+   instantiated = bit-exact shipping config).  When ENABLE=1 this is the
+   *repack* UOC whose fill path packs DENSE decoded traces across packet /
+   line / direct-taken-edge boundaries, so the truncation slots the line path
+   leaves empty (10-46% of cycles on supply rows) are recovered from a
+   resident dense entry.  This realizes UB x hit-rate (the FUND thesis,
+   doc/uoc_repack_gate_2026-06-13.md).
 
-              `active` means the cache owns the rename input this cycle.
-              `handoff_valid` pulses only when a stream exits and fetch must
-              resume from `handoff_pc`.
+   The as-built UOC (pre-repack) cached one truncated post-fusion fetch group
+   at a time, keyed by fused_insn[0].pc, byte-for-byte equal to the 4-wide
+   line packet -- the ~0%-gain root.  This revision inverts that fill path.
 
-              See doc/uop_cache_design_2026-04-25.md for the full spec.
+   --------------------------------------------------------------------------
+   FILL (this module, COMPLETE here):  inversions #1/#5/#6 + the seal
+   predicates of #2/#3.  A fill-build register accumulates decoded ops across
+   consecutive fused groups into a head-keyed dense entry, sealing+installing
+   on:
+       * entry full at UOC_PER_ENTRY (4)
+       * indirect target (any is_jalr -- JALR/RET/C.JR/C.JALR: the successor
+         PC is register-dynamic, not statically known at fill time)
+       * serializing op (CSR / FENCE / FENCE.I / AMO / ECALL / EBREAK /
+         MRET / SRET / SFENCE.VMA / WFI)
+       * exception
+       * redirect / invalidate (flush -> drop the partial build)
+   Direct control (JAL / Bcc) is packed THROUGH (does NOT seal) -- recovering
+   the taken-edge truncation is the entire point.  Install keys on the
+   build-HEAD pc; dup-detect + pLRU victim are head-keyed (inversion #5).
+   The dense entry stores no successor PC: next_group_pc(ops,count)
+   reconstructs it (a sealed entry's tail is either a direct branch with a
+   known target or a sequential op; indirect/serializing tails seal and cede
+   next-PC to the live frontend, inversion #1).
+
+   REPLAY/FTQ-BYPASS (inversions #2 live-TAGE / #3 control+partial serve /
+   #4 FTQ-single-enq-port, no frontend-hold, no per-exit flush):  These
+   require the UOC to drive FTQ enqueues and consult live BPU/TAGE -- a
+   frontend (fetch_top/ifu/bpu) rewire that is OUT of this module's current
+   post-fusion / pre-rename position.  Until that frontend bypass lands, the
+   replay emit path here is held at the SAFE straight-line policy (refuse
+   control/partial, frontend-hold handoff) so ENABLE=1 cannot static-replay
+   stale predictions (the 2026-05-05 misp-inflation failure mode).  See the
+   deliverable report for the precise remaining frontend work-list.
+   --------------------------------------------------------------------------
+
+   Pipeline:
+     F0  (lookup)   - drive SRAM addr = predicted next-group PC
+     F1  (hit)      - SRAM data + tag compare ready
+     F2  (mux/fill) - emit cached group OR accumulate+install dense entry
+
  Author: Jeremy Cai
- Date: Apr. 25, 2026
- Version: 2.0
+ Date: Apr. 25, 2026 (UOC-REPACK 2026-06-13)
+ Version: 3.0
 */
 `ifndef UOP_CACHE_SV
 `define UOP_CACHE_SV
@@ -44,7 +79,7 @@ module uop_cache
     // Frontend redirect (commit flush, BRU early redirect, FENCE.I)
     input  wire                redirect_valid,
     input  wire [63:0]         redirect_pc,
-    input  wire                invalidate,          // FENCE.I or full-flush invalidate
+    input  wire                invalidate,          // FENCE.I / satp / SFENCE.VMA / full-flush
 
     // Backpressure from rename
     input  wire                stall,
@@ -92,21 +127,44 @@ module uop_cache
     endfunction
 
     // =========================================================================
+    // Seal predicates (inversion #2/#3 fill-time segmentation).
+    //
+    // A dense build must SEAL-AND-INSTALL after an op when the successor PC is
+    // not statically packable, or architectural side effects forbid replay:
+    //   * indirect: any is_jalr (JALR / RET / C.JR / C.JALR -> register target)
+    //   * serializing: CSR / FENCE / FENCE.I / AMO / ECALL / EBREAK / MRET /
+    //                  SRET / SFENCE.VMA / WFI
+    //   * exception on the op
+    // Direct control (is_jal / is_branch) does NOT seal -- it packs through
+    // (the whole point: recover the taken-edge truncation slots).
+    // =========================================================================
+    function automatic logic op_seals(input decoded_insn_t op);
+        return op.is_jalr ||
+               op.is_csr     || op.is_fence   || op.is_fence_i ||
+               op.is_ecall   || op.is_ebreak  || op.is_mret    ||
+               op.is_sret    || op.is_sfence_vma || op.is_wfi   ||
+               op.is_amo     || op.has_exception;
+    endfunction
+
+    // An op cannot be densely packed AT ALL if it is fused (the fused payload
+    // carries cross-op state the dense builder must not split mid-fusion) --
+    // keep fused groups intact: a fused op forces the entry to seal AFTER it,
+    // and a build may not START on a fused continuation.  Conservative: treat
+    // fused like a seal-after.
+    function automatic logic op_seals_after(input decoded_insn_t op);
+        return op_seals(op) || op.is_fused;
+    endfunction
+
+    // =========================================================================
     // Predicted-next-group PC tracker.
     //
-    // Each cycle we maintain a prediction of the start PC of the *next* fetch
-    // group after whatever is currently being emitted (either by fused or
-    // by an in-progress playback).  This prediction drives the SRAM lookup
-    // address; one cycle later we know whether the cache holds that group.
+    // Drives the SRAM lookup address; one cycle later we know whether the
+    // cache holds that group.  (Replay path; the FILL path keys independently
+    // off the dense build head.)
     // =========================================================================
     logic [63:0] predicted_next_pc_r;
     logic [63:0] predicted_next_pc_c;          // combinational this-cycle update
 
-    // Compute the start-of-next-group PC from a 4-wide group of decoded µops
-    // and a count.  If the last µop is a taken branch, use its target; else
-    // PC + (4 if non-RVC, 2 if RVC).  Fused control µops carry the control
-    // instruction PC in pc for branch recovery and the first architectural PC
-    // in trap_pc for precise trap restart.
     function automatic logic [63:0] next_group_pc(
         input decoded_insn_t group [0:PIPE_WIDTH-1],
         input logic [2:0]    count
@@ -185,14 +243,9 @@ module uop_cache
 
     // =========================================================================
     // pLRU (tree-pLRU, 7 bits per set, 8 ways)
-    // bit[0] root:    0→ways 0-3, 1→ways 4-7
-    // bit[1] L0/L1:   0→ways 0-1, 1→ways 2-3
-    // bit[2] L0/L1:   0→ways 4-5, 1→ways 6-7
-    // bit[3..6] leaf: each picks within a 2-way pair
     // =========================================================================
     logic [UOC_PLRU_BITS-1:0] plru_r [UOC_SETS];
 
-    // Compute victim way from pLRU bits.
     function automatic logic [UOC_WAY_BITS-1:0] plru_victim(input logic [6:0] p);
         logic        b0, b1, b2, b3;
         logic [2:0]  way;
@@ -221,21 +274,20 @@ module uop_cache
         end
     endfunction
 
-    // Update pLRU on access (way W just used) — point bits AWAY from W.
     function automatic logic [6:0] plru_update(input logic [6:0] p,
                                                 input logic [2:0] w);
         logic [6:0] np;
         begin
             np = p;
-            np[0] = ~w[2];                   // root: away from way's high half
+            np[0] = ~w[2];
             if (!w[2]) begin
-                np[1] = ~w[1];               // ways 0-3 sub
-                if (!w[1]) np[3] = ~w[0];    // way 0 vs 1
-                else       np[4] = ~w[0];    // way 2 vs 3
+                np[1] = ~w[1];
+                if (!w[1]) np[3] = ~w[0];
+                else       np[4] = ~w[0];
             end else begin
-                np[2] = ~w[1];               // ways 4-7 sub
-                if (!w[1]) np[5] = ~w[0];    // way 4 vs 5
-                else       np[6] = ~w[0];    // way 6 vs 7
+                np[2] = ~w[1];
+                if (!w[1]) np[5] = ~w[0];
+                else       np[6] = ~w[0];
             end
             return np;
         end
@@ -243,14 +295,9 @@ module uop_cache
 
     // =========================================================================
     // F1: tag compare on SRAM read output.
-    //
-    // SRAM was addressed at posedge T-1 with predicted_next_pc_r (computed
-    // at T-1).  At cycle T, SRAM has data for that lookup PC.  We need to
-    // remember which PC we looked up so the F1 comparator uses the right
-    // tag and index → we register lookup_pc_r alongside the SRAM addr.
     // =========================================================================
     logic [63:0] lookup_pc_r;
-    logic        lookup_valid_r;             // 0 if previous cycle suppressed lookup
+    logic        lookup_valid_r;
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -299,11 +346,6 @@ module uop_cache
 
     // =========================================================================
     // State machine: IDLE / PLAYING.
-    //
-    // IDLE -> PLAYING: the predicted next fetch group hits in the cache.
-    // PLAYING: keep streaming cached groups while the next predicted PC hits.
-    // PLAYING -> IDLE: miss/unsafe group; redirect fetch to the first group
-    // that the UOP cache cannot serve.
     // =========================================================================
     typedef enum logic {
         UOC_IDLE    = 1'b0,
@@ -312,9 +354,13 @@ module uop_cache
 
     uoc_state_e state_r, state_next_c;
 
-    // Stage-1 safety policy: the UOP cache may bypass decode, but it
-    // must not become the branch predictor. Control-flow groups need live
-    // BPU/FTQ validation before this path can safely replay them by default.
+    // Replay-emit safety policy.
+    //
+    // Until the FTQ-single-enq-port + live-TAGE frontend bypass (inversions
+    // #2/#3/#4) lands, REPLAY refuses control/partial groups and uses the
+    // frontend-hold handoff -- so ENABLE=1 can NEVER static-replay a stored
+    // prediction (the 2026-05-05 misp-inflation failure mode).  The plusargs
+    // remain available to A/B the unsafe path under the unit TB only.
 `ifndef SYNTHESIS
     bit sim_uoc_allow_partial_groups;
     bit sim_uoc_allow_control_groups;
@@ -335,9 +381,6 @@ module uop_cache
     localparam logic uoc_allow_control_groups = 1'b0;
 `endif
 
-    // Replay guard: default to full straight-line groups only. Refuse groups
-    // whose next-PC accounting or architectural side effects need live
-    // BPU/FTQ validation.
     logic hit_data_unplayable_c;
     always_comb begin
         hit_data_unplayable_c =
@@ -420,9 +463,7 @@ module uop_cache
 
     assign active = emit_valid_c;
 
-    // =========================================================================
     // Output mux: when active, drive uoc_insn/uoc_count from hit_data
-    // =========================================================================
     always_comb begin
         for (int u = 0; u < PIPE_WIDTH; u++) begin
             uoc_insn[u] = active ? hit_data_c[u] : '0;
@@ -430,19 +471,11 @@ module uop_cache
         uoc_count = active ? hit_count_c : 3'd0;
     end
 
-    // Handoff: when a stream exits, fetch restarts at the first PC not served
-    // by the UOP cache. For a miss this is lookup_pc_r; for an unsafe hit it is
-    // also lookup_pc_r because the live frontend must decode that exact group.
     assign handoff_valid = stream_exit_c;
     assign handoff_pc    = lookup_pc_r;
 
     // =========================================================================
     // Predicted-next-PC update (combinational, drives F0 lookup)
-    //
-    // - When emitting hit_data: next group = end-of-hit_data
-    // - Otherwise, when fused_count > 0: next group = end-of-fused
-    // - On redirect: next group = redirect_pc
-    // - Otherwise: hold previous prediction
     // =========================================================================
     always_comb begin
         if (redirect_valid) begin
@@ -461,97 +494,229 @@ module uop_cache
         else        predicted_next_pc_r <= predicted_next_pc_c;
     end
 
-    // SRAM read addresses (driven from the *next-cycle* prediction)
     assign tag_raddr_c  = pc_index(predicted_next_pc_c);
     assign data_raddr_c = pc_index(predicted_next_pc_c);
 
     // =========================================================================
-    // Fill: on every cycle where fused produces a group, install or refresh
-    // its entry in the cache (capture-when-decoded model).  This is the
-    // simplest fill policy; it auto-warms the cache at no extra latency.
+    // FILL — DENSE TRACE BUILDER (inversion #1/#5; segmentation #2/#3).
     //
-    // Skip fill if the entry for this PC is already cached in any way at
-    // the same index — to avoid duplicate installs and pLRU disruption.
-    // (Detected via secondary tag compare against fused_insn[0].pc; this
-    // is a separate compare from the F1 lookup compare since fused PC
-    // and lookup PC are independent.)
+    // A fill-build register accumulates decoded ops across consecutive fused
+    // groups.  Each fused group this cycle is appended op-by-op into the
+    // build buffer.  The buffer SEALS-AND-INSTALLS (head-keyed) when it
+    // reaches UOC_PER_ENTRY ops, or right after an op that op_seals_after().
+    // Direct control (is_jal/is_branch, non-fused) packs through.
     //
-    // Implementation note: fill index/tag come from current cycle's fused
-    // output, NOT from the lookup pipeline; the SRAM ports are
-    // single-port-capable (one R + one W per cycle to different addrs is
-    // OK for separate-port SRAM, which this is modelled as).
+    // Contiguity: the builder only appends a group whose head PC equals the
+    // sequential/taken successor of the current build tail (next_group_pc of
+    // the partial build).  A discontiguous head (mispredict redirect target,
+    // wrong-path) restarts the build at that head.  This keeps every dense
+    // entry a real architectural straight-or-direct-taken trace.
+    //
+    // The builder is fed only on cycles where fused delivers a non-empty
+    // group and the UOC is not replaying (active=0) and not flushing.  This
+    // is the donor-residency mechanism: a hot loop's dense entry becomes
+    // resident after one pass and is then a HIT on the next pass.
     // =========================================================================
-    logic                       fill_pending_c;
+    decoded_insn_t build_ops_r [0:UOC_PER_ENTRY-1];
+    logic [2:0]    build_count_r;              // 0..UOC_PER_ENTRY
+    logic [63:0]   build_head_pc_r;
+    logic          build_valid_r;              // a build is in progress
+    logic [63:0]   build_next_pc_r;            // expected next head (contiguity)
+
+    // Combinational next-state of the builder + the install decision.
+    decoded_insn_t build_ops_n [0:UOC_PER_ENTRY-1];
+    logic [2:0]    build_count_n;
+    logic [63:0]   build_head_pc_n;
+    logic          build_valid_n;
+    logic [63:0]   build_next_pc_n;
+
+    logic          install_c;                  // seal+install this cycle
+    logic [UOC_PER_ENTRY-1:0] install_op_valid_c;
+    decoded_insn_t install_ops_c [0:UOC_PER_ENTRY-1];
+    logic [2:0]    install_count_c;
+    logic [63:0]   install_head_pc_c;
+
+    // Feed condition: fused delivering, UOC not replaying, no flush.
+    logic fill_feed_c;
+    assign fill_feed_c = en && (state_r == UOC_IDLE) && !active &&
+                         (fused_count != 3'd0) &&
+                         !redirect_valid && !invalidate;
+
+    always_comb begin
+        // Default: hold the build.
+        for (int u = 0; u < UOC_PER_ENTRY; u++) build_ops_n[u] = build_ops_r[u];
+        build_count_n   = build_count_r;
+        build_head_pc_n = build_head_pc_r;
+        build_valid_n   = build_valid_r;
+        build_next_pc_n = build_next_pc_r;
+
+        install_c         = 1'b0;
+        install_count_c   = 3'd0;
+        install_head_pc_c = build_head_pc_r;
+        for (int u = 0; u < UOC_PER_ENTRY; u++) begin
+            install_ops_c[u]      = build_ops_r[u];
+            install_op_valid_c[u] = 1'b0;
+        end
+
+        if (redirect_valid || invalidate) begin
+            // Drop the partial build on any flush (cede next-PC, inversion #1).
+            build_count_n = 3'd0;
+            build_valid_n = 1'b0;
+        end else if (fill_feed_c) begin : do_accumulate
+            // Working copy we mutate op-by-op across this fused group.
+            decoded_insn_t w_ops [0:UOC_PER_ENTRY-1];
+            logic [2:0]    w_count;
+            logic [63:0]   w_head;
+            logic          w_valid;
+            logic [63:0]   w_next;
+            logic          group_contig;
+
+            for (int u = 0; u < UOC_PER_ENTRY; u++) w_ops[u] = build_ops_r[u];
+            w_count = build_count_r;
+            w_head  = build_head_pc_r;
+            w_valid = build_valid_r;
+            w_next  = build_next_pc_r;
+
+            // Contiguity test for the head of this fused group.
+            group_contig = w_valid && (fused_insn[0].pc == w_next);
+            if (!w_valid || !group_contig) begin
+                // (Re)start the build at this group's head.  If a partial
+                // build was open and discontiguous, install it first iff it
+                // holds >=1 op (a real trace), else just drop it.
+                if (w_valid && (w_count != 3'd0)) begin
+                    install_c       = 1'b1;
+                    install_count_c = w_count;
+                    install_head_pc_c = w_head;
+                    for (int u = 0; u < UOC_PER_ENTRY; u++) begin
+                        install_ops_c[u]      = w_ops[u];
+                        install_op_valid_c[u] = (3'(u) < w_count);
+                    end
+                end
+                w_count = 3'd0;
+                w_head  = fused_insn[0].pc;
+                w_valid = 1'b1;
+            end
+
+            // Append each op of the fused group.  On a fill-only-one-install
+            // restriction (single data-RAM write port per cycle), we permit
+            // at most ONE seal+install per cycle: if a second seal would be
+            // needed, stop appending and carry the rest as the new build.
+            // In practice a fused group is <=4 ops and seals are sparse, so
+            // one install/cycle covers the overwhelmingly common case; the
+            // residual (two seals in one 4-wide group) simply defers the
+            // second trace's install to the next contiguous pass.
+            for (int g = 0; g < PIPE_WIDTH; g++) begin
+                if ((3'(g) < fused_count) && !install_c) begin
+                    // append op g
+                    w_ops[w_count] = fused_insn[g];
+                    w_count        = w_count + 3'd1;
+                    w_next         = fused_insn[g].bp_taken ?
+                                        fused_insn[g].bp_target :
+                                        (fused_insn[g].pc +
+                                         (fused_insn[g].is_rvc ? 64'd2 : 64'd4));
+                    // Seal?
+                    if ((w_count == 3'(UOC_PER_ENTRY)) ||
+                        op_seals_after(fused_insn[g])) begin
+                        install_c       = 1'b1;
+                        install_count_c = w_count;
+                        install_head_pc_c = w_head;
+                        for (int u = 0; u < UOC_PER_ENTRY; u++) begin
+                            install_ops_c[u]      = w_ops[u];
+                            install_op_valid_c[u] = (3'(u) < w_count);
+                        end
+                        // Reset build for whatever follows the seal.
+                        w_count = 3'd0;
+                        w_head  = w_next;
+                        // If the sealing op ceded next-PC (indirect/serializing/
+                        // exception), the successor is dynamic -> close the
+                        // build (live frontend owns next-PC).
+                        if (op_seals(fused_insn[g])) begin
+                            w_valid = 1'b0;
+                        end else begin
+                            w_valid = 1'b1;
+                        end
+                    end
+                end
+            end
+
+            for (int u = 0; u < UOC_PER_ENTRY; u++) build_ops_n[u] = w_ops[u];
+            build_count_n   = w_count;
+            build_head_pc_n = w_head;
+            build_valid_n   = w_valid;
+            build_next_pc_n = w_next;
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            build_count_r   <= 3'd0;
+            build_valid_r   <= 1'b0;
+            build_head_pc_r <= '0;
+            build_next_pc_r <= '0;
+        end else begin
+            for (int u = 0; u < UOC_PER_ENTRY; u++) build_ops_r[u] <= build_ops_n[u];
+            build_count_r   <= build_count_n;
+            build_head_pc_r <= build_head_pc_n;
+            build_valid_r   <= build_valid_n;
+            build_next_pc_r <= build_next_pc_n;
+        end
+    end
+
+    // =========================================================================
+    // INSTALL: write the sealed dense entry, head-keyed (inversion #5).
+    // =========================================================================
     logic [UOC_INDEX_BITS-1:0]  fill_idx_c;
     logic [UOC_TAG_BITS-1:0]    fill_tag_c;
+    assign fill_idx_c = pc_index(install_head_pc_c);
+    assign fill_tag_c = pc_tag(install_head_pc_c);
 
-    assign fill_pending_c = en && (state_r == UOC_IDLE) && !active &&
-                            (fused_count != 3'd0) &&
-                            !redirect_valid && !invalidate;
-    assign fill_idx_c     = pc_index(fused_insn[0].pc);
-    assign fill_tag_c     = pc_tag(fused_insn[0].pc);
-
-    // Probe whether this fill PC is already cached.
-    // We can only probe the way ports we already have read for THIS cycle's
-    // lookup_pc_r (= predicted_next_pc).  When fused_insn[0].pc matches
-    // predicted_next_pc (common case: post-PLAYING resume), we get a
-    // duplicate-detect for free; otherwise we conservatively do the fill,
-    // which may cause occasional duplicate entries (functionally correct,
-    // mildly wasteful capacity).
+    // Dup-detect, head-keyed: skip the install iff the build head is already
+    // the resident lookup hit (common post-replay resume).  Re-keyed to the
+    // build head, not the per-group pc.
     logic dup_skip_c;
     assign dup_skip_c = (fill_idx_c == lookup_idx_c) && hit_c &&
-                        (lookup_pc_r == fused_insn[0].pc);
+                        (lookup_pc_r == install_head_pc_c);
 
-    // Victim-way selection from pLRU
     logic [UOC_WAY_BITS-1:0] victim_way_c;
     assign victim_way_c = plru_victim(plru_r[fill_idx_c]);
 
     logic do_fill_c;
-    assign do_fill_c = fill_pending_c && !dup_skip_c;
+    assign do_fill_c = install_c && !dup_skip_c;
 
-    // Tag-write port driven from fill
     assign tag_we_c     = do_fill_c;
     assign tag_waddr_c  = fill_idx_c;
     assign tag_wway_c   = victim_way_c;
     assign tag_wvalid_c = 1'b1;
     assign tag_wtag_c   = fill_tag_c;
 
-    // Data-write ports: only the victim way is enabled for write
     always_comb begin
         for (int w = 0; w < UOC_WAYS; w++) begin
             data_we_c[w] = do_fill_c && (UOC_WAY_BITS'(w) == victim_way_c);
         end
     end
     assign data_waddr_c  = fill_idx_c;
-    assign data_wcount_c = fused_count;
+    assign data_wcount_c = install_count_c;
     always_comb begin
         for (int u = 0; u < UOC_PER_ENTRY; u++) begin
-            data_wdata_c[u] = fused_insn[u];
+            data_wdata_c[u] = install_op_valid_c[u] ? install_ops_c[u]
+                                                    : '0;
         end
     end
 
-    // Track if the chosen victim was valid (telemetry: capacity pressure)
     logic victim_valid_at_fill_c;
     always_comb begin
-        // tag_valid_out reflects lookup_idx_c (last-cycle lookup), not fill_idx_c.
-        // For accurate eviction telemetry we'd need a second tag-RAM read port;
-        // approximate with: signal valid only when fill index matches lookup
-        // index (so tag_valid_out is accurate for this set).
         victim_valid_at_fill_c = do_fill_c && (fill_idx_c == lookup_idx_c) &&
                                  tag_valid_out[victim_way_c];
     end
 
-    // Update pLRU: on hit, mark hit_way as MRU.  On fill, mark victim as MRU.
+    // pLRU update.
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             for (int s = 0; s < UOC_SETS; s++) plru_r[s] <= '0;
         end else begin
-            // Fill-path update (write happens at this set/victim)
             if (do_fill_c) begin
                 plru_r[fill_idx_c] <= plru_update(plru_r[fill_idx_c], victim_way_c);
             end
-            // Hit-path update (read happened at this set/hit_way last cycle)
-            // Only update if not also a fill at the same set this cycle (fill wins).
             if (hit_c && !(do_fill_c && (fill_idx_c == lookup_idx_c))) begin
                 plru_r[lookup_idx_c] <= plru_update(plru_r[lookup_idx_c], hit_way_c);
             end
