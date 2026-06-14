@@ -295,6 +295,18 @@ package rv64gc_pkg;
     // prefetch needs >=10 free MSHRs; the bandwidth-bound STREAM rows refuse it,
     // the low-MLP kernel/memcpy (mostly-idle MSHRs) allow it.
     localparam int   DPF_MSHR_RESERVE  = 6;                // dcache MSHR occ ceiling for PF
+    // Demand fill-backlog gate (the stream-l2 separation STUDY knob).  The
+    // dcache->L2 interface is SINGLE-OUTSTANDING (the L2 FSM serializes fills one
+    // at a time, IDLE->FILL_REQ->FILL_WAIT->IDLE).  mshr_fill_backlog counts
+    // MSHRs still owed an L2 fill (fill_pend, !writeback, !is_pf = DEMAND only) --
+    // the demand queue at that channel.  A prefetch issues only when the backlog
+    // is below this depth.  MEASURED RESULT (doc/dprefetch_streaml2_throttle_*):
+    // this does NOT separate stream-l2 (backlog_max 5-6) from memcpy (backlog_max
+    // 4) -- the distributions overlap, and memcpy needs gate>=4 for its full win,
+    // which also admits stream-l2's prefetches.  Shipped DISABLED (=MSHR_DEPTH)
+    // so it is a no-op; left in place as the documented study instrument
+    // (sim-overridable via +DPF_BACKLOG_GATE=<n>).  ENABLE-0 path unaffected.
+    localparam int   DPF_FILL_BACKLOG_GATE = 16;          // =MSHR_DEPTH => gate OFF (no-op)
 
     // L2 Cache: 2 MB, 8-way, 64B lines, 32 MSHRs, 8-cycle hit
     localparam int L2_SIZE        = 2097152;

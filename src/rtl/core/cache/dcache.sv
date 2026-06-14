@@ -135,6 +135,11 @@ module dcache
     integer sim_store_wt_deq_cyc;
     integer sim_store_wt_full_cyc;
     integer sim_store_wt_occ_max;
+    // Prefetch alloc / backlog-gate observability (the stream-l2 discriminator).
+    integer sim_pf_alloc_cyc;          // prefetch fills allocated (taken)
+    integer sim_pf_backlog_drop_cyc;   // would-alloc but the fill-backlog gate fired
+    integer sim_pf_occ_drop_cyc;       // would-alloc but the MSHR-reserve gate fired
+    integer sim_pf_backlog_max;        // max demand fill-backlog seen
 `endif
     logic [L1D_SET_BITS-1:0]   tr_dirty_waddr;
     logic [1:0]                tr_dirty_wway;
@@ -594,6 +599,7 @@ module dcache
         logic                    nwa_pending;    // NWA: deferred no-fill streaming-store line
         logic                    nwa_wt_owed;    // NWA: line owes a full-line write-through at install
         logic [6:0]              nwa_idle_cnt;   // NWA: cycles since alloc; bounds L2 visibility
+        logic                    is_pf;          // allocated by the D-prefetcher (not demand)
         logic [1:0]              victim;         // victim way for fill
         logic                    dirty_evict;    // victim was dirty
         logic [511:0]            evict_data;     // dirty line data for writeback
@@ -716,20 +722,56 @@ module dcache
     // contend (the dcache MSHR), not the upstream LSU LMB.
     logic [MSHR_IDX_BITS:0]   mshr_occ;
     logic                     mshr_pf_room;
+    // Demand fill-backlog depth: MSHRs still owed an L2 fill (fill_pend, not a
+    // writeback) -- the queue waiting at the SINGLE-OUTSTANDING dcache->L2 channel.
+    // This is the stream-l2 discriminator (see DPF_FILL_BACKLOG_GATE in the pkg):
+    // it counts the demand fills CONTENDING for the L2 channel (deep on the
+    // bandwidth-bound STREAM rows, ~1 on the latency-exposed memcpy), and EXCLUDES
+    // the drain/occupancy entries that make mshr_occ blind to stream-l2.
+    logic [MSHR_IDX_BITS:0]   mshr_fill_backlog;
+    logic                     mshr_pf_backlog_ok;
 
     always_comb begin
-        mshr_free_idx   = '0;
-        mshr_free_avail = 1'b0;
-        mshr_occ        = '0;
+        mshr_free_idx     = '0;
+        mshr_free_avail   = 1'b0;
+        mshr_occ          = '0;
+        mshr_fill_backlog = '0;
         for (int m = 0; m < MSHR_DEPTH; m++) begin
             if (!mshr[m].valid && !mshr_free_avail) begin
                 mshr_free_avail = 1'b1;
                 mshr_free_idx   = MSHR_IDX_BITS'(m);
             end
             if (mshr[m].valid) mshr_occ = mshr_occ + 1'b1;
+            // DEMAND fill-backlog only (!is_pf): the prefetcher's own in-flight
+            // fills must NOT gate further prefetches (self-throttling would zero
+            // out the win -- e.g. memcpy's degree-3 launcher drives its own
+            // backlog to ~6).  Counting demand-only isolates the true L2-channel
+            // pressure: ~1 on latency-exposed memcpy (demand waits per miss),
+            // deep on bandwidth-bound stream-l2 (demand piles up).
+            if (mshr[m].valid && mshr[m].fill_pend && !mshr[m].writeback_pend &&
+                !mshr[m].is_pf)
+                mshr_fill_backlog = mshr_fill_backlog + 1'b1;
         end
     end
-    assign mshr_pf_room = mshr_occ < (MSHR_IDX_BITS+1)'(DPF_MSHR_RESERVE);
+    assign mshr_pf_room        = mshr_occ < (MSHR_IDX_BITS+1)'(DPF_MSHR_RESERVE);
+    // Effective backlog-gate threshold.  Folds to the DPF_FILL_BACKLOG_GATE
+    // constant for synthesis; in simulation a +DPF_BACKLOG_GATE=<n> plusarg
+    // overrides it, so the threshold can be SWEPT (and the gate observed /
+    // disabled at <n>=MSHR_DEPTH) from one binary without a rebuild.  This is the
+    // experiment knob for the stream-l2-vs-memcpy separation study; the shipped
+    // value is the localparam.
+    logic [MSHR_IDX_BITS:0] pf_backlog_gate_eff;
+`ifdef SYNTHESIS
+    assign pf_backlog_gate_eff = (MSHR_IDX_BITS+1)'(DPF_FILL_BACKLOG_GATE);
+`else
+    logic [31:0] pf_backlog_gate_plus;
+    initial begin
+        pf_backlog_gate_plus = DPF_FILL_BACKLOG_GATE;
+        void'($value$plusargs("DPF_BACKLOG_GATE=%d", pf_backlog_gate_plus));
+    end
+    assign pf_backlog_gate_eff = pf_backlog_gate_plus[MSHR_IDX_BITS:0];
+`endif
+    assign mshr_pf_backlog_ok  = mshr_fill_backlog < pf_backlog_gate_eff;
 
     // =========================================================================
     // L2 arbitration FSM
@@ -1271,18 +1313,24 @@ module dcache
     // in-flight MSHR), a slot is free, the MSHR-reserve gate has demand headroom
     // (mshr_pf_room), AND no demand load/store wins the slot this cycle.
     // Drop-on-full / drop-on-demand-contention / MSHR-reserve is the census's
-    // mandatory throttle (never displace demand).  NOTE: this protects the
-    // low-MLP kernel/memcpy and the boot burst, but does NOT neutralize the
-    // bandwidth-bound stream-l2 (+4%) -- its MSHRs drain in 8 cyc so occupancy
-    // never trips the gate; an L2-channel-idle throttle was tried and REJECTED
-    // (it destroyed memcpy timeliness -- memcpy is also L2-busy yet latency-
-    // exposed).  A throughput/rate-aware throttle that distinguishes latency-
-    // exposed memcpy from bandwidth-bound stream-l2 is the named follow-up.
+    // mandatory throttle (never displace demand).  The MSHR-reserve (occupancy)
+    // gate protects the low-MLP kernel/memcpy and the boot burst but is BLIND to
+    // stream-l2 (its MSHRs drain in 8 cyc so occupancy never trips the gate -- an
+    // L2-channel-idle throttle was also tried and REJECTED, it destroyed memcpy
+    // timeliness, memcpy being L2-busy yet latency-exposed).  The DEMAND
+    // FILL-BACKLOG gate (mshr_pf_backlog_ok) is the throughput-aware discriminator
+    // that DOES separate them: it counts MSHRs still owed an L2 fill (fill_pend,
+    // not writeback) -- the queue at the single-outstanding dcache->L2 channel --
+    // which is deep on bandwidth-bound stream-l2 (demand piling up) and ~1 on
+    // latency-exposed memcpy (demand waiting on each miss).  A prefetch issues only
+    // when that backlog has spare channel turns (DPF_FILL_BACKLOG_GATE), so it
+    // fills memcpy's idle channel without displacing stream-l2's queued demand.
     logic pf_new_fill_req;
     logic pf_fill_alloc_sel;
     assign pf_new_fill_req = dpf_en && s1_pf_valid && !pf_cache_hit &&
                              !mshr_pf_match_hit && !invalidate_all;
     assign pf_fill_alloc_sel = pf_new_fill_req && mshr_free_avail && mshr_pf_room &&
+                               mshr_pf_backlog_ok &&
                                !ld0_miss_alloc_sel && !ld1_miss_alloc_sel &&
                                !s1_st_can_allocate_mshr;
     assign ld0_miss_merge_req = s1_ld0_valid && !ld0_cache_hit &&
@@ -1337,7 +1385,29 @@ module dcache
             sim_store_wt_deq_cyc <= 0;
             sim_store_wt_full_cyc <= 0;
             sim_store_wt_occ_max <= 0;
+            sim_pf_alloc_cyc <= 0;
+            sim_pf_backlog_drop_cyc <= 0;
+            sim_pf_occ_drop_cyc <= 0;
+            sim_pf_backlog_max <= 0;
         end else if (sim_perf_profile) begin
+            // Prefetch alloc / backlog-gate observability.  A prefetch that
+            // passed the probe + line-clean test (pf_new_fill_req) and would win
+            // the alloc slot but for a throttle gate is attributed to that gate.
+            if (pf_fill_alloc_sel)
+                sim_pf_alloc_cyc <= sim_pf_alloc_cyc + 1;
+            else if (pf_new_fill_req && mshr_free_avail &&
+                     !ld0_miss_alloc_sel && !ld1_miss_alloc_sel &&
+                     !s1_st_can_allocate_mshr) begin
+                // Lost the slot to a gate (not to demand).  Attribute: the
+                // backlog gate dominates (it is the stream-l2 discriminator);
+                // else the occupancy reserve gate.
+                if (!mshr_pf_backlog_ok)
+                    sim_pf_backlog_drop_cyc <= sim_pf_backlog_drop_cyc + 1;
+                else if (!mshr_pf_room)
+                    sim_pf_occ_drop_cyc <= sim_pf_occ_drop_cyc + 1;
+            end
+            if ({{(31-MSHR_IDX_BITS){1'b0}}, mshr_fill_backlog} > sim_pf_backlog_max)
+                sim_pf_backlog_max <= {{(31-MSHR_IDX_BITS){1'b0}}, mshr_fill_backlog};
             if (store_req_valid)
                 sim_store_req_cyc <= sim_store_req_cyc + 1;
             if (store_ack)
@@ -1538,6 +1608,7 @@ module dcache
             // ---- Allocate new MSHR on load miss ----
             if (ld0_miss_alloc_sel) begin
                 mshr[mshr_free_idx].valid          <= 1'b1;
+                mshr[mshr_free_idx].is_pf          <= 1'b0;
                 mshr[mshr_free_idx].addr           <= ld0_line_addr;
                 mshr[mshr_free_idx].victim         <= mshr_ld_vway;
                 mshr[mshr_free_idx].dirty_evict    <= mshr_ld_dirty_v;
@@ -1563,6 +1634,7 @@ module dcache
             // ---- Allocate new MSHR on load1 miss ----
             else if (ld1_miss_alloc_sel) begin
                 mshr[mshr_free_idx].valid          <= 1'b1;
+                mshr[mshr_free_idx].is_pf          <= 1'b0;
                 mshr[mshr_free_idx].addr           <= ld1_line_addr;
                 mshr[mshr_free_idx].victim         <= mshr_ld1_vway;
                 mshr[mshr_free_idx].dirty_evict    <= mshr_ld1_dirty_v;
@@ -1591,6 +1663,7 @@ module dcache
             // tr_valid_out / tr_tag_out reflect the store's set.
             else if (s1_st_can_allocate_mshr) begin
                 mshr[mshr_free_idx].valid          <= 1'b1;
+                mshr[mshr_free_idx].is_pf          <= 1'b0;
                 mshr[mshr_free_idx].addr           <= st_line_addr;
                 mshr[mshr_free_idx].victim         <= mshr_st_vway;
                 mshr[mshr_free_idx].dirty_evict    <= mshr_st_dirty_v;
@@ -1625,6 +1698,7 @@ module dcache
             // wins the slot, so this never displaces demand.
             else if (pf_fill_alloc_sel) begin
                 mshr[mshr_free_idx].valid          <= 1'b1;
+                mshr[mshr_free_idx].is_pf          <= 1'b1;
                 mshr[mshr_free_idx].addr           <= pf_line_addr;
                 mshr[mshr_free_idx].victim         <= victim_way_pf;
                 mshr[mshr_free_idx].dirty_evict    <= tr_dirty_out2[victim_way_pf];
@@ -1832,6 +1906,11 @@ module dcache
                      sim_ld1_new_blocked_diff_line_cyc);
             $display("  new load miss no free MSHR : %0d",
                      sim_ld_new_blocked_no_free_cyc);
+            $display("D-cache prefetch throttle summary:");
+            $display("  pf alloc / backlog_drop    : %0d / %0d",
+                     sim_pf_alloc_cyc, sim_pf_backlog_drop_cyc);
+            $display("  pf occ_drop / backlog_max  : %0d / %0d",
+                     sim_pf_occ_drop_cyc, sim_pf_backlog_max);
         end
     end
 `endif
