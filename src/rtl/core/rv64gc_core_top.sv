@@ -1642,6 +1642,15 @@ module rv64gc_core_top
     logic [63:0] dc_fill_snoop_addr;
     logic [511:0] dc_fill_snoop_data;
 
+    // D-side prefetch request (Lever A): produced by the LSU prefetcher,
+    // consumed by the dcache. Declared here (before the LSU instance) so the
+    // port connection is not a use-before-declaration — DSim treats a forward
+    // reference in a port map as an implicit net and then rejects the explicit
+    // declaration as a redefinition (Verilator is lenient).
+    logic        dc_pf_req_valid;
+    logic [63:0] dc_pf_req_addr;
+    logic        dc_pf_req_taken;
+
     rob u_rob (
         .clk                    (clk),
         .rst_n                  (rst_n),
@@ -5131,9 +5140,6 @@ module rv64gc_core_top
     logic [511:0] dc_l2_resp_data;
     logic        dc_invalidate_busy;
     logic        dc_store_wt_busy;
-    logic        dc_pf_req_valid;
-    logic [63:0] dc_pf_req_addr;
-    logic        dc_pf_req_taken;
     logic        ptw_dcache_store_valid;
     logic [63:0] ptw_dcache_store_addr;
     logic [63:0] ptw_dcache_store_data;
