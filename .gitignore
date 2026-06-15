@@ -80,3 +80,11 @@ logs/
 
 # Vendored CoreMark-PRO upstream source
 tests/coremark-pro/external/
+
+# log/ scratch (session run dirs); keep only the intentional RC verification reference set
+log/*
+!log/README.md
+!log/compliance.log
+!log/signoff.log
+!log/boot.log
+!log/stage5_perf_profile_trajectory.log
