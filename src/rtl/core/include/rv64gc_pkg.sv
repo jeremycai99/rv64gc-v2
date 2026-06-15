@@ -308,12 +308,16 @@ package rv64gc_pkg;
     // (sim-overridable via +DPF_BACKLOG_GATE=<n>).  ENABLE-0 path unaffected.
     localparam int   DPF_FILL_BACKLOG_GATE = 16;          // =MSHR_DEPTH => gate OFF (no-op)
 
-    // L2 Cache: 2 MB, 8-way, 64B lines, 32 MSHRs, 8-cycle hit
-    localparam int L2_SIZE        = 2097152;
+    // L2 Cache: 512 KB, 8-way, 64B lines, 32 MSHRs, 8-cycle hit
+    // PPA decision (2026-06-14, doc/cache_sizing_results_2026-06-13.md): 2 MB -> 512 KB
+    // returns ~30-37% of die area (-72.7% cache data+tag SRAM) for an accepted
+    // ~-0.8% real-app geomean cost at realistic DRAM latency (L=80: sha -4.4%, zip
+    // -2.6%, rest ~flat); L=1 compute-IPC basis is capacity-invariant (unchanged).
+    localparam int L2_SIZE        = 524288;
     localparam int L2_WAYS        = 8;
-    localparam int L2_SETS        = L2_SIZE / (L2_WAYS * LINE_SIZE);    // 4096
-    localparam int L2_SET_BITS    = $clog2(L2_SETS);       // 12
-    localparam int L2_TAG_BITS    = XLEN - L2_SET_BITS - LINE_BITS;    // 46
+    localparam int L2_SETS        = L2_SIZE / (L2_WAYS * LINE_SIZE);    // 1024
+    localparam int L2_SET_BITS    = $clog2(L2_SETS);       // 10
+    localparam int L2_TAG_BITS    = XLEN - L2_SET_BITS - LINE_BITS;    // 48
     localparam int L2_MSHR_DEPTH  = 32;
     localparam int L2_HIT_LATENCY = 8;
 

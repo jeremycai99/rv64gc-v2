@@ -1,5 +1,14 @@
 # Cache-Sizing DSE — Results (2026-06-13)
 
+> **COMMITTED 2026-06-14** → `rv64gc_pkg.sv` `L2_SIZE=524288`. Shipped geometry = the
+> **`512k-64k-lat8`** arm: 512 KB / 8-way L2, **8-cycle hit retained**, 64 KB L1D. Accepted cost
+> **+0.81% real-app** at realistic DRAM latency (worst: sha −4.4%, zip −2.6%; rest ≈flat) for
+> −72.7% cache data+tag SRAM (~30–37% die). The recommended **5-cycle hit pipe** (§4, a −1.28%
+> *net win*) was **NOT adopted** — 8-cycle hit kept by design choice; it remains a future option.
+> Re-validated on the 512 KB build: CoreMark iter10 2.178→2.185, sha 3.311→3.311, zip 2.524→2.562
+> (L=1 compute-IPC basis is capacity-invariant, as the §3 latency decomposition predicts).
+> The §4 Linux-boot confirmation (large-footprint axis) remains open.
+
 Decision readout for the L1D × L2 balance-point study planned in
 `doc/cache_sizing_dse_plan_2026-06-11.md`, against the user's PPA acceptance bar
 (≤3–4% suite perf cost is a good trade for the 2M→1M area saving ≈20–25% of die,

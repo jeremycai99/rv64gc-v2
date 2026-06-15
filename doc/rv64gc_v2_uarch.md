@@ -660,7 +660,7 @@ These are the structural constraint points that any optimization needs to be awa
 
 - **Width:** 4 slots/cycle
 - **Per-slot independent advance:** each slot can stall independently without holding back others (eliminates the 6-wide group-hold artifact)
-- **Move/zero elimination:** `mv rd, rs1`, `addi rd, rs1, 0`, `xor rd, rd, rd`, `li rd, 0` are eliminated at rename — bypassed to commit without consuming FU/IQ resources
+- **Zero elimination:** `xor rd, rd, rd`, `li rd, 0` map the destination to the architectural-zero physical register at rename — bypassed to commit without consuming FU/IQ resources. **Move elimination** (`mv rd, rs1`, `addi rd, rs1, 0`) is wired into the datapath but **disabled** in the as-built config (aliasing a destination to an arbitrary source physical register needs lifetime/refcount support the pipeline does not yet implement).
 - **Stall reasons** (per-slot, instrumented in `+PERF_PROFILE` rename summary):
   - `has_preg=0`: free list empty (pdst allocation)
   - `has_rob=0`: ROB full
@@ -943,11 +943,11 @@ correctness checks and pipeline-counter review.
 | Param | Value |
 |---|---|
 | Size | 32 KB (`L1I_SIZE=32768`) |
-| Associativity | 4-way (`L1I_WAYS=4`) |
-| Sets | 128 (`L1I_SETS=128`) |
+| Associativity | 8-way (`L1I_WAYS=8`) — alias-free VIPT, 4 KB/way = page size (Stage 5b) |
+| Sets | 64 (`L1I_SETS=64`) |
 | Line size | 64 B (`LINE_SIZE=64`) |
 | Hit latency | 1 cycle (registered S1 address) |
-| MSHR | (not separately specified; uses inline state) |
+| MSHR | 2-entry, miss-under-miss (`icache.sv`) |
 
 ### 10.2 L1 D-Cache (`src/rtl/core/cache/dcache.sv`, `dcache_data_ram.sv`, `dcache_tag_ram.sv`)
 
@@ -967,11 +967,18 @@ correctness checks and pipeline-counter review.
 
 | Param | Value |
 |---|---|
-| Size | 2 MB (`L2_SIZE=2097152`) |
+| Size | 512 KB (`L2_SIZE=524288`) |
 | Associativity | 8-way (`L2_WAYS=8`) |
-| Sets | 4096 (`L2_SETS=4096`) |
+| Sets | 1024 (`L2_SETS=1024`) |
 | Hit latency | 8 cycles (`L2_HIT_LATENCY=8`) |
 | MSHR depth | 32 (`L2_MSHR_DEPTH=32`) |
+
+> **PPA sizing (2026-06-14).** L2 reduced 2 MB → 512 KB (`doc/cache_sizing_results_2026-06-13.md`,
+> the `512k-64k-lat8` arm): returns ~30–37% of die area (−72.7% cache data+tag SRAM) for an
+> accepted ≈−0.8% real-app geomean cost at realistic DRAM latency (L=80: sha −4.4%, zip −2.6%,
+> rest ≈flat). The 8-cycle hit pipe is retained (the study's optional 5-cycle hit, a net win,
+> was not taken). The L=1 compute-IPC suite is capacity-invariant (CoreMark/sha/zip confirmed
+> unchanged on the 512 KB build).
 
 ---
 

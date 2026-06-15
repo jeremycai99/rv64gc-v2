@@ -49,7 +49,9 @@ Real-workload pivot:
   D-cache the one bare-metal-hidden signal).
 
 Cache / store / earlier-phase:
-- `cache_sizing_results_2026-06-13.md` — FINAL: 512K L2 / 64K L1D / 5-cyc hit (−1.28% real-app, −73% RAM).
+- `cache_sizing_results_2026-06-13.md` — **COMMITTED 2026-06-14:** L2 2 MB → 512 KB / 64K L1D /
+  8-cyc hit (the `512k-64k-lat8` arm; +0.81% real-app, −73% cache RAM, ~30–37% die). 5-cyc-hit
+  option (a net win) not taken.
 - `m2_spill_policy_campaign_2026-06-13.md` — M2-spill REFUTED.
 - `uoc_repack_gate_2026-06-13.md` — UOC-repack gate (fill built, replay on-cone = deferred).
 - `br0_mul_unshare_under_uoc_2026-06-13.md` — BR0/MUL port un-share = out-of-POR (≈0%).
@@ -59,7 +61,8 @@ Cache / store / earlier-phase:
 - Adopt GCC-14 (multiply → roster 9, zero RTL); SPEC harness on the booted Linux (last
   measurement hole); branch sign-off / merge of `backend/lq-instrument`.
 - Gated-but-validated levers ready to flip: D-prefetcher (real-kernel/memcpy axis),
-  F1 (FP cadence), cache 512K/lat5. TAGE-512 HELD (needs a targeted de-aliasing fix).
+  F1 (FP cadence). TAGE-512 HELD (needs a targeted de-aliasing fix). (L2-512K now committed;
+  its optional 5-cyc hit pipe remains the one unused cache lever.)
 
 ## Superseded
 

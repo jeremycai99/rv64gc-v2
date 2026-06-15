@@ -72,8 +72,15 @@ add-on if enabled. All IPC; bare-metal suite (GCC-13.4) + kernel-direct rows.
 - **GCC-14 codegen** — multiply 1.21→**3.371** (roster crossing, zero RTL); mont64 1.75; rest maintenance.
 - **D-prefetcher** — real-kernel D-miss **−67%**, memcpy +14%@L=80; stream-l2 +4% NEEDS-WORK (throttle).
 - **TAGE 256→512** — misp −5.5%/−4.5%/−2.4% on mont64/sglib/qrduino; +1.5% geomean, no roster; synth-cone PASS.
-- **Cache 512K/64K/lat5** — real-app geomean −1.28%, −73% cache RAM; parser +19%.
 - **Store-harvest A1** — tarfind/matmult head-store-wait recovery (funded).
+
+## Cache geometry — COMMITTED 2026-06-14
+- **L2 2 MB → 512 KB, 8-way, 8-cyc hit** (`L2_SIZE=524288`; the `512k-64k-lat8` arm). −72.7%
+  cache data+tag SRAM (~30–37% die area) for an accepted **+0.81% real-app cost** at realistic
+  DRAM latency (L=80: sha −4.4%, zip −2.6%, rest ≈flat). The L=1 compute-IPC table is
+  capacity-invariant (CoreMark 2.178→2.185, sha 3.311→3.311, zip 2.524→2.562 re-confirmed on the
+  512 KB build). The study's optional **5-cyc hit** (a −1.28% net win) was **not taken** — 8-cyc
+  hit retained by design choice; it remains a documented future option.
 
 ## What's certified DEAD (measured, not asserted)
 Chain band irreducible (value-prediction killed — crc32 LCG value-novel); misp-entropy
