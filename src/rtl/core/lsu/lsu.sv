@@ -3203,7 +3203,7 @@ module lsu
     // port-0 priority than the LMB re-probe and mutually exclusive (one re-probe in
     // flight at a time).  Memory-safe: L1 is write-through and the AMO address
     // resolved + cleared SQ-forwarding at its original issue.
-    localparam logic       AMO_REPROBE_ENABLE    = 1'b0;
+    localparam logic       AMO_REPROBE_ENABLE    = 1'b1;
     localparam logic [9:0] AMO_REPROBE_THRESHOLD = 10'd512;
     logic        sim_amo_reprobe;
 `ifdef SIMULATION
