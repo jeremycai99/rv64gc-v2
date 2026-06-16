@@ -2421,6 +2421,15 @@ module lsu
     mem_size_e               reprobe_req_size;
     logic                    reprobe_req_is_unsigned;
 
+    // AMO orphan re-probe port signals (forward-declared; built in the AMO
+    // re-probe block after the AMO state, consumed by the port-0 mux just below).
+    // Gated default-OFF, so byte-identical until +AMO_REPROBE.  See that block.
+    logic                    amo_reprobe_req_fire;
+    logic [63:0]             amo_reprobe_addr;
+    mem_size_e               amo_reprobe_size;
+    logic                    amo_reprobe_is_unsigned;
+    logic                    amo_reprobe_wb_fire;
+
     assign dcache_load_req_valid[0] = split_load_req_valid |
                                       p0_retry_fire |
                                       (load_issue_valid[0]
@@ -2434,21 +2443,28 @@ module lsu
                                        & ~(load_issue_data[0].is_amo &&
                                            (load_issue_data[0].amo_op == AMO_SC))
                                        & ~p0_issue_flush_kill) |
-                                      reprobe_req_fire;
+                                      reprobe_req_fire |
+                                      amo_reprobe_req_fire;
     assign dcache_load_req_addr[0]  = reprobe_req_fire
                                     ? reprobe_req_addr
+                                    : amo_reprobe_req_fire
+                                    ? amo_reprobe_addr
                                     : (split_load_req_valid
                                     ? split_load_req_addr
                                     : (p0_retry_fire ? p0_retry_addr_r
                                                      : load_mem_addr[0]));
     assign dcache_load_req_size[0]  = reprobe_req_fire
                                     ? reprobe_req_size
+                                    : amo_reprobe_req_fire
+                                    ? amo_reprobe_size
                                     : (split_load_req_valid
                                     ? MEM_DWORD
                                     : (p0_retry_fire ? p0_retry_data_r.mem_size
                                                      : load_issue_data[0].mem_size));
     assign dcache_load_req_is_unsigned[0] = reprobe_req_fire
                                           ? reprobe_req_is_unsigned
+                                          : amo_reprobe_req_fire
+                                          ? amo_reprobe_is_unsigned
                                           : (split_load_req_valid
                                           ? 1'b1
                                           : (p0_retry_fire ? p0_retry_data_r.is_unsigned
@@ -2467,6 +2483,7 @@ module lsu
     assign spec_wakeup_valid[0] = dcache_load_req_valid[0] &
                                   !split_load_req_valid &
                                   ~reprobe_req_fire &
+                                  ~amo_reprobe_req_fire &
                                   ~(p0_retry_fire ? p0_retry_data_r.is_amo
                                                   : load_issue_data[0].is_amo);
     assign spec_wakeup_tag[0]   = p0_retry_fire ? p0_retry_data_r.pdst
@@ -2629,7 +2646,8 @@ module lsu
         endcase
     end
 
-    assign amo_load_value = amo_load_hit_fire ? load_extracted_dc[0] : amo_fill_extracted;
+    assign amo_load_value = (amo_load_hit_fire || amo_reprobe_wb_fire)
+                          ? load_extracted_dc[0] : amo_fill_extracted;
     assign amo_old_word   = amo_load_value[31:0];
     assign amo_rs2_word   = amo_rs2_r[31:0];
     assign amo_old_word_s = amo_old_word;
@@ -2743,7 +2761,7 @@ module lsu
                 amo_store_committed_r <= 1'b0;
             end
 
-            if (amo_load_hit_fire || amo_load_fill_fire) begin
+            if (amo_load_hit_fire || amo_load_fill_fire || amo_reprobe_wb_fire) begin
                 amo_wait_load_r <= 1'b0;
                 amo_old_value_r <= amo_load_value;
                 if (amo_data_r.amo_op == AMO_LR) begin
@@ -3165,6 +3183,112 @@ module lsu
             $display("Re-probe fires/hits/retries: %0d / %0d / %0d",
                      reprobe_fires, reprobe_hits, reprobe_retries);
         end
+    end
+`endif
+
+    // =========================================================================
+    // AMO orphan re-probe (gated; default OFF = byte-identical)
+    // =========================================================================
+    // AMOs are carved out of the LMB/MSHR machinery (load_nocache_r forced for
+    // is_amo at the issue latch; ~is_amo in p0/p1_miss_detect), so the load-side
+    // LMB orphan re-probe above cannot rescue a stuck AMO.  The AMO read-half is a
+    // ONE-SHOT dcache probe whose only late wakeup (amo_load_fill_fire, a 1-cycle
+    // fill snoop) is lost under MEM_LATENCY>1 with paging (dense same-line load+AMO
+    // spinlock/refcount traffic) -> the AMO wedges in amo_wait_load_r forever at the
+    // ROB head -> boot hang.  Mirror the LMB re-probe: after the AMO read-half sits
+    // with no progress for AMO_REPROBE_THRESHOLD cycles, re-issue a NORMAL
+    // (cacheable, NOT is_amo) port-0 load for amo_addr_r -- it allocates an MSHR and
+    // fills if the line is absent, and its 1-cycle response wakes the AMO via
+    // amo_reprobe_wb_fire (the normal hit data path, load_extracted_dc[0]).  Lower
+    // port-0 priority than the LMB re-probe and mutually exclusive (one re-probe in
+    // flight at a time).  Memory-safe: L1 is write-through and the AMO address
+    // resolved + cleared SQ-forwarding at its original issue.
+    localparam logic       AMO_REPROBE_ENABLE    = 1'b0;
+    localparam logic [9:0] AMO_REPROBE_THRESHOLD = 10'd512;
+    logic        sim_amo_reprobe;
+`ifdef SIMULATION
+    initial sim_amo_reprobe = $test$plusargs("AMO_REPROBE") ? 1'b1 : 1'b0;
+`else
+    assign sim_amo_reprobe = 1'b0;
+`endif
+    logic        amo_reprobe_en;
+    assign amo_reprobe_en = AMO_REPROBE_ENABLE || sim_amo_reprobe;
+
+    logic        amo_reprobe_inflight;
+    logic [9:0]  amo_wait_stall_cyc;
+    logic        amo_orphan_trigger;
+    logic        amo_port0_idle;
+
+    // Port 0 is free for a re-probe when no normal port-0 request is driven this
+    // cycle (same negated terms the LMB re-probe uses).
+    assign amo_port0_idle =
+        !(split_load_req_valid |
+          p0_retry_fire |
+          (load_issue_valid[0]
+           & ~p0_retry_valid_r
+           & ~load_addr_misaligned[0]
+           & ~load_cross_line[0]
+           & ~split_load_busy
+           & ~load_addr_mmio[0]
+           & ~p0_fwd_hit
+           & ~p0_partial_fwd_wait
+           & ~(load_issue_data[0].is_amo &&
+               (load_issue_data[0].amo_op == AMO_SC))
+           & ~flush_in.valid));
+
+    assign amo_orphan_trigger = amo_reprobe_en && amo_wait_load_r &&
+                                (amo_wait_stall_cyc >= AMO_REPROBE_THRESHOLD) &&
+                                !reprobe_inflight && !amo_reprobe_inflight;
+
+    // Fire only when the LMB re-probe is not also firing this cycle.
+    assign amo_reprobe_req_fire    = amo_orphan_trigger && amo_port0_idle &&
+                                     !reprobe_req_fire;
+    assign amo_reprobe_addr        = amo_addr_r;
+    assign amo_reprobe_size        = amo_data_r.mem_size;
+    assign amo_reprobe_is_unsigned = amo_data_r.is_unsigned;
+    // The re-probe response arrives 1 cycle later (registered inflight), exactly
+    // like the LMB re-probe.
+    assign amo_reprobe_wb_fire     = amo_reprobe_inflight && dcache_load_resp_valid[0];
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            amo_reprobe_inflight <= 1'b0;
+            amo_wait_stall_cyc   <= 10'd0;
+        end else begin
+            if (amo_reprobe_req_fire)
+                amo_reprobe_inflight <= 1'b1;
+            else if (amo_reprobe_inflight)
+                amo_reprobe_inflight <= 1'b0;
+
+            // Saturating no-progress timer for the AMO read-half: count while it
+            // waits with no wakeup/issue/re-probe activity; reset otherwise.
+            if (amo_reprobe_en && amo_wait_load_r &&
+                !amo_load_hit_fire && !amo_load_fill_fire && !amo_load_issue_fire &&
+                !amo_reprobe_req_fire && !amo_reprobe_inflight) begin
+                if (amo_wait_stall_cyc != 10'h3ff)
+                    amo_wait_stall_cyc <= amo_wait_stall_cyc + 10'd1;
+            end else begin
+                amo_wait_stall_cyc <= 10'd0;
+            end
+        end
+    end
+
+`ifdef SIMULATION
+    integer amo_reprobe_fires;
+    integer amo_reprobe_hits;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            amo_reprobe_fires <= 0;
+            amo_reprobe_hits  <= 0;
+        end else if (amo_reprobe_en) begin
+            if (amo_reprobe_req_fire) amo_reprobe_fires <= amo_reprobe_fires + 1;
+            if (amo_reprobe_wb_fire)  amo_reprobe_hits  <= amo_reprobe_hits + 1;
+        end
+    end
+    final begin
+        if (amo_reprobe_en)
+            $display("=== LSU AMO RE-PROBE SUMMARY === fires/hits: %0d / %0d",
+                     amo_reprobe_fires, amo_reprobe_hits);
     end
 `endif
 
