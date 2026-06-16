@@ -1,7 +1,7 @@
 # RV64GC Compliance Audit
 
-Date: 2026-06-11
-Commit: `bcba1a6`
+Date: 2026-06-15
+Commit: `950e2f7`
 
 Verdict: **PASS, eligible to claim RV64GC instruction compliance for the covered standard riscv-tests rows**.
 
@@ -15,7 +15,7 @@ Scope:
 Artifacts:
 
 - Manifest: `build/rv64gc_compliance/rv64gc_compliance_manifest.json`
-- Results directory: `benchmark_results/rv64gc_compliance_20260611_signoff`
+- Results directory: `benchmark_results/rv64gc_compliance_20260615_195154`
 - Result count: `113` of `113` manifest rows
 
 Extension Summary:
